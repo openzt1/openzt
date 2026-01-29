@@ -12,8 +12,9 @@ OpenZT is a DLL injection framework for Zoo Tycoon (2001) written in Rust. It pr
 ## Critical Rules
 
 1. **NEVER commit Zoo Tycoon assets, code, configs, or decompiled content** - This is a clean-room reimplementation
-2. **New features start behind `experimental` feature flag** in Cargo.toml
-3. **All structs must use `#[repr(C)]`** for memory layout compatibility
+2. **ALWAYS USE openzt.bat for building, testing, running or just anything that would usually require use of `cargo`** - If openzt.bat is missing functionality add it rather than running cargo directly
+3. **New features start behind `experimental` feature flag** in Cargo.toml
+4. **All structs must use `#[repr(C)]`** for memory layout compatibility
 
 ## Development Commands
 

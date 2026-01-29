@@ -3,6 +3,8 @@ pub(crate) mod extensions;
 pub(crate) mod legacy_attributes;
 pub(crate) mod loading;
 pub mod patches;
+pub(crate) mod ztd_registry;
+pub(crate) mod entity_lookup;
 
 pub use crate::resource_manager::openzt_mods::{
     habitats_locations::{get_location_habitat_ids, get_location_or_habitat_by_id},

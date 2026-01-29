@@ -719,33 +719,31 @@ fn test_disabled_ztd_file_tracking() -> TestResult {
 }
 
 /// Run all disabled ZTD tests
-pub fn run_all_tests() -> Vec<TestResult> {
-    vec![
-        // Category 1: Core Functionality
-        test_case_insensitive_matching(),
-        test_cfg_creates_empty_resource(),
-        test_uca_creates_empty_resource(),
-        test_ucb_creates_empty_resource(),
-        test_ucs_creates_empty_resource(),
-        // Category 2: Error Handling
-        test_unsupported_file_type_no_resource(),
-        test_mixed_supported_unsupported_files(),
-        test_disabled_ztd_only_unsupported_files_all_errors(),
-        // Category 3: Loading Order Dependencies
-        test_file_already_loaded_is_skipped(),
-        test_multiple_disabled_ztds_no_duplicate(),
-        test_disabled_ztd_prevents_legacy_entity_extraction(),
-        test_mixed_file_counts(),
-        // Category 4: Integration
-        test_parse_disabled_entries_splits_correctly(),
-        // Category 5: Edge Cases
-        test_empty_disabled_ztd_no_errors(),
-        test_ztd_filename_with_spaces(),
-        // Category 6: Cleanup
-        test_empty_resource_can_be_removed(),
-        test_multiple_runs_clean_isolation(),
-        test_disabled_ztd_handlers_work_with_empty_resources(),
-        // Category 7: Disabled ZTD File Tracking
-        test_disabled_ztd_file_tracking(),
-    ]
-}
+crate::integration_tests![
+    // Category 1: Core Functionality
+    test_case_insensitive_matching,
+    test_cfg_creates_empty_resource,
+    test_uca_creates_empty_resource,
+    test_ucb_creates_empty_resource,
+    test_ucs_creates_empty_resource,
+    // Category 2: Error Handling
+    test_unsupported_file_type_no_resource,
+    test_mixed_supported_unsupported_files,
+    test_disabled_ztd_only_unsupported_files_all_errors,
+    // Category 3: Loading Order Dependencies
+    test_file_already_loaded_is_skipped,
+    test_multiple_disabled_ztds_no_duplicate,
+    test_disabled_ztd_prevents_legacy_entity_extraction,
+    test_mixed_file_counts,
+    // Category 4: Integration
+    test_parse_disabled_entries_splits_correctly,
+    // Category 5: Edge Cases
+    test_empty_disabled_ztd_no_errors,
+    test_ztd_filename_with_spaces,
+    // Category 6: Cleanup
+    test_empty_resource_can_be_removed,
+    test_multiple_runs_clean_isolation,
+    test_disabled_ztd_handlers_work_with_empty_resources,
+    // Category 7: Disabled ZTD File Tracking
+    test_disabled_ztd_file_tracking,
+];

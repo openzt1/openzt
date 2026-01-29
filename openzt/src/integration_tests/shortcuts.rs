@@ -4,17 +4,15 @@ use super::TestResult;
 use crate::shortcuts::{register_shortcut, list_shortcuts, Ctrl, Alt, Shift};
 use crate::shortcuts::{F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, A, B, NUM1, NUM2, NUM3, NUM4, NUM5, NUM6};
 
-pub fn run_all_tests() -> Vec<TestResult> {
-    vec![
-        test_simple_shortcut_registration(),
-        test_shortcut_with_modifiers(),
-        test_shortcut_conflict_detection(),
-        test_shortcut_override_behavior(),
-        test_multiple_shortcuts_different_keys(),
-        test_list_shortcuts(),
-        test_all_modifiers_combination(),
-    ]
-}
+crate::integration_tests![
+    test_simple_shortcut_registration,
+    test_shortcut_with_modifiers,
+    test_shortcut_conflict_detection,
+    test_shortcut_override_behavior,
+    test_multiple_shortcuts_different_keys,
+    test_list_shortcuts,
+    test_all_modifiers_combination,
+];
 
 /// Test simple shortcut registration (no modifiers)
 fn test_simple_shortcut_registration() -> TestResult {

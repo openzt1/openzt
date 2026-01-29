@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use tracing::{warn, info};
-use crate::mods::{Meta, Ordering};
+use crate::mods::{Meta, Ordering, DependencyIdentifier};
 
 /// Result of load order validation
 #[derive(Debug)]
@@ -70,10 +70,23 @@ pub fn validate_load_order(
 
         // Check each dependency
         for dep in meta.dependencies() {
-            let dep_mod_id = dep.mod_id();
+            // Resolve the dependency identifier to a mod_id for validation
+            // Note: We can't resolve ztd_name here since we don't have the ztd_to_mod_id mapping
+            // So for validation purposes, we skip ztd_name and dll_name dependencies
+            let dep_mod_id = match dep.identifier() {
+                DependencyIdentifier::ModId(id) => id.clone(),
+                DependencyIdentifier::ZtdName(_) => {
+                    // Skip validation for ztd_name dependencies (they're validated in dependency_resolver)
+                    continue;
+                }
+                DependencyIdentifier::DllName(_) => {
+                    // Skip validation for dll_name dependencies (they're validated in dependency_resolver)
+                    continue;
+                }
+            };
 
             // Check if dependency exists
-            if !mods.contains_key(dep_mod_id) {
+            if !mods.contains_key(&dep_mod_id) {
                 if *dep.optional() {
                     warnings.push(ValidationWarning::OptionalDependencyMissing {
                         mod_id: mod_id.clone(),
@@ -90,7 +103,7 @@ pub fn validate_load_order(
 
             // Check version constraints
             if let Some(min_version) = dep.min_version() {
-                let dep_meta = &mods[dep_mod_id];
+                let dep_meta = &mods[&dep_mod_id];
                 if dep_meta.version() < min_version {
                     warnings.push(ValidationWarning::VersionMismatch {
                         mod_id: mod_id.clone(),
@@ -102,7 +115,7 @@ pub fn validate_load_order(
             }
 
             // Check ordering constraints
-            if let Some(&dep_position) = position_map.get(dep_mod_id) {
+            if let Some(&dep_position) = position_map.get(&dep_mod_id) {
                 let violation = match dep.ordering() {
                     Ordering::After => {
                         // Current mod should load AFTER dependency

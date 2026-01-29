@@ -5,21 +5,19 @@ use std::collections::HashMap;
 
 use super::TestResult;
 
-pub fn run_all_tests() -> Vec<TestResult> {
-    vec![
-        test_registry_tag_validation(),
-        test_register_extension(),
-        test_get_extension(),
-        test_get_extension_by_base(),
-        test_get_entity_tags(),
-        test_get_entity_attribute(),
-        test_extension_has_tag(),
-        test_list_extensions_with_tag(),
-        test_extension_validation_valid(),
-        test_extension_validation_invalid_tag(),
-        test_extension_validation_invalid_attribute(),
-    ]
-}
+crate::integration_tests![
+    test_registry_tag_validation,
+    test_register_extension,
+    test_get_extension,
+    test_get_extension_by_base,
+    test_get_entity_tags,
+    test_get_entity_attribute,
+    test_extension_has_tag,
+    test_list_extensions_with_tag,
+    test_extension_validation_valid,
+    test_extension_validation_invalid_tag,
+    test_extension_validation_invalid_attribute,
+];
 
 fn test_registry_tag_validation() -> TestResult {
     let test_name = "test_registry_tag_validation";

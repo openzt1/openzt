@@ -199,10 +199,90 @@ fn default_as_false() -> bool {
     false
 }
 
+/// Dependency identifier types
+///
+/// Represents three ways to identify a dependency:
+/// - ModId: OpenZT mod ID (e.g., "finn.my_mod")
+/// - ZtdName: The .ztd filename (e.g., "my_mod.ztd")
+/// - DllName: Zoo Tycoon game DLL (e.g., "langusa.dll")
+#[derive(Debug, Clone, PartialEq)]
+pub enum DependencyIdentifier {
+    ModId(String),
+    ZtdName(String),
+    DllName(String),
+}
+
+impl<'de> Deserialize<'de> for DependencyIdentifier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field { ModId, ZtdName, DllName }
+
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = DependencyIdentifier;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("one of: mod_id, ztd_name, or dll_name")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::MapAccess<'de>,
+            {
+                let mut mod_id = None;
+                let mut ztd_name = None;
+                let mut dll_name = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::ModId => {
+                            if mod_id.is_some() {
+                                return Err(de::Error::duplicate_field("mod_id"));
+                            }
+                            mod_id = Some(map.next_value()?);
+                        }
+                        Field::ZtdName => {
+                            if ztd_name.is_some() {
+                                return Err(de::Error::duplicate_field("ztd_name"));
+                            }
+                            ztd_name = Some(map.next_value()?);
+                        }
+                        Field::DllName => {
+                            if dll_name.is_some() {
+                                return Err(de::Error::duplicate_field("dll_name"));
+                            }
+                            dll_name = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                // Priority: mod_id > ztd_name > dll_name
+                if let Some(id) = mod_id {
+                    Ok(DependencyIdentifier::ModId(id))
+                } else if let Some(name) = ztd_name {
+                    Ok(DependencyIdentifier::ZtdName(name))
+                } else if let Some(name) = dll_name {
+                    Ok(DependencyIdentifier::DllName(name))
+                } else {
+                    Err(de::Error::missing_field("mod_id, ztd_name, or dll_name"))
+                }
+            }
+        }
+
+        deserializer.deserialize_map(Visitor)
+    }
+}
+
 #[derive(Deserialize, Clone, Debug, Getters)]
 #[get = "pub"]
 pub struct Dependencies {
-    mod_id: String,
+    #[serde(flatten)]
+    identifier: DependencyIdentifier,
     name: String,
     #[serde(default, deserialize_with = "deserialize_version_option")]
     min_version: Option<Version>,
@@ -483,6 +563,12 @@ pub struct PatchCondition {
     pub key_exists: Option<KeyCheck>,
     #[serde(default)]
     pub value_equals: Option<ValueCheck>,
+    /// Check if a ZTD archive was loaded earlier in the load order
+    #[serde(default)]
+    pub ztd_loaded: Option<String>,
+    /// Check if a legacy entity exists (format: "legacy.{type}.{name}")
+    #[serde(default)]
+    pub entity_exists: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -691,7 +777,7 @@ impl ModDefinition {
 }
 #[cfg(test)]
 mod mod_loading_tests {
-    use crate::mods::Version;
+    use crate::mods::{Version, DependencyIdentifier};
 
     #[test]
     fn test_parse_meta() {
@@ -707,11 +793,11 @@ mod mod_loading_tests {
         assert_eq!(meta.dependencies.len(), 1);
         assert_eq!(meta.ztd_type, super::ZtdType::Combined);
         let dep = meta.dependencies[0].clone();
-        assert_eq!(dep.mod_id, "finn.my_other_mod");
-        assert_eq!(dep.name, "my other mod");
-        assert_eq!(dep.min_version.unwrap(), Version { major: 1, minor: 1, patch: 2 });
-        assert!(dep.optional);
-        assert_eq!(dep.ordering, super::Ordering::Before);
+        assert_eq!(dep.identifier(), &DependencyIdentifier::ModId("finn.my_other_mod".to_string()));
+        assert_eq!(dep.name(), "my other mod");
+        assert_eq!(dep.min_version().as_ref().unwrap(), &Version { major: 1, minor: 1, patch: 2 });
+        assert!(*dep.optional());
+        assert_eq!(dep.ordering(), &super::Ordering::Before);
     }
 
     #[test]
@@ -739,7 +825,7 @@ dependencies = [
         let meta: super::Meta = toml::from_str(toml_str).unwrap();
         // Empty dependency should be skipped with a warning, only valid one should remain
         assert_eq!(meta.dependencies.len(), 1);
-        assert_eq!(meta.dependencies[0].mod_id, "valid.mod");
+        assert_eq!(meta.dependencies[0].identifier(), &DependencyIdentifier::ModId("valid.mod".to_string()));
     }
 
     #[test]

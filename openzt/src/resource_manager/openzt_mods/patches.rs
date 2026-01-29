@@ -1776,12 +1776,46 @@ fn is_mod_loaded(mod_id: &str) -> bool {
     loaded_mods.iter().any(|id| id == mod_id)
 }
 
+/// Check if a ZTD was loaded before the current mod
+///
+/// # Arguments
+/// * `ztd_filename` - The ZTD filename to check
+/// * `current_mod_id` - The ID of the current mod
+///
+/// # Returns
+/// * `true` if the ZTD was enabled and loaded before the current mod
+/// * `false` otherwise
+fn is_ztd_loaded_before_current(ztd_filename: &str, current_mod_id: &str) -> bool {
+    use crate::resource_manager::openzt_mods::ztd_registry;
+
+    let current_ztd = match ztd_registry::get_mod_ztd(current_mod_id) {
+        Some(ztd) => ztd,
+        None => {
+            warn!("Cannot check ztd_loaded condition: current mod '{}' has no registered ZTD",
+                  current_mod_id);
+            return false;
+        }
+    };
+
+    let current_position = match ztd_registry::get_ztd_position(&current_ztd) {
+        Some(pos) => pos,
+        None => {
+            warn!("Cannot check ztd_loaded condition: current ZTD '{}' not found in registry",
+                  current_ztd);
+            return false;
+        }
+    };
+
+    ztd_registry::is_ztd_loaded_before(ztd_filename, current_position)
+}
+
 /// Evaluate patch-level conditions that require target file access
 ///
 /// # Arguments
 /// * `condition` - The condition to evaluate
 /// * `default_target` - Default target file path (used if condition.target is not specified)
 /// * `patch_name` - Name of the patch (for logging)
+/// * `current_mod_id` - The ID of the current mod (for ztd_loaded condition)
 ///
 /// # Returns
 /// * `Ok(true)` if all conditions pass
@@ -1791,6 +1825,7 @@ fn evaluate_patch_condition_with_target(
     condition: &Option<PatchCondition>,
     default_target: &str,
     patch_name: &str,
+    current_mod_id: &str,
 ) -> anyhow::Result<bool> {
     let Some(cond) = condition else {
         return Ok(true);
@@ -1803,6 +1838,24 @@ fn evaluate_patch_condition_with_target(
     if let Some(required_mod) = &cond.mod_loaded {
         if !is_mod_loaded(required_mod) {
             info!("Patch '{}': skipping - required mod '{}' not loaded", patch_name, required_mod);
+            return Ok(false);
+        }
+    }
+
+    // Check ztd_loaded condition
+    if let Some(required_ztd) = &cond.ztd_loaded {
+        if !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
+            info!("Patch '{}': skipping - required ZTD '{}' not loaded before current mod",
+                  patch_name, required_ztd);
+            return Ok(false);
+        }
+    }
+
+    // Check entity_exists condition (legacy entities only)
+    if let Some(entity_id) = &cond.entity_exists {
+        if !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
+            info!("Patch '{}': skipping - required legacy entity '{}' not loaded",
+                  patch_name, entity_id);
             return Ok(false);
         }
     }
@@ -1947,6 +2000,22 @@ fn apply_patches_direct(
             }
         }
 
+        // Check ztd_loaded at file level
+        if let Some(required_ztd) = &top_level_condition.ztd_loaded {
+            if !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
+                warn!("Patch file skipped - required ZTD '{}' not loaded before current mod", required_ztd);
+                return Ok(());
+            }
+        }
+
+        // Check entity_exists at file level
+        if let Some(entity_id) = &top_level_condition.entity_exists {
+            if !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
+                warn!("Patch file skipped - required legacy entity '{}' not loaded", entity_id);
+                return Ok(());
+            }
+        }
+
         // Check key_exists and value_equals with target
         if top_level_condition.key_exists.is_some() || top_level_condition.value_equals.is_some() {
             let Some(target) = &top_level_condition.target else {
@@ -1956,7 +2025,7 @@ fn apply_patches_direct(
             };
 
             // Use existing evaluation function with target
-            if !evaluate_patch_condition_with_target(&Some(top_level_condition.clone()), target, "top-level")? {
+            if !evaluate_patch_condition_with_target(&Some(top_level_condition.clone()), target, "top-level", current_mod_id)? {
                 warn!("Patch file skipped - top-level conditions failed");
                 return Ok(());
             }
@@ -1971,7 +2040,7 @@ fn apply_patches_direct(
         let target = get_patch_target(patch);
         let condition = get_patch_condition(patch);
 
-        match evaluate_patch_condition_with_target(condition, target, patch_name) {
+        match evaluate_patch_condition_with_target(condition, target, patch_name, current_mod_id) {
             Ok(true) => {
                 // Condition passed, apply patch
                 let result = apply_single_patch_direct(patch, mod_path, patch_name, &context);
@@ -2034,6 +2103,22 @@ fn apply_patches_with_shadow(
             }
         }
 
+        // Check ztd_loaded at file level
+        if let Some(required_ztd) = &top_level_condition.ztd_loaded {
+            if !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
+                warn!("Patch file skipped - required ZTD '{}' not loaded before current mod", required_ztd);
+                return Ok(());
+            }
+        }
+
+        // Check entity_exists at file level
+        if let Some(entity_id) = &top_level_condition.entity_exists {
+            if !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
+                warn!("Patch file skipped - required legacy entity '{}' not loaded", entity_id);
+                return Ok(());
+            }
+        }
+
         // Check key_exists and value_equals with target
         if top_level_condition.key_exists.is_some() || top_level_condition.value_equals.is_some() {
             let Some(target) = &top_level_condition.target else {
@@ -2043,7 +2128,7 @@ fn apply_patches_with_shadow(
             };
 
             // Use existing evaluation function with target
-            if !evaluate_patch_condition_with_target(&Some(top_level_condition.clone()), target, "top-level")? {
+            if !evaluate_patch_condition_with_target(&Some(top_level_condition.clone()), target, "top-level", current_mod_id)? {
                 warn!("Patch file skipped - top-level conditions failed");
                 return Ok(());
             }
@@ -2069,7 +2154,7 @@ fn apply_patches_with_shadow(
         let target = get_patch_target(patch);
         let condition = get_patch_condition(patch);
 
-        match evaluate_patch_condition_with_target(condition, target, patch_name) {
+        match evaluate_patch_condition_with_target(condition, target, patch_name, current_mod_id) {
             Ok(true) => {
                 // Condition passed, apply patch to shadow
                 let result = apply_single_patch_shadow(patch, mod_path, patch_name, &context, &mut shadow);

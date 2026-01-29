@@ -15,6 +15,7 @@ pub mod disabled_ztd;
 pub mod extensions;
 pub mod legacy_attributes;
 pub mod loading_order;
+pub mod patch_conditions;
 pub mod patch_rollback;
 pub mod shortcuts;
 
@@ -50,6 +51,46 @@ impl TestResult {
             error: None,
         }
     }
+}
+
+/// Run a single test with panic catching
+pub fn catch_test_panic(test_name: &str, test_fn: fn() -> TestResult) -> TestResult {
+    use std::panic::{self, AssertUnwindSafe};
+
+    match panic::catch_unwind(AssertUnwindSafe(test_fn)) {
+        Ok(result) => result,
+        Err(panic_info) => {
+            let panic_msg = if let Some(msg) = panic_info.downcast_ref::<String>() {
+                msg.clone()
+            } else if let Some(msg) = panic_info.downcast_ref::<&str>() {
+                msg.to_string()
+            } else {
+                "Unknown panic".to_string()
+            };
+            TestResult::fail(test_name, format!("PANIC: {}", panic_msg))
+        }
+    }
+}
+
+/// Macro to generate the run_all_tests() function for integration test modules
+///
+/// Usage:
+/// ```rust
+/// integration_tests![
+///     test_simple_dependency_chain,
+///     test_circular_dependency_handling,
+///     test_optional_dependency_warning,
+/// ];
+/// ```
+#[macro_export]
+macro_rules! integration_tests {
+    ( $( $test_fn:ident ),* $(,)? ) => {
+        pub fn run_all_tests() -> Vec<super::TestResult> {
+            vec![
+                $( super::catch_test_panic(stringify!($test_fn), $test_fn), )*
+            ]
+        }
+    };
 }
 
 pub fn init() {
@@ -324,6 +365,22 @@ mod detour_zoo_main {
         let extensions_results = super::extensions::run_all_tests();
 
         for result in &extensions_results {
+            if result.passed {
+                write_log(&format!("  ✓ {}", result.name));
+                total_passed += 1;
+            } else {
+                write_log(&format!("  ✗ {} - {}", result.name, result.error.as_ref().unwrap_or(&"Unknown error".to_string())));
+                total_failed += 1;
+            }
+        }
+
+        write_log("");
+
+        // Run patch conditions tests
+        write_log("Running patch conditions tests...");
+        let patch_conditions_results = super::patch_conditions::run_all_tests();
+
+        for result in &patch_conditions_results {
             if result.passed {
                 write_log(&format!("  ✓ {}", result.name));
                 total_passed += 1;

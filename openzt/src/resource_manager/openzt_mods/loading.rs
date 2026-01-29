@@ -42,6 +42,12 @@ pub fn get_mod_ids() -> Vec<String> {
     binding.iter().cloned().collect()
 }
 
+/// Clear the MOD_ID_SET (for integration tests)
+#[cfg(feature = "integration-tests")]
+pub fn clear_mod_ids_for_tests() {
+    MOD_ID_SET.lock().unwrap().clear();
+}
+
 /// Discover all OpenZT mods from .ztd archives without loading them
 ///
 /// Returns a map of mod_id -> (archive_name, Meta) for all mods found in the resource paths
@@ -220,6 +226,9 @@ fn load_open_zt_mod_internal(
     if !add_new_mod_id(&mod_id) {
         return Err(anyhow!("Mod already loaded: {}", mod_id));
     }
+
+    // Register the mod_id to ZTD mapping for ztd_loaded condition
+    crate::resource_manager::openzt_mods::ztd_registry::register_mod_ztd(&mod_id, archive_name);
 
     // Create span for the entire loading process
     let mod_name = meta.name().to_string();

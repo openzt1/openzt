@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use tracing::{warn, info, debug, error};
-use crate::mods::{Meta, Ordering};
+use crate::mods::{Meta, Ordering, DependencyIdentifier};
+use crate::dll_dependencies;
 
 /// Result of dependency resolution
 #[derive(Debug, Clone)]
@@ -45,12 +46,22 @@ struct DependencyGraph {
 /// Manages dependency resolution for mod loading
 pub struct DependencyResolver {
     mods: HashMap<String, Meta>,
+    // Mapping from ztd_name to mod_id for identifier resolution
+    ztd_to_mod_id: HashMap<String, String>,
 }
 
 impl DependencyResolver {
     /// Create a new resolver with available mods
-    pub fn new(mods: HashMap<String, Meta>) -> Self {
-        Self { mods }
+    ///
+    /// # Arguments
+    /// * `mods` - HashMap of mod_id to Meta
+    /// * `discovered` - HashMap of mod_id to (ztd_name, Meta) for resolving ztd_name dependencies
+    pub fn new(mods: HashMap<String, Meta>, discovered: &HashMap<String, (String, Meta)>) -> Self {
+        let ztd_to_mod_id = discovered.iter()
+            .map(|(mod_id, (ztd_name, _))| (ztd_name.clone(), mod_id.clone()))
+            .collect();
+
+        Self { mods, ztd_to_mod_id }
     }
 
     /// Resolve mod load order based on dependencies and existing configuration
@@ -166,7 +177,56 @@ impl DependencyResolver {
 
         for (mod_id, meta) in mods {
             for dep in meta.dependencies() {
-                let dep_mod_id = dep.mod_id();
+                // Warn if min_version is specified with non-mod_id identifiers
+                if dep.min_version().is_some() {
+                    match dep.identifier() {
+                        DependencyIdentifier::ModId(_) => {
+                            // min_version is valid for mod_id
+                        }
+                        DependencyIdentifier::ZtdName(name) => {
+                            warn!("Dependency '{}' (ztd_name) has min_version specified, which is not supported for ztd_name dependencies. Version will be ignored.", name);
+                        }
+                        DependencyIdentifier::DllName(name) => {
+                            warn!("Dependency '{}' (dll_name) has min_version specified, which is not supported for dll_name dependencies. Version will be ignored.", name);
+                        }
+                    }
+                }
+
+                // Resolve the identifier to a mod_id (or handle DLL dependencies)
+                let resolved_id = match dep.identifier() {
+                    DependencyIdentifier::ModId(id) => id.clone(),
+                    DependencyIdentifier::ZtdName(ztd_name) => {
+                        match self.ztd_to_mod_id.get(ztd_name) {
+                            Some(id) => id.clone(),
+                            None => {
+                                // ztd_name not found - use the ztd_name as identifier
+                                // This will be handled in find_insert_position to generate appropriate warnings
+                                debug!("ztd_name dependency '{}' for mod '{}' not found", ztd_name, mod_id);
+                                ztd_name.clone()
+                            }
+                        }
+                    }
+                    DependencyIdentifier::DllName(dll_name) => {
+                        // Validate DLL dependency
+                        let dll_exists = dll_dependencies::check_dll_dependency(dll_name);
+                        if !dll_exists {
+                            if *dep.optional() {
+                                debug!("Optional DLL dependency '{}' not found", dll_name);
+                            } else {
+                                warn!("Required DLL dependency '{}' not found", dll_name);
+                                // Add to warnings but don't affect load ordering
+                            }
+                        }
+                        // DLL dependencies don't participate in load ordering
+                        // Track optional status for consistency
+                        if *dep.optional() {
+                            optional.entry(mod_id.clone())
+                                .or_default()
+                                .insert(dll_name.clone());
+                        }
+                        continue;
+                    }
+                };
 
                 // Check if we should include this dependency based on the mode
                 let should_include = match mode {
@@ -179,27 +239,27 @@ impl DependencyResolver {
                     if *dep.optional() {
                         optional.entry(mod_id.clone())
                             .or_default()
-                            .insert(dep_mod_id.clone());
+                            .insert(resolved_id.clone());
                     }
                     continue;
                 }
 
                 match dep.ordering() {
                     Ordering::Before => {
-                        // This mod must load BEFORE dep_mod_id
+                        // This mod must load BEFORE resolved_id
                         after_deps.entry(mod_id.clone())
                             .or_default()
-                            .push(dep_mod_id.clone());
-                        before_deps.entry(dep_mod_id.clone())
+                            .push(resolved_id.clone());
+                        before_deps.entry(resolved_id.clone())
                             .or_default()
                             .push(mod_id.clone());
                     }
                     Ordering::After => {
-                        // This mod must load AFTER dep_mod_id
+                        // This mod must load AFTER resolved_id
                         before_deps.entry(mod_id.clone())
                             .or_default()
-                            .push(dep_mod_id.clone());
-                        after_deps.entry(dep_mod_id.clone())
+                            .push(resolved_id.clone());
+                        after_deps.entry(resolved_id.clone())
                             .or_default()
                             .push(mod_id.clone());
                     }
@@ -211,7 +271,7 @@ impl DependencyResolver {
                 if *dep.optional() {
                     optional.entry(mod_id.clone())
                         .or_default()
-                        .insert(dep_mod_id.clone());
+                        .insert(resolved_id.clone());
                 }
             }
         }
@@ -556,8 +616,15 @@ impl DependencyResolver {
                 } else if !all_mods.contains_key(dep) {
                     // Dependency doesn't exist
                     let meta = &all_mods[mod_id];
+                    // Check if this unresolved dependency is optional
                     let is_optional = meta.dependencies().iter()
-                        .any(|d| d.mod_id() == dep && *d.optional());
+                        .any(|d| {
+                            match d.identifier() {
+                                DependencyIdentifier::ModId(id) => id == dep && *d.optional(),
+                                DependencyIdentifier::ZtdName(name) => name == dep && *d.optional(),
+                                DependencyIdentifier::DllName(name) => name == dep && *d.optional(),
+                            }
+                        });
 
                     if is_optional {
                         debug!("Optional dependency '{}' for mod '{}' not found", dep, mod_id);
@@ -642,7 +709,8 @@ mod tests {
 
     #[test]
     fn test_empty_resolver() {
-        let resolver = DependencyResolver::new(HashMap::new());
+        let discovered = HashMap::new();
+        let resolver = DependencyResolver::new(HashMap::new(), &discovered);
         let result = resolver.resolve_order(&[], &[]);
         assert!(result.order.is_empty());
         assert!(result.warnings.is_empty());
@@ -669,10 +737,15 @@ mod tests {
             version = "1.0.0"
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
-        mods.insert("test.mod_b".to_string(), meta_b);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
+        mods.insert("test.mod_b".to_string(), meta_b.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        // Create discovered map matching the mods
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+        discovered.insert("test.mod_b".to_string(), ("test.mod_b.ztd".to_string(), meta_b));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let existing = vec!["test.mod_a".to_string(), "test.mod_b".to_string()];
         let result = resolver.resolve_order(&existing, &[]);
 
@@ -706,10 +779,14 @@ mod tests {
             ]
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
-        mods.insert("test.mod_b".to_string(), meta_b);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
+        mods.insert("test.mod_b".to_string(), meta_b.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+        discovered.insert("test.mod_b".to_string(), ("test.mod_b.ztd".to_string(), meta_b));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let result = resolver.resolve_order(&[], &[]);
 
         // mod_a should load before mod_b
@@ -742,10 +819,14 @@ mod tests {
             version = "1.0.0"
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
-        mods.insert("test.mod_b".to_string(), meta_b);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
+        mods.insert("test.mod_b".to_string(), meta_b.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+        discovered.insert("test.mod_b".to_string(), ("test.mod_b.ztd".to_string(), meta_b));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let result = resolver.resolve_order(&[], &[]);
 
         // mod_a should load before mod_b
@@ -793,11 +874,16 @@ mod tests {
             ]
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
-        mods.insert("test.mod_b".to_string(), meta_b);
-        mods.insert("test.mod_c".to_string(), meta_c);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
+        mods.insert("test.mod_b".to_string(), meta_b.clone());
+        mods.insert("test.mod_c".to_string(), meta_c.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+        discovered.insert("test.mod_b".to_string(), ("test.mod_b.ztd".to_string(), meta_b));
+        discovered.insert("test.mod_c".to_string(), ("test.mod_c.ztd".to_string(), meta_c));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let result = resolver.resolve_order(&[], &[]);
 
         // Should detect cycle and place mods at end in alphabetical order
@@ -834,9 +920,12 @@ mod tests {
             ]
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let result = resolver.resolve_order(&[], &[]);
 
         assert_eq!(result.order, vec!["test.mod_a"]);
@@ -866,9 +955,12 @@ mod tests {
             ]
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let result = resolver.resolve_order(&[], &[]);
 
         assert_eq!(result.order, vec!["test.mod_a"]);
@@ -916,11 +1008,16 @@ mod tests {
             ]
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
-        mods.insert("test.mod_b".to_string(), meta_b);
-        mods.insert("test.mod_c".to_string(), meta_c);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
+        mods.insert("test.mod_b".to_string(), meta_b.clone());
+        mods.insert("test.mod_c".to_string(), meta_c.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+        discovered.insert("test.mod_b".to_string(), ("test.mod_b.ztd".to_string(), meta_b));
+        discovered.insert("test.mod_c".to_string(), ("test.mod_c.ztd".to_string(), meta_c));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let existing = vec!["test.mod_a".to_string(), "test.mod_c".to_string()];
         let result = resolver.resolve_order(&existing, &[]);
 
@@ -957,11 +1054,16 @@ mod tests {
             version = "1.0.0"
         "#);
 
-        mods.insert("test.mod_a".to_string(), meta_a);
-        mods.insert("test.mod_b".to_string(), meta_b);
-        mods.insert("test.mod_c".to_string(), meta_c);
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
+        mods.insert("test.mod_b".to_string(), meta_b.clone());
+        mods.insert("test.mod_c".to_string(), meta_c.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+        discovered.insert("test.mod_b".to_string(), ("test.mod_b.ztd".to_string(), meta_b));
+        discovered.insert("test.mod_c".to_string(), ("test.mod_c.ztd".to_string(), meta_c));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
 
         // B is in existing order but disabled - should stay in order
         // C is new and disabled - should NOT be added
@@ -1004,11 +1106,16 @@ mod tests {
             version = "1.0.0"
         "#);
 
-        mods.insert("test.mod_c".to_string(), meta_c);
-        mods.insert("test.mod_a".to_string(), meta_a);
-        mods.insert("test.mod_b".to_string(), meta_b);
+        mods.insert("test.mod_c".to_string(), meta_c.clone());
+        mods.insert("test.mod_a".to_string(), meta_a.clone());
+        mods.insert("test.mod_b".to_string(), meta_b.clone());
 
-        let resolver = DependencyResolver::new(mods);
+        let mut discovered = HashMap::new();
+        discovered.insert("test.mod_c".to_string(), ("test.mod_c.ztd".to_string(), meta_c));
+        discovered.insert("test.mod_a".to_string(), ("test.mod_a.ztd".to_string(), meta_a));
+        discovered.insert("test.mod_b".to_string(), ("test.mod_b.ztd".to_string(), meta_b));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
         let result = resolver.resolve_order(&[], &[]);
 
         // Should be sorted alphabetically

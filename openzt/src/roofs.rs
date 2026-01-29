@@ -19,9 +19,10 @@ use openzt_detour_macro::detour_mod;
 /// if the roofs_hidden state is true.
 #[cfg(target_os = "windows")]
 #[detour_mod]
-pub mod hooks_place_entity {
+pub mod roof_detours {
     use super::*;
     use openzt_detour::gen::ztmapview::PLACE_ENTITY_ON_MAP_1;
+    use openzt_detour::gen::ztui_gameopts::SAVE_GAME;
 
     /// Detour for PLACE_ENTITY_ON_MAP_1
     ///
@@ -57,6 +58,31 @@ pub mod hooks_place_entity {
                     }
                 }
             }
+        }
+
+        result
+    }
+
+    /// Detour for SAVE_GAME
+    ///
+    /// Temporarily shows roofs before saving if they are currently hidden,
+    /// then re-hides them after saving.
+    #[detour(SAVE_GAME)]
+    unsafe extern "stdcall" fn save_game_detour() -> u32 {
+        // Check if roofs are currently hidden
+        let were_roofs_hidden = runtime_state::get_bool("roofs_hidden");
+
+        if were_roofs_hidden {
+            info!("SAVE_GAME: Roofs are hidden, temporarily showing them for save");
+            show_roofs();
+        }
+
+        // Call the original SAVE_GAME function
+        let result = SAVE_GAME_DETOUR.call();
+
+        if were_roofs_hidden {
+            info!("SAVE_GAME: Save complete, re-hiding roofs");
+            hide_roofs();
         }
 
         result
@@ -232,12 +258,12 @@ pub fn init() {
         Err(e) => tracing::error!("Failed to register roof tag: {}", e),
     }
 
-    // Initialize the placement detour (Windows only)
+    // Initialize detours required for roof placement and saving
     #[cfg(target_os = "windows")]
-    if let Err(e) = unsafe { hooks_place_entity::init_detours() } {
-        tracing::error!("Failed to initialize roofs placement detour: {}", e);
+    if let Err(e) = unsafe { roof_detours::init_detours() } {
+        tracing::error!("Failed to initialize roof detours: {}", e);
     } else {
-        info!("Initialized roofs placement detour");
+        info!("Initialized roof detours");
     }
 
     // Register Ctrl+R shortcut to toggle roof visibility

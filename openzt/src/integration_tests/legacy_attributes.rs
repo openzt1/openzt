@@ -94,34 +94,32 @@ fn cleanup_test_file(path: &str) {
 }
 
 /// Run all legacy attributes tests
-pub fn run_all_tests() -> Vec<TestResult> {
-    vec![
-        test_legacy_animal_attributes_loaded(),
-        test_legacy_fence_attributes_loaded(),
-        test_legacy_building_attributes_loaded(),
-        test_legacy_item_attributes_loaded(),
-        test_legacy_guest_attributes_loaded(),
-        test_default_subtype_animal(),
-        test_default_subtype_staff(),
-        test_default_subtype_fence(),
-        test_default_subtype_wall(),
-        test_no_default_subtype_building(),
-        test_explicit_subtype_female_animal(),
-        test_explicit_subtype_glass_fence(),
-        test_explicit_subtype_guest_man(),
-        test_explicit_subtype_guest_woman(),
-        test_invalid_subtype_fallback(),
-        test_patch_legacy_substitution_animal(),
-        test_patch_legacy_substitution_fence(),
-        test_patch_legacy_substitution_building(),
-        test_patch_multiple_legacy_variables(),
-        test_patch_mixed_variable_types(),
-        test_entity_not_found_error(),
-        test_entity_type_not_found(),
-        test_fallback_single_name_id(),
-        test_no_name_id_available(),
-    ]
-}
+crate::integration_tests![
+    test_legacy_animal_attributes_loaded,
+    test_legacy_fence_attributes_loaded,
+    test_legacy_building_attributes_loaded,
+    test_legacy_item_attributes_loaded,
+    test_legacy_guest_attributes_loaded,
+    test_default_subtype_animal,
+    test_default_subtype_staff,
+    test_default_subtype_fence,
+    test_default_subtype_wall,
+    test_no_default_subtype_building,
+    test_explicit_subtype_female_animal,
+    test_explicit_subtype_glass_fence,
+    test_explicit_subtype_guest_man,
+    test_explicit_subtype_guest_woman,
+    test_invalid_subtype_fallback,
+    test_patch_legacy_substitution_animal,
+    test_patch_legacy_substitution_fence,
+    test_patch_legacy_substitution_building,
+    test_patch_multiple_legacy_variables,
+    test_patch_mixed_variable_types,
+    test_entity_not_found_error,
+    test_entity_type_not_found,
+    test_fallback_single_name_id,
+    test_no_name_id_available,
+];
 
 // ============================================================================
 // Category 1: Legacy Attribute Extraction Tests

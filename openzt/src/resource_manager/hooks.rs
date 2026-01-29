@@ -190,7 +190,7 @@ mod zoo_resource_mgr {
                 .iter()
                 .map(|(id, (_, meta))| (id.clone(), meta.clone()))
                 .collect();
-            let resolver = DependencyResolver::new(resolver_mods.clone());
+            let resolver = DependencyResolver::new(resolver_mods.clone(), &discovered_mods);
             let resolution_result = resolver.resolve_order(
                 &config.mod_loading.order,
                 &disabled_mods,

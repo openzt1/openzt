@@ -91,18 +91,16 @@ pub fn create_test_mod_file_map() -> std::collections::HashMap<String, Box<[u8]>
 }
 
 /// Run all loading order tests
-pub fn run_all_tests() -> Vec<TestResult> {
-    vec![
-        test_category_ordering(),
-        test_alphabetical_within_nopatch(),
-        test_alphabetical_within_mixed(),
-        test_alphabetical_within_patchonly(),
-        test_case_insensitive_sorting(),
-        test_cross_file_habitat_reference(),
-        test_mixed_file_self_reference(),
-        test_patch_execution_order(),
-    ]
-}
+crate::integration_tests![
+    test_category_ordering,
+    test_alphabetical_within_nopatch,
+    test_alphabetical_within_mixed,
+    test_alphabetical_within_patchonly,
+    test_case_insensitive_sorting,
+    test_cross_file_habitat_reference,
+    test_mixed_file_self_reference,
+    test_patch_execution_order,
+];
 
 // ============================================================================
 // Helper Functions

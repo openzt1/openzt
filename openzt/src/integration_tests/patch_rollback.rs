@@ -37,19 +37,17 @@ fn cleanup_test_file(path: &str) {
 }
 
 /// Run all patch rollback tests
-pub fn run_all_tests() -> Vec<TestResult> {
-    vec![
-        test_continue_mode_applies_directly(),
-        test_continue_mode_skips_failed_patches(),
-        test_abort_mode_rolls_back_on_failure(),
-        test_abort_mode_commits_on_success(),
-        test_shadow_multiple_patches_same_file(),
-        test_shadow_file_deletion(),
-        test_shadow_create_and_delete_in_same_batch(),
-        test_shadow_resources_get_file_fallback(),
-        test_shadow_resources_delete_file(),
-    ]
-}
+crate::integration_tests![
+    test_continue_mode_applies_directly,
+    test_continue_mode_skips_failed_patches,
+    test_abort_mode_rolls_back_on_failure,
+    test_abort_mode_commits_on_success,
+    test_shadow_multiple_patches_same_file,
+    test_shadow_file_deletion,
+    test_shadow_create_and_delete_in_same_batch,
+    test_shadow_resources_get_file_fallback,
+    test_shadow_resources_delete_file,
+];
 
 fn test_continue_mode_applies_directly() -> TestResult {
     let test_name = "test_continue_mode_applies_directly";

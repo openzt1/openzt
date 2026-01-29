@@ -18,7 +18,7 @@ use crate::{
     resource_manager::{
         handlers::{get_handlers, RunStage},
         lazyresourcemap::{add_lazy, check_file_loaded, create_empty_resource, get_file, get_file_names, get_num_resources, mark_disabled_ztd_file},
-        openzt_mods::{get_num_mod_ids, legacy_attributes::{add_legacy_entity, LegacyEntityAttributes, LegacyEntityType, SubtypeAttributes}, load_open_zt_mod},
+        openzt_mods::{get_num_mod_ids, legacy_attributes::{add_legacy_entity, LegacyEntityAttributes, LegacyEntityType, SubtypeAttributes}, load_open_zt_mod, ztd_registry::ZtdLoadStatus},
         ztfile::ZTFileType,
     },
 };
@@ -219,6 +219,14 @@ fn handle_ztd(resource: &Path, disabled_ztds: &[String]) -> anyhow::Result<i32> 
     let is_disabled = disabled_ztds
         .iter()
         .any(|d| d.to_lowercase() == ztd_filename);
+
+    // Register this ZTD in the load order BEFORE loading
+    let status = if is_disabled {
+        ZtdLoadStatus::Disabled
+    } else {
+        ZtdLoadStatus::Enabled
+    };
+    crate::resource_manager::openzt_mods::ztd_registry::register_ztd(&ztd_filename, status);
 
     let ztd_type = load_open_zt_mod(&mut zip, resource)?;
 

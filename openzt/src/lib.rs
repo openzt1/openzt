@@ -68,6 +68,9 @@ mod experimental;
 /// Roof tag extension for scenery entities
 mod roofs;
 
+/// DLL dependency validation for Zoo Tycoon game DLLs
+mod dll_dependencies;
+
 /// Global runtime state store for cross-module state sharing
 mod runtime_state;
 
@@ -118,10 +121,10 @@ mod zoo_init {
     use super::*;
     use openzt_detour::gen::bfapp::LOAD_LANG_DLLS;
 
-    // Note(finn): We hook the LoadRes function to perform some later initialization steps. Starting
+    // Note(finn): We hook the LoadLangDLLs function to perform some later initialization steps. Starting
     //  the console starts a new thead which is not recommended in the DllMain function.
     #[detour(LOAD_LANG_DLLS)]
-    unsafe extern "thiscall" fn load_res_dlls(this: u32) -> u32 {
+    unsafe extern "thiscall" fn load_lang_dlls(this: u32) -> u32 {
         match init_console() {
             Ok(_) => {
                 let _enable_ansi = enable_ansi_support::enable_ansi_support().is_ok();
@@ -147,6 +150,7 @@ mod zoo_init {
             command_console::init();
         }
         resource_manager::init();
+        dll_dependencies::init();
         expansions::init();
         string_registry::init();
         bugfix::init();
@@ -156,6 +160,7 @@ mod zoo_init {
         bfentitytype::init();
         settings::init();
         scripting::init();
+        shortcuts::init();
         roofs::init();
 
         if cfg!(feature = "capture_ztlog") {
@@ -169,7 +174,6 @@ mod zoo_init {
             ztadvterrainmgr::init();
             ztgamemgr::init();
             experimental::init();
-            shortcuts::init();
             ztmapview::init();
             zthabitatmgr::init();
         }
