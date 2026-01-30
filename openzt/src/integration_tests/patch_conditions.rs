@@ -115,7 +115,8 @@ fn test_ztd_loaded_passes_when_ztd_loaded_before() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "mymod") {
+    let file_map = std::collections::HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "mymod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -175,7 +176,8 @@ fn test_ztd_loaded_skips_when_ztd_loaded_after() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was NOT applied
     match read_test_file(test_file) {
@@ -232,7 +234,8 @@ fn test_ztd_loaded_skips_when_ztd_disabled() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was NOT applied
     match read_test_file(test_file) {
@@ -288,7 +291,8 @@ fn test_ztd_loaded_skips_when_ztd_not_registered() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was NOT applied
     match read_test_file(test_file) {
@@ -345,7 +349,8 @@ fn test_ztd_loaded_case_insensitive() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "current");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "current");
 
     // Verify patch was applied (case insensitive match)
     match read_test_file(test_file) {
@@ -403,7 +408,8 @@ fn test_entity_exists_passes_when_entity_exists() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was applied
     match read_test_file(test_file) {
@@ -456,7 +462,8 @@ fn test_entity_exists_skips_when_entity_not_exists() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was NOT applied
     match read_test_file(test_file) {
@@ -526,7 +533,8 @@ fn test_entity_exists_all_entity_types() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was applied
     match read_test_file(test_file) {
@@ -580,7 +588,8 @@ fn test_entity_exists_case_insensitive() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was applied (case insensitive match)
     match read_test_file(test_file) {
@@ -642,7 +651,8 @@ fn test_entity_exists_invalid_format() -> TestResult {
             }),
         );
 
-        let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+        let file_map = std::collections::HashMap::new();
+        let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
         // Verify patch was NOT applied
         match read_test_file(test_file) {
@@ -703,7 +713,8 @@ fn test_entity_exists_invalid_entity_type() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was NOT applied
     match read_test_file(test_file) {
@@ -765,7 +776,8 @@ fn test_combined_ztd_loaded_and_entity_exists() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was applied
     match read_test_file(test_file) {
@@ -822,7 +834,8 @@ fn test_combined_ztd_loaded_fails_blocks_patch() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was NOT applied (ztd_loaded condition fails)
     match read_test_file(test_file) {
@@ -879,7 +892,8 @@ fn test_combined_entity_exists_fails_blocks_patch() -> TestResult {
         }),
     );
 
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "mymod");
+    let file_map = std::collections::HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "mymod");
 
     // Verify patch was NOT applied (entity_exists condition fails)
     match read_test_file(test_file) {

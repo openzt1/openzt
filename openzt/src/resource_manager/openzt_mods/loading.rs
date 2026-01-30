@@ -106,8 +106,7 @@ pub fn discover_mods(paths: &[String]) -> HashMap<String, (String, mods::Meta)> 
                     // Legacy mod (no meta.toml), skip
                 }
                 Err(e) => {
-                    error!("Failed to read meta from {:?}: Failed to parse meta.toml", file_path);
-                    debug!("Detailed parse error for {:?}:\n{:#}", file_path, e);
+                    error!("Failed to read meta from  {:?}: Failed to parse meta.toml\n{:#}", file_path, e);
                 }
             }
         }
@@ -311,7 +310,7 @@ fn load_open_zt_mod_internal(
         if let Some(patches) = file_info.mod_def.patches() {
             let patch_meta = file_info.mod_def.patch_meta().as_ref().cloned().unwrap_or_default();
             info!("Found {} patches in {}", patches.len(), file_info.filename);
-            if let Err(e) = super::patches::apply_patches(&patch_meta, patches, resource, &mod_id) {
+            if let Err(e) = super::patches::apply_patches(&patch_meta, patches, &file_map, &mod_id) {
                 error!("Failed to apply patches from {}: {}", file_info.filename, e);
                 return Err(e);
             }

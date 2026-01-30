@@ -9,7 +9,7 @@ operation = "set_key"
 target = "animals/test.ai"
 section = "Habitat"
 key = "cAlternateHabitat"
-value = "{habitat.test_habitat_a}"
+value = "{habitats.test_habitat_a}"
 
 [patches.late_patch]
 operation = "set_key"

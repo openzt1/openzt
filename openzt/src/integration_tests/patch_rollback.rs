@@ -77,7 +77,8 @@ fn test_continue_mode_applies_directly() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -147,7 +148,8 @@ fn test_continue_mode_skips_failed_patches() -> TestResult {
     );
 
     // Apply patches (should continue on error)
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod");
+    let file_map = HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "test_mod");
 
     // Verify
     match read_test_file(test_file) {
@@ -206,7 +208,8 @@ fn test_abort_mode_rolls_back_on_failure() -> TestResult {
     );
 
     // Apply patches (should fail and rollback)
-    match apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = HashMap::new();
+    match apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         Ok(_) => {
             cleanup_test_file(test_file);
             return TestResult::fail(test_name, "Patches should have failed".to_string());
@@ -271,7 +274,8 @@ fn test_abort_mode_commits_on_success() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -343,7 +347,8 @@ fn test_shadow_multiple_patches_same_file() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -395,7 +400,8 @@ fn test_shadow_file_deletion() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Delete patch failed: {}", e));
     }
@@ -442,7 +448,8 @@ fn test_shadow_create_and_delete_in_same_batch() -> TestResult {
     );
 
     // Apply patches
-    let _ = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod");
+    let file_map = HashMap::new();
+    let _ = apply_patches(&patch_meta, &patches, &file_map, "test_mod");
 
     // Verify
     let deleted = !check_file(test_file);

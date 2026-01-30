@@ -17,7 +17,17 @@ pub fn init_logging(config: &LoggingConfig) -> anyhow::Result<()> {
     }
 
     let enable_ansi = enable_ansi_support::enable_ansi_support().is_ok();
+
+    #[cfg(not(feature = "integration-tests"))]
     let level_filter = config.level.to_level_filter();
+    #[cfg(feature = "integration-tests")]
+    let level_filter = LevelFilter::TRACE; // Force TRACE level for integration tests
+
+
+    #[cfg(not(feature = "integration-tests"))]
+    let log_to_file = config.log_to_file;
+    #[cfg(feature = "integration-tests")]
+    let log_to_file = true;
 
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -30,7 +40,7 @@ pub fn init_logging(config: &LoggingConfig) -> anyhow::Result<()> {
         .with_filter(level_filter);
 
     // Set up file logging if enabled
-    if config.log_to_file {
+    if log_to_file {
         let log_path = crate::util::get_base_path().join("openzt.log");
         match std::fs::File::create(&log_path) {
             Ok(log_file) => {
@@ -78,6 +88,7 @@ pub fn init_logging(config: &LoggingConfig) -> anyhow::Result<()> {
 }
 /// OpenZT configuration file structure (openzt.toml)
 #[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct OpenZTConfig {
     #[serde(default)]
     pub mod_loading: ModLoadingConfig,
@@ -356,15 +367,31 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                 }
                 Err(e) => {
                     eprintln!("Failed to parse openzt.toml: {}", e);
-                    eprintln!("Using default configuration instead");
-                    OpenZTConfig::default()
+                    eprintln!();
+                    eprintln!("Please fix the configuration file and restart the game.");
+                    eprintln!("OpenZT will now wait indefinitely to allow you to read this message.");
+                    eprintln!();
+                    eprintln!("Config file location: {}", config_path.display());
+
+                    // Wait indefinitely so user can see the error
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(3600));
+                    }
                 }
             }
         }
         Err(e) => {
             eprintln!("Could not read openzt.toml: {}", e);
-            eprintln!("Using default configuration");
-            OpenZTConfig::default()
+            eprintln!();
+            eprintln!("Please fix the file permissions and restart the game.");
+            eprintln!("OpenZT will now wait indefinitely to allow you to read this message.");
+            eprintln!();
+            eprintln!("Config file location: {}", config_path.display());
+
+            // Wait indefinitely so user can see the error
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(3600));
+            }
         }
     }
 }

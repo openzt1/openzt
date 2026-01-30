@@ -123,8 +123,7 @@ pub fn load_resources(
         match handle_ztd(&resource, disabled_ztds) {
             Ok(count) => resource_count += count,
             Err(err) => {
-                error!("Error loading ztd: {} -> Failed to parse meta.toml", file_name);
-                debug!("Detailed parse error for {}:\n{:#}", file_name, err);
+                error!("Error loading ztd: {}:\n{:#}", file_name, err);
             }
         }
     }
@@ -137,8 +136,7 @@ pub fn load_resources(
             match handle_ztd(resource, disabled_ztds) {
                 Ok(count) => resource_count += count,
                 Err(err) => {
-                    error!("Error loading ztd: {} -> Failed to parse meta.toml", file_name);
-                    debug!("Detailed parse error for {}:\n{:#}", file_name, err);
+                    error!("Error loading ztd: {}:\n{:#}", file_name, err);
                 }
             }
         } else {

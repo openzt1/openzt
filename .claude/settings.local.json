@@ -33,7 +33,10 @@
       "Bash(git diff:*)",
       "Bash(git --no-pager diff:*)",
       "Bash(git log:*)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(for:*)",
+      "Bash(do)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []

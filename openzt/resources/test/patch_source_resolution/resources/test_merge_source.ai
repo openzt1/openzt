@@ -1,0 +1,3 @@
+[testsection]
+testkey = "merged_from_archive"
+anotherkey = "also_merged"
