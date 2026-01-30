@@ -30,7 +30,7 @@ use crate::{
         SetPalettePatch,
     },
     resource_manager::{
-        lazyresourcemap::{add_ztfile, check_file, get_file, remove_resource},
+        lazyresourcemap::{add_ztfile, add_ztfile_from_memory, check_file, get_file, remove_resource},
         openzt_mods::{get_mod_ids, habitats_locations::{get_habitat_id, get_location_id}, legacy_attributes::{get_legacy_attribute_with_subtype, LegacyEntityType}},
         ztfile::{modify_ztfile_as_animation, ZTFile, ZTFileType},
     },
@@ -44,10 +44,10 @@ use crate::{
 /// Variable types that can be substituted in patch values
 #[derive(Debug, PartialEq)]
 enum VariableType {
-    Habitat,
-    Location,
-    String,
-    Legacy,  // NEW: Legacy Zoo Tycoon entity attributes
+    Habitats,
+    Locations,
+    Strings,
+    Legacy,
 }
 
 /// Parsed variable reference from {variable} syntax
@@ -73,7 +73,7 @@ pub struct SubstitutionContext {
     pub current_mod_id: String,
 }
 
-/// Parse variable syntax: "habitat.moon" or "lunar.habitat.crater" or "string.9500"
+/// Parse variable syntax: "habitats.moon" or "lunar.habitats.crater" or "string.9500"
 ///
 /// # Arguments
 /// * `var_str` - The variable string content (without curly braces)
@@ -83,8 +83,8 @@ pub struct SubstitutionContext {
 /// * `Err` - Invalid syntax
 ///
 /// # Examples
-/// * "habitat.swamp" → ParsedVariable { var_type: Habitat, mod_id: None, identifier: "swamp" }
-/// * "lunar.location.moon" → ParsedVariable { var_type: Location, mod_id: Some("lunar"), identifier: "moon" }
+/// * "habitats.swamp" → ParsedVariable { var_type: Habitat, mod_id: None, identifier: "swamp" }
+/// * "lunar.locations.moon" → ParsedVariable { var_type: Location, mod_id: Some("lunar"), identifier: "moon" }
 /// * "string.9500" → ParsedVariable { var_type: String, mod_id: None, identifier: "9500" }
 fn parse_variable(var_str: &str) -> anyhow::Result<ParsedVariable> {
     let parts: Vec<&str> = var_str.split('.').collect();
@@ -93,9 +93,9 @@ fn parse_variable(var_str: &str) -> anyhow::Result<ParsedVariable> {
         2 => {
             // Format: {type.identifier} - current mod
             let var_type = match parts[0] {
-                "habitat" => VariableType::Habitat,
-                "location" => VariableType::Location,
-                "string" => VariableType::String,
+                "habitats" => VariableType::Habitats,
+                "locations" => VariableType::Locations,
+                "strings" => VariableType::Strings,
                 _ => anyhow::bail!("Invalid variable type '{}': expected 'habitat', 'location', or 'string'", parts[0]),
             };
 
@@ -124,10 +124,10 @@ fn parse_variable(var_str: &str) -> anyhow::Result<ParsedVariable> {
             } else {
                 // Cross-mod reference: {mod.type.identifier}
                 let var_type = match parts[1] {
-                    "habitat" => VariableType::Habitat,
-                    "location" => VariableType::Location,
-                    "string" => VariableType::String,
-                    _ => anyhow::bail!("Invalid variable type '{}': expected 'habitat', 'location', or 'string'", parts[1]),
+                    "habitats" => VariableType::Habitats,
+                    "locations" => VariableType::Locations,
+                    "strings" => VariableType::Strings,
+                    _ => anyhow::bail!("Invalid variable type '{}': expected 'habitats', 'locations', or 'string'", parts[1]),
                 };
 
                 Ok(ParsedVariable {
@@ -201,7 +201,7 @@ fn parse_variable(var_str: &str) -> anyhow::Result<ParsedVariable> {
 /// * `Err` - If variable doesn't exist or mod not loaded
 fn resolve_variable(var: &ParsedVariable, context: &SubstitutionContext) -> anyhow::Result<String> {
     match &var.var_type {
-        VariableType::Habitat => {
+        VariableType::Habitats => {
             let mod_id = var.mod_id.as_deref().unwrap_or(&context.current_mod_id);
 
             match get_habitat_id(mod_id, &var.identifier) {
@@ -221,7 +221,7 @@ fn resolve_variable(var: &ParsedVariable, context: &SubstitutionContext) -> anyh
                 }
             }
         }
-        VariableType::Location => {
+        VariableType::Locations => {
             let mod_id = var.mod_id.as_deref().unwrap_or(&context.current_mod_id);
 
             match get_location_id(mod_id, &var.identifier) {
@@ -241,7 +241,7 @@ fn resolve_variable(var: &ParsedVariable, context: &SubstitutionContext) -> anyh
                 }
             }
         }
-        VariableType::String => {
+        VariableType::Strings => {
             let string_id: u32 = var.identifier.parse()
                 .with_context(|| format!("Invalid string ID '{}': must be a number", var.identifier))?;
 
@@ -294,7 +294,7 @@ fn resolve_variable(var: &ParsedVariable, context: &SubstitutionContext) -> anyh
 /// * `Err` - If any variable fails to resolve
 ///
 /// # Examples
-/// * Input: "cHabitat={habitat.swamp}" with swamp registered as ID 100005
+/// * Input: "cHabitat={habitats.swamp}" with swamp registered as ID 100005
 /// * Output: "cHabitat=100005"
 fn substitute_variables(input: &str, context: &SubstitutionContext) -> anyhow::Result<String> {
     let mut result = String::new();
@@ -644,6 +644,7 @@ fn collect_affected_files(patches: &indexmap::IndexMap<String, Patch>) -> HashSe
 /// Apply set_key patch to shadow
 fn apply_set_key_patch_shadow(
     patch: &SetKeyPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
@@ -666,6 +667,7 @@ fn apply_set_key_patch_shadow(
 /// Apply set_keys patch to shadow
 fn apply_set_keys_patch_shadow(
     patch: &SetKeysPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
@@ -690,6 +692,7 @@ fn apply_set_keys_patch_shadow(
 /// Apply append_value patch to shadow
 fn apply_append_value_patch_shadow(
     patch: &AppendValuePatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
@@ -712,6 +715,7 @@ fn apply_append_value_patch_shadow(
 /// Apply append_values patch to shadow
 fn apply_append_values_patch_shadow(
     patch: &AppendValuesPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
@@ -736,6 +740,7 @@ fn apply_append_values_patch_shadow(
 /// Apply remove_key patch to shadow
 fn apply_remove_key_patch_shadow(
     patch: &RemoveKeyPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
@@ -773,6 +778,7 @@ fn apply_remove_key_patch_shadow(
 /// Apply remove_keys patch to shadow
 fn apply_remove_keys_patch_shadow(
     patch: &RemoveKeysPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
@@ -808,6 +814,7 @@ fn apply_remove_keys_patch_shadow(
 /// Apply add_section patch to shadow
 fn apply_add_section_patch_shadow(
     patch: &AddSectionPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
@@ -849,6 +856,7 @@ fn apply_add_section_patch_shadow(
 /// Apply clear_section patch to shadow
 fn apply_clear_section_patch_shadow(
     patch: &ClearSectionPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
@@ -881,6 +889,7 @@ fn apply_clear_section_patch_shadow(
 /// Apply remove_section patch to shadow
 fn apply_remove_section_patch_shadow(
     patch: &RemoveSectionPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
@@ -913,8 +922,9 @@ fn apply_remove_section_patch_shadow(
 /// Apply replace patch to shadow
 fn apply_replace_patch_shadow(
     patch: &ReplacePatch,
-    mod_path: &Path,
+    file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
+    current_mod_id: &str,  // Not used in shadow mode
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
     info!("Applying replace patch '{}' to shadow: {} -> {}",
@@ -925,14 +935,8 @@ fn apply_replace_patch_shadow(
         anyhow::bail!("Target file '{}' not found", patch.target);
     }
 
-    // Load source file from mod
-    let source_path = mod_path.join(&patch.source);
-    if !source_path.exists() {
-        anyhow::bail!("Source file '{}' not found in mod at path: {}",
-                     patch.source, source_path.display());
-    }
-
-    let source_data = std::fs::read(&source_path)?;
+    // Load source file from archive
+    let source_data = resolve_source_file(&patch.source, file_map)?;
     let file_type = ZTFileType::try_from(Path::new(&patch.target))
         .map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
 
@@ -959,8 +963,9 @@ fn apply_replace_patch_shadow(
 /// Apply merge patch to shadow
 fn apply_merge_patch_shadow(
     patch: &MergePatch,
-    mod_path: &Path,
+    file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
+    current_mod_id: &str,  // Not used in shadow mode
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
     info!("Applying merge patch '{}' to shadow: {} + {} (mode: {:?})",
@@ -983,14 +988,8 @@ fn apply_merge_patch_shadow(
     // Load target INI from shadow
     let mut target_ini = load_ini_from_shadow(&patch.target, shadow)?;
 
-    // Load source INI from mod
-    let source_path = mod_path.join(&patch.source);
-    if !source_path.exists() {
-        anyhow::bail!("Source file '{}' not found in mod at path: {}",
-                     patch.source, source_path.display());
-    }
-
-    let source_data = std::fs::read(&source_path)?;
+    // Load source INI from archive
+    let source_data = resolve_source_file(&patch.source, file_map)?;
     let source_str = crate::encoding_utils::decode_game_text(&source_data);
     let mut source_ini = Ini::new_cs();
     source_ini.set_comment_symbols(&[';', '#', ':']);
@@ -1103,7 +1102,12 @@ fn apply_set_palette_patch_shadow(
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if the target file doesn't exist, source file doesn't exist, or other errors occur
-fn apply_replace_patch_direct(patch: &ReplacePatch, mod_path: &Path, patch_name: &str) -> anyhow::Result<()> {
+fn apply_replace_patch_direct(
+    patch: &ReplacePatch,
+    file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+) -> anyhow::Result<()> {
     info!("Applying replace patch '{}': {} -> {}", patch_name, patch.source, patch.target);
 
     // Check if target file exists in resource system
@@ -1111,13 +1115,8 @@ fn apply_replace_patch_direct(patch: &ReplacePatch, mod_path: &Path, patch_name:
         anyhow::bail!("Target file '{}' not found in resource system", patch.target);
     }
 
-    // Load source file from mod
-    let source_path = mod_path.join(&patch.source);
-    if !source_path.exists() {
-        anyhow::bail!("Source file '{}' not found in mod at path: {}", patch.source, source_path.display());
-    }
-
-    let source_data = std::fs::read(&source_path)?;
+    // Load source file from archive
+    let source_data = resolve_source_file(&patch.source, file_map)?;
     let file_type = ZTFileType::try_from(Path::new(&patch.target))
         .map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
 
@@ -1136,8 +1135,8 @@ fn apply_replace_patch_direct(patch: &ReplacePatch, mod_path: &Path, patch_name:
         }
     };
 
-    // Update resource (add_ztfile automatically replaces if exists)
-    add_ztfile(mod_path, patch.target.clone(), ztfile)?;
+    // Update resource (add_ztfile_from_memory automatically replaces if exists)
+    add_ztfile_from_memory(current_mod_id, patch.target.clone(), ztfile)?;
 
     info!("Successfully applied replace patch '{}'", patch_name);
     Ok(())
@@ -1150,13 +1149,19 @@ fn apply_replace_patch_direct(patch: &ReplacePatch, mod_path: &Path, patch_name:
 ///
 /// # Arguments
 /// * `patch` - The merge patch configuration
-/// * `mod_path` - Path to the current mod being loaded (for resolving source files)
+/// * `file_map` - HashMap of files from the .ztd archive
 /// * `patch_name` - Name of the patch (for logging)
+/// * `current_mod_id` - The ID of the current mod (for tracking resource sources)
 ///
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if files don't exist, aren't INI files, or other errors occur
-fn apply_merge_patch_direct(patch: &MergePatch, mod_path: &Path, patch_name: &str) -> anyhow::Result<()> {
+fn apply_merge_patch_direct(
+    patch: &MergePatch,
+    file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+) -> anyhow::Result<()> {
     info!("Applying merge patch '{}': {} + {} (mode: {:?})",
           patch_name, patch.target, patch.source, patch.merge_mode);
 
@@ -1177,16 +1182,12 @@ fn apply_merge_patch_direct(patch: &MergePatch, mod_path: &Path, patch_name: &st
     target_ini.read(target_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse target INI file '{}': {}", patch.target, e))?;
 
-    // Load source INI file from mod
-    let source_path = mod_path.join(&patch.source);
-    if !source_path.exists() {
-        anyhow::bail!("Source file '{}' not found in mod at path: {}", patch.source, source_path.display());
-    }
-
-    let source_data = std::fs::read_to_string(&source_path)?;
+    // Load source INI file from archive
+    let source_data = resolve_source_file(&patch.source, file_map)?;
+    let source_str = crate::encoding_utils::decode_game_text(&source_data);
     let mut source_ini = Ini::new_cs();
     source_ini.set_comment_symbols(&[';', '#', ':']);
-    source_ini.read(source_data)
+    source_ini.read(source_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse source INI file '{}': {}", patch.source, e))?;
 
     // Convert MergeMode enum from mods to IniMergeMode from configparser
@@ -1207,8 +1208,8 @@ fn apply_merge_patch_direct(patch: &MergePatch, mod_path: &Path, patch_name: &st
     let c_string = std::ffi::CString::new(merged_content.clone())?;
     let ztfile = ZTFile::Text(c_string, file_type, merged_content.len() as u32);
 
-    // Update resource (add_ztfile automatically replaces if exists)
-    add_ztfile(mod_path, patch.target.clone(), ztfile)?;
+    // Update resource (add_ztfile_from_memory automatically replaces if exists)
+    add_ztfile_from_memory(current_mod_id, patch.target.clone(), ztfile)?;
 
     info!("Successfully applied merge patch '{}'", patch_name);
     Ok(())
@@ -1341,7 +1342,7 @@ fn load_ini_from_resources(target: &str) -> anyhow::Result<Ini> {
 }
 
 /// Helper function to save a modified INI file back to the resource system
-fn save_ini_to_resources(target: &str, ini: &Ini, mod_path: &Path) -> anyhow::Result<()> {
+fn save_ini_to_resources(target: &str, ini: &Ini, current_mod_id: &str) -> anyhow::Result<()> {
     // Write INI to string
     let content = ini.writes();
 
@@ -1351,8 +1352,8 @@ fn save_ini_to_resources(target: &str, ini: &Ini, mod_path: &Path) -> anyhow::Re
     let c_string = std::ffi::CString::new(content.clone())?;
     let ztfile = ZTFile::Text(c_string, file_type, content.len() as u32);
 
-    // Update resource (add_ztfile automatically replaces if exists)
-    add_ztfile(mod_path, target.to_string(), ztfile)?;
+    // Update resource (add_ztfile_from_memory automatically replaces if exists)
+    add_ztfile_from_memory(current_mod_id, target.to_string(), ztfile)?;
 
     Ok(())
 }
@@ -1368,7 +1369,13 @@ fn save_ini_to_resources(target: &str, ini: &Ini, mod_path: &Path) -> anyhow::Re
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_set_key_patch_direct(patch: &SetKeyPatch, mod_path: &Path, patch_name: &str, context: &SubstitutionContext) -> anyhow::Result<()> {
+fn apply_set_key_patch_direct(
+    patch: &SetKeyPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+    context: &SubstitutionContext,
+) -> anyhow::Result<()> {
     info!("Applying set_key patch '{}': {} [{}] {} = {}",
           patch_name, patch.target, patch.section, patch.key, patch.value);
 
@@ -1382,7 +1389,7 @@ fn apply_set_key_patch_direct(patch: &SetKeyPatch, mod_path: &Path, patch_name: 
     ini.setstr(&patch.section, &patch.key, Some(&resolved_value));
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied set_key patch '{}'", patch_name);
     Ok(())
@@ -1399,7 +1406,13 @@ fn apply_set_key_patch_direct(patch: &SetKeyPatch, mod_path: &Path, patch_name: 
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_set_keys_patch_direct(patch: &SetKeysPatch, mod_path: &Path, patch_name: &str, context: &SubstitutionContext) -> anyhow::Result<()> {
+fn apply_set_keys_patch_direct(
+    patch: &SetKeysPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+    context: &SubstitutionContext,
+) -> anyhow::Result<()> {
     info!("Applying set_keys patch '{}': {} [{}] ({} keys)",
           patch_name, patch.target, patch.section, patch.keys.len());
 
@@ -1413,7 +1426,7 @@ fn apply_set_keys_patch_direct(patch: &SetKeysPatch, mod_path: &Path, patch_name
     }
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied set_keys patch '{}' - set {} keys", patch_name, patch.keys.len());
     Ok(())
@@ -1430,7 +1443,13 @@ fn apply_set_keys_patch_direct(patch: &SetKeysPatch, mod_path: &Path, patch_name
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_append_value_patch_direct(patch: &AppendValuePatch, mod_path: &Path, patch_name: &str, context: &SubstitutionContext) -> anyhow::Result<()> {
+fn apply_append_value_patch_direct(
+    patch: &AppendValuePatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+    context: &SubstitutionContext,
+) -> anyhow::Result<()> {
     info!("Applying append_value patch '{}': {} [{}] {} += {}",
           patch_name, patch.target, patch.section, patch.key, patch.value);
 
@@ -1444,7 +1463,7 @@ fn apply_append_value_patch_direct(patch: &AppendValuePatch, mod_path: &Path, pa
     ini.addstr(&patch.section, &patch.key, &resolved_value);
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied append_value patch '{}'", patch_name);
     Ok(())
@@ -1461,7 +1480,13 @@ fn apply_append_value_patch_direct(patch: &AppendValuePatch, mod_path: &Path, pa
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_append_values_patch_direct(patch: &AppendValuesPatch, mod_path: &Path, patch_name: &str, context: &SubstitutionContext) -> anyhow::Result<()> {
+fn apply_append_values_patch_direct(
+    patch: &AppendValuesPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+    context: &SubstitutionContext,
+) -> anyhow::Result<()> {
     info!("Applying append_values patch '{}': {} [{}] {} += {} values",
           patch_name, patch.target, patch.section, patch.key, patch.values.len());
 
@@ -1475,7 +1500,7 @@ fn apply_append_values_patch_direct(patch: &AppendValuesPatch, mod_path: &Path, 
     }
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied append_values patch '{}' - appended {} values",
           patch_name, patch.values.len());
@@ -1492,7 +1517,12 @@ fn apply_append_values_patch_direct(patch: &AppendValuesPatch, mod_path: &Path, 
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully (warnings logged if key doesn't exist)
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_remove_key_patch_direct(patch: &RemoveKeyPatch, mod_path: &Path, patch_name: &str) -> anyhow::Result<()> {
+fn apply_remove_key_patch_direct(
+    patch: &RemoveKeyPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+) -> anyhow::Result<()> {
     info!("Applying remove_key patch '{}': {} [{}] remove key '{}'",
           patch_name, patch.target, patch.section, patch.key);
 
@@ -1509,7 +1539,7 @@ fn apply_remove_key_patch_direct(patch: &RemoveKeyPatch, mod_path: &Path, patch_
     }
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied remove_key patch '{}'", patch_name);
     Ok(())
@@ -1525,7 +1555,12 @@ fn apply_remove_key_patch_direct(patch: &RemoveKeyPatch, mod_path: &Path, patch_
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully (warnings logged for missing keys)
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_remove_keys_patch_direct(patch: &RemoveKeysPatch, mod_path: &Path, patch_name: &str) -> anyhow::Result<()> {
+fn apply_remove_keys_patch_direct(
+    patch: &RemoveKeysPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+) -> anyhow::Result<()> {
     info!("Applying remove_keys patch '{}': {} [{}] remove {} keys",
           patch_name, patch.target, patch.section, patch.keys.len());
 
@@ -1550,7 +1585,7 @@ fn apply_remove_keys_patch_direct(patch: &RemoveKeysPatch, mod_path: &Path, patc
     }
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied remove_keys patch '{}' - removed {} of {} keys",
           patch_name, removed_count, patch.keys.len());
@@ -1568,7 +1603,13 @@ fn apply_remove_keys_patch_direct(patch: &RemoveKeysPatch, mod_path: &Path, patc
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, section collision occurs with on_exists=error, or other errors
-fn apply_add_section_patch_direct(patch: &AddSectionPatch, mod_path: &Path, patch_name: &str, context: &SubstitutionContext) -> anyhow::Result<()> {
+fn apply_add_section_patch_direct(
+    patch: &AddSectionPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+    context: &SubstitutionContext,
+) -> anyhow::Result<()> {
     info!("Applying add_section patch '{}': {} [{}] with {} keys (on_exists: {:?})",
           patch_name, patch.target, patch.section, patch.keys.len(), patch.on_exists);
 
@@ -1612,7 +1653,7 @@ fn apply_add_section_patch_direct(patch: &AddSectionPatch, mod_path: &Path, patc
     }
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied add_section patch '{}' - {} keys added/merged",
           patch_name, patch.keys.len());
@@ -1629,7 +1670,12 @@ fn apply_add_section_patch_direct(patch: &AddSectionPatch, mod_path: &Path, patc
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully (warnings logged if section doesn't exist)
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_clear_section_patch_direct(patch: &ClearSectionPatch, mod_path: &Path, patch_name: &str) -> anyhow::Result<()> {
+fn apply_clear_section_patch_direct(
+    patch: &ClearSectionPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+) -> anyhow::Result<()> {
     info!("Applying clear_section patch '{}': {} [{}]",
           patch_name, patch.target, patch.section);
 
@@ -1647,7 +1693,7 @@ fn apply_clear_section_patch_direct(patch: &ClearSectionPatch, mod_path: &Path, 
     ini.clear_section(&patch.section);
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied clear_section patch '{}'", patch_name);
     Ok(())
@@ -1663,7 +1709,12 @@ fn apply_clear_section_patch_direct(patch: &ClearSectionPatch, mod_path: &Path, 
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully (warnings logged if section doesn't exist)
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_remove_section_patch_direct(patch: &RemoveSectionPatch, mod_path: &Path, patch_name: &str) -> anyhow::Result<()> {
+fn apply_remove_section_patch_direct(
+    patch: &RemoveSectionPatch,
+    _file_map: &HashMap<String, Box<[u8]>>,
+    patch_name: &str,
+    current_mod_id: &str,
+) -> anyhow::Result<()> {
     info!("Applying remove_section patch '{}': {} [{}]",
           patch_name, patch.target, patch.section);
 
@@ -1680,10 +1731,35 @@ fn apply_remove_section_patch_direct(patch: &RemoveSectionPatch, mod_path: &Path
     }
 
     // Save back to resources
-    save_ini_to_resources(&patch.target, &ini, mod_path)?;
+    save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
     info!("Successfully applied remove_section patch '{}'", patch_name);
     Ok(())
+}
+
+/// Resolve a source file for patch operations
+///
+/// Looks up source files in the file_map (from .ztd archive) with "resources/" prefix.
+/// Errors if not found in archive.
+///
+/// # Arguments
+/// * `source` - Relative path to the source file
+/// * `file_map` - HashMap of files from the .ztd archive
+///
+/// # Returns
+/// * `Ok(Vec<u8>)` - File contents
+/// * `Err(_)` - File not found
+fn resolve_source_file(
+    source: &str,
+    file_map: &HashMap<String, Box<[u8]>>,
+) -> anyhow::Result<Vec<u8>> {
+    let archive_path = format!("resources/{}", source);
+    file_map.get(&archive_path)
+        .map(|data| data.to_vec())
+        .ok_or_else(|| anyhow::anyhow!(
+            "Source file '{}' not found in archive (expected as 'resources/{}')",
+            source, source
+        ))
 }
 
 // ============================================================================
@@ -1694,8 +1770,9 @@ fn apply_remove_section_patch_direct(patch: &RemoveSectionPatch, mod_path: &Path
 ///
 /// # Arguments
 /// * `patch` - The patch to apply
-/// * `mod_path` - Path to the current mod being loaded
+/// * `file_map` - HashMap of files from the .ztd archive
 /// * `patch_name` - Name of the patch (for logging)
+/// * `current_mod_id` - The ID of the current mod (for tracking resource sources)
 /// * `context` - Substitution context for variable resolution
 ///
 /// # Returns
@@ -1703,24 +1780,25 @@ fn apply_remove_section_patch_direct(patch: &RemoveSectionPatch, mod_path: &Path
 /// * `Err(_)` if the patch failed
 fn apply_single_patch_direct(
     patch: &Patch,
-    mod_path: &Path,
+    file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
+    current_mod_id: &str,
     context: &SubstitutionContext,
 ) -> anyhow::Result<()> {
     match patch {
-        Patch::Replace(p) => apply_replace_patch_direct(p, mod_path, patch_name),
-        Patch::Merge(p) => apply_merge_patch_direct(p, mod_path, patch_name),
+        Patch::Replace(p) => apply_replace_patch_direct(p, file_map, patch_name, current_mod_id),
+        Patch::Merge(p) => apply_merge_patch_direct(p, file_map, patch_name, current_mod_id),
         Patch::Delete(p) => apply_delete_patch_direct(p, patch_name),
         Patch::SetPalette(p) => apply_set_palette_patch_direct(p, patch_name),
-        Patch::SetKey(p) => apply_set_key_patch_direct(p, mod_path, patch_name, context),
-        Patch::SetKeys(p) => apply_set_keys_patch_direct(p, mod_path, patch_name, context),
-        Patch::AppendValue(p) => apply_append_value_patch_direct(p, mod_path, patch_name, context),
-        Patch::AppendValues(p) => apply_append_values_patch_direct(p, mod_path, patch_name, context),
-        Patch::RemoveKey(p) => apply_remove_key_patch_direct(p, mod_path, patch_name),
-        Patch::RemoveKeys(p) => apply_remove_keys_patch_direct(p, mod_path, patch_name),
-        Patch::AddSection(p) => apply_add_section_patch_direct(p, mod_path, patch_name, context),
-        Patch::ClearSection(p) => apply_clear_section_patch_direct(p, mod_path, patch_name),
-        Patch::RemoveSection(p) => apply_remove_section_patch_direct(p, mod_path, patch_name),
+        Patch::SetKey(p) => apply_set_key_patch_direct(p, file_map, patch_name, current_mod_id, context),
+        Patch::SetKeys(p) => apply_set_keys_patch_direct(p, file_map, patch_name, current_mod_id, context),
+        Patch::AppendValue(p) => apply_append_value_patch_direct(p, file_map, patch_name, current_mod_id, context),
+        Patch::AppendValues(p) => apply_append_values_patch_direct(p, file_map, patch_name, current_mod_id, context),
+        Patch::RemoveKey(p) => apply_remove_key_patch_direct(p, file_map, patch_name, current_mod_id),
+        Patch::RemoveKeys(p) => apply_remove_keys_patch_direct(p, file_map, patch_name, current_mod_id),
+        Patch::AddSection(p) => apply_add_section_patch_direct(p, file_map, patch_name, current_mod_id, context),
+        Patch::ClearSection(p) => apply_clear_section_patch_direct(p, file_map, patch_name, current_mod_id),
+        Patch::RemoveSection(p) => apply_remove_section_patch_direct(p, file_map, patch_name, current_mod_id),
     }
 }
 
@@ -1728,8 +1806,9 @@ fn apply_single_patch_direct(
 ///
 /// # Arguments
 /// * `patch` - The patch to apply
-/// * `mod_path` - Path to the current mod being loaded
+/// * `file_map` - HashMap of files from the .ztd archive
 /// * `patch_name` - Name of the patch (for logging)
+/// * `current_mod_id` - The ID of the current mod (for tracking resource sources)
 /// * `context` - Substitution context for variable resolution
 /// * `shadow` - Shadow resources to apply patches to
 ///
@@ -1738,25 +1817,26 @@ fn apply_single_patch_direct(
 /// * `Err(_)` if the patch failed
 fn apply_single_patch_shadow(
     patch: &Patch,
-    mod_path: &Path,
+    file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
+    current_mod_id: &str,
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
     match patch {
-        Patch::Replace(p) => apply_replace_patch_shadow(p, mod_path, patch_name, shadow),
-        Patch::Merge(p) => apply_merge_patch_shadow(p, mod_path, patch_name, shadow),
+        Patch::Replace(p) => apply_replace_patch_shadow(p, file_map, patch_name, current_mod_id, shadow),
+        Patch::Merge(p) => apply_merge_patch_shadow(p, file_map, patch_name, current_mod_id, shadow),
         Patch::Delete(p) => apply_delete_patch_shadow(p, patch_name, shadow),
         Patch::SetPalette(p) => apply_set_palette_patch_shadow(p, patch_name, shadow),
-        Patch::SetKey(p) => apply_set_key_patch_shadow(p, patch_name, context, shadow),
-        Patch::SetKeys(p) => apply_set_keys_patch_shadow(p, patch_name, context, shadow),
-        Patch::AppendValue(p) => apply_append_value_patch_shadow(p, patch_name, context, shadow),
-        Patch::AppendValues(p) => apply_append_values_patch_shadow(p, patch_name, context, shadow),
-        Patch::RemoveKey(p) => apply_remove_key_patch_shadow(p, patch_name, shadow),
-        Patch::RemoveKeys(p) => apply_remove_keys_patch_shadow(p, patch_name, shadow),
-        Patch::AddSection(p) => apply_add_section_patch_shadow(p, patch_name, context, shadow),
-        Patch::ClearSection(p) => apply_clear_section_patch_shadow(p, patch_name, shadow),
-        Patch::RemoveSection(p) => apply_remove_section_patch_shadow(p, patch_name, shadow),
+        Patch::SetKey(p) => apply_set_key_patch_shadow(p, file_map, patch_name, context, shadow),
+        Patch::SetKeys(p) => apply_set_keys_patch_shadow(p, file_map, patch_name, context, shadow),
+        Patch::AppendValue(p) => apply_append_value_patch_shadow(p, file_map, patch_name, context, shadow),
+        Patch::AppendValues(p) => apply_append_values_patch_shadow(p, file_map, patch_name, context, shadow),
+        Patch::RemoveKey(p) => apply_remove_key_patch_shadow(p, file_map, patch_name, shadow),
+        Patch::RemoveKeys(p) => apply_remove_keys_patch_shadow(p, file_map, patch_name, shadow),
+        Patch::AddSection(p) => apply_add_section_patch_shadow(p, file_map, patch_name, context, shadow),
+        Patch::ClearSection(p) => apply_clear_section_patch_shadow(p, file_map, patch_name, shadow),
+        Patch::RemoveSection(p) => apply_remove_section_patch_shadow(p, file_map, patch_name, shadow),
     }
 }
 
@@ -1970,7 +2050,7 @@ enum PatchResult {
 /// # Arguments
 /// * `patch_meta` - Patch metadata containing error handling and file-level conditions
 /// * `patches` - Ordered map of patches to apply (order is preserved via IndexMap)
-/// * `mod_path` - Path to the current mod being loaded
+/// * `file_map` - HashMap of files from the .ztd archive
 /// * `current_mod_id` - The ID of the current mod (for variable substitution)
 ///
 /// # Returns
@@ -1978,7 +2058,7 @@ enum PatchResult {
 fn apply_patches_direct(
     patch_meta: &PatchMeta,
     patches: &indexmap::IndexMap<String, Patch>,
-    mod_path: &Path,
+    file_map: &HashMap<String, Box<[u8]>>,
     current_mod_id: &str,
 ) -> anyhow::Result<()> {
 
@@ -2043,7 +2123,7 @@ fn apply_patches_direct(
         match evaluate_patch_condition_with_target(condition, target, patch_name, current_mod_id) {
             Ok(true) => {
                 // Condition passed, apply patch
-                let result = apply_single_patch_direct(patch, mod_path, patch_name, &context);
+                let result = apply_single_patch_direct(patch, file_map, patch_name, current_mod_id, &context);
 
                 if let Err(e) = result {
                     error!("Patch '{}' failed: {}. Continuing.", patch_name, e);
@@ -2073,7 +2153,7 @@ fn apply_patches_direct(
 /// # Arguments
 /// * `patch_meta` - Patch metadata containing error handling and file-level conditions
 /// * `patches` - Ordered map of patches to apply (order is preserved via IndexMap)
-/// * `mod_path` - Path to the current mod being loaded
+/// * `file_map` - HashMap of files from the .ztd archive
 /// * `current_mod_id` - The ID of the current mod (for variable substitution)
 ///
 /// # Returns
@@ -2082,7 +2162,7 @@ fn apply_patches_direct(
 fn apply_patches_with_shadow(
     patch_meta: &PatchMeta,
     patches: &indexmap::IndexMap<String, Patch>,
-    mod_path: &Path,
+    file_map: &HashMap<String, Box<[u8]>>,
     current_mod_id: &str,
 ) -> anyhow::Result<()> {
     // Create substitution context for variable resolution
@@ -2157,7 +2237,7 @@ fn apply_patches_with_shadow(
         match evaluate_patch_condition_with_target(condition, target, patch_name, current_mod_id) {
             Ok(true) => {
                 // Condition passed, apply patch to shadow
-                let result = apply_single_patch_shadow(patch, mod_path, patch_name, &context, &mut shadow);
+                let result = apply_single_patch_shadow(patch, file_map, patch_name, current_mod_id, &context, &mut shadow);
 
                 if let Err(e) = result {
                     error!("Patch '{}' failed: {}. Rolling back.", patch_name, e);
@@ -2194,7 +2274,7 @@ fn apply_patches_with_shadow(
 /// # Arguments
 /// * `patch_meta` - Patch metadata containing error handling and file-level conditions
 /// * `patches` - Ordered map of patches to apply (order is preserved via IndexMap)
-/// * `mod_path` - Path to the current mod being loaded
+/// * `file_map` - HashMap of files from the .ztd archive
 /// * `current_mod_id` - The ID of the current mod (for variable substitution)
 ///
 /// # Returns
@@ -2203,18 +2283,18 @@ fn apply_patches_with_shadow(
 pub fn apply_patches(
     patch_meta: &PatchMeta,
     patches: &indexmap::IndexMap<String, Patch>,
-    mod_path: &Path,
+    file_map: &HashMap<String, Box<[u8]>>,
     current_mod_id: &str,
 ) -> anyhow::Result<()> {
     // Route based on error handling mode
     match patch_meta.on_error {
         ErrorHandling::Continue => {
             // Direct mode - no shadow, patches applied directly
-            apply_patches_direct(patch_meta, patches, mod_path, current_mod_id)
+            apply_patches_direct(patch_meta, patches, file_map, current_mod_id)
         }
         ErrorHandling::Abort | ErrorHandling::AbortMod => {
             // Shadow mode - patches applied to shadow, committed on success
-            apply_patches_with_shadow(patch_meta, patches, mod_path, current_mod_id)
+            apply_patches_with_shadow(patch_meta, patches, file_map, current_mod_id)
         }
     }
 }
@@ -2229,40 +2309,40 @@ mod tests {
 
     #[test]
     fn test_parse_variable_current_mod_habitat() {
-        let result = parse_variable("habitat.swamp").unwrap();
-        assert_eq!(result.var_type, VariableType::Habitat);
+        let result = parse_variable("habitats.swamp").unwrap();
+        assert_eq!(result.var_type, VariableType::Habitats);
         assert_eq!(result.mod_id, None);
         assert_eq!(result.identifier, "swamp");
     }
 
     #[test]
     fn test_parse_variable_current_mod_location() {
-        let result = parse_variable("location.moon").unwrap();
-        assert_eq!(result.var_type, VariableType::Location);
+        let result = parse_variable("locations.moon").unwrap();
+        assert_eq!(result.var_type, VariableType::Locations);
         assert_eq!(result.mod_id, None);
         assert_eq!(result.identifier, "moon");
     }
 
     #[test]
     fn test_parse_variable_current_mod_string() {
-        let result = parse_variable("string.9500").unwrap();
-        assert_eq!(result.var_type, VariableType::String);
+        let result = parse_variable("strings.9500").unwrap();
+        assert_eq!(result.var_type, VariableType::Strings);
         assert_eq!(result.mod_id, None);
         assert_eq!(result.identifier, "9500");
     }
 
     #[test]
     fn test_parse_variable_cross_mod_habitat() {
-        let result = parse_variable("lunar.habitat.crater").unwrap();
-        assert_eq!(result.var_type, VariableType::Habitat);
+        let result = parse_variable("lunar.habitats.crater").unwrap();
+        assert_eq!(result.var_type, VariableType::Habitats);
         assert_eq!(result.mod_id, Some("lunar".to_string()));
         assert_eq!(result.identifier, "crater");
     }
 
     #[test]
     fn test_parse_variable_cross_mod_location() {
-        let result = parse_variable("lunar.location.moon").unwrap();
-        assert_eq!(result.var_type, VariableType::Location);
+        let result = parse_variable("lunar.locations.moon").unwrap();
+        assert_eq!(result.var_type, VariableType::Locations);
         assert_eq!(result.mod_id, Some("lunar".to_string()));
         assert_eq!(result.identifier, "moon");
     }
@@ -2276,7 +2356,7 @@ mod tests {
 
     #[test]
     fn test_parse_variable_invalid_syntax_too_many_parts() {
-        let result = parse_variable("mod.habitat.name.extra");
+        let result = parse_variable("mod.habitats.name.extra");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid variable syntax"));
     }
@@ -2310,7 +2390,7 @@ mod tests {
             current_mod_id: "test_mod".to_string(),
         };
         // This would fail without registered habitats, but tests the parsing
-        let input = "{habitat.swamp}";
+        let input = "{habitats.swamp}";
         let result = substitute_variables(input, &context);
         // Will fail because habitat not registered, but that's expected
         assert!(result.is_err());
@@ -2328,7 +2408,7 @@ mod tests {
         let context = SubstitutionContext {
             current_mod_id: "test_mod".to_string(),
         };
-        let input = "cHabitat={habitat.swamp}, cLocation={location.moon}";
+        let input = "cHabitat={habitats.swamp}, cLocation={locations.moon}";
         let result = substitute_variables(input, &context);
         // Will fail because habitats not registered, but validates parsing multiple variables
         assert!(result.is_err());
@@ -2339,7 +2419,7 @@ mod tests {
         let context = SubstitutionContext {
             current_mod_id: "test_mod".to_string(),
         };
-        let input = "prefix {habitat.swamp} middle {location.moon} suffix";
+        let input = "prefix {habitats.swamp} middle {locations.moon} suffix";
         let result = substitute_variables(input, &context);
         // Will fail because habitats not registered, but validates mixed content parsing
         assert!(result.is_err());
@@ -2350,7 +2430,7 @@ mod tests {
         let context = SubstitutionContext {
             current_mod_id: "test_mod".to_string(),
         };
-        let input = "text {habitat.swamp";
+        let input = "text {habitats.swamp";
         let result = substitute_variables(input, &context);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unclosed variable brace"));

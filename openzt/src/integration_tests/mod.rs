@@ -17,6 +17,7 @@ pub mod legacy_attributes;
 pub mod loading_order;
 pub mod patch_conditions;
 pub mod patch_rollback;
+pub mod patch_source_resolution;
 pub mod shortcuts;
 
 /// Result of a single test
@@ -365,6 +366,22 @@ mod detour_zoo_main {
         let extensions_results = super::extensions::run_all_tests();
 
         for result in &extensions_results {
+            if result.passed {
+                write_log(&format!("  ✓ {}", result.name));
+                total_passed += 1;
+            } else {
+                write_log(&format!("  ✗ {} - {}", result.name, result.error.as_ref().unwrap_or(&"Unknown error".to_string())));
+                total_failed += 1;
+            }
+        }
+
+        write_log("");
+
+        // Run patch source resolution tests
+        write_log("Running patch source resolution tests...");
+        let patch_source_results = super::patch_source_resolution::run_all_tests();
+
+        for result in &patch_source_results {
             if result.passed {
                 write_log(&format!("  ✓ {}", result.name));
                 total_passed += 1;

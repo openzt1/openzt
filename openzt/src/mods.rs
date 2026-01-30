@@ -12,6 +12,7 @@ use serde::{
     Deserialize,
 };
 use toml::Value;
+use tracing::warn;
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -41,6 +42,7 @@ impl From<std::num::ParseIntError> for ParseError {
 }
 
 #[derive(Deserialize, Debug, Getters, Clone)]
+#[serde(deny_unknown_fields)]
 #[get = "pub"]
 pub struct Meta {
     name: String,
@@ -87,7 +89,7 @@ where
                     Err(e) => {
                         // Skip invalid dependency with a warning (using eprintln as a fallback
                         // since we don't have access to tracing during deserialization)
-                        eprintln!(
+                        warn!(
                             "Warning: Skipping invalid dependency at index {}: {}. \
                             Dependency will be ignored. Value: {}",
                             index, e, value_str
@@ -302,6 +304,7 @@ pub enum Ordering {
 }
 
 #[derive(Deserialize, Debug, Getters)]
+#[serde(deny_unknown_fields)]
 #[get = "pub"]
 pub struct ModDefinition {
     habitats: Option<HashMap<String, IconDefinition>>,
@@ -477,6 +480,7 @@ impl EntityExtension {
 /// Contains file-level error handling and conditional evaluation settings
 /// that apply to all patches in a mod definition.
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PatchMeta {
     /// File-level on_error directive for error handling
     #[serde(default = "default_on_error")]
@@ -551,6 +555,7 @@ fn default_on_exists() -> OnExists {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PatchCondition {
     /// Target file for key_exists/value_equals conditions
     /// Required at top-level if using key_exists or value_equals

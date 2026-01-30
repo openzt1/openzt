@@ -403,7 +403,8 @@ fn test_patch_legacy_substitution_animal() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = std::collections::HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -463,7 +464,8 @@ fn test_patch_legacy_substitution_fence() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = std::collections::HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -522,7 +524,8 @@ fn test_patch_legacy_substitution_building() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = std::collections::HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -582,7 +585,8 @@ fn test_patch_multiple_legacy_variables() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = std::collections::HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }
@@ -637,7 +641,8 @@ fn test_patch_mixed_variable_types() -> TestResult {
     );
 
     // Apply patches
-    if let Err(e) = apply_patches(&patch_meta, &patches, Path::new(""), "test_mod") {
+    let file_map = std::collections::HashMap::new();
+    if let Err(e) = apply_patches(&patch_meta, &patches, &file_map, "test_mod") {
         cleanup_test_file(test_file);
         return TestResult::fail(test_name, format!("Patches failed to apply: {}", e));
     }

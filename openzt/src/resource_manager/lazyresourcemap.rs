@@ -495,9 +495,21 @@ pub fn get_num_resources() -> usize {
 }
 
 pub fn add_ztfile(path: &Path, file_name: String, ztfile: ZTFile) -> anyhow::Result<()> {
-    let ztd_path = path.to_str() 
+    let ztd_path = path.to_str()
         .with_context(|| format!("Failed to convert path to string: {}", path.display()))?;
     let (file_name, type_, data) = ztfile_to_raw_resource(ztd_path, file_name, ztfile)?;
+    LazyResourceMap::insert_custom(file_name, type_, data);
+    Ok(())
+}
+
+/// Add a ZTFile from memory/in-memory source, using mod_id as the source identifier
+///
+/// This is used when resources come from in-memory file maps rather than
+/// filesystem paths, such as when patch source files are read from .ztd archives.
+pub fn add_ztfile_from_memory(mod_id: &str, file_name: String, ztfile: ZTFile) -> anyhow::Result<()> {
+    // Use the mod_id as the ztd_path for tracking
+    let ztd_path = format!("zip::openzt_mods/{}", mod_id);
+    let (file_name, type_, data) = ztfile_to_raw_resource(&ztd_path, file_name, ztfile)?;
     LazyResourceMap::insert_custom(file_name, type_, data);
     Ok(())
 }

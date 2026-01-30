@@ -342,7 +342,7 @@ fn test_cross_file_habitat_reference() -> TestResult {
     };
 
     // Read animals/test.ai and verify cAlternateHabitat contains the habitat string ID
-    // The patch in 99-patches-only.toml uses {habitat.test_habitat_a}
+    // The patch in 99-patches-only.toml uses {habitats.test_habitat_a}
     match read_ini_key("animals/test.ai", "Habitat", "cAlternateHabitat") {
         Ok(value) => {
             let value_as_id = value.parse::<u32>().unwrap_or(0);
@@ -373,7 +373,7 @@ fn test_mixed_file_self_reference() -> TestResult {
     };
 
     // Read animals/test.ai and verify cHabitat contains the habitat string ID
-    // The patch in 50-mixed-content.toml uses {habitat.test_habitat_b}
+    // The patch in 50-mixed-content.toml uses {habitats.test_habitat_b}
     match read_ini_key("animals/test.ai", "Habitat", "cHabitat") {
         Ok(value) => {
             let value_as_id = value.parse::<u32>().unwrap_or(0);

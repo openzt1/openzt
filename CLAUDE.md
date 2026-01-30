@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL: ALWAYS USE openzt.bat
+
+**NEVER use `cargo` directly** - ALWAYS use `./openzt.bat` for ANY cargo command (build, check, clippy, test, run, etc.).
+
+The project uses a specific toolchain and target configuration that is managed by `openzt.bat`. Running `cargo` directly will use the wrong toolchain/target.
+
+**Examples:**
+- ❌ `cargo check` → ✅ `./openzt.bat check`
+- ❌ `cargo build` → ✅ `./openzt.bat build`
+- ❌ `cargo clippy` → ✅ `./openzt.bat clippy`
+- ❌ `cargo test` → ✅ `./openzt.bat test`
+
+If `openzt.bat` is missing a command you need, ADD IT to `openzt.bat` rather than running cargo directly.
+
 ## Project Overview
 
 OpenZT is a DLL injection framework for Zoo Tycoon (2001) written in Rust. It provides mod support, bug fixes, and feature enhancements through function detouring and memory manipulation.

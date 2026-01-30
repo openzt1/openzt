@@ -1,0 +1,22 @@
+[patches]
+
+# Test 1: Simple merge patch
+[patches.test_merge_from_archive]
+operation = "merge"
+target = "animals/testsource.ai"
+source = "test_merge_source.ai"
+
+# Test 2: Replace patch
+[patches.test_replace_from_archive]
+operation = "replace"
+target = "animals/testtarget.ai"
+source = "test_replace_source.ai"
+
+# Test 3: Merge with multiple sections
+[patches.test_merge_sections]
+operation = "merge"
+target = "animals/testmulti.ai"
+source = "test_multi_source.ai"
+
+[patch_meta]
+on_error = "continue"

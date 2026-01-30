@@ -1,0 +1,6 @@
+name = "Patch Source Resolution Test"
+mod_id = "patch_source_test"
+version = "0.1.0"
+description = "Tests that patch source files can be read from .ztd archive"
+authors = ["OpenZT"]
+ztd_type = "Openzt"
