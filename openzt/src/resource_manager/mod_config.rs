@@ -105,6 +105,7 @@ pub struct OpenZTConfig {
 
 /// Mod loading configuration section
 #[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ModLoadingConfig {
     /// Explicit load order - mods are loaded in this sequence
     #[serde(default)]
@@ -160,6 +161,7 @@ impl LogLevel {
 
 /// Logging configuration section
 #[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct LoggingConfig {
     /// Enable file logging to openzt.log (default: true)
     #[serde(default = "default_true")]
@@ -172,6 +174,7 @@ pub struct LoggingConfig {
 
 /// Resource cache configuration section
 #[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceCacheConfig {
     /// Maximum memory usage before unloading begins (in MB)
     #[serde(default = "default_max_memory_mb")]
