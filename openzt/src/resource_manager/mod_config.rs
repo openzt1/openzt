@@ -372,14 +372,13 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                     eprintln!("Failed to parse openzt.toml: {}", e);
                     eprintln!();
                     eprintln!("Please fix the configuration file and restart the game.");
-                    eprintln!("OpenZT will now wait indefinitely to allow you to read this message.");
+                    eprintln!("OpenZT will now exit.");
                     eprintln!();
                     eprintln!("Config file location: {}", config_path.display());
 
-                    // Wait indefinitely so user can see the error
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(3600));
-                    }
+                    // Wait to allow user to read the error, then exit
+                    std::thread::sleep(std::time::Duration::from_secs(3600));
+                    std::process::exit(1);
                 }
             }
         }
@@ -387,14 +386,13 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
             eprintln!("Could not read openzt.toml: {}", e);
             eprintln!();
             eprintln!("Please fix the file permissions and restart the game.");
-            eprintln!("OpenZT will now wait indefinitely to allow you to read this message.");
+            eprintln!("OpenZT will now exit.");
             eprintln!();
             eprintln!("Config file location: {}", config_path.display());
 
-            // Wait indefinitely so user can see the error
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(3600));
-            }
+            // Wait to allow user to read the error, then exit
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+            std::process::exit(1);
         }
     }
 }
