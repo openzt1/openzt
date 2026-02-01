@@ -969,7 +969,6 @@ fn apply_replace_patch_shadow(
     patch: &ReplacePatch,
     file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
-    current_mod_id: &str, // Not used in shadow mode
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
     info!("Applying replace patch '{}' to shadow: {} -> {}", patch_name, patch.source, patch.target);
@@ -1014,7 +1013,6 @@ fn apply_merge_patch_shadow(
     patch: &MergePatch,
     file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
-    current_mod_id: &str, // Not used in shadow mode
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
     info!(
@@ -1873,13 +1871,12 @@ fn apply_single_patch_shadow(
     patch: &Patch,
     file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
-    current_mod_id: &str,
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
     match patch {
-        Patch::Replace(p) => apply_replace_patch_shadow(p, file_map, patch_name, current_mod_id, shadow),
-        Patch::Merge(p) => apply_merge_patch_shadow(p, file_map, patch_name, current_mod_id, shadow),
+        Patch::Replace(p) => apply_replace_patch_shadow(p, file_map, patch_name, shadow),
+        Patch::Merge(p) => apply_merge_patch_shadow(p, file_map, patch_name, shadow),
         Patch::Delete(p) => apply_delete_patch_shadow(p, patch_name, shadow),
         Patch::SetPalette(p) => apply_set_palette_patch_shadow(p, patch_name, shadow),
         Patch::SetKey(p) => apply_set_key_patch_shadow(p, file_map, patch_name, context, shadow),
@@ -2281,7 +2278,7 @@ fn apply_patches_with_shadow(
         match evaluate_patch_condition_with_target(condition, target, patch_name, current_mod_id) {
             Ok(true) => {
                 // Condition passed, apply patch to shadow
-                let result = apply_single_patch_shadow(patch, file_map, patch_name, current_mod_id, &context, &mut shadow);
+                let result = apply_single_patch_shadow(patch, file_map, patch_name, &context, &mut shadow);
 
                 if let Err(e) = result {
                     error!("Patch '{}' failed: {}. Rolling back.", patch_name, e);

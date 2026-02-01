@@ -505,7 +505,7 @@ pub fn init() {
                     Err(_) => vec![],
                 }
             } else {
-                tags.iter().cloned().collect::<Vec<_>>()
+                tags.to_vec()
             };
 
             if filtered.is_empty() {
@@ -538,7 +538,7 @@ pub fn init() {
                     Err(_) => vec![],
                 }
             } else {
-                attrs.iter().cloned().collect::<Vec<_>>()
+                attrs.to_vec()
             };
 
             if filtered.is_empty() {

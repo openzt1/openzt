@@ -85,7 +85,7 @@ pub fn load_resources(
             debug!("Scanning resource: {} (checking discovered_mods: {})", file_name, discovered_mods.len());
 
             // Check if this is an OpenZT mod
-            if let Some((mod_id, (archive_name, meta))) = discovered_mods.iter().find(|(_, (archive_name, _))| archive_name == file_name) {
+            if let Some((mod_id, (_archive_name, meta))) = discovered_mods.iter().find(|(_, (archive_name, _))| archive_name == file_name) {
                 debug!("Found OpenZT mod: {} -> {} (ztd_type: {:?})", file_name, mod_id, meta.ztd_type());
                 // Only add if not already found (earlier paths take precedence)
                 mod_to_path.entry(mod_id.clone()).or_insert_with(|| resource.clone());

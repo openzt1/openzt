@@ -684,7 +684,7 @@ impl DependencyResolver {
         // Note: We reverse before inserting because inserting at position 0 in a loop
         // would otherwise reverse the order
         let mut pure_legacy_filenames: Vec<String> = new_pure_legacy.iter().map(|(filename, _)| filename.clone()).collect();
-        pure_legacy_filenames.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        pure_legacy_filenames.sort_by_key(|a| a.to_lowercase());
         pure_legacy_filenames.reverse(); // Reverse so they end up in correct order after insert(0)
 
         for filename in pure_legacy_filenames {
