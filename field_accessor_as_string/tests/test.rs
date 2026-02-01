@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn test_set_fields() {
         let mut my_struct = MyStruct::default();
-        
+
         let result = my_struct.set_field("field1", "hello");
         assert!(result.is_ok());
         assert_eq!(my_struct.field1, "hello");
@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn test_deref_set_fields() {
         let mut my_child_struct = MyChildStruct::default();
-        
+
         let result = my_child_struct.set_field("child_field1", "hello");
         assert!(result.is_ok());
         assert_eq!(my_child_struct.child_field1, "hello");
@@ -98,8 +98,12 @@ mod tests {
 
     #[test]
     fn test_get_fields() {
-        let my_struct = MyStruct{field1: "hello".to_string(), field2: 42, field3: 43};
-        
+        let my_struct = MyStruct {
+            field1: "hello".to_string(),
+            field2: 42,
+            field3: 43,
+        };
+
         let result = my_struct.get_field("field1");
         assert!(result.is_ok());
         assert!(result.unwrap() == "hello");
@@ -114,8 +118,16 @@ mod tests {
 
     #[test]
     fn test_deref_get_fields() {
-        let my_child_struct = MyChildStruct{my_struct: MyStruct{field1: "hello".to_string(), field2: 42, field3: 43}, child_field1: "hello".to_string(), child_field2: 42};
-        
+        let my_child_struct = MyChildStruct {
+            my_struct: MyStruct {
+                field1: "hello".to_string(),
+                field2: 42,
+                field3: 43,
+            },
+            child_field1: "hello".to_string(),
+            child_field2: 42,
+        };
+
         let result = my_child_struct.get_field("child_field1");
         assert!(result.is_ok());
         assert!(result.unwrap() == "hello");

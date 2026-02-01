@@ -24,31 +24,18 @@ fn test_registry_tag_validation() -> TestResult {
     clear_extensions();
 
     // Register a tag for scenery only
-    register_tag(
-        "test",
-        "roof",
-        "Test roof tag",
-        EntityScope::single(LegacyEntityType::Scenery),
-    ).unwrap();
+    register_tag("test", "roof", "Test roof tag", EntityScope::single(LegacyEntityType::Scenery)).unwrap();
 
     // Try to add roof tag to scenery extension - should succeed
-    let ext1 = EntityExtension::new_test(
-        "legacy.scenery.statue".to_string(),
-        vec!["roof".to_string()],
-        HashMap::new(),
-    );
+    let ext1 = EntityExtension::new_test("legacy.scenery.statue".to_string(), vec!["roof".to_string()], HashMap::new());
     match add_extension("test_mod".to_string(), "scenery.statue".to_string(), ext1) {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => return TestResult::fail(test_name, format!("Scenery with roof tag should succeed: {}", e)),
     }
     clear_extensions();
 
     // Try to add roof tag to animal extension - should fail
-    let ext2 = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["roof".to_string()],
-        HashMap::new(),
-    );
+    let ext2 = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["roof".to_string()], HashMap::new());
     match add_extension("test_mod".to_string(), "animals.elephant".to_string(), ext2) {
         Ok(_) => return TestResult::fail(test_name, "Animal with roof tag should fail".to_string()),
         Err(_) => TestResult::pass(test_name),
@@ -60,28 +47,13 @@ fn test_register_extension() -> TestResult {
     clear_extensions();
 
     // Register test tag and attribute
-    register_tag(
-        "test",
-        "example_tag",
-        "Test tag for unit tests",
-        EntityScope::all(),
-    ).unwrap();
-    register_attribute(
-        "test",
-        "example_attribute",
-        "Test attribute for unit tests",
-        EntityScope::all(),
-        None,
-    ).unwrap();
+    register_tag("test", "example_tag", "Test tag for unit tests", EntityScope::all()).unwrap();
+    register_attribute("test", "example_attribute", "Test attribute for unit tests", EntityScope::all(), None).unwrap();
 
     let mut attributes = HashMap::new();
     attributes.insert("example_attribute".to_string(), "test_value".to_string());
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["example_tag".to_string()],
-        attributes,
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["example_tag".to_string()], attributes);
 
     match add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension) {
         Ok(_) => TestResult::pass(test_name),
@@ -94,28 +66,13 @@ fn test_get_extension() -> TestResult {
     clear_extensions();
 
     // Register test tag and attribute
-    register_tag(
-        "test",
-        "example_tag",
-        "Test tag for unit tests",
-        EntityScope::all(),
-    ).unwrap();
-    register_attribute(
-        "test",
-        "example_attribute",
-        "Test attribute for unit tests",
-        EntityScope::all(),
-        None,
-    ).unwrap();
+    register_tag("test", "example_tag", "Test tag for unit tests", EntityScope::all()).unwrap();
+    register_attribute("test", "example_attribute", "Test attribute for unit tests", EntityScope::all(), None).unwrap();
 
     let mut attributes = HashMap::new();
     attributes.insert("example_attribute".to_string(), "test_value".to_string());
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["example_tag".to_string()],
-        attributes,
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["example_tag".to_string()], attributes);
 
     let _ = add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension.clone());
 
@@ -124,7 +81,8 @@ fn test_get_extension() -> TestResult {
             if record.mod_id == "test_mod"
                 && record.base == "legacy.animals.elephant"
                 && record.extension.tags().contains(&"example_tag".to_string())
-                && record.extension.attributes().get("example_attribute") == Some(&"test_value".to_string()) {
+                && record.extension.attributes().get("example_attribute") == Some(&"test_value".to_string())
+            {
                 TestResult::pass(test_name)
             } else {
                 TestResult::fail(test_name, "Data mismatch".to_string())
@@ -139,18 +97,9 @@ fn test_get_extension_by_base() -> TestResult {
     clear_extensions();
 
     // Register test tag
-    register_tag(
-        "test",
-        "example_tag",
-        "Test tag for unit tests",
-        EntityScope::all(),
-    ).unwrap();
+    register_tag("test", "example_tag", "Test tag for unit tests", EntityScope::all()).unwrap();
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["example_tag".to_string()],
-        HashMap::new(),
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["example_tag".to_string()], HashMap::new());
 
     let _ = add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension);
 
@@ -171,18 +120,9 @@ fn test_get_entity_tags() -> TestResult {
     clear_extensions();
 
     // Register test tag
-    register_tag(
-        "test",
-        "example_tag",
-        "Test tag for unit tests",
-        EntityScope::all(),
-    ).unwrap();
+    register_tag("test", "example_tag", "Test tag for unit tests", EntityScope::all()).unwrap();
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["example_tag".to_string()],
-        HashMap::new(),
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["example_tag".to_string()], HashMap::new());
 
     let _ = add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension);
 
@@ -198,22 +138,12 @@ fn test_get_entity_attribute() -> TestResult {
     clear_extensions();
 
     // Register test attribute
-    register_attribute(
-        "test",
-        "example_attribute",
-        "Test attribute for unit tests",
-        EntityScope::all(),
-        None,
-    ).unwrap();
+    register_attribute("test", "example_attribute", "Test attribute for unit tests", EntityScope::all(), None).unwrap();
 
     let mut attributes = HashMap::new();
     attributes.insert("example_attribute".to_string(), "test_value".to_string());
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec![],
-        attributes,
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec![], attributes);
 
     let _ = add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension);
 
@@ -230,18 +160,9 @@ fn test_extension_has_tag() -> TestResult {
     clear_extensions();
 
     // Register test tag
-    register_tag(
-        "test",
-        "example_tag",
-        "Test tag for unit tests",
-        EntityScope::all(),
-    ).unwrap();
+    register_tag("test", "example_tag", "Test tag for unit tests", EntityScope::all()).unwrap();
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["example_tag".to_string()],
-        HashMap::new(),
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["example_tag".to_string()], HashMap::new());
 
     let _ = add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension);
 
@@ -257,32 +178,17 @@ fn test_list_extensions_with_tag() -> TestResult {
     clear_extensions();
 
     // Register test tag
-    register_tag(
-        "test",
-        "example_tag",
-        "Test tag for unit tests",
-        EntityScope::all(),
-    ).unwrap();
+    register_tag("test", "example_tag", "Test tag for unit tests", EntityScope::all()).unwrap();
 
-    let ext1 = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["example_tag".to_string()],
-        HashMap::new(),
-    );
+    let ext1 = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["example_tag".to_string()], HashMap::new());
 
-    let ext2 = EntityExtension::new_test(
-        "legacy.animals.lion".to_string(),
-        vec!["example_tag".to_string()],
-        HashMap::new(),
-    );
+    let ext2 = EntityExtension::new_test("legacy.animals.lion".to_string(), vec!["example_tag".to_string()], HashMap::new());
 
     let _ = add_extension("test_mod".to_string(), "animals.elephant".to_string(), ext1);
     let _ = add_extension("test_mod".to_string(), "animals.lion".to_string(), ext2);
 
     let extensions = list_extensions_with_tag("example_tag");
-    if extensions.len() == 2
-        && extensions.contains(&"animals.elephant".to_string())
-        && extensions.contains(&"animals.lion".to_string()) {
+    if extensions.len() == 2 && extensions.contains(&"animals.elephant".to_string()) && extensions.contains(&"animals.lion".to_string()) {
         TestResult::pass(test_name)
     } else {
         TestResult::fail(test_name, format!("Wrong extensions: {:?}", extensions))
@@ -294,28 +200,13 @@ fn test_extension_validation_valid() -> TestResult {
     clear_extensions();
 
     // Register test tag and attribute
-    register_tag(
-        "test",
-        "example_tag",
-        "Test tag for unit tests",
-        EntityScope::all(),
-    ).unwrap();
-    register_attribute(
-        "test",
-        "example_attribute",
-        "Test attribute for unit tests",
-        EntityScope::all(),
-        None,
-    ).unwrap();
+    register_tag("test", "example_tag", "Test tag for unit tests", EntityScope::all()).unwrap();
+    register_attribute("test", "example_attribute", "Test attribute for unit tests", EntityScope::all(), None).unwrap();
 
     let mut attributes = HashMap::new();
     attributes.insert("example_attribute".to_string(), "value".to_string());
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["example_tag".to_string()],
-        attributes,
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["example_tag".to_string()], attributes);
 
     match add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension) {
         Ok(_) => TestResult::pass(test_name),
@@ -327,11 +218,7 @@ fn test_extension_validation_invalid_tag() -> TestResult {
     let test_name = "test_extension_validation_invalid_tag";
     clear_extensions();
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec!["invalid_tag".to_string()],
-        HashMap::new(),
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec!["invalid_tag".to_string()], HashMap::new());
 
     match add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension) {
         Ok(_) => TestResult::fail(test_name, "Should reject invalid tag".to_string()),
@@ -346,11 +233,7 @@ fn test_extension_validation_invalid_attribute() -> TestResult {
     let mut attributes = HashMap::new();
     attributes.insert("invalid_attribute".to_string(), "value".to_string());
 
-    let extension = EntityExtension::new_test(
-        "legacy.animals.elephant".to_string(),
-        vec![],
-        attributes,
-    );
+    let extension = EntityExtension::new_test("legacy.animals.elephant".to_string(), vec![], attributes);
 
     match add_extension("test_mod".to_string(), "animals.elephant".to_string(), extension) {
         Ok(_) => TestResult::fail(test_name, "Should reject invalid attribute".to_string()),

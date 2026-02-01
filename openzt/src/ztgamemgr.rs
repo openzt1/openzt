@@ -1,10 +1,6 @@
 use tracing::info;
 
-use crate::{
-    command_console::CommandError,
-    lua_fn,
-    util::get_from_memory,
-};
+use crate::{command_console::CommandError, lua_fn, util::get_from_memory};
 
 const GLOBAL_ZTGAMEMGR_ADDRESS: u32 = 0x00638048;
 
@@ -33,16 +29,16 @@ struct ZTGameMgr {
     pad10: [u8; 0x1194 - 0x1164],  // 0x1160
     date: Systemtime,              // 0x1194
     pad11: [u8; 0x1400],           // 0x1194
-    // TODO: Below
-    // admissions_income_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x254),
-    // concessions_benefit_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x29c),
-    // recycling_benefit_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x340),
-    // // net_income maybe?: get_from_memory::<i32>(zt_game_mgr_prt + 0x404),
-    // income_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x404),
-    // income_expense_totals_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x44c),
-    // zoo_rating_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x464),
-    // unknown_array: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x4c4),
-    // construction_cost_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x824),
+                                   // TODO: Below
+                                   // admissions_income_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x254),
+                                   // concessions_benefit_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x29c),
+                                   // recycling_benefit_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x340),
+                                   // // net_income maybe?: get_from_memory::<i32>(zt_game_mgr_prt + 0x404),
+                                   // income_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x404),
+                                   // income_expense_totals_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x44c),
+                                   // zoo_rating_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x464),
+                                   // unknown_array: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x4c4),
+                                   // construction_cost_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x824),
 }
 
 /// SYSTEMTIME struct from Windows API
@@ -128,7 +124,7 @@ pub fn init() {
     lua_fn!("get_date", "Returns current in-game date/time", "get_date()", || {
         match command_get_date_str(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -137,24 +133,29 @@ pub fn init() {
         let amount_str = amount.to_string();
         match command_add_cash(vec![&amount_str]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
     // enable_dev_mode(enabled) - bool arg
-    lua_fn!("enable_dev_mode", "Enables/disables developer mode", "enable_dev_mode(true/false)", |enabled: bool| {
-        let enabled_str = enabled.to_string();
-        match command_enable_dev_mode(vec![&enabled_str]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+    lua_fn!(
+        "enable_dev_mode",
+        "Enables/disables developer mode",
+        "enable_dev_mode(true/false)",
+        |enabled: bool| {
+            let enabled_str = enabled.to_string();
+            match command_enable_dev_mode(vec![&enabled_str]) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 
     // zoostats() - no args
     lua_fn!("zoostats", "Returns zoo statistics", "zoostats()", || {
         match command_zoostats(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 }

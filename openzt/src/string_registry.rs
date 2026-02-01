@@ -1,8 +1,8 @@
 use std::sync::Mutex;
 
-use std::sync::LazyLock;
-use std::collections::HashMap;
 use openzt_detour_macro::detour_mod;
+use std::collections::HashMap;
+use std::sync::LazyLock;
 use tracing::info;
 
 use crate::command_console::CommandError;
@@ -14,22 +14,14 @@ const GLOBAL_BFAPP: u32 = 0x00638148;
 
 static STRING_REGISTRY: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
-static STRING_OVERRIDES: LazyLock<Mutex<HashMap<u32, String>>> = LazyLock::new(|| {
-    Mutex::new(DEFAULT_OVERRIDES.iter().map(|(id, string_override)| (*id, string_override.to_string())).collect())
-});
+static STRING_OVERRIDES: LazyLock<Mutex<HashMap<u32, String>>> =
+    LazyLock::new(|| Mutex::new(DEFAULT_OVERRIDES.iter().map(|(id, string_override)| (*id, string_override.to_string())).collect()));
 
-const DEFAULT_OVERRIDES: &[(u32, &str)] = &[
-    (3383, "Swamp"),
-    (33383, "Swampy terrain"),
-];
+const DEFAULT_OVERRIDES: &[(u32, &str)] = &[(3383, "Swamp"), (33383, "Swampy terrain")];
 
 pub fn add_override_string_to_registry(string_id: u32, string_val: String) {
     let mut data_mutex = STRING_OVERRIDES.lock().unwrap();
-    info!(
-        "Added override string to registry: {} -> {}",
-        string_id,
-        string_val.clone()
-    );
+    info!("Added override string to registry: {} -> {}", string_id, string_val.clone());
     data_mutex.insert(string_id, string_val);
 }
 
@@ -93,10 +85,10 @@ fn command_get_string(args: Vec<&str>) -> Result<String, CommandError> {
 
 #[detour_mod]
 pub mod zoo_string {
-    use tracing::info;
     use openzt_detour::gen::bfapp::LOAD_STRING;
+    use tracing::info;
 
-    use super::{is_user_type_id, STRING_REGISTRY_ID_OFFSET, get_override_string_from_registry};
+    use super::{get_override_string_from_registry, is_user_type_id, STRING_REGISTRY_ID_OFFSET};
     use crate::{string_registry::get_string_from_registry, util::save_string_to_memory};
 
     #[detour(LOAD_STRING)]
@@ -150,11 +142,16 @@ pub fn init() {
     }
 
     // get_string(id) - single u32 arg
-    lua_fn!("get_string", "Retrieves game string by ID (from OpenZT registry or game)", "get_string(id)", |id: u32| {
-        let id_str = id.to_string();
-        match command_get_string(vec![&id_str]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+    lua_fn!(
+        "get_string",
+        "Retrieves game string by ID (from OpenZT registry or game)",
+        "get_string(id)",
+        |id: u32| {
+            let id_str = id.to_string();
+            match command_get_string(vec![&id_str]) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 }

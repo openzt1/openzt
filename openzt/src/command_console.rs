@@ -7,8 +7,8 @@ use std::{
     thread,
 };
 
-use std::sync::LazyLock;
 use openzt_detour_macro::detour_mod;
+use std::sync::LazyLock;
 use tracing::{error, info};
 
 /// Error type for command execution (kept for backward compatibility with existing command implementations)
@@ -69,8 +69,8 @@ impl From<&str> for CommandError {
 
 #[detour_mod]
 pub mod zoo_console {
-    use tracing::error;
     use openzt_detour::gen::ztapp::UPDATE_SIM;
+    use tracing::error;
 
     use super::call_next_command;
 
@@ -94,11 +94,11 @@ pub fn init() {
     zoo_console::init();
 }
 
-static COMMAND_THREAD: LazyLock<Mutex<std::thread::JoinHandle<()>>> = LazyLock::new(|| Mutex::new(std::thread::spawn(|| {
-            start_server();
-        }
-    ))
-);
+static COMMAND_THREAD: LazyLock<Mutex<std::thread::JoinHandle<()>>> = LazyLock::new(|| {
+    Mutex::new(std::thread::spawn(|| {
+        start_server();
+    }))
+});
 
 static COMMAND_RESULTS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::<String>::new()));
 

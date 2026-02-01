@@ -294,11 +294,9 @@ pub fn ztfile_to_raw_resource(path: &str, file_name: String, ztfile: ZTFile) -> 
     ztd_path = ztd_path.replace('\\', "/").replace("./", "zip::./");
     let lowercase_filename = file_name.to_lowercase();
 
-    let bf_zip_name = CString::new(ztd_path.clone())
-        .with_context(|| format!("Error converting zip name to CString: {}", ztd_path))?;
+    let bf_zip_name = CString::new(ztd_path.clone()).with_context(|| format!("Error converting zip name to CString: {}", ztd_path))?;
 
-    let bf_resource_name = CString::new(lowercase_filename.clone())
-        .with_context(|| format!("Error converting resource name to CString: {}", lowercase_filename))?;
+    let bf_resource_name = CString::new(lowercase_filename.clone()).with_context(|| format!("Error converting resource name to CString: {}", lowercase_filename))?;
 
     match ztfile {
         ZTFile::Text(data, type_, length) => {
@@ -324,7 +322,7 @@ pub fn ztfile_to_raw_resource(path: &str, file_name: String, ztfile: ZTFile) -> 
                 content_size: length,
             }));
 
-        Ok((lowercase_filename, type_, resource_ptr as _))
+            Ok((lowercase_filename, type_, resource_ptr as _))
         }
     }
 }

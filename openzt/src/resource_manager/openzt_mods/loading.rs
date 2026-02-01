@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::CString,
     fmt,
-    path::Path,
+    path::{Path, PathBuf},
     str,
     sync::Mutex,
 };
@@ -48,14 +48,37 @@ pub fn clear_mod_ids_for_tests() {
     MOD_ID_SET.lock().unwrap().clear();
 }
 
-/// Discover all OpenZT mods from .ztd archives without loading them
+/// Result of discovering mods and legacy archives
 ///
-/// Returns a map of mod_id -> (archive_name, Meta) for all mods found in the resource paths
-/// This is used for dependency resolution before actual mod loading
-pub fn discover_mods(paths: &[String]) -> HashMap<String, (String, mods::Meta)> {
-    use std::path::PathBuf;
+/// Contains both OpenZT mods (with meta.toml) and pure legacy archives (without meta.toml)
+/// Only pure legacy archives found in /mods/ directory are included
+#[derive(Debug, Clone)]
+pub struct DiscoveryResult {
+    /// OpenZT mods: mod_id -> (archive_name, Meta)
+    pub openzt_mods: HashMap<String, (String, mods::Meta)>,
+    /// Pure legacy archives in /mods/: (archive_name, path)
+    pub pure_legacy_in_mods: Vec<(String, PathBuf)>,
+}
 
-    let mut discovered = HashMap::new();
+impl DiscoveryResult {
+    pub fn new() -> Self {
+        Self {
+            openzt_mods: HashMap::new(),
+            pure_legacy_in_mods: Vec::new(),
+        }
+    }
+}
+
+/// Discover all OpenZT mods and pure legacy archives from .ztd archives without loading them
+///
+/// Returns a DiscoveryResult containing:
+/// - OpenZT mods (with meta.toml) from all resource paths
+/// - Pure legacy archives (no meta.toml) ONLY from /mods/ directory
+///
+/// This is used for dependency resolution and load order generation before actual mod loading
+pub fn discover_mods(paths: &[String]) -> DiscoveryResult {
+    let mut result = DiscoveryResult::new();
+    let mods_path = PathBuf::from("./mods");
 
     // Iterate through resource paths to find .ztd files
     for path_str in paths.iter().rev() {
@@ -64,6 +87,14 @@ pub fn discover_mods(paths: &[String]) -> HashMap<String, (String, mods::Meta)> 
         if !path.exists() {
             continue;
         }
+
+        // Check if this is the /mods/ directory
+        let is_mods_dir = path == mods_path
+            || path
+                .canonicalize()
+                .ok()
+                .map(|p| p == mods_path.canonicalize().unwrap_or(mods_path.clone()))
+                .unwrap_or(false);
 
         // Read directory entries
         let Ok(entries) = std::fs::read_dir(&path) else {
@@ -75,21 +106,18 @@ pub fn discover_mods(paths: &[String]) -> HashMap<String, (String, mods::Meta)> 
 
             // Only process .ztd files (case-insensitive)
             if !file_path.extension().is_some_and(|s| s.eq_ignore_ascii_case("ztd")) {
-            // if file_path.extension().and_then(|s| s.to_str()).map_or(true, |s| !s.eq_ignore_ascii_case("ztd")) {
                 continue;
             }
+
+            let archive_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
 
             // Try to read meta.toml from the archive
             match read_meta_from_archive(&file_path) {
                 Ok(Some(meta)) => {
                     let mod_id = meta.mod_id().to_string();
-                    let archive_name = file_path.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or_default()
-                        .to_string();
 
                     // Skip if we already found this mod (earlier paths take precedence)
-                    discovered.entry(mod_id.clone()).or_insert_with(|| {
+                    result.openzt_mods.entry(mod_id.clone()).or_insert_with(|| {
                         let span = tracing::info_span!(
                             "discover_mod",
                             archive_path = %file_path.display().to_string(),
@@ -103,7 +131,17 @@ pub fn discover_mods(paths: &[String]) -> HashMap<String, (String, mods::Meta)> 
                     });
                 }
                 Ok(None) => {
-                    // Legacy mod (no meta.toml), skip
+                    // Legacy mod (no meta.toml)
+                    // Only add to pure_legacy_in_mods if in /mods/ directory
+                    if is_mods_dir {
+                        // Check if already discovered (earlier paths take precedence)
+                        let already_discovered = result.pure_legacy_in_mods.iter().any(|(name, _)| name.to_lowercase() == archive_name.to_lowercase());
+
+                        if !already_discovered {
+                            debug!("Discovered pure legacy archive in /mods/: {}", archive_name);
+                            result.pure_legacy_in_mods.push((archive_name, file_path));
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("Failed to read meta from  {:?}: Failed to parse meta.toml\n{:#}", file_path, e);
@@ -112,7 +150,7 @@ pub fn discover_mods(paths: &[String]) -> HashMap<String, (String, mods::Meta)> 
         }
     }
 
-    discovered
+    result
 }
 
 /// Read and parse meta.toml from a .ztd archive
@@ -125,8 +163,7 @@ fn read_meta_from_archive(archive_path: &Path) -> anyhow::Result<Option<mods::Me
     let span = tracing::info_span!("read_meta_from_archive", archive_path = %archive_path_str);
     let _guard = span.enter();
 
-    let mut archive = ZtdArchive::new(archive_path)
-        .with_context(|| format!("Failed to open archive: {:?}", archive_path))?;
+    let mut archive = ZtdArchive::new(archive_path).with_context(|| format!("Failed to open archive: {:?}", archive_path))?;
 
     // Check if meta.toml exists
     let Ok(meta_file) = archive.by_name("meta.toml") else {
@@ -135,11 +172,9 @@ fn read_meta_from_archive(archive_path: &Path) -> anyhow::Result<Option<mods::Me
     };
 
     // Parse meta.toml
-    let meta_str = String::try_from(meta_file)
-        .with_context(|| format!("Failed to read meta.toml from {:?}", archive_path))?;
+    let meta_str = String::try_from(meta_file).with_context(|| format!("Failed to read meta.toml from {:?}", archive_path))?;
 
-    let meta = toml::from_str::<mods::Meta>(&meta_str)
-        .with_context(|| format!("Failed to parse meta.toml from {:?}", archive_path))?;
+    let meta = toml::from_str::<mods::Meta>(&meta_str).with_context(|| format!("Failed to parse meta.toml from {:?}", archive_path))?;
 
     // Record mod_id in the span for downstream error context
     let mod_id = meta.mod_id().to_string();
@@ -203,18 +238,11 @@ pub fn openzt_full_resource_id_path(base_resource_id: &str, file_type: ZTFileTyp
 }
 
 /// Load an OpenZT mod from a file map (shared implementation)
-fn load_open_zt_mod_internal(
-    file_map: HashMap<String, Box<[u8]>>,
-    archive_name: &str,
-    resource: &Path,
-) -> anyhow::Result<mods::ZtdType> {
-    let meta_file = file_map
-        .get("meta.toml")
-        .ok_or_else(|| anyhow!("meta.toml not found in {}", archive_name))?;
+fn load_open_zt_mod_internal(file_map: HashMap<String, Box<[u8]>>, archive_name: &str, _resource: &Path) -> anyhow::Result<mods::ZtdType> {
+    let meta_file = file_map.get("meta.toml").ok_or_else(|| anyhow!("meta.toml not found in {}", archive_name))?;
 
     let meta_str = String::from_utf8_lossy(meta_file.as_ref());
-    let meta = toml::from_str::<mods::Meta>(&meta_str)
-        .with_context(|| format!("Failed to parse meta.toml in {}", archive_name))?;
+    let meta = toml::from_str::<mods::Meta>(&meta_str).with_context(|| format!("Failed to parse meta.toml in {}", archive_name))?;
 
     if meta.ztd_type() == &mods::ZtdType::Legacy {
         return Ok(mods::ZtdType::Legacy);
@@ -283,10 +311,7 @@ fn load_open_zt_mod_internal(
 
     // Process files in sorted order
     for file_info in file_infos {
-        info!(
-            "Loading {} (category: {:?})",
-            file_info.filename, file_info.category
-        );
+        info!("Loading {} (category: {:?})", file_info.filename, file_info.category);
 
         // Track loading order for integration tests
         #[cfg(feature = "integration-tests")]
@@ -356,8 +381,7 @@ pub fn load_open_zt_mod(archive: &mut ZtdArchive, resource: &Path) -> anyhow::Re
         }
 
         let mut file_buffer = vec![0; file.size() as usize].into_boxed_slice();
-        file.read_exact(&mut file_buffer)
-            .with_context(|| format!("Error reading file: {}", file_name))?;
+        file.read_exact(&mut file_buffer).with_context(|| format!("Error reading file: {}", file_name))?;
 
         file_map.insert(file_name, file_buffer);
     }
@@ -368,11 +392,7 @@ pub fn load_open_zt_mod(archive: &mut ZtdArchive, resource: &Path) -> anyhow::Re
 
 /// Load an OpenZT mod from an in-memory file map (for testing)
 #[cfg(feature = "integration-tests")]
-pub fn load_open_zt_mod_from_memory(
-    file_map: HashMap<String, Box<[u8]>>,
-    mod_name: &str,
-    resource: &Path,
-) -> anyhow::Result<mods::ZtdType> {
+pub fn load_open_zt_mod_from_memory(file_map: HashMap<String, Box<[u8]>>, mod_name: &str, resource: &Path) -> anyhow::Result<mods::ZtdType> {
     load_open_zt_mod_internal(file_map, mod_name, resource)
 }
 
@@ -403,8 +423,7 @@ pub fn parse_def(mod_id: &str, file_name: &str, file_map: &HashMap<String, Box<[
 
     let intermediate_string = crate::encoding_utils::decode_game_text(file);
 
-    let defs = toml::from_str::<mods::ModDefinition>(&intermediate_string)
-        .with_context(|| format!("Error parsing defs from OpenZT mod: {}", file_name))?;
+    let defs = toml::from_str::<mods::ModDefinition>(&intermediate_string).with_context(|| format!("Error parsing defs from OpenZT mod: {}", file_name))?;
 
     info!("Parsed defs: {}", defs.len());
 
@@ -412,11 +431,7 @@ pub fn parse_def(mod_id: &str, file_name: &str, file_map: &HashMap<String, Box<[
 }
 
 /// Load habitats and locations from a ModDefinition into the resource system
-pub fn load_habitats_locations(
-    mod_id: &str,
-    mod_def: &mods::ModDefinition,
-    file_map: &HashMap<String, Box<[u8]>>,
-) -> anyhow::Result<()> {
+pub fn load_habitats_locations(mod_id: &str, mod_def: &mods::ModDefinition, file_map: &HashMap<String, Box<[u8]>>) -> anyhow::Result<()> {
     // Habitats
     if let Some(habitats) = mod_def.habitats() {
         for (habitat_name, habitat_def) in habitats.iter() {
@@ -451,10 +466,7 @@ pub fn load_habitats_locations(
 }
 
 /// Load extensions from a ModDefinition into the extension storage system
-pub fn load_extensions(
-    mod_id: &str,
-    mod_def: &mods::ModDefinition,
-) -> anyhow::Result<()> {
+pub fn load_extensions(mod_id: &str, mod_def: &mods::ModDefinition) -> anyhow::Result<()> {
     use crate::resource_manager::openzt_mods::extensions;
 
     let extensions = mod_def.extensions();
@@ -465,11 +477,7 @@ pub fn load_extensions(
     info!("Loading extensions for mod {}", mod_id);
 
     for (extension_key, entity_extension) in extensions.iter() {
-        extensions::add_extension(
-            mod_id.to_string(),
-            extension_key.clone(),
-            entity_extension.clone(),
-        )?;
+        extensions::add_extension(mod_id.to_string(), extension_key.clone(), entity_extension.clone())?;
     }
 
     Ok(())
@@ -660,15 +668,6 @@ mod tests {
 
         files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
 
-        assert_eq!(
-            files,
-            vec![
-                "defs/animal.toml",
-                "defs/bear.toml",
-                "defs/Elephant.toml",
-                "defs/ZEBRA.toml",
-            ]
-        );
+        assert_eq!(files, vec!["defs/animal.toml", "defs/bear.toml", "defs/Elephant.toml", "defs/ZEBRA.toml",]);
     }
 }
-

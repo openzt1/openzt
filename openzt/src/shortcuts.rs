@@ -152,9 +152,7 @@ pub struct Shortcut<const CTRL: bool, const ALT: bool, const SHIFT: bool, const 
     _private: PhantomData<()>,
 }
 
-impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32>
-    Shortcut<CTRL, ALT, SHIFT, KEY>
-{
+impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32> Shortcut<CTRL, ALT, SHIFT, KEY> {
     const fn new() -> Self {
         Self { _private: PhantomData }
     }
@@ -206,9 +204,7 @@ pub struct PartialShortcut<const CTRL: bool, const ALT: bool, const SHIFT: bool,
     _private: PhantomData<()>,
 }
 
-impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32>
-    PartialShortcut<CTRL, ALT, SHIFT, KEY>
-{
+impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32> PartialShortcut<CTRL, ALT, SHIFT, KEY> {
     const fn new() -> Self {
         Self { _private: PhantomData }
     }
@@ -244,9 +240,7 @@ impl<const CODE: i32> Add<Shift> for Key<CODE> {
 }
 
 // Shortcut + Modifier (adding modifiers to existing shortcuts)
-impl<const ALT: bool, const SHIFT: bool, const KEY: i32> Add<Ctrl>
-    for Shortcut<false, ALT, SHIFT, KEY>
-{
+impl<const ALT: bool, const SHIFT: bool, const KEY: i32> Add<Ctrl> for Shortcut<false, ALT, SHIFT, KEY> {
     type Output = Shortcut<true, ALT, SHIFT, KEY>;
 
     fn add(self, _: Ctrl) -> Self::Output {
@@ -254,9 +248,7 @@ impl<const ALT: bool, const SHIFT: bool, const KEY: i32> Add<Ctrl>
     }
 }
 
-impl<const CTRL: bool, const SHIFT: bool, const KEY: i32> Add<Alt>
-    for Shortcut<CTRL, false, SHIFT, KEY>
-{
+impl<const CTRL: bool, const SHIFT: bool, const KEY: i32> Add<Alt> for Shortcut<CTRL, false, SHIFT, KEY> {
     type Output = Shortcut<CTRL, true, SHIFT, KEY>;
 
     fn add(self, _: Alt) -> Self::Output {
@@ -264,9 +256,7 @@ impl<const CTRL: bool, const SHIFT: bool, const KEY: i32> Add<Alt>
     }
 }
 
-impl<const CTRL: bool, const ALT: bool, const KEY: i32> Add<Shift>
-    for Shortcut<CTRL, ALT, false, KEY>
-{
+impl<const CTRL: bool, const ALT: bool, const KEY: i32> Add<Shift> for Shortcut<CTRL, ALT, false, KEY> {
     type Output = Shortcut<CTRL, ALT, true, KEY>;
 
     fn add(self, _: Shift) -> Self::Output {
@@ -280,32 +270,44 @@ impl<const CTRL: bool, const ALT: bool, const KEY: i32> Add<Shift>
 
 impl Add<Alt> for Ctrl {
     type Output = PartialShortcut<true, true, false, -1>;
-    fn add(self, _: Alt) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Alt) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 impl Add<Shift> for Ctrl {
     type Output = PartialShortcut<true, false, true, -1>;
-    fn add(self, _: Shift) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Shift) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 impl Add<Ctrl> for Alt {
     type Output = PartialShortcut<true, true, false, -1>;
-    fn add(self, _: Ctrl) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Ctrl) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 impl Add<Shift> for Alt {
     type Output = PartialShortcut<false, true, true, -1>;
-    fn add(self, _: Shift) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Shift) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 impl Add<Ctrl> for Shift {
     type Output = PartialShortcut<true, false, true, -1>;
-    fn add(self, _: Ctrl) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Ctrl) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 impl Add<Alt> for Shift {
     type Output = PartialShortcut<false, true, true, -1>;
-    fn add(self, _: Alt) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Alt) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 // ============================================================================
@@ -314,12 +316,16 @@ impl Add<Alt> for Shift {
 
 impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<true, false, false, -1> {
     type Output = Shortcut<true, false, false, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<false, true, false, -1> {
     type Output = Shortcut<false, true, false, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 // Note: PartialShortcut<false, false, true, KEY> (Shift-only) should NOT allow adding Key
@@ -327,22 +333,30 @@ impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<false, true, false, -1>
 
 impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<true, true, false, -1> {
     type Output = Shortcut<true, true, false, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<true, false, true, -1> {
     type Output = Shortcut<true, false, true, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<false, true, true, -1> {
     type Output = Shortcut<false, true, true, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<true, true, true, -1> {
     type Output = Shortcut<true, true, true, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 // ============================================================================
@@ -354,17 +368,23 @@ impl<const CODE: i32> Add<Key<CODE>> for PartialShortcut<true, true, true, -1> {
 
 impl Add<Ctrl> for PartialShortcut<false, true, true, -1> {
     type Output = PartialShortcut<true, true, true, -1>;
-    fn add(self, _: Ctrl) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Ctrl) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 impl Add<Alt> for PartialShortcut<true, false, true, -1> {
     type Output = PartialShortcut<true, true, true, -1>;
-    fn add(self, _: Alt) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Alt) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 impl Add<Shift> for PartialShortcut<true, true, false, -1> {
     type Output = PartialShortcut<true, true, true, -1>;
-    fn add(self, _: Shift) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Shift) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 // ============================================================================
@@ -373,17 +393,23 @@ impl Add<Shift> for PartialShortcut<true, true, false, -1> {
 
 impl<const CODE: i32> Add<Key<CODE>> for Ctrl {
     type Output = Shortcut<true, false, false, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 impl<const CODE: i32> Add<Key<CODE>> for Alt {
     type Output = Shortcut<false, true, false, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 impl<const CODE: i32> Add<Key<CODE>> for Shift {
     type Output = PartialShortcut<false, false, true, CODE>;
-    fn add(self, _: Key<CODE>) -> Self::Output { PartialShortcut::new() }
+    fn add(self, _: Key<CODE>) -> Self::Output {
+        PartialShortcut::new()
+    }
 }
 
 // ============================================================================
@@ -396,12 +422,16 @@ impl<const CODE: i32> Add<Key<CODE>> for Shift {
 
 impl<const KEY: i32> Add<Ctrl> for PartialShortcut<false, false, true, KEY> {
     type Output = Shortcut<true, false, true, KEY>;
-    fn add(self, _: Ctrl) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Ctrl) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 impl<const KEY: i32> Add<Alt> for PartialShortcut<false, false, true, KEY> {
     type Output = Shortcut<false, true, true, KEY>;
-    fn add(self, _: Alt) -> Self::Output { Shortcut::new() }
+    fn add(self, _: Alt) -> Self::Output {
+        Shortcut::new()
+    }
 }
 
 // ============================================================================
@@ -420,18 +450,14 @@ struct RegisteredShortcut {
 }
 
 /// Global registry of all registered shortcuts.
-static SHORTCUT_REGISTRY: LazyLock<std::sync::Mutex<Vec<RegisteredShortcut>>> =
-    LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+static SHORTCUT_REGISTRY: LazyLock<std::sync::Mutex<Vec<RegisteredShortcut>>> = LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
 
 /// Sealed trait to restrict shortcut registration to typestate shortcuts only.
 mod private {
     pub trait SealedShortcut {}
 }
 
-impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32>
-    private::SealedShortcut for Shortcut<CTRL, ALT, SHIFT, KEY>
-{
-}
+impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32> private::SealedShortcut for Shortcut<CTRL, ALT, SHIFT, KEY> {}
 
 /// Trait for types that can be registered as shortcuts.
 ///
@@ -451,9 +477,7 @@ pub trait Registerable: private::SealedShortcut {
     fn shift(&self) -> bool;
 }
 
-impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32> Registerable
-    for Shortcut<CTRL, ALT, SHIFT, KEY>
-{
+impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32> Registerable for Shortcut<CTRL, ALT, SHIFT, KEY> {
     fn key_code(&self) -> i32 {
         KEY
     }
@@ -501,13 +525,7 @@ impl<const CTRL: bool, const ALT: bool, const SHIFT: bool, const KEY: i32> Regis
 ///     }
 /// )?;
 /// ```
-pub fn register_shortcut<S: Registerable>(
-    module: &str,
-    description: &str,
-    shortcut: S,
-    override_existing: bool,
-    callback: fn(),
-) -> Result<(), String> {
+pub fn register_shortcut<S: Registerable>(module: &str, description: &str, shortcut: S, override_existing: bool, callback: fn()) -> Result<(), String> {
     let key_code = shortcut.key_code();
     let ctrl = shortcut.ctrl();
     let alt = shortcut.alt();
@@ -522,11 +540,7 @@ pub fn register_shortcut<S: Registerable>(
 
     match (existing_idx, override_existing) {
         (Some(idx), true) => {
-            tracing::warn!(
-                "Shortcut override: {} replacing {} for key combo",
-                module,
-                registry[idx].module
-            );
+            tracing::warn!("Shortcut override: {} replacing {} for key combo", module, registry[idx].module);
             registry[idx] = RegisteredShortcut {
                 module: module.to_string(),
                 description: description.to_string(),
@@ -575,12 +589,7 @@ pub fn check_shortcuts(key_code: i32) -> Option<fn()> {
     let registry = SHORTCUT_REGISTRY.lock().unwrap();
     registry
         .iter()
-        .find(|s| {
-            s.key_code == key_code
-                && s.ctrl == ctrl_pressed
-                && s.shift == shift_pressed
-                && s.alt == alt_pressed
-        })
+        .find(|s| s.key_code == key_code && s.ctrl == ctrl_pressed && s.shift == shift_pressed && s.alt == alt_pressed)
         .map(|s| {
             tracing::debug!("Shortcut triggered: {} - {}", s.module, s.description);
             s.callback
@@ -642,19 +651,13 @@ pub fn list_shortcuts() -> String {
 #[macro_export]
 macro_rules! shortcut {
     ($module:expr, $description:expr, $shortcut:expr, $override:expr, || $body:block) => {
-        $crate::shortcuts::register_shortcut(
-            $module,
-            $description,
-            $shortcut,
-            $override,
-            || $body,
-        )
-        .unwrap_or_else(|e| tracing::error!("Failed to register shortcut: {}", e))
+        $crate::shortcuts::register_shortcut($module, $description, $shortcut, $override, || $body)
+            .unwrap_or_else(|e| tracing::error!("Failed to register shortcut: {}", e))
     };
 }
 
-use openzt_detour_macro::detour_mod;
 use openzt_detour::gen::ztapp::HANDLE_KEY_DOWN;
+use openzt_detour_macro::detour_mod;
 use tracing::info;
 
 #[detour_mod]
@@ -681,8 +684,8 @@ pub fn init() {
     shortcut!(
         "shortcuts",
         "Example: Print test message",
-        Ctrl + Shift + Alt + R,  // Add Modifiers and a key to create a shortcut
-        false,  // override
+        Ctrl + Shift + Alt + R, // Add Modifiers and a key to create a shortcut
+        false,                  // override
         || {
             tracing::info!("Ctrl+Shift+Alt+R shortcut triggered! This is an example shortcut.");
         }

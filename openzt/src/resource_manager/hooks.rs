@@ -9,32 +9,32 @@ pub fn init_hooks() {
 
 #[detour_mod]
 mod zoo_resource_mgr {
+    use std::collections::HashMap;
     use std::ffi::CString;
     use std::time::Instant;
-    use std::collections::HashMap;
 
-    use tracing::{info, warn, error, debug};
+    use tracing::{debug, error, info, warn};
 
     use openzt_configparser::ini::Ini;
-    use openzt_detour::gen::bfresourcemgr::{CONSTRUCTOR, ADD_PATH};
     use openzt_detour::gen::bfresource::{ATTEMPT, PREPARE};
-    use openzt_detour::gen::ztui_general::GET_INFO_IMAGE_NAME;
+    use openzt_detour::gen::bfresourcemgr::{ADD_PATH, CONSTRUCTOR};
     use openzt_detour::gen::bfresourceptr::{
-        DELREF_0, DELREF_1, DELREF_2, DELREF_3, DELREF_4, DELREF_5, DELREF_6, DELREF_7, DELREF_8, DELREF_9,
-        DELREF_10, DELREF_11, DELREF_12, DELREF_13, DELREF_14, DELREF_15, DELREF_16, DELREF_17, DELREF_18, DELREF_19,
-        DELREF_20, DELREF_21, DELREF_22, DELREF_23, DELREF_24, DELREF_25, DELREF_26, DELREF_27, DELREF_28, DELREF_29,
+        DELREF_0, DELREF_1, DELREF_10, DELREF_11, DELREF_12, DELREF_13, DELREF_14, DELREF_15, DELREF_16, DELREF_17, DELREF_18, DELREF_19, DELREF_2, DELREF_20,
+        DELREF_21, DELREF_22, DELREF_23, DELREF_24, DELREF_25, DELREF_26, DELREF_27, DELREF_28, DELREF_29, DELREF_3, DELREF_4, DELREF_5, DELREF_6, DELREF_7, DELREF_8,
+        DELREF_9,
     };
+    use openzt_detour::gen::ztui_general::GET_INFO_IMAGE_NAME;
 
     use crate::{
         mods,
         resource_manager::{
             bfresourcemgr::BFResourcePtr,
-            lazyresourcemap::{check_file, get_file_ptr, deref_resource, is_disabled_ztd_file},
-            legacy_loading::{load_resources, OPENZT_DIR0},
-            openzt_mods::{get_location_or_habitat_by_id, discover_mods},
-            mod_config::{get_openzt_config, save_openzt_config},
             dependency_resolver::DependencyResolver,
-            validation::{validate_load_order, log_validation_result},
+            lazyresourcemap::{check_file, deref_resource, get_file_ptr, is_disabled_ztd_file},
+            legacy_loading::{load_resources, OPENZT_DIR0},
+            mod_config::{get_openzt_config, save_openzt_config},
+            openzt_mods::{discover_mods, get_location_or_habitat_by_id},
+            validation::{log_validation_result, validate_load_order},
         },
         util::{get_ini_path, get_string_from_memory, save_to_memory},
     };
@@ -81,7 +81,7 @@ mod zoo_resource_mgr {
                     file_name_string
                 );
             }
-            return false
+            return false;
         }
 
         if let Some(ptr) = get_file_ptr(&file_name_string) {
@@ -153,11 +153,9 @@ mod zoo_resource_mgr {
         };
 
         if let Some(paths) = zoo_ini.get("resource", "path") {
-
             let mut paths: Vec<String> = paths.split(';').map(|s| s.to_owned()).collect();
 
             if !paths.iter().any(|s| s.trim() == "./mods") {
-
                 info!("Adding mods directory to BFResourceMgr");
 
                 if let Ok(mods_path) = CString::new("./mods") {
@@ -172,10 +170,11 @@ mod zoo_resource_mgr {
             // Load OpenZT configuration
             let mut config = get_openzt_config();
 
-            // Discover all mods
-            info!("Discovering mods...");
-            let discovered_mods = discover_mods(&paths);
-            info!("Discovered {} mod(s)", discovered_mods.len());
+            // Discover all mods and pure legacy archives
+            debug!("Discovering mods...");
+            let discovery_result = discover_mods(&paths);
+            debug!("Discovered {} OpenZT mod(s)", discovery_result.openzt_mods.len());
+            debug!("Discovered {} pure legacy archive(s) in /mods/", discovery_result.pure_legacy_in_mods.len());
 
             // Parse disabled entries into mod IDs and ZTD filenames
             let (disabled_mods, disabled_ztds) = parse_disabled_entries(&config.mod_loading.disabled);
@@ -186,15 +185,9 @@ mod zoo_resource_mgr {
 
             // Resolve dependencies and determine load order
             // Extract just the Meta structs for the resolver (convert from tuple)
-            let resolver_mods: HashMap<String, mods::Meta> = discovered_mods
-                .iter()
-                .map(|(id, (_, meta))| (id.clone(), meta.clone()))
-                .collect();
-            let resolver = DependencyResolver::new(resolver_mods.clone(), &discovered_mods);
-            let resolution_result = resolver.resolve_order(
-                &config.mod_loading.order,
-                &disabled_mods,
-            );
+            let resolver_mods: HashMap<String, mods::Meta> = discovery_result.openzt_mods.iter().map(|(id, (_, meta))| (id.clone(), meta.clone())).collect();
+            let resolver = DependencyResolver::new(resolver_mods.clone(), &discovery_result.openzt_mods);
+            let resolution_result = resolver.resolve_order(&config.mod_loading.order, &disabled_mods, &discovery_result.pure_legacy_in_mods);
 
             // Log any dependency resolution warnings
             for warning in &resolution_result.warnings {
@@ -224,7 +217,7 @@ mod zoo_resource_mgr {
 
             // Validate load order if configured
             if config.mod_loading.warn_on_conflicts {
-                let validation_result = validate_load_order(&resolution_result.order, &resolver_mods);
+                let validation_result = validate_load_order(&resolution_result.order, &resolver_mods, &discovery_result.pure_legacy_in_mods);
                 log_validation_result(&validation_result);
             }
 
@@ -241,17 +234,21 @@ mod zoo_resource_mgr {
             // Filter out disabled mods for actual loading
             // (they remain in openzt.toml order but are not loaded)
             let disabled_set: std::collections::HashSet<_> = disabled_mods.iter().collect();
-            let enabled_order: Vec<String> = resolution_result.order.iter()
-                .filter(|mod_id| !disabled_set.contains(mod_id))
-                .cloned()
-                .collect();
+            let enabled_order: Vec<String> = resolution_result.order.iter().filter(|mod_id| !disabled_set.contains(mod_id)).cloned().collect();
 
             if !disabled_mods.is_empty() {
                 info!("Disabled OpenZT mods (not loading): {:?}", disabled_mods);
             }
 
             // Load resources in resolved order (excluding disabled mods, with disabled ZTD info)
-            load_resources(paths, &enabled_order, &discovered_mods, &disabled_mods, &disabled_ztds);
+            load_resources(
+                paths,
+                &enabled_order,
+                &discovery_result.openzt_mods,
+                &disabled_mods,
+                &disabled_ztds,
+                &discovery_result.pure_legacy_in_mods,
+            );
             info!("Resources loaded");
         }
         return_value
@@ -452,5 +449,4 @@ mod zoo_resource_mgr {
     //     file_name_ptr: u32,
     //     padding: [u8; 0x104],
     // }
-
 }

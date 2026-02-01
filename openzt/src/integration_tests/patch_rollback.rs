@@ -1,9 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::mods::{
-    AddSectionPatch, DeletePatch, ErrorHandling, OnExists, Patch, PatchMeta, SetKeyPatch,
-};
+use crate::mods::{AddSectionPatch, DeletePatch, ErrorHandling, OnExists, Patch, PatchMeta, SetKeyPatch};
 use crate::resource_manager::{
     lazyresourcemap::{add_ztfile, check_file, get_file, remove_resource},
     openzt_mods::patches::apply_patches,
@@ -16,8 +14,7 @@ use super::TestResult;
 fn create_test_ini_file(path: &str, content: &str) -> anyhow::Result<()> {
     let content_len = content.len() as u32;
     let c_string = std::ffi::CString::new(content)?;
-    let file_type = ZTFileType::try_from(Path::new(path))
-        .map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(path)).map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
     let ztfile = ZTFile::Text(c_string, file_type, content_len);
     add_ztfile(Path::new(""), path.to_string(), ztfile)?;
     Ok(())
@@ -25,8 +22,7 @@ fn create_test_ini_file(path: &str, content: &str) -> anyhow::Result<()> {
 
 /// Helper function to read a file from the resource system as string
 fn read_test_file(path: &str) -> anyhow::Result<String> {
-    let (_filename, data) = get_file(path)
-        .ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
+    let (_filename, data) = get_file(path).ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
     // Convert bytes to string
     Ok(String::from_utf8_lossy(&data).to_string())
 }

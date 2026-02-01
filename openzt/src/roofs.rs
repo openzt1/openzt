@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use tracing::info;
 
-use crate::resource_manager::openzt_mods::extensions::{register_tag, EntityScope, list_extensions_with_tag, get_extension};
+use crate::resource_manager::openzt_mods::extensions::{get_extension, list_extensions_with_tag, register_tag, EntityScope};
 use crate::resource_manager::openzt_mods::legacy_attributes::LegacyEntityType;
 use crate::runtime_state;
 use crate::shortcuts::{Ctrl, R};
@@ -29,12 +29,7 @@ pub mod roof_detours {
     /// After placing an entity, checks if it's a roof and hides it if needed.
     /// The second parameter (entity_ptr) is the BFEntity that was just placed.
     #[detour(PLACE_ENTITY_ON_MAP_1)]
-    unsafe extern "thiscall" fn place_entity_on_map_detour(
-        _this: u32,
-        entity_ptr: u32,
-        _pos: f32,
-        _rotation: i32,
-    ) -> u32 {
+    unsafe extern "thiscall" fn place_entity_on_map_detour(_this: u32, entity_ptr: u32, _pos: f32, _rotation: i32) -> u32 {
         // Call the original function first to place the entity
         let result = PLACE_ENTITY_ON_MAP_1_DETOUR.call(_this, entity_ptr, _pos, _rotation);
 
@@ -165,8 +160,10 @@ pub fn hide_roofs() {
         i += 0x4;
     }
 
-    info!("hide_roofs() complete: checked {} entities, {} had no base, hid {} roof entities",
-        checked_count, no_base_count, hidden_count);
+    info!(
+        "hide_roofs() complete: checked {} entities, {} had no base, hid {} roof entities",
+        checked_count, no_base_count, hidden_count
+    );
 }
 
 /// Show all entities tagged with "roof"
@@ -214,7 +211,7 @@ pub fn show_roofs() {
                 if roof_bases.contains(&base) {
                     unsafe {
                         let visible_ptr = (entity_ptr + 0x13f) as *mut u8;
-                        *visible_ptr = 1;  // Set visible
+                        *visible_ptr = 1; // Set visible
                     }
                     shown_count += 1;
                 }
@@ -271,7 +268,7 @@ pub fn init() {
         "roofs",
         "Toggle roof visibility",
         Ctrl + R,
-        false,  // override
+        false, // override
         || {
             toggle_roofs();
         }

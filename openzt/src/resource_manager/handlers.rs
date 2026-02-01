@@ -1,9 +1,9 @@
 use std::{ffi::CString, path::Path, str, sync::Mutex};
 
-use openzt_configparser::ini::{Ini, WriteOptions};
 use getset::CopyGetters;
+use openzt_configparser::ini::{Ini, WriteOptions};
 use std::sync::LazyLock;
-use tracing::{error, info, debug};
+use tracing::{debug, error, info};
 
 use crate::{
     animation::Animation,

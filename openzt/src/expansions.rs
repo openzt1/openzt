@@ -8,10 +8,10 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use openzt_configparser::ini::Ini;
 use maplit::hashset;
-use std::sync::LazyLock;
+use openzt_configparser::ini::Ini;
 use openzt_detour_macro::detour_mod;
+use std::sync::LazyLock;
 use tracing::{debug, error, info};
 
 use crate::{
@@ -19,8 +19,8 @@ use crate::{
     bfentitytype::{ZTEntityType, ZTEntityTypeClass},
     command_console::CommandError,
     lua_fn,
-    resource_manager::{add_handler, modify_ztfile_as_animation, modify_ztfile_as_ini, Handler, RunStage, OPENZT_DIR0},
     resource_manager::mod_config::get_openzt_config,
+    resource_manager::{add_handler, modify_ztfile_as_animation, modify_ztfile_as_ini, Handler, RunStage, OPENZT_DIR0},
     string_registry::add_string_to_registry,
     util::{get_from_memory, get_string_from_memory, get_string_from_memory_bounded, save_to_memory},
     ztui::{get_random_sex, get_selected_sex, BuyTab, Sex},
@@ -190,7 +190,8 @@ fn get_entities_from_archive(archive_name: &str) -> Option<HashSet<String>> {
     };
 
     // Collect all entities from this archive
-    let entities: HashSet<String> = mapping.iter()
+    let entities: HashSet<String> = mapping
+        .iter()
         .filter(|(_, archive)| {
             // Strip "zip::" prefix if present for comparison
             let archive_stripped = archive.strip_prefix("zip::").unwrap_or(archive);
@@ -356,15 +357,14 @@ impl Display for ExpansionList {
 pub mod custom_expansion {
     use tracing::debug;
     // use openzt_detour::{ZTUI_GENERAL_ENTITY_TYPE_IS_DISPLAYED, ZTUI_EXPANSIONSELECT_SETUP};
-    use openzt_detour::gen::ztui_general::ENTITY_TYPE_IS_DISPLAYED;
     use openzt_detour::gen::ztui_expansionselect::SETUP;
+    use openzt_detour::gen::ztui_general::ENTITY_TYPE_IS_DISPLAYED;
 
     use super::{initialise_expansions, read_current_expansion};
     use crate::{bfentitytype::read_zt_entity_type_from_memory, ztui::get_current_buy_tab};
 
     #[detour(ENTITY_TYPE_IS_DISPLAYED)]
     pub unsafe extern "cdecl" fn ztui_general_entity_type_is_displayed(bf_entity: u32, param_1: u32, param_2: u32) -> bool {
-
         // TODO: Put this call and subsequent log behind OpenZT debug flag)
         let result = unsafe { ENTITY_TYPE_IS_DISPLAYED_DETOUR.call(bf_entity, param_1, param_2) };
 
@@ -400,7 +400,10 @@ fn create_custom_expansions() {
     info!("create_custom_expansions() - starting");
     info!("create_custom_expansions() - getting config");
     let config = get_openzt_config();
-    info!("create_custom_expansions() - got config, {} custom expansions to process", config.expansions.custom.len());
+    info!(
+        "create_custom_expansions() - got config, {} custom expansions to process",
+        config.expansions.custom.len()
+    );
     let mut expansion_id = 0x5; // Start after official expansion IDs
 
     for (expansion_name, items) in &config.expansions.custom {
@@ -423,8 +426,7 @@ fn create_custom_expansions() {
                     for entity_name in entities {
                         add_member(entity_name, member_set_name.clone());
                     }
-                    info!("Added {} entities from archive '{}' to expansion '{}'",
-                        entity_count, item, expansion_name);
+                    info!("Added {} entities from archive '{}' to expansion '{}'", entity_count, item, expansion_name);
                 } else {
                     info!("No entities found from archive '{}' for expansion '{}'", item, expansion_name);
                 }
@@ -438,15 +440,23 @@ fn create_custom_expansions() {
         // Check if we have any members before creating expansion
         if let Some(members) = get_members(&member_set_name) {
             if !members.is_empty() {
-                info!("create_custom_expansions() - adding expansion to game: '{}' with {} members", expansion_name, members.len());
+                info!(
+                    "create_custom_expansions() - adding expansion to game: '{}' with {} members",
+                    expansion_name,
+                    members.len()
+                );
                 add_expansion_with_string_value(
                     expansion_id,
                     member_set_name.clone(),
                     expansion_name.clone(),
                     false, // Don't save yet
                 );
-                info!("Created custom expansion '{}' (ID: {:#x}) with {} members",
-                    expansion_name, expansion_id, members.len());
+                info!(
+                    "Created custom expansion '{}' (ID: {:#x}) with {} members",
+                    expansion_name,
+                    expansion_id,
+                    members.len()
+                );
                 expansion_id += 1;
             } else {
                 info!("Skipping expansion '{}' - no valid entities found", expansion_name);
@@ -461,7 +471,7 @@ fn initialise_expansions() {
     info!("initialise_expansions() - adding 'all' expansion");
     add_expansion_with_string_id(0x0, "all".to_string(), 0x5974, false);
     info!("initialise_expansions() - checking for custom content members");
-    if let Some(member_hash) = get_members(&get_cc_expansion_name_all()){
+    if let Some(member_hash) = get_members(&get_cc_expansion_name_all()) {
         if !member_hash.is_empty() {
             info!("initialise_expansions() - adding 'Custom Content' expansion");
             add_expansion_with_string_value(0x4, get_cc_expansion_name_all(), "Custom Content".to_string(), false);
@@ -875,7 +885,7 @@ pub fn init() {
     lua_fn!("list_expansion", "Lists all loaded expansions", "list_expansion()", || {
         match command_get_expansions(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -883,7 +893,7 @@ pub fn init() {
     lua_fn!("get_current_expansion", "Returns current active expansion", "get_current_expansion()", || {
         match command_get_current_expansion(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -891,7 +901,7 @@ pub fn init() {
     lua_fn!("get_members", "Lists expansion member sets", "get_members()", || {
         match command_get_members(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
     add_handler(

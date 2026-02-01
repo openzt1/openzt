@@ -34,7 +34,7 @@ pub fn set_fields(input: TokenStream) -> TokenStream {
             set_error_match = quote! {self.#deref_field.set_field(field_name, value)};
             is_error_match = quote! {false || self.#deref_field.is_field(field_name)};
             deref_field_exists = true;
-            continue
+            continue;
         }
 
         let field_name = field.ident.as_ref().expect("Expected field name");
@@ -48,7 +48,7 @@ pub fn set_fields(input: TokenStream) -> TokenStream {
             "String" | "i64" | "u64" | "f64" | "i32" | "u32" | "f32" | "i16" | "u16" | "i8" | "u8" | "bool" => {
                 field_names.push(field_name);
                 field_types.push(field_type);
-            },
+            }
             _ => (),
         }
     }
@@ -88,13 +88,9 @@ pub fn set_fields(input: TokenStream) -> TokenStream {
 }
 
 fn should_skip(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        if let Some(ident) = attr.path().get_ident() {
-            ident == "skip_field"
-        } else {
-            false
-        }
-    })
+    attrs
+        .iter()
+        .any(|attr| if let Some(ident) = attr.path().get_ident() { ident == "skip_field" } else { false })
 }
 
 fn is_deref(attrs: &[syn::Attribute]) -> bool {

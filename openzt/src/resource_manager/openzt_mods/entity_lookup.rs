@@ -3,7 +3,7 @@
 //! This module provides functions to check if legacy entities have been loaded
 //! from the LEGACY_ATTRIBUTES_MAP, enabling the `entity_exists` patch condition.
 
-use crate::resource_manager::openzt_mods::legacy_attributes::{LEGACY_ATTRIBUTES_MAP, LegacyEntityType};
+use crate::resource_manager::openzt_mods::legacy_attributes::{LegacyEntityType, LEGACY_ATTRIBUTES_MAP};
 
 /// Check if a legacy entity exists
 ///
@@ -45,9 +45,7 @@ fn legacy_entity_exists(identifier: &str) -> bool {
     };
 
     let map = LEGACY_ATTRIBUTES_MAP.lock().unwrap();
-    map.get(&entity_type)
-        .and_then(|entities| entities.get(entity_name))
-        .is_some()
+    map.get(&entity_type).and_then(|entities| entities.get(entity_name)).is_some()
 }
 
 /// Parse entity type string to LegacyEntityType enum

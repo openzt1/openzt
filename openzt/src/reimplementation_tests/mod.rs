@@ -117,9 +117,12 @@ mod detour_zoo_main {
 
                 let result = GET_LOCAL_ELEVATION.original()(&raw const tile as u32, &raw const pos as u32);
                 assert_eq!(
-                    result, reimplemented_result+1,
+                    result,
+                    reimplemented_result + 1,
                     "Failed for pos: {:?}, tile: {:?}, unknown_byte_2: {}",
-                    pos, tile, unknown_byte_2
+                    pos,
+                    tile,
+                    unknown_byte_2
                 );
                 Ok(())
             }) {

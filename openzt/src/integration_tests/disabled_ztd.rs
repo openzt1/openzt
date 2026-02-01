@@ -1,5 +1,5 @@
 use crate::resource_manager::{
-    lazyresourcemap::{check_file, check_file_loaded, get_file, remove_resource, mark_disabled_ztd_file, is_disabled_ztd_file},
+    lazyresourcemap::{check_file, check_file_loaded, get_file, is_disabled_ztd_file, mark_disabled_ztd_file, remove_resource},
     ztfile::{ZTFile, ZTFileType},
 };
 use std::ffi::CString;
@@ -54,13 +54,11 @@ fn verify_resource_not_exist(path: &str) -> Result<(), String> {
 fn add_test_resource(path: &str, content: &str, file_type: ZTFileType) -> Result<(), String> {
     use crate::resource_manager::lazyresourcemap::add_ztfile;
 
-    let cstring = CString::new(content)
-        .map_err(|e| format!("Failed to create CString: {}", e))?;
+    let cstring = CString::new(content).map_err(|e| format!("Failed to create CString: {}", e))?;
 
     let ztfile = ZTFile::Text(cstring, file_type, content.len() as u32);
 
-    add_ztfile(Path::new(""), path.to_string(), ztfile)
-        .map_err(|e| format!("Failed to add test resource: {}", e))
+    add_ztfile(Path::new(""), path.to_string(), ztfile).map_err(|e| format!("Failed to add test resource: {}", e))
 }
 
 /// Add a binary file to the resource system
@@ -69,16 +67,14 @@ fn add_test_binary_resource(path: &str, content: &[u8], file_type: ZTFileType) -
 
     let ztfile = ZTFile::RawBytes(content.to_vec().into_boxed_slice(), file_type, content.len() as u32);
 
-    add_ztfile(Path::new(""), path.to_string(), ztfile)
-        .map_err(|e| format!("Failed to add test binary resource: {}", e))
+    add_ztfile(Path::new(""), path.to_string(), ztfile).map_err(|e| format!("Failed to add test binary resource: {}", e))
 }
 
 /// Create an empty resource (for simulating disabled ZTD behavior)
 fn create_empty_resource_for_test(path: &str, file_type: ZTFileType) -> Result<(), String> {
     use crate::resource_manager::lazyresourcemap::create_empty_resource;
 
-    create_empty_resource(path.to_string(), file_type)
-        .map_err(|e| format!("Failed to create empty resource: {}", e))
+    create_empty_resource(path.to_string(), file_type).map_err(|e| format!("Failed to create empty resource: {}", e))
 }
 
 /// Cleanup test resources
@@ -322,10 +318,10 @@ fn test_parse_disabled_entries_splits_correctly() -> TestResult {
     // Since we can't directly call it from here, we verify the concept
 
     let disabled = vec![
-        "com.example.mod".to_string(),  // OpenZT mod ID
-        "legacy_expansion.ztd".to_string(),   // ZTD filename
-        "another_mod.ztd".to_string(),        // Another ZTD
-        "test.mod".to_string(),                // Another mod ID (no .ztd)
+        "com.example.mod".to_string(),      // OpenZT mod ID
+        "legacy_expansion.ztd".to_string(), // ZTD filename
+        "another_mod.ztd".to_string(),      // Another ZTD
+        "test.mod".to_string(),             // Another mod ID (no .ztd)
     ];
 
     let mut mod_ids = Vec::new();
@@ -572,9 +568,7 @@ fn test_disabled_ztd_prevents_legacy_entity_extraction() -> TestResult {
 
     #[cfg(feature = "ini")]
     {
-        use crate::resource_manager::openzt_mods::legacy_attributes::{
-            get_legacy_attribute_with_subtype, LegacyEntityType,
-        };
+        use crate::resource_manager::openzt_mods::legacy_attributes::{get_legacy_attribute_with_subtype, LegacyEntityType};
 
         let test_path = "animals/testentity.cfg";
 
@@ -589,10 +583,7 @@ fn test_disabled_ztd_prevents_legacy_entity_extraction() -> TestResult {
         match get_legacy_attribute_with_subtype(LegacyEntityType::Animal, entity_name, None, "name_id") {
             Ok(attrs) => {
                 cleanup_test_resources(&[test_path]);
-                return TestResult::fail(
-                    test_name,
-                    format!("Should not get attributes from empty .cfg, got: {:?}", attrs)
-                );
+                return TestResult::fail(test_name, format!("Should not get attributes from empty .cfg, got: {:?}", attrs));
             }
             Err(_) => {
                 // Expected - empty .cfg can't be parsed
@@ -636,8 +627,12 @@ fn test_mixed_file_counts() -> TestResult {
     // Simulate disabled ZTD processing:
     // - Check if already loaded -> skip (2 skipped)
     let mut skipped_count = 0;
-    if check_file_loaded(already_loaded_1) { skipped_count += 1; }
-    if check_file_loaded(already_loaded_2) { skipped_count += 1; }
+    if check_file_loaded(already_loaded_1) {
+        skipped_count += 1;
+    }
+    if check_file_loaded(already_loaded_2) {
+        skipped_count += 1;
+    }
 
     // - Create empty for new supported file -> add (1 added)
     if let Err(e) = create_empty_resource_for_test(new_cfg, ZTFileType::Cfg) {

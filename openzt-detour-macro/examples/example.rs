@@ -16,16 +16,14 @@ mod detour_mod {
 
 // OUTPUT (what the macro generates):
 mod detour_mod {
-    static LOAD_LANG_DLLS_DETOUR: ::std::sync::LazyLock<::retour::GenericDetour<unsafe extern "thiscall" fn(u32) -> u32>> = 
-        ::std::sync::LazyLock::new(|| {
-            unsafe { LOAD_LANG_DLLS.detour(detour_target).unwrap() }
-        });
-    
+    static LOAD_LANG_DLLS_DETOUR: ::std::sync::LazyLock<::retour::GenericDetour<unsafe extern "thiscall" fn(u32) -> u32>> =
+        ::std::sync::LazyLock::new(|| unsafe { LOAD_LANG_DLLS.detour(detour_target).unwrap() });
+
     unsafe extern "thiscall" fn detour_target(_: u32) -> u32 {
         info!("Detour success");
         1
     }
-    
+
     pub fn init() {
         LOAD_LANG_DLLS_DETOUR.enable().unwrap();
     }

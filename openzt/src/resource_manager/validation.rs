@@ -1,6 +1,7 @@
+use crate::mods::{DependencyIdentifier, Meta, Ordering};
 use std::collections::HashMap;
-use tracing::{warn, info};
-use crate::mods::{Meta, Ordering, DependencyIdentifier};
+use std::path::PathBuf;
+use tracing::{info, warn};
 
 /// Result of load order validation
 #[derive(Debug)]
@@ -35,36 +36,43 @@ pub enum ValidationWarning {
 /// Errors for critical issues in load order
 #[derive(Debug, Clone)]
 pub enum ValidationError {
-    RequiredDependencyMissing {
-        mod_id: String,
-        missing_dep: String,
-    },
-    CircularDependency {
-        cycle: Vec<String>,
-    },
+    RequiredDependencyMissing { mod_id: String, missing_dep: String },
+    CircularDependency { cycle: Vec<String> },
 }
 
 /// Validate a mod load order against dependencies
 ///
 /// This checks if the existing order respects dependency constraints,
 /// but does NOT modify the order - only reports violations.
-pub fn validate_load_order(
-    order: &[String],
-    mods: &HashMap<String, Meta>,
-) -> ValidationResult {
+pub fn validate_load_order(order: &[String], mods: &HashMap<String, Meta>, pure_legacy_in_mods: &[(String, PathBuf)]) -> ValidationResult {
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
 
     // Create position map for efficient lookups
-    let position_map: HashMap<&String, usize> = order.iter()
-        .enumerate()
-        .map(|(i, id)| (id, i))
-        .collect();
+    let position_map: HashMap<&String, usize> = order.iter().enumerate().map(|(i, id)| (id, i)).collect();
 
-    // Validate each mod's dependencies
+    // Build a set of pure legacy archive filenames for quick lookup
+    let pure_legacy_set: std::collections::HashSet<String> = pure_legacy_in_mods.iter().map(|(filename, _)| filename.clone()).collect();
+
+    // Validate each entry in the order
     for (idx, mod_id) in order.iter().enumerate() {
+        // Check if it's an OpenZT mod
         let Some(meta) = mods.get(mod_id) else {
-            warn!("Mod '{}' in load order but not found in available mods", mod_id);
+            // Not an OpenZT mod - check if it's a pure legacy archive
+            if pure_legacy_set.contains(mod_id) {
+                // Pure legacy archives don't have dependencies, so we're done with this entry
+                continue;
+            }
+
+            // Check if it looks like a ZTD filename (might be a legacy archive outside /mods/)
+            if mod_id.to_lowercase().ends_with(".ztd") {
+                warn!(
+                    "ZTD '{}' in load order but not found in /mods/ directory (legacy archives outside /mods/ are loaded separately)",
+                    mod_id
+                );
+            } else {
+                warn!("Mod '{}' in load order but not found in available mods", mod_id);
+            }
             continue;
         };
 
@@ -151,11 +159,7 @@ pub fn validate_load_order(
 
     let is_valid = errors.is_empty();
 
-    ValidationResult {
-        is_valid,
-        warnings,
-        errors,
-    }
+    ValidationResult { is_valid, warnings, errors }
 }
 
 /// Log validation warnings and errors
@@ -169,16 +173,10 @@ pub fn log_validation_result(result: &ValidationResult) {
     for error in &result.errors {
         match error {
             ValidationError::RequiredDependencyMissing { mod_id, missing_dep } => {
-                warn!(
-                    "ERROR: Mod '{}' requires missing dependency '{}'",
-                    mod_id, missing_dep
-                );
+                warn!("ERROR: Mod '{}' requires missing dependency '{}'", mod_id, missing_dep);
             }
             ValidationError::CircularDependency { cycle } => {
-                warn!(
-                    "ERROR: Circular dependency detected: {:?}",
-                    cycle
-                );
+                warn!("ERROR: Circular dependency detected: {:?}", cycle);
             }
         }
     }
@@ -197,10 +195,7 @@ pub fn log_validation_result(result: &ValidationResult) {
                     "WARNING: Mod '{}' at position {} {} (currently at position {})",
                     mod_id, current_position, expected_relation, other_position
                 );
-                info!(
-                    "  Recommendation: Check openzt.toml and adjust order of '{}' relative to '{}'",
-                    mod_id, other_mod
-                );
+                info!("  Recommendation: Check openzt.toml and adjust order of '{}' relative to '{}'", mod_id, other_mod);
             }
             ValidationWarning::VersionMismatch {
                 mod_id,
@@ -215,10 +210,7 @@ pub fn log_validation_result(result: &ValidationResult) {
                 info!("  Recommendation: Update '{}' to version {} or later", required_mod, required_version);
             }
             ValidationWarning::OptionalDependencyMissing { mod_id, missing_dep } => {
-                info!(
-                    "INFO: Mod '{}' has optional dependency '{}' which is not present",
-                    mod_id, missing_dep
-                );
+                info!("INFO: Mod '{}' has optional dependency '{}' which is not present", mod_id, missing_dep);
             }
         }
     }
@@ -237,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_empty_validation() {
-        let result = validate_load_order(&[], &HashMap::new());
+        let result = validate_load_order(&[], &HashMap::new(), &[]);
         assert!(result.is_valid);
         assert!(result.warnings.is_empty());
         assert!(result.errors.is_empty());

@@ -27,7 +27,10 @@ pub fn add_location_or_habitat(mod_id: &str, name: &String, icon_resource_id: &S
 
     let string_id = add_string_to_registry(name.clone());
 
-    info!("Adding location/habitat: {} {} -> {} (mod: {}, is_habitat: {})", name, icon_resource_id, string_id, mod_id, is_habitat);
+    info!(
+        "Adding location/habitat: {} {} -> {} (mod: {}, is_habitat: {})",
+        name, icon_resource_id, string_id, mod_id, is_habitat
+    );
 
     let icon_resource_id_cstring = CString::new(icon_resource_id.clone())
         .with_context(|| format!("Failed to create cstring for location/habitat {} with icon_resource_id {}", name, icon_resource_id))?;
@@ -35,17 +38,10 @@ pub fn add_location_or_habitat(mod_id: &str, name: &String, icon_resource_id: &S
     id_binding.insert(name.clone(), string_id);
 
     // Track per-mod registration for variable substitution
-    let mod_map = if is_habitat {
-        &MOD_HABITATS_MAP
-    } else {
-        &MOD_LOCATIONS_MAP
-    };
+    let mod_map = if is_habitat { &MOD_HABITATS_MAP } else { &MOD_LOCATIONS_MAP };
 
     let mut mod_map_binding = mod_map.lock().unwrap();
-    mod_map_binding
-        .entry(mod_id.to_string())
-        .or_insert_with(HashMap::new)
-        .insert(name.clone(), string_id);
+    mod_map_binding.entry(mod_id.to_string()).or_insert_with(HashMap::new).insert(name.clone(), string_id);
 
     Ok(())
 }

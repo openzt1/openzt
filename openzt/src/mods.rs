@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    error::Error,
-    fmt,
-    str::FromStr,
-};
+use std::{collections::HashMap, error::Error, fmt, str::FromStr};
 
 use getset::Getters;
 use indexmap::IndexMap;
@@ -221,7 +216,11 @@ impl<'de> Deserialize<'de> for DependencyIdentifier {
     {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "snake_case")]
-        enum Field { ModId, ZtdName, DllName }
+        enum Field {
+            ModId,
+            ZtdName,
+            DllName,
+        }
 
         struct Visitor;
 
@@ -334,7 +333,7 @@ pub struct ModDefinition {
 
     // Patch system - split into metadata and patches
     patch_meta: Option<PatchMeta>,
-    patches: Option<IndexMap<String, Patch>>,  // MUST use IndexMap for order preservation
+    patches: Option<IndexMap<String, Patch>>, // MUST use IndexMap for order preservation
 }
 
 impl ModDefinition {
@@ -420,16 +419,36 @@ impl ModDefinition {
             len += locations.len();
         }
         // Count all entity type extensions
-        if let Some(ref ext) = self.scenery { len += ext.len(); }
-        if let Some(ref ext) = self.animals { len += ext.len(); }
-        if let Some(ref ext) = self.buildings { len += ext.len(); }
-        if let Some(ref ext) = self.fences { len += ext.len(); }
-        if let Some(ref ext) = self.walls { len += ext.len(); }
-        if let Some(ref ext) = self.paths { len += ext.len(); }
-        if let Some(ref ext) = self.food { len += ext.len(); }
-        if let Some(ref ext) = self.staff { len += ext.len(); }
-        if let Some(ref ext) = self.guests { len += ext.len(); }
-        if let Some(ref ext) = self.items { len += ext.len(); }
+        if let Some(ref ext) = self.scenery {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.animals {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.buildings {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.fences {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.walls {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.paths {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.food {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.staff {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.guests {
+            len += ext.len();
+        }
+        if let Some(ref ext) = self.items {
+            len += ext.len();
+        }
         len
     }
 }
@@ -463,11 +482,7 @@ pub struct EntityExtension {
 impl EntityExtension {
     #[cfg(feature = "integration-tests")]
     pub fn new_test(base: String, tags: Vec<String>, attributes: HashMap<String, String>) -> Self {
-        EntityExtension {
-            base,
-            tags,
-            attributes,
-        }
+        EntityExtension { base, tags, attributes }
     }
 }
 
@@ -782,7 +797,7 @@ impl ModDefinition {
 }
 #[cfg(test)]
 mod mod_loading_tests {
-    use crate::mods::{Version, DependencyIdentifier};
+    use crate::mods::{DependencyIdentifier, Version};
 
     #[test]
     fn test_parse_meta() {
@@ -1008,8 +1023,7 @@ dependencies = [
         }
 
         // Test set_palette patch
-        let set_palette_patch = patches.get("set_elephant_palette")
-            .expect("set_elephant_palette patch not found");
+        let set_palette_patch = patches.get("set_elephant_palette").expect("set_elephant_palette patch not found");
         match set_palette_patch {
             super::Patch::SetPalette(patch) => {
                 assert_eq!(patch.target, "animals/elephant/adult/male/n");
@@ -1020,8 +1034,7 @@ dependencies = [
         }
 
         // Test set_palette patch with condition
-        let conditional_palette = patches.get("conditional_palette_swap")
-            .expect("conditional_palette_swap patch not found");
+        let conditional_palette = patches.get("conditional_palette_swap").expect("conditional_palette_swap patch not found");
         match conditional_palette {
             super::Patch::SetPalette(patch) => {
                 assert_eq!(patch.target, "animals/tiger/adult/n");
@@ -1101,4 +1114,3 @@ dependencies = [
         assert!(all_extensions.contains_key("buildings.restaurant"));
     }
 }
-

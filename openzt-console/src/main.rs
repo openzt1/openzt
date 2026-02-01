@@ -45,7 +45,7 @@ fn run_interactive(server_address: &str) -> io::Result<()> {
 
     loop {
         let mut input = String::new();
-        print!("Enter a command: ") ;
+        print!("Enter a command: ");
         io::stdout().flush()?;
         io::stdin().read_line(&mut input)?;
 

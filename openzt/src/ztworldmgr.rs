@@ -1,21 +1,21 @@
-use std::cmp::max;
-use std::{collections::HashMap, fmt};
-use std::str::FromStr;
 use getset::Getters;
 use itertools::Itertools;
 use num_enum::FromPrimitive;
-use tracing::{error, info};
 use openzt_detour_macro::detour_mod;
+use std::cmp::max;
+use std::str::FromStr;
+use std::{collections::HashMap, fmt};
+use tracing::{error, info};
 
+use crate::bfentitytype::ZTEntityTypeClass;
+use crate::util::ZTBufferString;
+use crate::ztmapview::BFTile;
 use crate::{
     bfentitytype::{read_zt_entity_type_from_memory, BFEntityType, ZTEntityType, ZTSceneryType},
     command_console::CommandError,
     lua_fn,
     util::{get_from_memory, get_string_from_memory, map_from_memory},
 };
-use crate::util::ZTBufferString;
-use crate::ztmapview::BFTile;
-use crate::bfentitytype::ZTEntityTypeClass;
 
 const GLOBAL_ZTWORLDMGR_ADDRESS: u32 = 0x00638040;
 
@@ -41,7 +41,7 @@ pub enum ZTEntityClass {
     Unknown = 0x0,
 }
 
-// TODO: Make this look like other structs with proper offsets and padding -> 
+// TODO: Make this look like other structs with proper offsets and padding ->
 #[derive(Debug, Getters)]
 #[get = "pub"]
 #[repr(C)]
@@ -87,10 +87,7 @@ pub struct Rectangle {
 
 impl Rectangle {
     fn contains_point(&self, point: &IVec3) -> bool {
-        point.x >= self.min_x 
-            && point.x <= self.max_x 
-            && point.y >= self.min_y 
-            && point.y <= self.max_y
+        point.x >= self.min_x && point.x <= self.max_x && point.y >= self.min_y && point.y <= self.max_y
     }
 }
 
@@ -104,26 +101,26 @@ impl Rectangle {
 pub struct BFEntity {
     vtable: u32,
     padding: [u8; 0x104],
-    name: ZTBufferString,   // 0x108
-    x_coord: i32,           // 0x114
-    y_coord: i32,           // 0x118   
-    z_coord: i32,           // 0x11c
+    name: ZTBufferString,      // 0x108
+    x_coord: i32,              // 0x114
+    y_coord: i32,              // 0x118
+    z_coord: i32,              // 0x11c
     height_above_terrain: u32, // 0x120
-    padding4: [u8; 0x4],    // ----- padding: 4 bytes
-    inner_class_ptr: u32,   // 0x128
-    rotation: i32,          // 0x12c
-    padding5: [u8; 0x14],    // ----- padding: 28 bytes
-    unknown_flag1: u8,    // 0x13c // isRemoved
-    unknown_flag2: u8,    // 0x13d // isRemovedUndo
-    unknown_flag3: u8,    // 0x13e
-    visible: u8,    // 0x13f 
-    snap_to_ground: u8, // 0x140
-    selected: u8, // 0x141
-    unknown_flag4: u8, // 0x142 // Moving? Programmatically?
-    unknown_flag5: u8, // 0x143 // Picked up?
-    draw_dithered: u8, // 0x144
-    unknown_flag6: u8, // 0x145 // If != 0; Draw selection graphic
-    stop_at_end: u8, // 0x146
+    padding4: [u8; 0x4],       // ----- padding: 4 bytes
+    inner_class_ptr: u32,      // 0x128
+    rotation: i32,             // 0x12c
+    padding5: [u8; 0x14],      // ----- padding: 28 bytes
+    unknown_flag1: u8,         // 0x13c // isRemoved
+    unknown_flag2: u8,         // 0x13d // isRemovedUndo
+    unknown_flag3: u8,         // 0x13e
+    visible: u8,               // 0x13f
+    snap_to_ground: u8,        // 0x140
+    selected: u8,              // 0x141
+    unknown_flag4: u8,         // 0x142 // Moving? Programmatically?
+    unknown_flag5: u8,         // 0x143 // Picked up?
+    draw_dithered: u8,         // 0x144
+    unknown_flag6: u8,         // 0x145 // If != 0; Draw selection graphic
+    stop_at_end: u8,           // 0x146
 }
 
 impl fmt::Display for BFEntity {
@@ -155,7 +152,7 @@ impl BFEntity {
         if entity_tile == *tile {
             return true;
         }
-        
+
         let rect = self.get_blocking_rect();
         let tile_size = IVec3 { x: 0x20, y: 0x20, z: 0 };
         rect.contains_point(&read_zt_world_mgr_from_global().tile_to_world(tile.pos, tile_size))
@@ -167,9 +164,9 @@ impl BFEntity {
         if self.inner_class_ptr == 0 || self.entity_type().is_transient || self.entity_type_class() == ZTEntityTypeClass::Path {
             return Rectangle::default(); // Zero rectangle
         }
-        
+
         let mut footprint = self.vtable_get_footprint();
-        
+
         if self.rotation % 2 != 0 {
             let max = max(footprint.x, footprint.y);
             footprint.x = max;
@@ -177,9 +174,9 @@ impl BFEntity {
         }
 
         // Calculate half-dimensions for easier rectangle construction
-        let half_width = (footprint.x * 32) / 2;  // Scaling factor preserved from original
+        let half_width = (footprint.x * 32) / 2; // Scaling factor preserved from original
         let half_height = (footprint.y * 32) / 2;
-        
+
         // Construct and return the rectangle
         Rectangle {
             min_x: self.x_coord - half_width,
@@ -191,7 +188,8 @@ impl BFEntity {
 
     fn vtable_get_footprint(&self) -> IVec3 {
         let function_address = get_from_memory::<u32>(self.vtable + 0x94);
-        let get_footprint_fn = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(this: &BFEntity, param_1: &mut IVec3, param_2: u32) -> u32>(function_address) };
+        let get_footprint_fn =
+            unsafe { std::mem::transmute::<u32, extern "thiscall" fn(this: &BFEntity, param_1: &mut IVec3, param_2: u32) -> u32>(function_address) };
         let mut result_footprint = IVec3::default();
         let footprint_ptr = get_footprint_fn(self, &mut result_footprint, 0);
         get_from_memory::<IVec3>(footprint_ptr)
@@ -213,7 +211,7 @@ impl BFEntity {
             }
         }
     }
-    
+
     pub fn get_tile(&self) -> Option<BFTile> {
         read_zt_world_mgr_from_global().get_tile_from_coords(self.x_coord, self.y_coord)
     }
@@ -232,7 +230,13 @@ impl fmt::Display for ZTEntity {
         write!(
             f,
             "Entity Type: {:?}, Name: {}, EntityType {} ({},{}) ({},{})",
-            self.class, self.name, self.type_class, self.pos1, self.pos2, self.pos1 >> 6, self.pos2 >> 6
+            self.class,
+            self.name,
+            self.type_class,
+            self.pos1,
+            self.pos2,
+            self.pos1 >> 6,
+            self.pos2 >> 6
         )
     }
 }
@@ -346,7 +350,7 @@ impl ZTWorldMgr {
         }
         Some(get_from_memory::<BFTile>(self.tile_array + ((y * self.map_x_size + x) * 0x8c)))
     }
-    
+
     pub fn get_tile_from_coords(&self, x_coord: i32, y_coord: i32) -> Option<BFTile> {
         let x = (x_coord as u32) >> 6; // Convert to tile coordinates
         let y = (y_coord as u32) >> 6; // Convert to tile coordinates
@@ -360,10 +364,10 @@ impl ZTWorldMgr {
     pub fn tile_to_world(&self, tile_pos: IVec3, local_pos: IVec3) -> IVec3 {
         let tile_x = tile_pos.x;
         let tile_y = tile_pos.y;
-        
+
         // Get the tile at the specified position, if it exists and is within bounds
         let tile = self.get_tile_from_pos(tile_pos);
-        
+
         // Calculate elevation based on tile data
         let world_z = match tile {
             Some(tile_ref) => {
@@ -372,7 +376,7 @@ impl ZTWorldMgr {
             }
             None => 0,
         };
-        
+
         // Convert tile coordinates to world coordinates
         IVec3 {
             x: tile_x * TILE_SIZE + local_pos.x,
@@ -385,8 +389,8 @@ impl ZTWorldMgr {
 #[detour_mod]
 pub mod hooks_ztworldmgr {
     use crate::util::save_to_memory;
+    use openzt_detour::gen::bfentity::{GET_BLOCKING_RECT, GET_BLOCKING_RECT_VIRT_ZTPATH, GET_FOOTPRINT, IS_ON_TILE};
     use openzt_detour::gen::bfmap::{GET_NEIGHBOR_1, TILE_TO_WORLD};
-    use openzt_detour::gen::bfentity::{GET_BLOCKING_RECT, GET_FOOTPRINT, IS_ON_TILE, GET_BLOCKING_RECT_VIRT_ZTPATH};
 
     use super::*;
 
@@ -396,14 +400,10 @@ pub mod hooks_ztworldmgr {
         let bftile = get_from_memory::<BFTile>(bftile);
         let direction = Direction::from(direction);
         match ztwm.get_neighbour(&bftile, direction) {
-            Some(neighbour) => {
-                ztwm.get_ptr_from_bftile(&neighbour)
-            }
-            None => {
-                0
-            }
+            Some(neighbour) => ztwm.get_ptr_from_bftile(&neighbour),
+            None => 0,
         }
-    }    
+    }
 
     // 0x0040f916 int * __thiscall OOAnalyzer::BFEntity::getFootprint(BFEntity *this,undefined4 *param_1)
     #[detour(GET_FOOTPRINT)]
@@ -453,7 +453,10 @@ pub mod hooks_ztworldmgr {
         let tile = get_from_memory::<BFTile>(param_1);
         let reimimplented_result = entity.is_on_tile(&tile);
         if result != reimimplented_result {
-            error!("BFEntity::is_on_tile: Detour result ({}) does not match reimplemented result ({}) for entity {}", result, reimimplented_result, entity.name);
+            error!(
+                "BFEntity::is_on_tile: Detour result ({}) does not match reimplemented result ({}) for entity {}",
+                result, reimimplented_result, entity.name
+            );
         }
         reimimplented_result
     }
@@ -464,7 +467,7 @@ pub fn init() {
     lua_fn!("list_entities", "Lists all entities in the world", "list_entities()", || {
         match command_get_zt_world_mgr_entities(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -472,7 +475,7 @@ pub fn init() {
     lua_fn!("list_entities_2", "Lists all entities in the world (alternate format)", "list_entities_2()", || {
         match command_get_zt_world_mgr_entities_2(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -480,7 +483,7 @@ pub fn init() {
     lua_fn!("list_types", "Lists all entity types in the world", "list_types()", || {
         match command_get_zt_world_mgr_types(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -488,7 +491,7 @@ pub fn init() {
     lua_fn!("get_zt_world_mgr", "Returns world manager details", "get_zt_world_mgr()", || {
         match command_get_zt_world_mgr(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -496,25 +499,35 @@ pub fn init() {
     lua_fn!("get_types_summary", "Returns summary of all entity types", "get_types_summary()", || {
         match command_zt_world_mgr_types_summary(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
     // get_entity_vtable_entry(offset) - single string arg
-    lua_fn!("get_entity_vtable_entry", "Returns unique entity vtable entries at offset", "get_entity_vtable_entry(offset)", |offset: String| {
-        match command_get_entity_unique_vtable_entries(vec![&offset]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+    lua_fn!(
+        "get_entity_vtable_entry",
+        "Returns unique entity vtable entries at offset",
+        "get_entity_vtable_entry(offset)",
+        |offset: String| {
+            match command_get_entity_unique_vtable_entries(vec![&offset]) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 
     // get_entity_type_vtable_entry(offset) - single string arg
-    lua_fn!("get_entity_type_vtable_entry", "Returns unique entity type vtable entries at offset", "get_entity_type_vtable_entry(offset)", |offset: String| {
-        match command_get_entity_type_unique_vtable_entries(vec![&offset]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+    lua_fn!(
+        "get_entity_type_vtable_entry",
+        "Returns unique entity type vtable entries at offset",
+        "get_entity_type_vtable_entry(offset)",
+        |offset: String| {
+            match command_get_entity_type_unique_vtable_entries(vec![&offset]) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 
     unsafe { hooks_ztworldmgr::init_detours().unwrap() };
 }
@@ -574,21 +587,17 @@ fn command_get_entity_unique_vtable_entries(args: Vec<&str>) -> Result<String, C
     if args.len() != 1 {
         return Err(CommandError::new("Vtable offset required".to_string()));
     }
-    
+
     let vtable_offset = match args[0].strip_prefix("0x") {
-        Some(hex_str) => {
-            u32::from_str_radix(hex_str, 16)?
-        }
-        None => {
-            u32::from_str(args[0])?
-        }
+        Some(hex_str) => u32::from_str_radix(hex_str, 16)?,
+        None => u32::from_str(args[0])?,
     };
-    
+
     let zt_world_mgr = read_zt_world_mgr_from_global();
     let entities = get_zt_world_mgr_entities(&zt_world_mgr);
 
     let mut result = String::new();
-    
+
     entities
         .iter()
         .map(|entity| (entity.type_class.class.clone(), entity.vtable + vtable_offset))
@@ -604,21 +613,17 @@ fn command_get_entity_type_unique_vtable_entries(args: Vec<&str>) -> Result<Stri
     if args.len() != 1 {
         return Err(CommandError::new("Vtable offset required".to_string()));
     }
-    
+
     let vtable_offset = match args[0].strip_prefix("0x") {
-        Some(hex_str) => {
-            u32::from_str_radix(hex_str, 16)?
-        }
-        None => {
-            u32::from_str(args[0])?
-        }
+        Some(hex_str) => u32::from_str_radix(hex_str, 16)?,
+        None => u32::from_str(args[0])?,
     };
-    
+
     let zt_world_mgr = read_zt_world_mgr_from_global();
     let entities = get_zt_world_mgr_types(&zt_world_mgr);
 
     let mut result = String::new();
-    
+
     entities
         .iter()
         .map(|entity_type| (entity_type.class.clone(), entity_type.vtable + vtable_offset))

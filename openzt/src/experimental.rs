@@ -1,19 +1,17 @@
-use tracing::info;
 use openzt_detour_macro::detour_mod;
+use tracing::info;
 
 // use crate::{
 //     util::get_from_memory,
 // };
 
-
 // 0049ccc3
 // void __thiscall BFUIMgr::displayMessage(void *this,uint param_1,int param_2,BFTile *param_3,BFEntity *param_4,bool param_5, bool param_6)
 
-
 #[detour_mod]
 pub mod zoo_experimental {
-    use tracing::info;
     use openzt_detour::gen::bfuimgr::DISPLAY_MESSAGE_0;
+    use tracing::info;
 
     // use crate::{
     //     bfregistry::{add_to_registry, get_from_registry},
@@ -22,7 +20,10 @@ pub mod zoo_experimental {
 
     #[detour(DISPLAY_MESSAGE_0)]
     unsafe extern "thiscall" fn prt_get(_this_prt: u32, param_1: u32, param_2: i32, param_3: u32, param_4: u32, param_5: bool, param_6: bool) {
-        info!("BFUIMgr::displayMessage called with params: {}, {}, {}, {}, {}, {}", param_1, param_2, param_3, param_4, param_5, param_6);
+        info!(
+            "BFUIMgr::displayMessage called with params: {}, {}, {}, {}, {}, {}",
+            param_1, param_2, param_3, param_4, param_5, param_6
+        );
         unsafe { DISPLAY_MESSAGE_0_DETOUR.call(_this_prt, param_1, param_2, param_3, param_4, param_5, param_6) };
     }
 
@@ -48,7 +49,6 @@ pub mod zoo_experimental {
     //     info!("GXMixer::getAnim called with params: {:#x} {:#x}", _this, get_from_memory::<u32>(_this));
     //     unsafe { GXMixer_get_anim.call(_this) }
     // }
-
 }
 
 pub fn init() {

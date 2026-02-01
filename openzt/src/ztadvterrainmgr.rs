@@ -49,16 +49,7 @@ impl Display for BFTerrainTypeInfo {
         write!(
             f,
             "BFTerrainTypeInfo {{ vtable: {:#x} type_id: {} cost: {} blend: {} water: {} ?: {:#x} ?: {} ?: {} help_id: {} icon_string: {} }}",
-            self.vtable,
-            self.type_id,
-            self.cost,
-            self.blend,
-            self.water,
-            self.unknown_ptr,
-            self.unknown_u32_6,
-            self.unknown_u32_7,
-            self.help_id,
-            self.icon_string,
+            self.vtable, self.type_id, self.cost, self.blend, self.water, self.unknown_ptr, self.unknown_u32_6, self.unknown_u32_7, self.help_id, self.icon_string,
         )
     }
 }
@@ -105,7 +96,7 @@ pub fn init() {
     lua_fn!("list_bfterraintypeinfo", "Lists terrain type info", "list_bfterraintypeinfo()", || {
         match command_get_bfterraintypeinfo(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 }

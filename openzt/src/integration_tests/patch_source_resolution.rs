@@ -20,13 +20,16 @@ crate::integration_tests![
 
 /// Helper function to create meta.toml content with a given mod_id
 fn create_meta_toml(mod_id: &str) -> String {
-    format!(r#"name = "Patch Source Resolution Test"
+    format!(
+        r#"name = "Patch Source Resolution Test"
 mod_id = "{}"
 version = "0.1.0"
 description = "Tests that patch source files can be read from .ztd archive"
 authors = ["OpenZT"]
 ztd_type = "openzt"
-"#, mod_id)
+"#,
+        mod_id
+    )
 }
 
 /// Helper function to load a test mod with the given mod_id
@@ -40,11 +43,9 @@ fn load_test_mod(mod_id: &str) -> Result<(), String> {
     file_map.insert("resources/test_multi_source.ai".to_string(), MULTI_SOURCE.as_bytes().to_vec().into_boxed_slice());
 
     // Load the test mod
-    crate::resource_manager::openzt_mods::loading::load_open_zt_mod_from_memory(
-        file_map,
-        mod_id,
-        std::path::Path::new("dummy"),
-    ).map(|_| ()).map_err(|e| format!("Failed to load test mod: {}", e))
+    crate::resource_manager::openzt_mods::loading::load_open_zt_mod_from_memory(file_map, mod_id, std::path::Path::new("dummy"))
+        .map(|_| ())
+        .map_err(|e| format!("Failed to load test mod: {}", e))
 }
 
 fn test_source_file_from_archive() -> TestResult {
@@ -66,8 +67,9 @@ fn test_merge_from_archive() -> TestResult {
     add_ztfile_from_memory(
         "test_setup",
         "animals/testsource.ai".to_string(),
-        ZTFile::RawBytes(b"[base]\nkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0)
-    ).expect("Failed to create target file");
+        ZTFile::RawBytes(b"[base]\nkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0),
+    )
+    .expect("Failed to create target file");
 
     // Load the test mod with unique mod_id so patches are applied
     if let Err(e) = load_test_mod("patch_source_merge_test") {
@@ -100,8 +102,9 @@ fn test_replace_from_archive() -> TestResult {
     add_ztfile_from_memory(
         "test_setup",
         "animals/testtarget.ai".to_string(),
-        ZTFile::RawBytes(b"[old]\noldkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0)
-    ).expect("Failed to create target file");
+        ZTFile::RawBytes(b"[old]\noldkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0),
+    )
+    .expect("Failed to create target file");
 
     // Load the test mod with unique mod_id so patches are applied
     if let Err(e) = load_test_mod("patch_source_replace_test") {
@@ -134,20 +137,29 @@ fn test_missing_source_file_error() -> TestResult {
     add_ztfile_from_memory(
         "test_setup",
         "animals/target.ai".to_string(),
-        ZTFile::RawBytes(b"[base]\nkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0)
-    ).expect("Failed to create target file");
+        ZTFile::RawBytes(b"[base]\nkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0),
+    )
+    .expect("Failed to create target file");
 
     // Create a mod with a patch that references a non-existent source file
     let mut file_map = std::collections::HashMap::new();
-    file_map.insert("meta.toml".to_string(), r#"name = "Missing Source Test"
+    file_map.insert(
+        "meta.toml".to_string(),
+        r#"name = "Missing Source Test"
 mod_id = "missing_source_test"
 version = "0.1.0"
 description = "Test for missing source files"
 authors = ["OpenZT"]
 ztd_type = "openzt"
-"#.as_bytes().to_vec().into_boxed_slice());
+"#
+        .as_bytes()
+        .to_vec()
+        .into_boxed_slice(),
+    );
 
-    file_map.insert("defs/01-patches.toml".to_string(), r#"
+    file_map.insert(
+        "defs/01-patches.toml".to_string(),
+        r#"
         [patches]
         [patches.bad_patch]
         operation = "merge"
@@ -156,25 +168,19 @@ ztd_type = "openzt"
 
         [patch_meta]
         on_error = "abort"
-    "#.as_bytes().to_vec().into_boxed_slice());
-
-    let result = crate::resource_manager::openzt_mods::loading::load_open_zt_mod_from_memory(
-        file_map,
-        "missing_source_test",
-        std::path::Path::new("dummy"),
+    "#
+        .as_bytes()
+        .to_vec()
+        .into_boxed_slice(),
     );
+
+    let result = crate::resource_manager::openzt_mods::loading::load_open_zt_mod_from_memory(file_map, "missing_source_test", std::path::Path::new("dummy"));
 
     // Should fail with appropriate error message
     match result {
-        Err(e) if e.to_string().contains("not found in archive") => {
-            TestResult::pass(test_name)
-        }
-        Err(e) => {
-            TestResult::fail(test_name, format!("Wrong error type: {}", e))
-        }
-        Ok(_) => {
-            TestResult::fail(test_name, "Expected error but got success".to_string())
-        }
+        Err(e) if e.to_string().contains("not found in archive") => TestResult::pass(test_name),
+        Err(e) => TestResult::fail(test_name, format!("Wrong error type: {}", e)),
+        Ok(_) => TestResult::fail(test_name, "Expected error but got success".to_string()),
     }
 }
 
@@ -187,20 +193,29 @@ fn test_source_file_wrong_path_error() -> TestResult {
     add_ztfile_from_memory(
         "test_setup",
         "animals/target.ai".to_string(),
-        ZTFile::RawBytes(b"[base]\nkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0)
-    ).expect("Failed to create target file");
+        ZTFile::RawBytes(b"[base]\nkey=value".to_vec().into_boxed_slice(), ZTFileType::Ai, 0),
+    )
+    .expect("Failed to create target file");
 
     // Create a mod where source file exists but not under resources/
     let mut file_map = std::collections::HashMap::new();
-    file_map.insert("meta.toml".to_string(), r#"name = "Wrong Path Test"
+    file_map.insert(
+        "meta.toml".to_string(),
+        r#"name = "Wrong Path Test"
 mod_id = "wrong_path_test"
 version = "0.1.0"
 description = "Test for wrong path to source files"
 authors = ["OpenZT"]
 ztd_type = "openzt"
-"#.as_bytes().to_vec().into_boxed_slice());
+"#
+        .as_bytes()
+        .to_vec()
+        .into_boxed_slice(),
+    );
 
-    file_map.insert("defs/01-patches.toml".to_string(), r#"
+    file_map.insert(
+        "defs/01-patches.toml".to_string(),
+        r#"
         [patches]
         [patches.wrong_path]
         operation = "merge"
@@ -209,27 +224,21 @@ ztd_type = "openzt"
 
         [patch_meta]
         on_error = "abort"
-    "#.as_bytes().to_vec().into_boxed_slice());
+    "#
+        .as_bytes()
+        .to_vec()
+        .into_boxed_slice(),
+    );
 
     // File exists but in wrong location (no resources/ prefix)
     file_map.insert("patches/file.ai".to_string(), b"[wrong]\nkey=value".to_vec().into_boxed_slice());
 
-    let result = crate::resource_manager::openzt_mods::loading::load_open_zt_mod_from_memory(
-        file_map,
-        "wrong_path_test",
-        std::path::Path::new("dummy"),
-    );
+    let result = crate::resource_manager::openzt_mods::loading::load_open_zt_mod_from_memory(file_map, "wrong_path_test", std::path::Path::new("dummy"));
 
     // Should fail because file is not under resources/
     match result {
-        Err(e) if e.to_string().contains("not found in archive") => {
-            TestResult::pass(test_name)
-        }
-        Err(e) => {
-            TestResult::fail(test_name, format!("Wrong error type: {}", e))
-        }
-        Ok(_) => {
-            TestResult::fail(test_name, "Expected error but got success".to_string())
-        }
+        Err(e) if e.to_string().contains("not found in archive") => TestResult::pass(test_name),
+        Err(e) => TestResult::fail(test_name, format!("Wrong error type: {}", e)),
+        Ok(_) => TestResult::fail(test_name, "Expected error but got success".to_string()),
     }
 }
