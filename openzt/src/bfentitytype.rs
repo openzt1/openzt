@@ -7,6 +7,7 @@ use getset::{Getters, Setters};
 use num_enum::FromPrimitive;
 use tracing::info;
 
+use crate::util::ZTBoundedString;
 use crate::{
     command_console::CommandError,
     expansions::is_member,
@@ -15,7 +16,6 @@ use crate::{
     ztui::get_selected_entity_type_address,
     ztworldmgr,
 };
-use crate::util::ZTBoundedString;
 
 pub trait EntityType: FieldAccessorAsStringTrait {
     // allows setting the configuration of the entity type
@@ -76,7 +76,7 @@ pub struct BFEntityType {
     pub avoid_edges: bool,            // 0x074
     // TODO: Add to display impl and test these bits, if they work replace usage of ZTEntityType with BFEntityType
     pad8: [u8; 0x080 - 0x075],        // ----------------------- padding: 11 bytes
-    pub bf_config_file_ptr: u32,        // 0x080
+    pub bf_config_file_ptr: u32,      // 0x080
     pad9: [u8; 0x098 - 0x084],        // ----------------------- padding: 20 bytes
     pub zt_type: ZTBoundedString,     // 0x098
     pub zt_sub_type: ZTBoundedString, // 0x0A4
@@ -283,7 +283,11 @@ impl Checkable for ZTSceneryType {
     fn check(ptr: u32) -> anyhow::Result<()> {
         let entity_type_vtable = ZTEntityTypeClass::from(get_from_memory::<u32>(ptr));
         if !zt_entity_type_class_is(&entity_type_vtable, &ZTEntityTypeClass::Scenery) {
-            return Err(anyhow::anyhow!("Incompatible entity type: expected ZTEntityTypeClass::Scenery, found {:?}({:#x})", entity_type_vtable, get_from_memory::<u32>(ptr)));
+            return Err(anyhow::anyhow!(
+                "Incompatible entity type: expected ZTEntityTypeClass::Scenery, found {:?}({:#x})",
+                entity_type_vtable,
+                get_from_memory::<u32>(ptr)
+            ));
         }
         anyhow::Ok(())
     }
@@ -1083,14 +1087,14 @@ pub struct ZTAnimalType {
     pad11: [u8; 0x31C - 0x2C0],         // ----------------------- padding: 92 bytes
     pub baby_born_change: i32,          // 0x31C
     // pad12: [u8; 0x320 - 0x320],         // ----------------------- padding: 4 bytes
-    pub energy_increment: i32,          // 0x320
-    pub energy_threshold: i32,          // 0x324
-    pub dirty_increment: i32,           // 0x328
-    pub dirty_threshold: i32,           // 0x32C
+    pub energy_increment: i32, // 0x320
+    pub energy_threshold: i32, // 0x324
+    pub dirty_increment: i32,  // 0x328
+    pub dirty_threshold: i32,  // 0x32C
     // pad13: [u8; 0x330 - 0x330],         // ----------------------- padding: 4 bytes
-    pub sick_time: i32,                 // 0x330
-    pad14: [u8; 0x344 - 0x334],         // ----------------------- padding: 16 bytes
-    pub baby_to_adult: i32,             // 0x344
+    pub sick_time: i32,         // 0x330
+    pad14: [u8; 0x344 - 0x334], // ----------------------- padding: 16 bytes
+    pub baby_to_adult: i32,     // 0x344
     // pad15: [u8; 0x348 - 0x348],         // ----------------------- padding: 4 bytes
     pub other_food: i32,                // 0x348
     pub tree_pref: i32,                 // 0x34C
@@ -1105,33 +1109,33 @@ pub struct ZTAnimalType {
     pad16: [u8; 0x378 - 0x370],         // ----------------------- padding: 8 bytes
     pub happy_reproduce_threshold: i32, // 0x378
     // pad17: [u8; 0x37C - 0x37C],         // ----------------------- padding: 4 bytes
-    pub building_use_chance: i32,       // 0x37C
-    pub no_mate_change: i32,            // 0x380
-    pub time_death: i32,                // 0x384
-    pub death_chance: i32,              // 0x388
-    pub dirt_chance: i32,               // 0x38C
-    pub water_needed: i32,              // 0x390
-    pub underwater_needed: i32,         // 0x394
-    pub land_needed: i32,               // 0x398
-    pub enter_water_chance: i32,        // 0x39C
-    pub enter_tank_chance: i32,         // 0x3A0
-    pub enter_land_chance: i32,         // 0x3A4
-    pub drink_water_chance: i32,        // 0x3A8
-    pub chase_animal_chance: i32,       // 0x3AC
-    pub climbs_cliffs: i32,             // 0x3B0
-    pub bash_strength: i32,             // 0x3B4
-    pub attractiveness: i32,            // 0x3B8
-    pad18: [u8; 0x3C8 - 0x3BC],         // ----------------------- padding: 8 bytes
-    pub keeper_food_type: i32,          // 0x3C8
-    pub is_climber: bool,               // 0x3CC
-    pub is_jumper: bool,                // 0x3CD
-    pub small_zoodoo: bool,             // 0x3CE
-    pub dino_zoodoo: bool,              // 0x3CF
-    pub giant_zoodoo: bool,             // 0x3D0
-    pub is_special_animal: bool,        // 0x3D1
-    pub need_shelter: bool,             // 0x3D2
-    pub need_toys: bool,                // 0x3D3
-    pub babies_attack: bool,            // 0x3D4
+    pub building_use_chance: i32, // 0x37C
+    pub no_mate_change: i32,      // 0x380
+    pub time_death: i32,          // 0x384
+    pub death_chance: i32,        // 0x388
+    pub dirt_chance: i32,         // 0x38C
+    pub water_needed: i32,        // 0x390
+    pub underwater_needed: i32,   // 0x394
+    pub land_needed: i32,         // 0x398
+    pub enter_water_chance: i32,  // 0x39C
+    pub enter_tank_chance: i32,   // 0x3A0
+    pub enter_land_chance: i32,   // 0x3A4
+    pub drink_water_chance: i32,  // 0x3A8
+    pub chase_animal_chance: i32, // 0x3AC
+    pub climbs_cliffs: i32,       // 0x3B0
+    pub bash_strength: i32,       // 0x3B4
+    pub attractiveness: i32,      // 0x3B8
+    pad18: [u8; 0x3C8 - 0x3BC],   // ----------------------- padding: 8 bytes
+    pub keeper_food_type: i32,    // 0x3C8
+    pub is_climber: bool,         // 0x3CC
+    pub is_jumper: bool,          // 0x3CD
+    pub small_zoodoo: bool,       // 0x3CE
+    pub dino_zoodoo: bool,        // 0x3CF
+    pub giant_zoodoo: bool,       // 0x3D0
+    pub is_special_animal: bool,  // 0x3D1
+    pub need_shelter: bool,       // 0x3D2
+    pub need_toys: bool,          // 0x3D3
+    pub babies_attack: bool,      // 0x3D4
 }
 
 impl EntityType for ZTAnimalType {
@@ -1261,7 +1265,7 @@ pub struct ZTStaffType {
     pub work_check: i32,        // 0x1B4
     pub chase_check: i32,       // 0x1B8
     // pad02: [u8; 0x1BC - 0x1BC], // ----------------------- padding: 4 bytes
-    pub monthly_cost: f32,      // 0x1BC
+    pub monthly_cost: f32, // 0x1BC
     // pub training_icon_name: string ptr, // 0x1D8 TODO: implement string ptr as function getter
     pad03: [u8; 0x1E8 - 0x1C0], // ----------------------- padding: 24 bytes
     pub duties_text_id: i32,    // 0x1E8
@@ -1704,7 +1708,6 @@ fn print_info_image_name(entity_type: &BFEntityType, config: &mut String) {
 //     Ok(result)
 
 // }
-    
 
 // This returns a dynamic trait object, which lets us call the methods of the entity type without knowing the exact type
 fn get_bfentitytype(address: u32) -> Result<Box<dyn EntityType>, String> {
@@ -1732,16 +1735,16 @@ fn get_bfentitytype(address: u32) -> Result<Box<dyn EntityType>, String> {
         ZTEntityTypeClass::Staff => Box::new(get_from_memory::<ZTStaffType>(address)),
         ZTEntityTypeClass::BFEntity => Box::new(get_from_memory::<BFEntityType>(address)),
         ZTEntityTypeClass::Unknown => return Err("Unknown entity type".to_string()),
-        };
-        Ok(entity)
-    }
+    };
+    Ok(entity)
+}
 
-    fn map_bfentitytype(address: u32) -> Result<&'static mut dyn EntityType, String> {
-        // create a copied instance of the entity type
-        info!("Mapping entity type at address {:#x}", address);
-        let entity_type_vtable: u32 = get_from_memory(address);
-        info!("Entity type vtable: {:#x}", entity_type_vtable);
-        let entity: &mut dyn EntityType = match ZTEntityTypeClass::from(entity_type_vtable) {
+fn map_bfentitytype(address: u32) -> Result<&'static mut dyn EntityType, String> {
+    // create a copied instance of the entity type
+    info!("Mapping entity type at address {:#x}", address);
+    let entity_type_vtable: u32 = get_from_memory(address);
+    info!("Entity type vtable: {:#x}", entity_type_vtable);
+    let entity: &mut dyn EntityType = match ZTEntityTypeClass::from(entity_type_vtable) {
         ZTEntityTypeClass::Animal => map_from_memory::<ZTAnimalType>(address),
         ZTEntityTypeClass::Ambient => map_from_memory::<ZTAmbientType>(address),
         ZTEntityTypeClass::Guest => map_from_memory::<ZTGuestType>(address),
@@ -1763,30 +1766,35 @@ fn get_bfentitytype(address: u32) -> Result<Box<dyn EntityType>, String> {
         ZTEntityTypeClass::Staff => map_from_memory::<ZTStaffType>(address),
         ZTEntityTypeClass::BFEntity => map_from_memory::<BFEntityType>(address),
         ZTEntityTypeClass::Unknown => return Err("Unknown entity type".to_string()),
-        };
-        Ok(entity)
-    }
+    };
+    Ok(entity)
+}
 
-    // initializes the custom command
-    pub fn init() {
-        // sel_type([key], [value]) - optional arguments
-        lua_fn!("sel_type", "Gets selected entity type config, with optional key/value to set", "sel_type([key], [value]) or sel_type(\"-v\")", |args: mlua::Variadic<String>| {
+// initializes the custom command
+pub fn init() {
+    // sel_type([key], [value]) - optional arguments
+    lua_fn!(
+        "sel_type",
+        "Gets selected entity type config, with optional key/value to set",
+        "sel_type([key], [value]) or sel_type(\"-v\")",
+        |args: mlua::Variadic<String>| {
             let args_vec: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
             match command_sel_type(args_vec) {
                 Ok(result) => Ok((Some(result), None::<String>)),
-                Err(e) => Ok((None::<String>, Some(e.to_string())))
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
             }
-        });
+        }
+    );
 
-        // make_sel(id) - single u32 arg
-        lua_fn!("make_sel", "Makes entity type selectable", "make_sel(id)", |id: u32| {
-            let id_str = id.to_string();
-            match command_make_sel(vec![&id_str]) {
-                Ok(result) => Ok((Some(result), None::<String>)),
-                Err(e) => Ok((None::<String>, Some(e.to_string())))
-            }
-        });
-    }
+    // make_sel(id) - single u32 arg
+    lua_fn!("make_sel", "Makes entity type selectable", "make_sel(id)", |id: u32| {
+        let id_str = id.to_string();
+        match command_make_sel(vec![&id_str]) {
+            Ok(result) => Ok((Some(result), None::<String>)),
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
+        }
+    });
+}
 
 #[derive(Debug, PartialEq, Eq, FromPrimitive, Clone)]
 #[repr(u32)]
@@ -1823,7 +1831,17 @@ pub fn zt_entity_type_class_is(original_class: &ZTEntityTypeClass, class: &ZTEnt
         ZTEntityTypeClass::Fence => matches!(*original_class, ZTEntityTypeClass::Fence | ZTEntityTypeClass::TankWall),
         ZTEntityTypeClass::TourGuide => *original_class == ZTEntityTypeClass::TourGuide,
         ZTEntityTypeClass::Building => *original_class == ZTEntityTypeClass::Building,
-        ZTEntityTypeClass::Scenery => matches!(*original_class, ZTEntityTypeClass::Scenery | ZTEntityTypeClass::Food | ZTEntityTypeClass::Path | ZTEntityTypeClass::Rubble | ZTEntityTypeClass::TankFilter | ZTEntityTypeClass::TankWall | ZTEntityTypeClass::Building | ZTEntityTypeClass::Fence),
+        ZTEntityTypeClass::Scenery => matches!(
+            *original_class,
+            ZTEntityTypeClass::Scenery
+                | ZTEntityTypeClass::Food
+                | ZTEntityTypeClass::Path
+                | ZTEntityTypeClass::Rubble
+                | ZTEntityTypeClass::TankFilter
+                | ZTEntityTypeClass::TankWall
+                | ZTEntityTypeClass::Building
+                | ZTEntityTypeClass::Fence
+        ),
         ZTEntityTypeClass::Food => *original_class == ZTEntityTypeClass::Food,
         ZTEntityTypeClass::TankFilter => *original_class == ZTEntityTypeClass::TankFilter,
         ZTEntityTypeClass::Path => *original_class == ZTEntityTypeClass::Path,
@@ -1834,10 +1852,56 @@ pub fn zt_entity_type_class_is(original_class: &ZTEntityTypeClass, class: &ZTEnt
         ZTEntityTypeClass::Drt => *original_class == ZTEntityTypeClass::Drt,
         ZTEntityTypeClass::Unknown => false,
         ZTEntityTypeClass::BFOverlay => matches!(*original_class, ZTEntityTypeClass::BFOverlay | ZTEntityTypeClass::Ambient),
-        ZTEntityTypeClass::BFUnit => matches!(*original_class, ZTEntityTypeClass::BFUnit | ZTEntityTypeClass::ZTUnit | ZTEntityTypeClass::Staff | ZTEntityTypeClass::Keeper | ZTEntityTypeClass::MaintenanceWorker | ZTEntityTypeClass::Drt | ZTEntityTypeClass::TourGuide | ZTEntityTypeClass::Guest | ZTEntityTypeClass::Animal),
-        ZTEntityTypeClass::ZTUnit => matches!(*original_class, ZTEntityTypeClass::ZTUnit | ZTEntityTypeClass::Staff | ZTEntityTypeClass::Keeper | ZTEntityTypeClass::MaintenanceWorker | ZTEntityTypeClass::Drt | ZTEntityTypeClass::TourGuide | ZTEntityTypeClass::Guest | ZTEntityTypeClass::Animal),
-        ZTEntityTypeClass::Staff => matches!(*original_class, ZTEntityTypeClass::Staff | ZTEntityTypeClass::Keeper | ZTEntityTypeClass::MaintenanceWorker | ZTEntityTypeClass::Drt | ZTEntityTypeClass::TourGuide),
-        ZTEntityTypeClass::BFEntity => matches!(*original_class, ZTEntityTypeClass::BFEntity | ZTEntityTypeClass::BFUnit | ZTEntityTypeClass::ZTUnit | ZTEntityTypeClass::Staff | ZTEntityTypeClass::Keeper | ZTEntityTypeClass::MaintenanceWorker | ZTEntityTypeClass::Drt | ZTEntityTypeClass::TourGuide | ZTEntityTypeClass::Guest | ZTEntityTypeClass::Animal | ZTEntityTypeClass::Scenery | ZTEntityTypeClass::Food | ZTEntityTypeClass::Path | ZTEntityTypeClass::Rubble | ZTEntityTypeClass::TankFilter | ZTEntityTypeClass::TankWall | ZTEntityTypeClass::Building | ZTEntityTypeClass::Fence | ZTEntityTypeClass::BFOverlay | ZTEntityTypeClass::Ambient),
+        ZTEntityTypeClass::BFUnit => matches!(
+            *original_class,
+            ZTEntityTypeClass::BFUnit
+                | ZTEntityTypeClass::ZTUnit
+                | ZTEntityTypeClass::Staff
+                | ZTEntityTypeClass::Keeper
+                | ZTEntityTypeClass::MaintenanceWorker
+                | ZTEntityTypeClass::Drt
+                | ZTEntityTypeClass::TourGuide
+                | ZTEntityTypeClass::Guest
+                | ZTEntityTypeClass::Animal
+        ),
+        ZTEntityTypeClass::ZTUnit => matches!(
+            *original_class,
+            ZTEntityTypeClass::ZTUnit
+                | ZTEntityTypeClass::Staff
+                | ZTEntityTypeClass::Keeper
+                | ZTEntityTypeClass::MaintenanceWorker
+                | ZTEntityTypeClass::Drt
+                | ZTEntityTypeClass::TourGuide
+                | ZTEntityTypeClass::Guest
+                | ZTEntityTypeClass::Animal
+        ),
+        ZTEntityTypeClass::Staff => matches!(
+            *original_class,
+            ZTEntityTypeClass::Staff | ZTEntityTypeClass::Keeper | ZTEntityTypeClass::MaintenanceWorker | ZTEntityTypeClass::Drt | ZTEntityTypeClass::TourGuide
+        ),
+        ZTEntityTypeClass::BFEntity => matches!(
+            *original_class,
+            ZTEntityTypeClass::BFEntity
+                | ZTEntityTypeClass::BFUnit
+                | ZTEntityTypeClass::ZTUnit
+                | ZTEntityTypeClass::Staff
+                | ZTEntityTypeClass::Keeper
+                | ZTEntityTypeClass::MaintenanceWorker
+                | ZTEntityTypeClass::Drt
+                | ZTEntityTypeClass::TourGuide
+                | ZTEntityTypeClass::Guest
+                | ZTEntityTypeClass::Animal
+                | ZTEntityTypeClass::Scenery
+                | ZTEntityTypeClass::Food
+                | ZTEntityTypeClass::Path
+                | ZTEntityTypeClass::Rubble
+                | ZTEntityTypeClass::TankFilter
+                | ZTEntityTypeClass::TankWall
+                | ZTEntityTypeClass::Building
+                | ZTEntityTypeClass::Fence
+                | ZTEntityTypeClass::BFOverlay
+                | ZTEntityTypeClass::Ambient
+        ),
     }
 }
 

@@ -1,10 +1,10 @@
-pub(crate) mod habitats_locations;
+pub(crate) mod entity_lookup;
 pub(crate) mod extensions;
+pub(crate) mod habitats_locations;
 pub(crate) mod legacy_attributes;
 pub(crate) mod loading;
 pub mod patches;
 pub(crate) mod ztd_registry;
-pub(crate) mod entity_lookup;
 
 pub use crate::resource_manager::openzt_mods::{
     habitats_locations::{get_location_habitat_ids, get_location_or_habitat_by_id},
@@ -15,11 +15,5 @@ pub use crate::resource_manager::openzt_mods::{
 #[cfg(feature = "integration-tests")]
 pub use crate::resource_manager::openzt_mods::{
     habitats_locations::{get_habitat_id, get_location_id},
-    loading::{
-        clear_load_tracker,
-        get_load_events,
-        load_open_zt_mod_from_memory,
-        DefFileCategory,
-        LoadEvent,
-    },
+    loading::{clear_load_tracker, get_load_events, load_open_zt_mod_from_memory, DefFileCategory, LoadEvent},
 };

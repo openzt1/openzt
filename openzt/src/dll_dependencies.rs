@@ -1,8 +1,8 @@
+use regex::Regex;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use tracing::{info, warn};
-use regex::Regex;
 
 /// Set of available language DLL files in the game directory
 static AVAILABLE_DLLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -16,11 +16,9 @@ pub fn init() {
     use std::fs;
 
     // Get the directory containing the running executable (zoo.exe/zt.exe)
-    let exe_path = std::env::current_exe()
-        .expect("Failed to get current executable path");
+    let exe_path = std::env::current_exe().expect("Failed to get current executable path");
 
-    let exe_dir = exe_path.parent()
-        .expect("Failed to get executable directory");
+    let exe_dir = exe_path.parent().expect("Failed to get executable directory");
 
     info!("Scanning directory for DLL dependencies: {}", exe_dir.display());
 

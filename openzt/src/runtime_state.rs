@@ -28,12 +28,10 @@
 use std::{collections::HashMap, sync::LazyLock};
 
 /// Boolean state storage
-static BOOL_STATE: LazyLock<std::sync::Mutex<HashMap<String, bool>>> =
-    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+static BOOL_STATE: LazyLock<std::sync::Mutex<HashMap<String, bool>>> = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// String state storage
-static STRING_STATE: LazyLock<std::sync::Mutex<HashMap<String, String>>> =
-    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+static STRING_STATE: LazyLock<std::sync::Mutex<HashMap<String, String>>> = LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// Get a boolean value, returns false if not found (clones value)
 ///

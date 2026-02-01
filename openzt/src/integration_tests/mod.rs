@@ -19,6 +19,7 @@ pub mod patch_conditions;
 pub mod patch_rollback;
 pub mod patch_source_resolution;
 pub mod shortcuts;
+pub mod unified_loading_order;
 
 /// Result of a single test
 #[derive(Debug)]
@@ -104,8 +105,7 @@ pub fn init() {
                 let enable_ansi = enable_ansi_support::enable_ansi_support().is_ok();
 
                 // Set up file appender - truncate file on startup
-                let log_file = std::fs::File::create("openzt.log")
-                    .expect("Failed to create openzt.log");
+                let log_file = std::fs::File::create("openzt.log").expect("Failed to create openzt.log");
                 let (non_blocking_file, _guard) = tracing_appender::non_blocking(log_file);
 
                 // Set up layered logging to both console and file
@@ -154,26 +154,14 @@ fn setup_test_files() -> anyhow::Result<()> {
     // Create animals/test.ai for habitat reference tests
     let test_ai_content = "[Habitat]\n";
     let test_ai_cstring = CString::new(test_ai_content)?;
-    let test_ai_file = ZTFile::Text(
-        test_ai_cstring,
-        ZTFileType::Ai,
-        test_ai_content.len() as u32,
-    );
+    let test_ai_file = ZTFile::Text(test_ai_cstring, ZTFileType::Ai, test_ai_content.len() as u32);
     add_ztfile(Path::new(""), "animals/test.ai".to_string(), test_ai_file)?;
 
     // Create animals/test_order.ai for patch order tests
     let test_order_content = "[Test]\n";
     let test_order_cstring = CString::new(test_order_content)?;
-    let test_order_file = ZTFile::Text(
-        test_order_cstring,
-        ZTFileType::Ai,
-        test_order_content.len() as u32,
-    );
-    add_ztfile(
-        Path::new(""),
-        "animals/test_order.ai".to_string(),
-        test_order_file,
-    )?;
+    let test_order_file = ZTFile::Text(test_order_cstring, ZTFileType::Ai, test_order_content.len() as u32);
+    add_ztfile(Path::new(""), "animals/test_order.ai".to_string(), test_order_file)?;
 
     Ok(())
 }
@@ -240,8 +228,8 @@ mod detour_zoo_main {
         }
 
         // Read filepath from environment variable with default
-        let test_log_path = std::env::var("OPENZT_TEST_LOG")
-            .unwrap_or_else(|_| "C:\\Program Files (x86)\\Microsoft Games\\Zoo Tycoon\\openzt_integration_tests.log".to_string());
+        let test_log_path =
+            std::env::var("OPENZT_TEST_LOG").unwrap_or_else(|_| "C:\\Program Files (x86)\\Microsoft Games\\Zoo Tycoon\\openzt_integration_tests.log".to_string());
 
         // Create or truncate the file
         let mut test_log = match OpenOptions::new().create(true).write(true).truncate(true).open(&test_log_path) {
@@ -302,6 +290,22 @@ mod detour_zoo_main {
         let loading_results = super::loading_order::run_all_tests();
 
         for result in &loading_results {
+            if result.passed {
+                write_log(&format!("  ✓ {}", result.name));
+                total_passed += 1;
+            } else {
+                write_log(&format!("  ✗ {} - {}", result.name, result.error.as_ref().unwrap_or(&"Unknown error".to_string())));
+                total_failed += 1;
+            }
+        }
+
+        write_log("");
+
+        // Run unified loading order tests
+        write_log("Running unified loading order tests...");
+        let unified_loading_results = super::unified_loading_order::run_all_tests();
+
+        for result in &unified_loading_results {
             if result.passed {
                 write_log(&format!("  ✓ {}", result.name));
                 total_passed += 1;

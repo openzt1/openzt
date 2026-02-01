@@ -4,6 +4,7 @@ use crate::resource_manager::{
     validation::validate_load_order,
 };
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 // ============================================================================
 // Embedded Test Resources for Dependency Tests
@@ -374,11 +375,10 @@ fn test_simple_dependency_chain() -> TestResult {
     mods.insert("test.dependency.mod_c".to_string(), all_mods["test.dependency.mod_c"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Expected order: A, B, C
     let expected = vec![
@@ -388,17 +388,11 @@ fn test_simple_dependency_chain() -> TestResult {
     ];
 
     if result.order != expected {
-        return TestResult::fail(
-            test_name,
-            format!("Expected order {:?}, got {:?}", expected, result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected order {:?}, got {:?}", expected, result.order));
     }
 
     if !result.warnings.is_empty() {
-        return TestResult::fail(
-            test_name,
-            format!("Expected no warnings, got: {:?}", result.warnings),
-        );
+        return TestResult::fail(test_name, format!("Expected no warnings, got: {:?}", result.warnings));
     }
 
     TestResult::pass(test_name)
@@ -416,28 +410,21 @@ fn test_circular_dependency_handling() -> TestResult {
     mods.insert("test.dependency.mod_e".to_string(), all_mods["test.dependency.mod_e"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Should have both mods in the order
     if result.order.len() != 2 {
-        return TestResult::fail(
-            test_name,
-            format!("Expected 2 mods in order, got {}", result.order.len()),
-        );
+        return TestResult::fail(test_name, format!("Expected 2 mods in order, got {}", result.order.len()));
     }
 
     // Should have circular dependency warning
     let has_cycle_warning = result.warnings.iter().any(|w| matches!(w, ResolutionWarning::CircularDependency { .. }));
 
     if !has_cycle_warning {
-        return TestResult::fail(
-            test_name,
-            "Expected CircularDependency warning".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected CircularDependency warning".to_string());
     }
 
     TestResult::pass(test_name)
@@ -454,30 +441,21 @@ fn test_optional_dependency_warning() -> TestResult {
     mods.insert("test.dependency.mod_f".to_string(), all_mods["test.dependency.mod_f"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Should have mod F in the order
     if result.order != vec!["test.dependency.mod_f"] {
-        return TestResult::fail(
-            test_name,
-            format!("Expected only mod_f in order, got {:?}", result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected only mod_f in order, got {:?}", result.order));
     }
 
     // Should have missing optional dependency warning
-    let has_optional_warning = result.warnings.iter().any(|w| {
-        matches!(w, ResolutionWarning::MissingOptionalDependency { .. })
-    });
+    let has_optional_warning = result.warnings.iter().any(|w| matches!(w, ResolutionWarning::MissingOptionalDependency { .. }));
 
     if !has_optional_warning {
-        return TestResult::fail(
-            test_name,
-            "Expected MissingOptionalDependency warning".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected MissingOptionalDependency warning".to_string());
     }
 
     TestResult::pass(test_name)
@@ -495,23 +473,16 @@ fn test_before_dependency() -> TestResult {
     mods.insert("test.dependency.mod_h".to_string(), all_mods["test.dependency.mod_h"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Expected order: G, H (G must be before H)
-    let expected = vec![
-        "test.dependency.mod_g".to_string(),
-        "test.dependency.mod_h".to_string(),
-    ];
+    let expected = vec!["test.dependency.mod_g".to_string(), "test.dependency.mod_h".to_string()];
 
     if result.order != expected {
-        return TestResult::fail(
-            test_name,
-            format!("Expected order {:?}, got {:?}", expected, result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected order {:?}, got {:?}", expected, result.order));
     }
 
     TestResult::pass(test_name)
@@ -530,18 +501,14 @@ fn test_new_mod_insertion() -> TestResult {
     mods.insert("test.dependency.mod_c".to_string(), all_mods["test.dependency.mod_c"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
 
     // Existing order has A and C, missing B
-    let existing = vec![
-        "test.dependency.mod_a".to_string(),
-        "test.dependency.mod_c".to_string(),
-    ];
+    let existing = vec!["test.dependency.mod_a".to_string(), "test.dependency.mod_c".to_string()];
 
-    let result = resolver.resolve_order(&existing, &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&existing, &[], pure_legacy);
 
     // B should be inserted between A and C
     let expected = vec![
@@ -551,10 +518,7 @@ fn test_new_mod_insertion() -> TestResult {
     ];
 
     if result.order != expected {
-        return TestResult::fail(
-            test_name,
-            format!("Expected B to be inserted between A and C, got {:?}", result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected B to be inserted between A and C, got {:?}", result.order));
     }
 
     TestResult::pass(test_name)
@@ -573,56 +537,34 @@ fn test_disabled_mods_excluded() -> TestResult {
     mods.insert("test.dependency.mod_c".to_string(), all_mods["test.dependency.mod_c"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
 
     // B is in existing order but disabled - should stay in order
     // C is new and disabled - should NOT be added
-    let existing = vec![
-        "test.dependency.mod_a".to_string(),
-        "test.dependency.mod_b".to_string(),
-    ];
-    let disabled = vec![
-        "test.dependency.mod_b".to_string(),
-        "test.dependency.mod_c".to_string(),
-    ];
-    let result = resolver.resolve_order(&existing, &disabled);
+    let existing = vec!["test.dependency.mod_a".to_string(), "test.dependency.mod_b".to_string()];
+    let disabled = vec!["test.dependency.mod_b".to_string(), "test.dependency.mod_c".to_string()];
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&existing, &disabled, pure_legacy);
 
     // Should have A and B (B is disabled but stays in order)
     // C is new and disabled, so should not be added
     if !result.order.contains(&"test.dependency.mod_b".to_string()) {
-        return TestResult::fail(
-            test_name,
-            "Disabled mod_b should stay in order (already exists)".to_string(),
-        );
+        return TestResult::fail(test_name, "Disabled mod_b should stay in order (already exists)".to_string());
     }
 
     if result.order.contains(&"test.dependency.mod_c".to_string()) {
-        return TestResult::fail(
-            test_name,
-            "New disabled mod_c should not be added to order".to_string(),
-        );
+        return TestResult::fail(test_name, "New disabled mod_c should not be added to order".to_string());
     }
 
     if !result.order.contains(&"test.dependency.mod_a".to_string()) {
-        return TestResult::fail(
-            test_name,
-            "Enabled mod_a should be in order".to_string(),
-        );
+        return TestResult::fail(test_name, "Enabled mod_a should be in order".to_string());
     }
 
     // Expected order: A, B (C not added because it's new and disabled)
-    let expected = vec![
-        "test.dependency.mod_a".to_string(),
-        "test.dependency.mod_b".to_string(),
-    ];
+    let expected = vec!["test.dependency.mod_a".to_string(), "test.dependency.mod_b".to_string()];
     if result.order != expected {
-        return TestResult::fail(
-            test_name,
-            format!("Expected order {:?}, got {:?}", expected, result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected order {:?}, got {:?}", expected, result.order));
     }
 
     TestResult::pass(test_name)
@@ -640,19 +582,13 @@ fn test_validation_detects_violations() -> TestResult {
     mods.insert("test.dependency.mod_b".to_string(), all_mods["test.dependency.mod_b"].clone());
 
     // Create WRONG order: B before A (violates dependency)
-    let wrong_order = vec![
-        "test.dependency.mod_b".to_string(),
-        "test.dependency.mod_a".to_string(),
-    ];
+    let wrong_order = vec!["test.dependency.mod_b".to_string(), "test.dependency.mod_a".to_string()];
 
-    let validation = validate_load_order(&wrong_order, &mods);
+    let validation = validate_load_order(&wrong_order, &mods, &[]);
 
     // Should have warnings about ordering violation
     if validation.warnings.is_empty() {
-        return TestResult::fail(
-            test_name,
-            "Expected warnings for ordering violation".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected warnings for ordering violation".to_string());
     }
 
     TestResult::pass(test_name)
@@ -675,18 +611,14 @@ fn test_optional_dependency_cycle() -> TestResult {
     mods.insert("test.dependency.mod_j".to_string(), all_mods["test.dependency.mod_j"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Should have both mods in alphabetical order
     if result.order.len() != 2 {
-        return TestResult::fail(
-            test_name,
-            format!("Expected 2 mods in order, got {}", result.order.len()),
-        );
+        return TestResult::fail(test_name, format!("Expected 2 mods in order, got {}", result.order.len()));
     }
 
     // Both should be formerly cyclic (not truly cyclic)
@@ -696,32 +628,20 @@ fn test_optional_dependency_cycle() -> TestResult {
     let has_formerly_cyclic = result.warnings.iter().any(|w| matches!(w, ResolutionWarning::FormerlyCyclicDependency { .. }));
 
     if !has_stage1_warning {
-        return TestResult::fail(
-            test_name,
-            "Expected CircularDependency warning from Stage 1".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected CircularDependency warning from Stage 1".to_string());
     }
 
     if has_stage2_warning {
-        return TestResult::fail(
-            test_name,
-            "Should NOT have TrulyCyclicDependency warning (optional deps only)".to_string(),
-        );
+        return TestResult::fail(test_name, "Should NOT have TrulyCyclicDependency warning (optional deps only)".to_string());
     }
 
     if !has_formerly_cyclic {
-        return TestResult::fail(
-            test_name,
-            "Expected FormerlyCyclicDependency warnings".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected FormerlyCyclicDependency warnings".to_string());
     }
 
     // Mods should NOT be at the end (they're formerly cyclic, inserted normally)
     // They should be at the beginning in alphabetical order
-    let expected = vec![
-        "test.dependency.mod_i".to_string(),
-        "test.dependency.mod_j".to_string(),
-    ];
+    let expected = vec!["test.dependency.mod_i".to_string(), "test.dependency.mod_j".to_string()];
 
     if result.order != expected {
         return TestResult::fail(
@@ -747,18 +667,14 @@ fn test_mixed_cycle_resolution() -> TestResult {
     mods.insert("test.dependency.mod_m".to_string(), all_mods["test.dependency.mod_m"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Should have all 3 mods
     if result.order.len() != 3 {
-        return TestResult::fail(
-            test_name,
-            format!("Expected 3 mods in order, got {}", result.order.len()),
-        );
+        return TestResult::fail(test_name, format!("Expected 3 mods in order, got {}", result.order.len()));
     }
 
     // Should have Stage 1 warning but NO Stage 2 warning
@@ -766,17 +682,11 @@ fn test_mixed_cycle_resolution() -> TestResult {
     let has_stage2_warning = result.warnings.iter().any(|w| matches!(w, ResolutionWarning::TrulyCyclicDependency { .. }));
 
     if !has_stage1_warning {
-        return TestResult::fail(
-            test_name,
-            "Expected CircularDependency warning from Stage 1".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected CircularDependency warning from Stage 1".to_string());
     }
 
     if has_stage2_warning {
-        return TestResult::fail(
-            test_name,
-            "Should NOT have TrulyCyclicDependency warning (cycle broken by optional)".to_string(),
-        );
+        return TestResult::fail(test_name, "Should NOT have TrulyCyclicDependency warning (cycle broken by optional)".to_string());
     }
 
     // Without the optional edge L->M, the required-only graph is:
@@ -792,10 +702,7 @@ fn test_mixed_cycle_resolution() -> TestResult {
     ];
 
     if result.order != expected {
-        return TestResult::fail(
-            test_name,
-            format!("Expected order {:?}, got {:?}", expected, result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected order {:?}, got {:?}", expected, result.order));
     }
 
     TestResult::pass(test_name)
@@ -815,18 +722,14 @@ fn test_triangle_with_optional() -> TestResult {
     mods.insert("test.dependency.mod_p".to_string(), all_mods["test.dependency.mod_p"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Should have all 3 mods
     if result.order.len() != 3 {
-        return TestResult::fail(
-            test_name,
-            format!("Expected 3 mods in order, got {}", result.order.len()),
-        );
+        return TestResult::fail(test_name, format!("Expected 3 mods in order, got {}", result.order.len()));
     }
 
     // Should have Stage 1 warning but NO Stage 2 warning
@@ -834,17 +737,11 @@ fn test_triangle_with_optional() -> TestResult {
     let has_stage2_warning = result.warnings.iter().any(|w| matches!(w, ResolutionWarning::TrulyCyclicDependency { .. }));
 
     if !has_stage1_warning {
-        return TestResult::fail(
-            test_name,
-            "Expected CircularDependency warning from Stage 1".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected CircularDependency warning from Stage 1".to_string());
     }
 
     if has_stage2_warning {
-        return TestResult::fail(
-            test_name,
-            "Should NOT have TrulyCyclicDependency warning (cycle broken by optional)".to_string(),
-        );
+        return TestResult::fail(test_name, "Should NOT have TrulyCyclicDependency warning (cycle broken by optional)".to_string());
     }
 
     // Without the optional edge P->N, the order should be: P, O, N
@@ -856,10 +753,7 @@ fn test_triangle_with_optional() -> TestResult {
     ];
 
     if result.order != expected {
-        return TestResult::fail(
-            test_name,
-            format!("Expected order {:?}, got {:?}", expected, result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected order {:?}, got {:?}", expected, result.order));
     }
 
     TestResult::pass(test_name)
@@ -880,18 +774,14 @@ fn test_large_cycle_one_optional() -> TestResult {
     mods.insert("test.dependency.mod_t".to_string(), all_mods["test.dependency.mod_t"].clone());
 
     // Create discovered map for the resolver
-    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter()
-        .map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone())))
-        .collect();
+    let discovered: HashMap<String, (String, crate::mods::Meta)> = mods.iter().map(|(id, meta)| (id.clone(), (format!("{}.ztd", id), meta.clone()))).collect();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     // Should have all 4 mods
     if result.order.len() != 4 {
-        return TestResult::fail(
-            test_name,
-            format!("Expected 4 mods in order, got {}", result.order.len()),
-        );
+        return TestResult::fail(test_name, format!("Expected 4 mods in order, got {}", result.order.len()));
     }
 
     // Should have Stage 1 warning but NO Stage 2 warning
@@ -899,17 +789,11 @@ fn test_large_cycle_one_optional() -> TestResult {
     let has_stage2_warning = result.warnings.iter().any(|w| matches!(w, ResolutionWarning::TrulyCyclicDependency { .. }));
 
     if !has_stage1_warning {
-        return TestResult::fail(
-            test_name,
-            "Expected CircularDependency warning from Stage 1".to_string(),
-        );
+        return TestResult::fail(test_name, "Expected CircularDependency warning from Stage 1".to_string());
     }
 
     if has_stage2_warning {
-        return TestResult::fail(
-            test_name,
-            "Should NOT have TrulyCyclicDependency warning (cycle broken by optional)".to_string(),
-        );
+        return TestResult::fail(test_name, "Should NOT have TrulyCyclicDependency warning (cycle broken by optional)".to_string());
     }
 
     // Without the optional edge T->Q, the order should be: T, S, R, Q
@@ -922,10 +806,7 @@ fn test_large_cycle_one_optional() -> TestResult {
     ];
 
     if result.order != expected {
-        return TestResult::fail(
-            test_name,
-            format!("Expected order {:?}, got {:?}", expected, result.order),
-        );
+        return TestResult::fail(test_name, format!("Expected order {:?}, got {:?}", expected, result.order));
     }
 
     TestResult::pass(test_name)
@@ -936,15 +817,19 @@ fn test_ztd_name_dependency() -> TestResult {
     use crate::mods;
     let test_name = "test_ztd_name_dependency";
 
-    let meta_a: mods::Meta = toml::from_str(r#"name = "Test Mod A"
+    let meta_a: mods::Meta = toml::from_str(
+        r#"name = "Test Mod A"
 description = "Base test mod"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.identifier.mod_a"
 version = "1.0.0"
 ztd_type = "openzt"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    let meta_b: mods::Meta = toml::from_str(r#"name = "Test Mod B"
+    let meta_b: mods::Meta = toml::from_str(
+        r#"name = "Test Mod B"
 description = "Test mod with ztd_name dependency"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.identifier.mod_b"
@@ -953,18 +838,27 @@ ztd_type = "openzt"
 dependencies = [
     { ztd_name = "test.identifier.mod_a.ztd", name = "Test Mod A", ordering = "after" }
 ]
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let mut mods = HashMap::new();
     mods.insert("test.identifier.mod_a".to_string(), meta_a);
     mods.insert("test.identifier.mod_b".to_string(), meta_b);
 
     let mut discovered = HashMap::new();
-    discovered.insert("test.identifier.mod_a".to_string(), ("test.identifier.mod_a.ztd".to_string(), mods["test.identifier.mod_a"].clone()));
-    discovered.insert("test.identifier.mod_b".to_string(), ("test.identifier.mod_b.ztd".to_string(), mods["test.identifier.mod_b"].clone()));
+    discovered.insert(
+        "test.identifier.mod_a".to_string(),
+        ("test.identifier.mod_a.ztd".to_string(), mods["test.identifier.mod_a"].clone()),
+    );
+    discovered.insert(
+        "test.identifier.mod_b".to_string(),
+        ("test.identifier.mod_b.ztd".to_string(), mods["test.identifier.mod_b"].clone()),
+    );
 
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     let expected = vec!["test.identifier.mod_a".to_string(), "test.identifier.mod_b".to_string()];
 
@@ -979,7 +873,8 @@ fn test_dll_name_dependency() -> TestResult {
     use crate::mods;
     let test_name = "test_dll_name_dependency";
 
-    let meta: mods::Meta = toml::from_str(r#"name = "Test Mod"
+    let meta: mods::Meta = toml::from_str(
+        r#"name = "Test Mod"
 description = "Test mod with dll_name dependency"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.identifier.mod_dll"
@@ -988,14 +883,17 @@ ztd_type = "openzt"
 dependencies = [
     { dll_name = "langusa.dll", name = "English Language", optional = false }
 ]
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let mut mods = HashMap::new();
     mods.insert("test.identifier.mod_dll".to_string(), meta);
 
     let discovered: HashMap<String, (String, mods::Meta)> = HashMap::new();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     if !result.order.contains(&"test.identifier.mod_dll".to_string()) {
         return TestResult::fail(test_name, "Mod should be in order even with DLL dependency".to_string());
@@ -1008,15 +906,19 @@ fn test_mixed_identifier_types() -> TestResult {
     use crate::mods;
     let test_name = "test_mixed_identifier_types";
 
-    let meta_a: mods::Meta = toml::from_str(r#"name = "Test Mod A"
+    let meta_a: mods::Meta = toml::from_str(
+        r#"name = "Test Mod A"
 description = "Base test mod"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.mixed.mod_a"
 version = "1.0.0"
 ztd_type = "openzt"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    let meta_b: mods::Meta = toml::from_str(r#"name = "Test Mod B"
+    let meta_b: mods::Meta = toml::from_str(
+        r#"name = "Test Mod B"
 description = "Test mod with mod_id dependency"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.mixed.mod_b"
@@ -1025,9 +927,12 @@ ztd_type = "openzt"
 dependencies = [
     { mod_id = "test.mixed.mod_a", name = "Test Mod A", ordering = "after" }
 ]
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    let meta_c: mods::Meta = toml::from_str(r#"name = "Test Mod C"
+    let meta_c: mods::Meta = toml::from_str(
+        r#"name = "Test Mod C"
 description = "Test mod with ztd_name and dll_name dependencies"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.mixed.mod_c"
@@ -1037,7 +942,9 @@ dependencies = [
     { ztd_name = "test.mixed.mod_b.ztd", name = "Test Mod B", ordering = "after" },
     { dll_name = "langusa.dll", name = "English Language", optional = true }
 ]
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let mut mods = HashMap::new();
     mods.insert("test.mixed.mod_a".to_string(), meta_a);
@@ -1050,7 +957,8 @@ dependencies = [
     discovered.insert("test.mixed.mod_c".to_string(), ("test.mixed.mod_c.ztd".to_string(), mods["test.mixed.mod_c"].clone()));
 
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     let expected = vec!["test.mixed.mod_a".to_string(), "test.mixed.mod_b".to_string(), "test.mixed.mod_c".to_string()];
 
@@ -1065,7 +973,8 @@ fn test_unresolved_ztd_name_warning() -> TestResult {
     use crate::mods;
     let test_name = "test_unresolved_ztd_name_warning";
 
-    let meta: mods::Meta = toml::from_str(r#"name = "Test Mod"
+    let meta: mods::Meta = toml::from_str(
+        r#"name = "Test Mod"
 description = "Test mod with unresolved ztd_name dependency"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.unresolved.mod"
@@ -1074,14 +983,17 @@ ztd_type = "openzt"
 dependencies = [
     { ztd_name = "nonexistent.ztd", name = "Nonexistent Mod", optional = true, ordering = "after" }
 ]
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let mut mods = HashMap::new();
     mods.insert("test.unresolved.mod".to_string(), meta);
 
     let discovered: HashMap<String, (String, mods::Meta)> = HashMap::new();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     let has_missing_warning = result.warnings.iter().any(|w| matches!(w, ResolutionWarning::MissingOptionalDependency { .. }));
 
@@ -1096,15 +1008,19 @@ fn test_backwards_compatibility_mod_id() -> TestResult {
     use crate::mods;
     let test_name = "test_backwards_compatibility_mod_id";
 
-    let meta_a: mods::Meta = toml::from_str(r#"name = "Test Mod A"
+    let meta_a: mods::Meta = toml::from_str(
+        r#"name = "Test Mod A"
 description = "Base test mod"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.compat.mod_a"
 version = "1.0.0"
 ztd_type = "openzt"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    let meta_b: mods::Meta = toml::from_str(r#"name = "Test Mod B"
+    let meta_b: mods::Meta = toml::from_str(
+        r#"name = "Test Mod B"
 description = "Test mod with mod_id dependency (old style)"
 authors = ["OpenZT Test Suite"]
 mod_id = "test.compat.mod_b"
@@ -1113,7 +1029,9 @@ ztd_type = "openzt"
 dependencies = [
     { mod_id = "test.compat.mod_a", name = "Test Mod A", ordering = "after" }
 ]
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let mut mods = HashMap::new();
     mods.insert("test.compat.mod_a".to_string(), meta_a);
@@ -1121,7 +1039,8 @@ dependencies = [
 
     let discovered: HashMap<String, (String, mods::Meta)> = HashMap::new();
     let resolver = DependencyResolver::new(mods, &discovered);
-    let result = resolver.resolve_order(&[], &[]);
+    let pure_legacy: &[(String, PathBuf)] = &[];
+    let result = resolver.resolve_order(&[], &[], pure_legacy);
 
     let expected = vec!["test.compat.mod_a".to_string(), "test.compat.mod_b".to_string()];
 

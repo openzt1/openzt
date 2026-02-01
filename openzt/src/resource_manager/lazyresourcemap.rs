@@ -59,9 +59,7 @@ impl LazyResourceMap {
 
         // Subtract size if resource was loaded
         let size = match &value.backing {
-            ResourceBacking::LoadedZipFile { data, .. } | ResourceBacking::Custom { data } => {
-                unsafe { &*(*data as *const BFResourcePtr) }.content_size as u64
-            }
+            ResourceBacking::LoadedZipFile { data, .. } | ResourceBacking::Custom { data } => unsafe { &*(*data as *const BFResourcePtr) }.content_size as u64,
             ResourceBacking::LazyZipFile { .. } => 0,
         };
         if size > 0 {
@@ -83,12 +81,7 @@ impl LazyResourceMap {
         let bf_resource_ptr = unsafe { Box::from_raw(data as *mut BFResourcePtr) };
         let size = bf_resource_ptr.content_size;
 
-        trace!(
-            "Dropping resource: {} (type: {:?}, size: {} bytes)",
-            resource.filename,
-            resource.type_,
-            size
-        );
+        trace!("Dropping resource: {} (type: {:?}, size: {} bytes)", resource.filename, resource.type_, size);
 
         match resource.type_ {
             ZTFileType::Ini
@@ -119,10 +112,7 @@ impl LazyResourceMap {
             Ok(file_type) => file_type,
             Err(e) => {
                 // Skip logging errors for known vanilla Zoo Tycoon files with unsupported types
-                let known_vanilla_files = [
-                    "objects/ddogstnd/fancyblg_icons.zip",
-                    "bfupdateres.h"
-                ];
+                let known_vanilla_files = ["objects/ddogstnd/fancyblg_icons.zip", "bfupdateres.h"];
                 if !known_vanilla_files.iter().any(|&f| file_name.eq_ignore_ascii_case(f)) {
                     error!("Error inserting file: {} error: {}", file_name, e);
                 }
@@ -163,9 +153,7 @@ impl LazyResourceMap {
         ) {
             // Subtract size of replaced resource
             let old_size = match &existing.backing {
-                ResourceBacking::LoadedZipFile { data, .. } | ResourceBacking::Custom { data } => {
-                    unsafe { &*(*data as *const BFResourcePtr) }.content_size as u64
-                }
+                ResourceBacking::LoadedZipFile { data, .. } | ResourceBacking::Custom { data } => unsafe { &*(*data as *const BFResourcePtr) }.content_size as u64,
                 ResourceBacking::LazyZipFile { .. } => 0,
             };
             if old_size > 0 {
@@ -201,13 +189,10 @@ impl LazyResourceMap {
             ResourceBacking::LazyZipFile { archive } => {
                 let mut binding = archive.lock().unwrap();
                 let archive_name = binding.name().to_string();
-                let mut file = binding
-                    .by_name(&filename)
-                    .with_context(|| format!("Error finding file in archive: {}", filename))?;
+                let mut file = binding.by_name(&filename).with_context(|| format!("Error finding file in archive: {}", filename))?;
                 let mut file_buffer = vec![0u8; file.size() as usize].into_boxed_slice();
 
-                file.read_exact(&mut file_buffer)
-                    .with_context(|| format!("Error reading file: {}", filename))?;
+                file.read_exact(&mut file_buffer).with_context(|| format!("Error reading file: {}", filename))?;
 
                 let ztfile = ZTFile::builder()
                     .file_name(filename.clone())
@@ -216,7 +201,10 @@ impl LazyResourceMap {
                     .raw_data(file_buffer)
                     .build();
                 let data = ztfile_to_raw_resource(&archive_name, filename.clone(), ztfile)?;
-                resource.backing = ResourceBacking::LoadedZipFile { archive: archive.clone(), data: data.2 };
+                resource.backing = ResourceBacking::LoadedZipFile {
+                    archive: archive.clone(),
+                    data: data.2,
+                };
                 (Some(archive_name.clone()), data.2)
             }
             ResourceBacking::LoadedZipFile { archive, data } => {
@@ -233,7 +221,7 @@ impl LazyResourceMap {
             TOTAL_LOADED_BYTES.fetch_add(bf_ptr.content_size as u64, Ordering::Relaxed);
 
             // Trigger auto-unload check after loading new resource
-            drop(binding);  // Release lock before calling unload
+            drop(binding); // Release lock before calling unload
             Self::maybe_unload_resources();
         }
 
@@ -289,22 +277,14 @@ impl LazyResourceMap {
         // Check if resource has any refs - if so, don't unload
         let ref_count = resource.ref_count.load(Ordering::Relaxed);
         if ref_count > 0 {
-            trace!(
-                "Skipping unload for {} (has {} active refs)",
-                resource.filename,
-                ref_count
-            );
+            trace!("Skipping unload for {} (has {} active refs)", resource.filename, ref_count);
             return None;
         }
 
         // Get size before dropping
         let size = unsafe { &*(data as *const BFResourcePtr) }.content_size as u64;
 
-        trace!(
-            "Unloading resource: {} (size: {} bytes)",
-            resource.filename,
-            size
-        );
+        trace!("Unloading resource: {} (size: {} bytes)", resource.filename, size);
 
         // Transition back to lazy
         resource.backing = ResourceBacking::LazyZipFile { archive: archive.clone() };
@@ -330,11 +310,11 @@ impl LazyResourceMap {
     /// Only unloads resources with ref_count == 0
     fn unload_all_loaded() -> UnloadResult {
         let mut binding = LAZY_RESOURCE_MAP.lock().unwrap();
-        let keys_to_unload: Vec<String> = binding.iter()
+        let keys_to_unload: Vec<String> = binding
+            .iter()
             .filter(|(_, r)| {
                 // Only unload LoadedZipFile with ref_count == 0
-                matches!(r.backing, ResourceBacking::LoadedZipFile { .. })
-                    && r.ref_count.load(Ordering::Relaxed) == 0
+                matches!(r.backing, ResourceBacking::LoadedZipFile { .. }) && r.ref_count.load(Ordering::Relaxed) == 0
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -346,9 +326,7 @@ impl LazyResourceMap {
             if let Some(resource) = binding.remove(&key) {
                 // Get size before dropping
                 let size = match &resource.backing {
-                    ResourceBacking::LoadedZipFile { data, .. } => {
-                        unsafe { &*(*data as *const BFResourcePtr) }.content_size as u64
-                    }
+                    ResourceBacking::LoadedZipFile { data, .. } => unsafe { &*(*data as *const BFResourcePtr) }.content_size as u64,
                     _ => 0,
                 };
                 total_size += size;
@@ -357,12 +335,7 @@ impl LazyResourceMap {
             }
         }
 
-        info!(
-            "Unloaded {} resources (freed {} bytes, {} MB)",
-            count,
-            total_size,
-            total_size / (1024 * 1024)
-        );
+        info!("Unloaded {} resources (freed {} bytes, {} MB)", count, total_size, total_size / (1024 * 1024));
 
         UnloadResult { count, total_size }
     }
@@ -390,7 +363,8 @@ impl LazyResourceMap {
         // Collect candidates: (key, last_accessed, size, is_custom)
         // Custom resources are counted in size but NEVER unloaded
         // Only consider resources with ref_count == 0
-        let mut candidates: Vec<(String, Instant, u64, bool)> = binding.iter()
+        let mut candidates: Vec<(String, Instant, u64, bool)> = binding
+            .iter()
             .filter_map(|(k, r)| {
                 // Skip resources with active refs
                 if r.ref_count.load(Ordering::Relaxed) > 0 {
@@ -434,12 +408,12 @@ impl LazyResourceMap {
             let still_over_target = unloadable_total > target_bytes;
 
             if is_stale || still_over_target {
-                drop(binding);  // Release lock before calling unload_resource
+                drop(binding); // Release lock before calling unload_resource
                 if Self::unload_resource(&key).is_some() {
                     unloaded_size += size;
                     unloaded_count += 1;
                 }
-                binding = LAZY_RESOURCE_MAP.lock().unwrap();  // Re-acquire for next iteration
+                binding = LAZY_RESOURCE_MAP.lock().unwrap(); // Re-acquire for next iteration
             }
         }
 
@@ -495,8 +469,7 @@ pub fn get_num_resources() -> usize {
 }
 
 pub fn add_ztfile(path: &Path, file_name: String, ztfile: ZTFile) -> anyhow::Result<()> {
-    let ztd_path = path.to_str()
-        .with_context(|| format!("Failed to convert path to string: {}", path.display()))?;
+    let ztd_path = path.to_str().with_context(|| format!("Failed to convert path to string: {}", path.display()))?;
     let (file_name, type_, data) = ztfile_to_raw_resource(ztd_path, file_name, ztfile)?;
     LazyResourceMap::insert_custom(file_name, type_, data);
     Ok(())
@@ -561,7 +534,8 @@ pub fn get_cache_stats() -> CacheStats {
     let binding = LAZY_RESOURCE_MAP.lock().unwrap();
 
     // Count loaded resources (both LoadedZipFile and Custom)
-    let loaded_count = binding.values()
+    let loaded_count = binding
+        .values()
         .filter(|r| matches!(r.backing, ResourceBacking::LoadedZipFile { .. } | ResourceBacking::Custom { .. }))
         .count();
 
@@ -601,12 +575,10 @@ pub fn decrement_ref(file_name: &str) -> Option<u32> {
         // We use fetch_sub with a check to prevent going below 0
         let mut old_count = resource.ref_count.load(Ordering::Relaxed);
         while old_count > 0 {
-            match resource.ref_count.compare_exchange_weak(
-                old_count,
-                old_count - 1,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
+            match resource
+                .ref_count
+                .compare_exchange_weak(old_count, old_count - 1, Ordering::Relaxed, Ordering::Relaxed)
+            {
                 Ok(_) => return Some(old_count - 1),
                 Err(new_old) => old_count = new_old,
             }
@@ -623,8 +595,7 @@ pub fn decrement_ref(file_name: &str) -> Option<u32> {
 pub fn get_ref_count(file_name: &str) -> Option<u32> {
     let lowercase_key = file_name.to_lowercase();
     let binding = LAZY_RESOURCE_MAP.lock().unwrap();
-    binding.get(&lowercase_key)
-        .map(|r| r.ref_count.load(Ordering::Relaxed))
+    binding.get(&lowercase_key).map(|r| r.ref_count.load(Ordering::Relaxed))
 }
 
 /// Dereference a resource by file name

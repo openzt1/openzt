@@ -1,14 +1,10 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use std::sync::LazyLock;
 use openzt_detour_macro::detour_mod;
+use std::sync::LazyLock;
 use tracing::info;
 
-use crate::{
-    command_console::CommandError,
-    lua_fn,
-    util::get_from_memory,
-};
+use crate::{command_console::CommandError, lua_fn, util::get_from_memory};
 
 static BF_REGISTRY: LazyLock<Mutex<HashMap<String, u32>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -64,9 +60,9 @@ mod zoo_bf_registry {
         util::{get_from_memory, get_string_from_memory},
     };
     // use openzt_detour::BFREGISTRY_ADDUI; // Actually UIElement::registerit
-    use openzt_detour::gen::uielement::REGISTERIT as UIELEMENT_REGISTERIT;
-    use openzt_detour::gen::bfregistry::PTR_GET;
     use openzt_detour::gen::bfmgr::REGISTERIT as BFMGR_REGISTERIT;
+    use openzt_detour::gen::bfregistry::PTR_GET;
+    use openzt_detour::gen::uielement::REGISTERIT as UIELEMENT_REGISTERIT;
 
     #[detour(PTR_GET)]
     unsafe extern "thiscall" fn prt_get(_this_prt: u32, class_name: u32, _param_2: bool) -> u32 {
@@ -98,7 +94,7 @@ pub fn init() {
     lua_fn!("list_bf_registry", "Lists BF registry entries (deprecated)", "list_bf_registry()", || {
         match command_list_registry(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 }

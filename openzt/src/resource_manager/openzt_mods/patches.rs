@@ -9,29 +9,16 @@ use tracing::{error, info, warn};
 use crate::{
     animation::Animation,
     mods::{
-        AddSectionPatch,
-        AppendValuePatch,
-        AppendValuesPatch,
-        ClearSectionPatch,
-        DeletePatch,
-        ErrorHandling,
-        MergeMode,
-        MergePatch,
-        OnExists,
-        Patch,
-        PatchCondition,
-        PatchMeta,
-        RemoveKeyPatch,
-        RemoveKeysPatch,
-        RemoveSectionPatch,
-        ReplacePatch,
-        SetKeyPatch,
-        SetKeysPatch,
-        SetPalettePatch,
+        AddSectionPatch, AppendValuePatch, AppendValuesPatch, ClearSectionPatch, DeletePatch, ErrorHandling, MergeMode, MergePatch, OnExists, Patch, PatchCondition,
+        PatchMeta, RemoveKeyPatch, RemoveKeysPatch, RemoveSectionPatch, ReplacePatch, SetKeyPatch, SetKeysPatch, SetPalettePatch,
     },
     resource_manager::{
         lazyresourcemap::{add_ztfile, add_ztfile_from_memory, check_file, get_file, remove_resource},
-        openzt_mods::{get_mod_ids, habitats_locations::{get_habitat_id, get_location_id}, legacy_attributes::{get_legacy_attribute_with_subtype, LegacyEntityType}},
+        openzt_mods::{
+            get_mod_ids,
+            habitats_locations::{get_habitat_id, get_location_id},
+            legacy_attributes::{get_legacy_attribute_with_subtype, LegacyEntityType},
+        },
         ztfile::{modify_ztfile_as_animation, ZTFile, ZTFileType},
     },
     string_registry::get_string_from_registry,
@@ -54,9 +41,9 @@ enum VariableType {
 #[derive(Debug)]
 struct ParsedVariable {
     var_type: VariableType,
-    mod_id: Option<String>,  // None = current mod
+    mod_id: Option<String>, // None = current mod
     identifier: String,
-    legacy_parts: Option<LegacyVariableParts>,  // NEW: For legacy entity attributes
+    legacy_parts: Option<LegacyVariableParts>, // NEW: For legacy entity attributes
 }
 
 /// Parsed parts for legacy entity variable references
@@ -64,7 +51,7 @@ struct ParsedVariable {
 struct LegacyVariableParts {
     entity_type: LegacyEntityType,
     entity_name: String,
-    subtype: Option<String>,  // NEW: Optional subtype
+    subtype: Option<String>, // NEW: Optional subtype
     attribute: String,
 }
 
@@ -117,7 +104,7 @@ fn parse_variable(var_str: &str) -> anyhow::Result<ParsedVariable> {
                     legacy_parts: Some(LegacyVariableParts {
                         entity_type,
                         entity_name: parts[2].to_string(),
-                        subtype: None,  // Will use default
+                        subtype: None, // Will use default
                         attribute: "name_id".to_string(),
                     }),
                 })
@@ -153,13 +140,16 @@ fn parse_variable(var_str: &str) -> anyhow::Result<ParsedVariable> {
                         legacy_parts: Some(LegacyVariableParts {
                             entity_type,
                             entity_name: parts[2].to_string(),
-                            subtype: None,  // Use default
+                            subtype: None, // Use default
                             attribute: parts[3].to_string(),
                         }),
                     })
                 } else {
                     // Assume it's a subtype - but we need 5 parts for subtype+attribute
-                    anyhow::bail!("Invalid variable syntax '{}': expected {{legacy.type.name.subtype.attribute}} for subtype references", var_str)
+                    anyhow::bail!(
+                        "Invalid variable syntax '{}': expected {{legacy.type.name.subtype.attribute}} for subtype references",
+                        var_str
+                    )
                 }
             } else {
                 anyhow::bail!("Invalid variable syntax")
@@ -185,7 +175,10 @@ fn parse_variable(var_str: &str) -> anyhow::Result<ParsedVariable> {
             }
         }
         _ => {
-            anyhow::bail!("Invalid variable syntax '{}': expected {{type.name}}, {{mod.type.name}}, {{legacy.type.name.attribute}}, or {{legacy.type.name.subtype.attribute}}", var_str)
+            anyhow::bail!(
+                "Invalid variable syntax '{}': expected {{type.name}}, {{mod.type.name}}, {{legacy.type.name.attribute}}, or {{legacy.type.name.subtype.attribute}}",
+                var_str
+            )
         }
     }
 }
@@ -210,13 +203,11 @@ fn resolve_variable(var: &ParsedVariable, context: &SubstitutionContext) -> anyh
                     if var.mod_id.is_some() {
                         anyhow::bail!(
                             "Habitat '{}' not found in mod '{}' (ensure mod is loaded and habitat is defined)",
-                            var.identifier, mod_id
+                            var.identifier,
+                            mod_id
                         )
                     } else {
-                        anyhow::bail!(
-                            "Habitat '{}' not found in current mod",
-                            var.identifier
-                        )
+                        anyhow::bail!("Habitat '{}' not found in current mod", var.identifier)
                     }
                 }
             }
@@ -230,35 +221,30 @@ fn resolve_variable(var: &ParsedVariable, context: &SubstitutionContext) -> anyh
                     if var.mod_id.is_some() {
                         anyhow::bail!(
                             "Location '{}' not found in mod '{}' (ensure mod is loaded and location is defined)",
-                            var.identifier, mod_id
+                            var.identifier,
+                            mod_id
                         )
                     } else {
-                        anyhow::bail!(
-                            "Location '{}' not found in current mod",
-                            var.identifier
-                        )
+                        anyhow::bail!("Location '{}' not found in current mod", var.identifier)
                     }
                 }
             }
         }
         VariableType::Strings => {
-            let string_id: u32 = var.identifier.parse()
+            let string_id: u32 = var
+                .identifier
+                .parse()
                 .with_context(|| format!("Invalid string ID '{}': must be a number", var.identifier))?;
 
-            get_string_from_registry(string_id)
-                .map_err(|_| anyhow::anyhow!("String ID {} not found in registry", string_id))
+            get_string_from_registry(string_id).map_err(|_| anyhow::anyhow!("String ID {} not found in registry", string_id))
         }
         VariableType::Legacy => {
             // NEW: Resolve legacy entity attribute
-            let parts = var.legacy_parts.as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Legacy variable missing parts"))?;
+            let parts = var.legacy_parts.as_ref().ok_or_else(|| anyhow::anyhow!("Legacy variable missing parts"))?;
 
             // Only name_id is supported in initial implementation
             if parts.attribute != "name_id" {
-                anyhow::bail!(
-                    "Unsupported attribute '{}'. Only 'name_id' is currently supported.",
-                    parts.attribute
-                );
+                anyhow::bail!("Unsupported attribute '{}'. Only 'name_id' is currently supported.", parts.attribute);
             }
 
             // Determine which subtype to use
@@ -269,14 +255,15 @@ fn resolve_variable(var: &ParsedVariable, context: &SubstitutionContext) -> anyh
                 parts.entity_type.default_subtype()
             };
 
-            get_legacy_attribute_with_subtype(
-                parts.entity_type,
-                &parts.entity_name,
-                subtype_to_use,
-                &parts.attribute
-            ).map_err(|e| anyhow::anyhow!("{} (type: {}, entity: {}, subtype: {:?})",
-                e, parts.entity_type.as_str(), parts.entity_name,
-                subtype_to_use))
+            get_legacy_attribute_with_subtype(parts.entity_type, &parts.entity_name, subtype_to_use, &parts.attribute).map_err(|e| {
+                anyhow::anyhow!(
+                    "{} (type: {}, entity: {}, subtype: {:?})",
+                    e,
+                    parts.entity_type.as_str(),
+                    parts.entity_name,
+                    subtype_to_use
+                )
+            })
         }
     }
 }
@@ -320,11 +307,9 @@ fn substitute_variables(input: &str, context: &SubstitutionContext) -> anyhow::R
             }
 
             // Parse and resolve the variable
-            let parsed_var = parse_variable(&var_content)
-                .with_context(|| format!("Failed to parse variable '{{{}}}'", var_content))?;
+            let parsed_var = parse_variable(&var_content).with_context(|| format!("Failed to parse variable '{{{}}}'", var_content))?;
 
-            let resolved_value = resolve_variable(&parsed_var, context)
-                .with_context(|| format!("Failed to resolve variable '{{{}}}'", var_content))?;
+            let resolved_value = resolve_variable(&parsed_var, context).with_context(|| format!("Failed to resolve variable '{{{}}}'", var_content))?;
 
             result.push_str(&resolved_value);
         } else {
@@ -384,21 +369,26 @@ impl ShadowResources {
         for path in affected_files {
             if let Some((_filename, raw_data)) = get_file(path) {
                 // File exists - convert to ZTFile and clone into shadow
-                let file_type = ZTFileType::try_from(Path::new(path))
-                    .map_err(|e| anyhow::anyhow!("Invalid file type for '{}': {}", path, e))?;
+                let file_type = ZTFileType::try_from(Path::new(path)).map_err(|e| anyhow::anyhow!("Invalid file type for '{}': {}", path, e))?;
 
                 let ztfile = match file_type {
-                    ZTFileType::Ini | ZTFileType::Ai | ZTFileType::Ani | ZTFileType::Cfg
-                    | ZTFileType::Lyt | ZTFileType::Scn | ZTFileType::Uca | ZTFileType::Ucs
-                    | ZTFileType::Ucb | ZTFileType::Txt | ZTFileType::Toml => {
+                    ZTFileType::Ini
+                    | ZTFileType::Ai
+                    | ZTFileType::Ani
+                    | ZTFileType::Cfg
+                    | ZTFileType::Lyt
+                    | ZTFileType::Scn
+                    | ZTFileType::Uca
+                    | ZTFileType::Ucs
+                    | ZTFileType::Ucb
+                    | ZTFileType::Txt
+                    | ZTFileType::Toml => {
                         let content = crate::encoding_utils::decode_game_text(&raw_data);
                         let content_len = content.len() as u32;
                         let c_string = std::ffi::CString::new(content)?;
                         ZTFile::Text(c_string, file_type, content_len)
                     }
-                    _ => {
-                        ZTFile::RawBytes(raw_data, file_type, 0)
-                    }
+                    _ => ZTFile::RawBytes(raw_data, file_type, 0),
                 };
 
                 files.insert(path.clone(), ztfile);
@@ -408,8 +398,7 @@ impl ShadowResources {
             }
         }
 
-        info!("Created {:?} shadow: {} files cloned, {} will be created",
-              scope, files.len(), new_files.len());
+        info!("Created {:?} shadow: {} files cloned, {} will be created", scope, files.len(), new_files.len());
 
         Ok(ShadowResources {
             files,
@@ -439,17 +428,23 @@ impl ShadowResources {
             let file_type = ZTFileType::try_from(Path::new(path)).ok()?;
 
             let ztfile = match file_type {
-                ZTFileType::Ini | ZTFileType::Ai | ZTFileType::Ani | ZTFileType::Cfg
-                | ZTFileType::Lyt | ZTFileType::Scn | ZTFileType::Uca | ZTFileType::Ucs
-                | ZTFileType::Ucb | ZTFileType::Txt | ZTFileType::Toml => {
+                ZTFileType::Ini
+                | ZTFileType::Ai
+                | ZTFileType::Ani
+                | ZTFileType::Cfg
+                | ZTFileType::Lyt
+                | ZTFileType::Scn
+                | ZTFileType::Uca
+                | ZTFileType::Ucs
+                | ZTFileType::Ucb
+                | ZTFileType::Txt
+                | ZTFileType::Toml => {
                     let content = crate::encoding_utils::decode_game_text(&raw_data);
                     let content_len = content.len() as u32;
                     let c_string = std::ffi::CString::new(content).ok()?;
                     ZTFile::Text(c_string, file_type, content_len)
                 }
-                _ => {
-                    ZTFile::RawBytes(raw_data, file_type, 0)
-                }
+                _ => ZTFile::RawBytes(raw_data, file_type, 0),
             };
 
             Some(ztfile)
@@ -507,8 +502,12 @@ impl ShadowResources {
     /// * `Ok(())` if all files were committed successfully
     /// * `Err(_)` if there's an error writing files
     pub fn commit(self) -> anyhow::Result<()> {
-        info!("Committing {:?} shadow: {} files to write, {} to delete",
-              self.scope, self.files.len(), self.deleted_files.len());
+        info!(
+            "Committing {:?} shadow: {} files to write, {} to delete",
+            self.scope,
+            self.files.len(),
+            self.deleted_files.len()
+        );
 
         let start = std::time::Instant::now();
 
@@ -533,8 +532,12 @@ impl ShadowResources {
     /// This method is called explicitly to log the discard, but rollback
     /// happens automatically when the ShadowResources is dropped.
     pub fn discard(self) {
-        info!("Discarding {:?} shadow: {} files dropped, {} deletions cancelled (rollback)",
-              self.scope, self.files.len(), self.deleted_files.len());
+        info!(
+            "Discarding {:?} shadow: {} files dropped, {} deletions cancelled (rollback)",
+            self.scope,
+            self.files.len(),
+            self.deleted_files.len()
+        );
         // Automatic drop - no action needed
     }
 }
@@ -553,16 +556,14 @@ impl ShadowResources {
 /// * `Ok(Ini)` - Parsed INI file
 /// * `Err(_)` if file not found or not parseable as INI
 fn load_ini_from_shadow(path: &str, shadow: &ShadowResources) -> anyhow::Result<Ini> {
-    let file = shadow.get_file(path)
-        .ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
+    let file = shadow.get_file(path).ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
 
     match file {
         ZTFile::Text(content, _, _) => {
             let content_str = content.to_str()?.to_string();
             let mut ini = Ini::new_cs();
             ini.set_comment_symbols(&[';', '#', ':']);
-            ini.read(content_str)
-                .map_err(|e| anyhow::anyhow!("Failed to parse INI: {}", e))?;
+            ini.read(content_str).map_err(|e| anyhow::anyhow!("Failed to parse INI: {}", e))?;
             Ok(ini)
         }
         _ => anyhow::bail!("File '{}' is not a text file", path),
@@ -584,8 +585,7 @@ fn save_ini_to_shadow(path: &str, ini: &Ini, shadow: &mut ShadowResources) -> an
     let content_len = content.len() as u32;
     let c_string = std::ffi::CString::new(content)?;
 
-    let file_type = ZTFileType::try_from(Path::new(path))
-        .map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(path)).map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
 
     let ztfile = ZTFile::Text(c_string, file_type, content_len);
     shadow.update_file(path, ztfile);
@@ -618,19 +618,45 @@ fn collect_affected_files(patches: &indexmap::IndexMap<String, Patch>) -> HashSe
 
     for patch in patches.values() {
         match patch {
-            Patch::Replace(p) => { files.insert(p.target.clone()); },
-            Patch::Merge(p) => { files.insert(p.target.clone()); },
-            Patch::Delete(p) => { files.insert(p.target.clone()); },
-            Patch::SetPalette(p) => { files.insert(p.target.clone()); },
-            Patch::SetKey(p) => { files.insert(p.target.clone()); },
-            Patch::SetKeys(p) => { files.insert(p.target.clone()); },
-            Patch::AppendValue(p) => { files.insert(p.target.clone()); },
-            Patch::AppendValues(p) => { files.insert(p.target.clone()); },
-            Patch::RemoveKey(p) => { files.insert(p.target.clone()); },
-            Patch::RemoveKeys(p) => { files.insert(p.target.clone()); },
-            Patch::AddSection(p) => { files.insert(p.target.clone()); },
-            Patch::ClearSection(p) => { files.insert(p.target.clone()); },
-            Patch::RemoveSection(p) => { files.insert(p.target.clone()); },
+            Patch::Replace(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::Merge(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::Delete(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::SetPalette(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::SetKey(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::SetKeys(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::AppendValue(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::AppendValues(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::RemoveKey(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::RemoveKeys(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::AddSection(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::ClearSection(p) => {
+                files.insert(p.target.clone());
+            }
+            Patch::RemoveSection(p) => {
+                files.insert(p.target.clone());
+            }
         }
     }
 
@@ -649,8 +675,10 @@ fn apply_set_key_patch_shadow(
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying set_key patch '{}' to shadow: {} [{}] {} = {}",
-          patch_name, patch.target, patch.section, patch.key, patch.value);
+    info!(
+        "Applying set_key patch '{}' to shadow: {} [{}] {} = {}",
+        patch_name, patch.target, patch.section, patch.key, patch.value
+    );
 
     validate_ini_file(&patch.target)?;
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
@@ -672,8 +700,13 @@ fn apply_set_keys_patch_shadow(
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying set_keys patch '{}' to shadow: {} [{}] ({} keys)",
-          patch_name, patch.target, patch.section, patch.keys.len());
+    info!(
+        "Applying set_keys patch '{}' to shadow: {} [{}] ({} keys)",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.keys.len()
+    );
 
     validate_ini_file(&patch.target)?;
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
@@ -697,8 +730,10 @@ fn apply_append_value_patch_shadow(
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying append_value patch '{}' to shadow: {} [{}] {} += {}",
-          patch_name, patch.target, patch.section, patch.key, patch.value);
+    info!(
+        "Applying append_value patch '{}' to shadow: {} [{}] {} += {}",
+        patch_name, patch.target, patch.section, patch.key, patch.value
+    );
 
     validate_ini_file(&patch.target)?;
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
@@ -720,8 +755,14 @@ fn apply_append_values_patch_shadow(
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying append_values patch '{}' to shadow: {} [{}] {} += {} values",
-          patch_name, patch.target, patch.section, patch.key, patch.values.len());
+    info!(
+        "Applying append_values patch '{}' to shadow: {} [{}] {} += {} values",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.key,
+        patch.values.len()
+    );
 
     validate_ini_file(&patch.target)?;
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
@@ -744,28 +785,30 @@ fn apply_remove_key_patch_shadow(
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying remove_key patch '{}' to shadow: {} [{}] -{}",
-          patch_name, patch.target, patch.section, patch.key);
+    info!(
+        "Applying remove_key patch '{}' to shadow: {} [{}] -{}",
+        patch_name, patch.target, patch.section, patch.key
+    );
 
     validate_ini_file(&patch.target)?;
 
     if !check_file_in_shadow(&patch.target, shadow) {
-        warn!("Remove_key patch '{}': file '{}' not found, skipping",
-              patch_name, patch.target);
+        warn!("Remove_key patch '{}': file '{}' not found, skipping", patch_name, patch.target);
         return Ok(());
     }
 
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
 
     if !ini.has_section(&patch.section) {
-        warn!("Remove_key patch '{}': section '{}' not found, skipping",
-              patch_name, patch.section);
+        warn!("Remove_key patch '{}': section '{}' not found, skipping", patch_name, patch.section);
         return Ok(());
     }
 
     if ini.remove_key(&patch.section, &patch.key).is_none() {
-        warn!("Remove_key patch '{}': key '{}' not found in section '{}', skipping",
-              patch_name, patch.key, patch.section);
+        warn!(
+            "Remove_key patch '{}': key '{}' not found in section '{}', skipping",
+            patch_name, patch.key, patch.section
+        );
         return Ok(());
     }
 
@@ -782,22 +825,25 @@ fn apply_remove_keys_patch_shadow(
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying remove_keys patch '{}' to shadow: {} [{}] -{} keys",
-          patch_name, patch.target, patch.section, patch.keys.len());
+    info!(
+        "Applying remove_keys patch '{}' to shadow: {} [{}] -{} keys",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.keys.len()
+    );
 
     validate_ini_file(&patch.target)?;
 
     if !check_file_in_shadow(&patch.target, shadow) {
-        warn!("Remove_keys patch '{}': file '{}' not found, skipping",
-              patch_name, patch.target);
+        warn!("Remove_keys patch '{}': file '{}' not found, skipping", patch_name, patch.target);
         return Ok(());
     }
 
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
 
     if !ini.has_section(&patch.section) {
-        warn!("Remove_keys patch '{}': section '{}' not found, skipping",
-              patch_name, patch.section);
+        warn!("Remove_keys patch '{}': section '{}' not found, skipping", patch_name, patch.section);
         return Ok(());
     }
 
@@ -819,8 +865,14 @@ fn apply_add_section_patch_shadow(
     context: &SubstitutionContext,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying add_section patch '{}' to shadow: {} [{}] ({} keys, on_exists: {:?})",
-          patch_name, patch.target, patch.section, patch.keys.len(), patch.on_exists);
+    info!(
+        "Applying add_section patch '{}' to shadow: {} [{}] ({} keys, on_exists: {:?})",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.keys.len(),
+        patch.on_exists
+    );
 
     validate_ini_file(&patch.target)?;
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
@@ -832,8 +884,7 @@ fn apply_add_section_patch_shadow(
             anyhow::bail!("Section '{}' already exists in '{}'", patch.section, patch.target);
         }
         (OnExists::Skip, true) => {
-            warn!("Add_section patch '{}': section '{}' already exists, skipping",
-                  patch_name, patch.section);
+            warn!("Add_section patch '{}': section '{}' already exists, skipping", patch_name, patch.section);
             return Ok(());
         }
         (OnExists::Replace, true) => {
@@ -860,22 +911,19 @@ fn apply_clear_section_patch_shadow(
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying clear_section patch '{}' to shadow: {} [{}]",
-          patch_name, patch.target, patch.section);
+    info!("Applying clear_section patch '{}' to shadow: {} [{}]", patch_name, patch.target, patch.section);
 
     validate_ini_file(&patch.target)?;
 
     if !check_file_in_shadow(&patch.target, shadow) {
-        warn!("Clear_section patch '{}': file '{}' not found, skipping",
-              patch_name, patch.target);
+        warn!("Clear_section patch '{}': file '{}' not found, skipping", patch_name, patch.target);
         return Ok(());
     }
 
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
 
     if !ini.has_section(&patch.section) {
-        warn!("Clear_section patch '{}': section '{}' not found, skipping",
-              patch_name, patch.section);
+        warn!("Clear_section patch '{}': section '{}' not found, skipping", patch_name, patch.section);
         return Ok(());
     }
 
@@ -893,22 +941,19 @@ fn apply_remove_section_patch_shadow(
     patch_name: &str,
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying remove_section patch '{}' to shadow: {} -[{}]",
-          patch_name, patch.target, patch.section);
+    info!("Applying remove_section patch '{}' to shadow: {} -[{}]", patch_name, patch.target, patch.section);
 
     validate_ini_file(&patch.target)?;
 
     if !check_file_in_shadow(&patch.target, shadow) {
-        warn!("Remove_section patch '{}': file '{}' not found, skipping",
-              patch_name, patch.target);
+        warn!("Remove_section patch '{}': file '{}' not found, skipping", patch_name, patch.target);
         return Ok(());
     }
 
     let mut ini = load_ini_from_shadow(&patch.target, shadow)?;
 
     if !ini.has_section(&patch.section) {
-        warn!("Remove_section patch '{}': section '{}' not found, skipping",
-              patch_name, patch.section);
+        warn!("Remove_section patch '{}': section '{}' not found, skipping", patch_name, patch.section);
         return Ok(());
     }
 
@@ -924,11 +969,10 @@ fn apply_replace_patch_shadow(
     patch: &ReplacePatch,
     file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
-    current_mod_id: &str,  // Not used in shadow mode
+    current_mod_id: &str, // Not used in shadow mode
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying replace patch '{}' to shadow: {} -> {}",
-          patch_name, patch.source, patch.target);
+    info!("Applying replace patch '{}' to shadow: {} -> {}", patch_name, patch.source, patch.target);
 
     // Check if target exists (in shadow or main resources)
     if !check_file_in_shadow(&patch.target, shadow) {
@@ -937,21 +981,26 @@ fn apply_replace_patch_shadow(
 
     // Load source file from archive
     let source_data = resolve_source_file(&patch.source, file_map)?;
-    let file_type = ZTFileType::try_from(Path::new(&patch.target))
-        .map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(&patch.target)).map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
 
     let ztfile = match file_type {
-        ZTFileType::Ini | ZTFileType::Ai | ZTFileType::Ani | ZTFileType::Cfg
-        | ZTFileType::Lyt | ZTFileType::Scn | ZTFileType::Uca | ZTFileType::Ucs
-        | ZTFileType::Ucb | ZTFileType::Txt | ZTFileType::Toml => {
+        ZTFileType::Ini
+        | ZTFileType::Ai
+        | ZTFileType::Ani
+        | ZTFileType::Cfg
+        | ZTFileType::Lyt
+        | ZTFileType::Scn
+        | ZTFileType::Uca
+        | ZTFileType::Ucs
+        | ZTFileType::Ucb
+        | ZTFileType::Txt
+        | ZTFileType::Toml => {
             let content = crate::encoding_utils::decode_game_text(&source_data);
             let content_len = content.len() as u32;
             let c_string = std::ffi::CString::new(content)?;
             ZTFile::Text(c_string, file_type, content_len)
         }
-        _ => {
-            ZTFile::RawBytes(source_data.into_boxed_slice(), file_type, 0)
-        }
+        _ => ZTFile::RawBytes(source_data.into_boxed_slice(), file_type, 0),
     };
 
     shadow.update_file(&patch.target, ztfile);
@@ -965,19 +1014,20 @@ fn apply_merge_patch_shadow(
     patch: &MergePatch,
     file_map: &HashMap<String, Box<[u8]>>,
     patch_name: &str,
-    current_mod_id: &str,  // Not used in shadow mode
+    current_mod_id: &str, // Not used in shadow mode
     shadow: &mut ShadowResources,
 ) -> anyhow::Result<()> {
-    info!("Applying merge patch '{}' to shadow: {} + {} (mode: {:?})",
-          patch_name, patch.target, patch.source, patch.merge_mode);
+    info!(
+        "Applying merge patch '{}' to shadow: {} + {} (mode: {:?})",
+        patch_name, patch.target, patch.source, patch.merge_mode
+    );
 
     // Validate INI file type
     let target_path = Path::new(&patch.target);
     let target_ext = target_path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let valid_extensions = ["ini", "ai", "cfg", "uca", "ucs", "ucb", "scn", "lyt"];
     if !valid_extensions.contains(&target_ext) {
-        anyhow::bail!("Target file '{}' is not an INI file. Merge only works with INI files.",
-                     patch.target);
+        anyhow::bail!("Target file '{}' is not an INI file. Merge only works with INI files.", patch.target);
     }
 
     // Check target exists
@@ -993,7 +1043,8 @@ fn apply_merge_patch_shadow(
     let source_str = crate::encoding_utils::decode_game_text(&source_data);
     let mut source_ini = Ini::new_cs();
     source_ini.set_comment_symbols(&[';', '#', ':']);
-    source_ini.read(source_str)
+    source_ini
+        .read(source_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse source INI '{}': {}", patch.source, e))?;
 
     // Merge based on mode
@@ -1012,16 +1063,11 @@ fn apply_merge_patch_shadow(
 }
 
 /// Apply delete patch to shadow
-fn apply_delete_patch_shadow(
-    patch: &DeletePatch,
-    patch_name: &str,
-    shadow: &mut ShadowResources,
-) -> anyhow::Result<()> {
+fn apply_delete_patch_shadow(patch: &DeletePatch, patch_name: &str, shadow: &mut ShadowResources) -> anyhow::Result<()> {
     info!("Applying delete patch '{}' to shadow: -{}", patch_name, patch.target);
 
     if !check_file_in_shadow(&patch.target, shadow) {
-        warn!("Delete patch '{}': file '{}' not found, skipping",
-              patch_name, patch.target);
+        warn!("Delete patch '{}': file '{}' not found, skipping", patch_name, patch.target);
         return Ok(());
     }
 
@@ -1032,18 +1078,12 @@ fn apply_delete_patch_shadow(
 }
 
 /// Apply set_palette patch to shadow
-fn apply_set_palette_patch_shadow(
-    patch: &SetPalettePatch,
-    patch_name: &str,
-    shadow: &mut ShadowResources,
-) -> anyhow::Result<()> {
-    info!("Applying set_palette patch '{}' to shadow: {} palette -> {}",
-          patch_name, patch.target, patch.palette);
+fn apply_set_palette_patch_shadow(patch: &SetPalettePatch, patch_name: &str, shadow: &mut ShadowResources) -> anyhow::Result<()> {
+    info!("Applying set_palette patch '{}' to shadow: {} palette -> {}", patch_name, patch.target, patch.palette);
 
     // Validate target is animation (no extension)
     if Path::new(&patch.target).extension().is_some() {
-        anyhow::bail!("Target '{}' has extension - set_palette only works on animation files (no extension)",
-                     patch.target);
+        anyhow::bail!("Target '{}' has extension - set_palette only works on animation files (no extension)", patch.target);
     }
 
     // Validate palette has .pal extension
@@ -1059,7 +1099,8 @@ fn apply_set_palette_patch_shadow(
     }
 
     // Load animation from shadow
-    let animation_file = shadow.get_file(&patch.target)
+    let animation_file = shadow
+        .get_file(&patch.target)
         .ok_or_else(|| anyhow::anyhow!("Failed to load animation '{}' from shadow", patch.target))?;
 
     let animation_data = match animation_file {
@@ -1102,12 +1143,7 @@ fn apply_set_palette_patch_shadow(
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if the target file doesn't exist, source file doesn't exist, or other errors occur
-fn apply_replace_patch_direct(
-    patch: &ReplacePatch,
-    file_map: &HashMap<String, Box<[u8]>>,
-    patch_name: &str,
-    current_mod_id: &str,
-) -> anyhow::Result<()> {
+fn apply_replace_patch_direct(patch: &ReplacePatch, file_map: &HashMap<String, Box<[u8]>>, patch_name: &str, current_mod_id: &str) -> anyhow::Result<()> {
     info!("Applying replace patch '{}': {} -> {}", patch_name, patch.source, patch.target);
 
     // Check if target file exists in resource system
@@ -1117,22 +1153,27 @@ fn apply_replace_patch_direct(
 
     // Load source file from archive
     let source_data = resolve_source_file(&patch.source, file_map)?;
-    let file_type = ZTFileType::try_from(Path::new(&patch.target))
-        .map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(&patch.target)).map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
 
     // Create ZTFile based on file type
     let ztfile = match file_type {
-        ZTFileType::Ini | ZTFileType::Ai | ZTFileType::Ani | ZTFileType::Cfg
-        | ZTFileType::Lyt | ZTFileType::Scn | ZTFileType::Uca | ZTFileType::Ucs
-        | ZTFileType::Ucb | ZTFileType::Txt | ZTFileType::Toml => {
+        ZTFileType::Ini
+        | ZTFileType::Ai
+        | ZTFileType::Ani
+        | ZTFileType::Cfg
+        | ZTFileType::Lyt
+        | ZTFileType::Scn
+        | ZTFileType::Uca
+        | ZTFileType::Ucs
+        | ZTFileType::Ucb
+        | ZTFileType::Txt
+        | ZTFileType::Toml => {
             let content = crate::encoding_utils::decode_game_text(&source_data);
             let content_len = content.len() as u32;
             let c_string = std::ffi::CString::new(content)?;
             ZTFile::Text(c_string, file_type, content_len)
         }
-        _ => {
-            ZTFile::RawBytes(source_data.into_boxed_slice(), file_type, 0)
-        }
+        _ => ZTFile::RawBytes(source_data.into_boxed_slice(), file_type, 0),
     };
 
     // Update resource (add_ztfile_from_memory automatically replaces if exists)
@@ -1156,14 +1197,11 @@ fn apply_replace_patch_direct(
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if files don't exist, aren't INI files, or other errors occur
-fn apply_merge_patch_direct(
-    patch: &MergePatch,
-    file_map: &HashMap<String, Box<[u8]>>,
-    patch_name: &str,
-    current_mod_id: &str,
-) -> anyhow::Result<()> {
-    info!("Applying merge patch '{}': {} + {} (mode: {:?})",
-          patch_name, patch.target, patch.source, patch.merge_mode);
+fn apply_merge_patch_direct(patch: &MergePatch, file_map: &HashMap<String, Box<[u8]>>, patch_name: &str, current_mod_id: &str) -> anyhow::Result<()> {
+    info!(
+        "Applying merge patch '{}': {} + {} (mode: {:?})",
+        patch_name, patch.target, patch.source, patch.merge_mode
+    );
 
     // Check if target file exists
     if !check_file(&patch.target) {
@@ -1174,12 +1212,12 @@ fn apply_merge_patch_direct(
     validate_ini_file(&patch.target)?;
 
     // Load target INI file
-    let target_file = get_file(&patch.target)
-        .ok_or_else(|| anyhow::anyhow!("Failed to load target file '{}'", patch.target))?;
+    let target_file = get_file(&patch.target).ok_or_else(|| anyhow::anyhow!("Failed to load target file '{}'", patch.target))?;
     let target_str = crate::encoding_utils::decode_game_text(&target_file.1);
     let mut target_ini = Ini::new_cs();
     target_ini.set_comment_symbols(&[';', '#', ':']);
-    target_ini.read(target_str)
+    target_ini
+        .read(target_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse target INI file '{}': {}", patch.target, e))?;
 
     // Load source INI file from archive
@@ -1187,7 +1225,8 @@ fn apply_merge_patch_direct(
     let source_str = crate::encoding_utils::decode_game_text(&source_data);
     let mut source_ini = Ini::new_cs();
     source_ini.set_comment_symbols(&[';', '#', ':']);
-    source_ini.read(source_str)
+    source_ini
+        .read(source_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse source INI file '{}': {}", patch.source, e))?;
 
     // Convert MergeMode enum from mods to IniMergeMode from configparser
@@ -1203,8 +1242,7 @@ fn apply_merge_patch_direct(
     let merged_content = target_ini.writes();
 
     // Create ZTFile and update resource
-    let file_type = ZTFileType::try_from(Path::new(&patch.target))
-        .map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(&patch.target)).map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
     let c_string = std::ffi::CString::new(merged_content.clone())?;
     let ztfile = ZTFile::Text(c_string, file_type, merged_content.len() as u32);
 
@@ -1227,8 +1265,10 @@ fn apply_delete_patch_direct(patch: &DeletePatch, patch_name: &str) -> anyhow::R
     info!("Applying delete patch '{}': {}", patch_name, patch.target);
 
     if !check_file(&patch.target) {
-        warn!("Delete patch '{}': target file '{}' not found (already deleted or never existed)",
-              patch_name, patch.target);
+        warn!(
+            "Delete patch '{}': target file '{}' not found (already deleted or never existed)",
+            patch_name, patch.target
+        );
         return Ok(());
     }
 
@@ -1236,8 +1276,10 @@ fn apply_delete_patch_direct(patch: &DeletePatch, patch_name: &str) -> anyhow::R
     if removed {
         info!("Successfully applied delete patch '{}' - removed '{}'", patch_name, patch.target);
     } else {
-        warn!("Delete patch '{}': failed to remove '{}' (may have been removed by another operation)",
-              patch_name, patch.target);
+        warn!(
+            "Delete patch '{}': failed to remove '{}' (may have been removed by another operation)",
+            patch_name, patch.target
+        );
     }
 
     Ok(())
@@ -1256,14 +1298,12 @@ fn apply_delete_patch_direct(patch: &DeletePatch, patch_name: &str) -> anyhow::R
 /// * `Ok(())` if the patch was applied successfully
 /// * `Err(_)` if validation fails or animation parsing/writing fails
 fn apply_set_palette_patch_direct(patch: &SetPalettePatch, patch_name: &str) -> anyhow::Result<()> {
-    info!("Applying set_palette patch '{}': {} -> palette: {}",
-          patch_name, patch.target, patch.palette);
+    info!("Applying set_palette patch '{}': {} -> palette: {}", patch_name, patch.target, patch.palette);
 
     // Validate target has no extension (must be animation file)
     let target_path = Path::new(&patch.target);
     if target_path.extension().is_some() {
-        anyhow::bail!("Target file '{}' has an extension. Animation files must have no extension.",
-                     patch.target);
+        anyhow::bail!("Target file '{}' has an extension. Animation files must have no extension.", patch.target);
     }
 
     // Validate palette has .pal extension
@@ -1282,8 +1322,10 @@ fn apply_set_palette_patch_direct(patch: &SetPalettePatch, patch_name: &str) -> 
         Ok(())
     })?;
 
-    info!("Successfully applied set_palette patch '{}' - updated palette reference to '{}'",
-          patch_name, patch.palette);
+    info!(
+        "Successfully applied set_palette patch '{}' - updated palette reference to '{}'",
+        patch_name, patch.palette
+    );
     Ok(())
 }
 
@@ -1330,13 +1372,11 @@ fn load_ini_from_resources(target: &str) -> anyhow::Result<Ini> {
     validate_ini_file(target)?;
 
     // Load and parse INI file
-    let target_file = get_file(target)
-        .ok_or_else(|| anyhow::anyhow!("Failed to load target file '{}'", target))?;
+    let target_file = get_file(target).ok_or_else(|| anyhow::anyhow!("Failed to load target file '{}'", target))?;
     let target_str = crate::encoding_utils::decode_game_text(&target_file.1);
     let mut ini = Ini::new_cs();
     ini.set_comment_symbols(&[';', '#', ':']);
-    ini.read(target_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse INI file '{}': {}", target, e))?;
+    ini.read(target_str).map_err(|e| anyhow::anyhow!("Failed to parse INI file '{}': {}", target, e))?;
 
     Ok(ini)
 }
@@ -1347,8 +1387,7 @@ fn save_ini_to_resources(target: &str, ini: &Ini, current_mod_id: &str) -> anyho
     let content = ini.writes();
 
     // Create ZTFile
-    let file_type = ZTFileType::try_from(Path::new(target))
-        .map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(target)).map_err(|e| anyhow::anyhow!("Invalid target file type: {}", e))?;
     let c_string = std::ffi::CString::new(content.clone())?;
     let ztfile = ZTFile::Text(c_string, file_type, content.len() as u32);
 
@@ -1376,8 +1415,10 @@ fn apply_set_key_patch_direct(
     current_mod_id: &str,
     context: &SubstitutionContext,
 ) -> anyhow::Result<()> {
-    info!("Applying set_key patch '{}': {} [{}] {} = {}",
-          patch_name, patch.target, patch.section, patch.key, patch.value);
+    info!(
+        "Applying set_key patch '{}': {} [{}] {} = {}",
+        patch_name, patch.target, patch.section, patch.key, patch.value
+    );
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1413,8 +1454,13 @@ fn apply_set_keys_patch_direct(
     current_mod_id: &str,
     context: &SubstitutionContext,
 ) -> anyhow::Result<()> {
-    info!("Applying set_keys patch '{}': {} [{}] ({} keys)",
-          patch_name, patch.target, patch.section, patch.keys.len());
+    info!(
+        "Applying set_keys patch '{}': {} [{}] ({} keys)",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.keys.len()
+    );
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1450,8 +1496,10 @@ fn apply_append_value_patch_direct(
     current_mod_id: &str,
     context: &SubstitutionContext,
 ) -> anyhow::Result<()> {
-    info!("Applying append_value patch '{}': {} [{}] {} += {}",
-          patch_name, patch.target, patch.section, patch.key, patch.value);
+    info!(
+        "Applying append_value patch '{}': {} [{}] {} += {}",
+        patch_name, patch.target, patch.section, patch.key, patch.value
+    );
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1487,8 +1535,14 @@ fn apply_append_values_patch_direct(
     current_mod_id: &str,
     context: &SubstitutionContext,
 ) -> anyhow::Result<()> {
-    info!("Applying append_values patch '{}': {} [{}] {} += {} values",
-          patch_name, patch.target, patch.section, patch.key, patch.values.len());
+    info!(
+        "Applying append_values patch '{}': {} [{}] {} += {} values",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.key,
+        patch.values.len()
+    );
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1502,8 +1556,7 @@ fn apply_append_values_patch_direct(
     // Save back to resources
     save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
-    info!("Successfully applied append_values patch '{}' - appended {} values",
-          patch_name, patch.values.len());
+    info!("Successfully applied append_values patch '{}' - appended {} values", patch_name, patch.values.len());
     Ok(())
 }
 
@@ -1517,14 +1570,11 @@ fn apply_append_values_patch_direct(
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully (warnings logged if key doesn't exist)
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_remove_key_patch_direct(
-    patch: &RemoveKeyPatch,
-    _file_map: &HashMap<String, Box<[u8]>>,
-    patch_name: &str,
-    current_mod_id: &str,
-) -> anyhow::Result<()> {
-    info!("Applying remove_key patch '{}': {} [{}] remove key '{}'",
-          patch_name, patch.target, patch.section, patch.key);
+fn apply_remove_key_patch_direct(patch: &RemoveKeyPatch, _file_map: &HashMap<String, Box<[u8]>>, patch_name: &str, current_mod_id: &str) -> anyhow::Result<()> {
+    info!(
+        "Applying remove_key patch '{}': {} [{}] remove key '{}'",
+        patch_name, patch.target, patch.section, patch.key
+    );
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1533,8 +1583,10 @@ fn apply_remove_key_patch_direct(
     let removed = ini.remove_key(&patch.section, &patch.key);
 
     if removed.is_none() {
-        warn!("Remove_key patch '{}': key '{}' not found in section '{}' of '{}'",
-              patch_name, patch.key, patch.section, patch.target);
+        warn!(
+            "Remove_key patch '{}': key '{}' not found in section '{}' of '{}'",
+            patch_name, patch.key, patch.section, patch.target
+        );
         return Ok(());
     }
 
@@ -1555,14 +1607,14 @@ fn apply_remove_key_patch_direct(
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully (warnings logged for missing keys)
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_remove_keys_patch_direct(
-    patch: &RemoveKeysPatch,
-    _file_map: &HashMap<String, Box<[u8]>>,
-    patch_name: &str,
-    current_mod_id: &str,
-) -> anyhow::Result<()> {
-    info!("Applying remove_keys patch '{}': {} [{}] remove {} keys",
-          patch_name, patch.target, patch.section, patch.keys.len());
+fn apply_remove_keys_patch_direct(patch: &RemoveKeysPatch, _file_map: &HashMap<String, Box<[u8]>>, patch_name: &str, current_mod_id: &str) -> anyhow::Result<()> {
+    info!(
+        "Applying remove_keys patch '{}': {} [{}] remove {} keys",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.keys.len()
+    );
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1574,8 +1626,7 @@ fn apply_remove_keys_patch_direct(
         if removed.is_some() {
             removed_count += 1;
         } else {
-            warn!("Remove_keys patch '{}': key '{}' not found in section '{}'",
-                  patch_name, key, patch.section);
+            warn!("Remove_keys patch '{}': key '{}' not found in section '{}'", patch_name, key, patch.section);
         }
     }
 
@@ -1587,8 +1638,12 @@ fn apply_remove_keys_patch_direct(
     // Save back to resources
     save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
-    info!("Successfully applied remove_keys patch '{}' - removed {} of {} keys",
-          patch_name, removed_count, patch.keys.len());
+    info!(
+        "Successfully applied remove_keys patch '{}' - removed {} of {} keys",
+        patch_name,
+        removed_count,
+        patch.keys.len()
+    );
     Ok(())
 }
 
@@ -1610,8 +1665,14 @@ fn apply_add_section_patch_direct(
     current_mod_id: &str,
     context: &SubstitutionContext,
 ) -> anyhow::Result<()> {
-    info!("Applying add_section patch '{}': {} [{}] with {} keys (on_exists: {:?})",
-          patch_name, patch.target, patch.section, patch.keys.len(), patch.on_exists);
+    info!(
+        "Applying add_section patch '{}': {} [{}] with {} keys (on_exists: {:?})",
+        patch_name,
+        patch.target,
+        patch.section,
+        patch.keys.len(),
+        patch.on_exists
+    );
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1624,22 +1685,30 @@ fn apply_add_section_patch_direct(
             OnExists::Error => {
                 anyhow::bail!(
                     "Add_section patch '{}': section '{}' already exists in '{}' (on_exists=error)",
-                    patch_name, patch.section, patch.target
+                    patch_name,
+                    patch.section,
+                    patch.target
                 );
             }
             OnExists::Skip => {
-                warn!("Add_section patch '{}': section '{}' already exists, skipping (on_exists=skip)",
-                      patch_name, patch.section);
+                warn!(
+                    "Add_section patch '{}': section '{}' already exists, skipping (on_exists=skip)",
+                    patch_name, patch.section
+                );
                 return Ok(());
             }
             OnExists::Merge => {
-                info!("Add_section patch '{}': section '{}' exists, merging keys (on_exists=merge)",
-                      patch_name, patch.section);
+                info!(
+                    "Add_section patch '{}': section '{}' exists, merging keys (on_exists=merge)",
+                    patch_name, patch.section
+                );
                 // Fall through to add keys (they will merge with existing)
             }
             OnExists::Replace => {
-                info!("Add_section patch '{}': section '{}' exists, replacing (on_exists=replace)",
-                      patch_name, patch.section);
+                info!(
+                    "Add_section patch '{}': section '{}' exists, replacing (on_exists=replace)",
+                    patch_name, patch.section
+                );
                 // Clear the section first
                 ini.clear_section(&patch.section);
             }
@@ -1655,8 +1724,7 @@ fn apply_add_section_patch_direct(
     // Save back to resources
     save_ini_to_resources(&patch.target, &ini, current_mod_id)?;
 
-    info!("Successfully applied add_section patch '{}' - {} keys added/merged",
-          patch_name, patch.keys.len());
+    info!("Successfully applied add_section patch '{}' - {} keys added/merged", patch_name, patch.keys.len());
     Ok(())
 }
 
@@ -1670,22 +1738,15 @@ fn apply_add_section_patch_direct(
 /// # Returns
 /// * `Ok(())` if the patch was applied successfully (warnings logged if section doesn't exist)
 /// * `Err(_)` if the file doesn't exist, isn't an INI file, or other errors occur
-fn apply_clear_section_patch_direct(
-    patch: &ClearSectionPatch,
-    _file_map: &HashMap<String, Box<[u8]>>,
-    patch_name: &str,
-    current_mod_id: &str,
-) -> anyhow::Result<()> {
-    info!("Applying clear_section patch '{}': {} [{}]",
-          patch_name, patch.target, patch.section);
+fn apply_clear_section_patch_direct(patch: &ClearSectionPatch, _file_map: &HashMap<String, Box<[u8]>>, patch_name: &str, current_mod_id: &str) -> anyhow::Result<()> {
+    info!("Applying clear_section patch '{}': {} [{}]", patch_name, patch.target, patch.section);
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
 
     // Check if section exists
     if !ini.has_section(&patch.section) {
-        warn!("Clear_section patch '{}': section '{}' not found in '{}'",
-              patch_name, patch.section, patch.target);
+        warn!("Clear_section patch '{}': section '{}' not found in '{}'", patch_name, patch.section, patch.target);
         return Ok(());
     }
 
@@ -1715,8 +1776,7 @@ fn apply_remove_section_patch_direct(
     patch_name: &str,
     current_mod_id: &str,
 ) -> anyhow::Result<()> {
-    info!("Applying remove_section patch '{}': {} [{}]",
-          patch_name, patch.target, patch.section);
+    info!("Applying remove_section patch '{}': {} [{}]", patch_name, patch.target, patch.section);
 
     // Load INI file
     let mut ini = load_ini_from_resources(&patch.target)?;
@@ -1725,8 +1785,7 @@ fn apply_remove_section_patch_direct(
     let removed = ini.remove_section(&patch.section);
 
     if removed.is_none() {
-        warn!("Remove_section patch '{}': section '{}' not found in '{}'",
-              patch_name, patch.section, patch.target);
+        warn!("Remove_section patch '{}': section '{}' not found in '{}'", patch_name, patch.section, patch.target);
         return Ok(());
     }
 
@@ -1749,17 +1808,12 @@ fn apply_remove_section_patch_direct(
 /// # Returns
 /// * `Ok(Vec<u8>)` - File contents
 /// * `Err(_)` - File not found
-fn resolve_source_file(
-    source: &str,
-    file_map: &HashMap<String, Box<[u8]>>,
-) -> anyhow::Result<Vec<u8>> {
+fn resolve_source_file(source: &str, file_map: &HashMap<String, Box<[u8]>>) -> anyhow::Result<Vec<u8>> {
     let archive_path = format!("resources/{}", source);
-    file_map.get(&archive_path)
+    file_map
+        .get(&archive_path)
         .map(|data| data.to_vec())
-        .ok_or_else(|| anyhow::anyhow!(
-            "Source file '{}' not found in archive (expected as 'resources/{}')",
-            source, source
-        ))
+        .ok_or_else(|| anyhow::anyhow!("Source file '{}' not found in archive (expected as 'resources/{}')", source, source))
 }
 
 // ============================================================================
@@ -1871,8 +1925,7 @@ fn is_ztd_loaded_before_current(ztd_filename: &str, current_mod_id: &str) -> boo
     let current_ztd = match ztd_registry::get_mod_ztd(current_mod_id) {
         Some(ztd) => ztd,
         None => {
-            warn!("Cannot check ztd_loaded condition: current mod '{}' has no registered ZTD",
-                  current_mod_id);
+            warn!("Cannot check ztd_loaded condition: current mod '{}' has no registered ZTD", current_mod_id);
             return false;
         }
     };
@@ -1880,8 +1933,7 @@ fn is_ztd_loaded_before_current(ztd_filename: &str, current_mod_id: &str) -> boo
     let current_position = match ztd_registry::get_ztd_position(&current_ztd) {
         Some(pos) => pos,
         None => {
-            warn!("Cannot check ztd_loaded condition: current ZTD '{}' not found in registry",
-                  current_ztd);
+            warn!("Cannot check ztd_loaded condition: current ZTD '{}' not found in registry", current_ztd);
             return false;
         }
     };
@@ -1901,12 +1953,7 @@ fn is_ztd_loaded_before_current(ztd_filename: &str, current_mod_id: &str) -> boo
 /// * `Ok(true)` if all conditions pass
 /// * `Ok(false)` if any condition fails
 /// * `Err(_)` if there's an error evaluating conditions
-fn evaluate_patch_condition_with_target(
-    condition: &Option<PatchCondition>,
-    default_target: &str,
-    patch_name: &str,
-    current_mod_id: &str,
-) -> anyhow::Result<bool> {
+fn evaluate_patch_condition_with_target(condition: &Option<PatchCondition>, default_target: &str, patch_name: &str, current_mod_id: &str) -> anyhow::Result<bool> {
     let Some(cond) = condition else {
         return Ok(true);
     };
@@ -1925,8 +1972,7 @@ fn evaluate_patch_condition_with_target(
     // Check ztd_loaded condition
     if let Some(required_ztd) = &cond.ztd_loaded {
         if !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
-            info!("Patch '{}': skipping - required ZTD '{}' not loaded before current mod",
-                  patch_name, required_ztd);
+            info!("Patch '{}': skipping - required ZTD '{}' not loaded before current mod", patch_name, required_ztd);
             return Ok(false);
         }
     }
@@ -1934,8 +1980,7 @@ fn evaluate_patch_condition_with_target(
     // Check entity_exists condition (legacy entities only)
     if let Some(entity_id) = &cond.entity_exists {
         if !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
-            info!("Patch '{}': skipping - required legacy entity '{}' not loaded",
-                  patch_name, entity_id);
+            info!("Patch '{}': skipping - required legacy entity '{}' not loaded", patch_name, entity_id);
             return Ok(false);
         }
     }
@@ -1944,8 +1989,7 @@ fn evaluate_patch_condition_with_target(
     if let Some(key_check) = &cond.key_exists {
         // Check if target file exists
         if !check_file(target) {
-            warn!("Patch '{}': cannot evaluate key_exists condition - target file '{}' not found",
-                  patch_name, target);
+            warn!("Patch '{}': cannot evaluate key_exists condition - target file '{}' not found", patch_name, target);
             return Ok(false);
         }
 
@@ -1953,14 +1997,18 @@ fn evaluate_patch_condition_with_target(
         match load_ini_from_resources(target) {
             Ok(ini) => {
                 if ini.get(&key_check.section, &key_check.key).is_none() {
-                    info!("Patch '{}': skipping - key '[{}]{}' does not exist in '{}'",
-                          patch_name, key_check.section, key_check.key, target);
+                    info!(
+                        "Patch '{}': skipping - key '[{}]{}' does not exist in '{}'",
+                        patch_name, key_check.section, key_check.key, target
+                    );
                     return Ok(false);
                 }
             }
             Err(e) => {
-                warn!("Patch '{}': cannot evaluate key_exists condition - failed to load target '{}': {}",
-                      patch_name, target, e);
+                warn!(
+                    "Patch '{}': cannot evaluate key_exists condition - failed to load target '{}': {}",
+                    patch_name, target, e
+                );
                 return Ok(false);
             }
         }
@@ -1970,8 +2018,7 @@ fn evaluate_patch_condition_with_target(
     if let Some(value_check) = &cond.value_equals {
         // Check if target file exists
         if !check_file(target) {
-            warn!("Patch '{}': cannot evaluate value_equals condition - target file '{}' not found",
-                  patch_name, target);
+            warn!("Patch '{}': cannot evaluate value_equals condition - target file '{}' not found", patch_name, target);
             return Ok(false);
         }
 
@@ -1980,14 +2027,18 @@ fn evaluate_patch_condition_with_target(
             Ok(ini) => {
                 let actual_value = ini.get(&value_check.section, &value_check.key);
                 if actual_value.as_deref() != Some(&value_check.value) {
-                    info!("Patch '{}': skipping - key '[{}]{}' value does not equal '{}' (actual: {:?})",
-                          patch_name, value_check.section, value_check.key, value_check.value, actual_value);
+                    info!(
+                        "Patch '{}': skipping - key '[{}]{}' value does not equal '{}' (actual: {:?})",
+                        patch_name, value_check.section, value_check.key, value_check.value, actual_value
+                    );
                     return Ok(false);
                 }
             }
             Err(e) => {
-                warn!("Patch '{}': cannot evaluate value_equals condition - failed to load target '{}': {}",
-                      patch_name, target, e);
+                warn!(
+                    "Patch '{}': cannot evaluate value_equals condition - failed to load target '{}': {}",
+                    patch_name, target, e
+                );
                 return Ok(false);
             }
         }
@@ -2038,8 +2089,8 @@ fn get_patch_condition(patch: &Patch) -> &Option<PatchCondition> {
 #[derive(Debug, Clone, PartialEq)]
 enum PatchResult {
     Success,
-    Skipped,           // Condition failed or warning situation
-    Error(String),     // Error occurred
+    Skipped,       // Condition failed or warning situation
+    Error(String), // Error occurred
 }
 
 /// Apply patches directly without shadow (continue mode)
@@ -2061,14 +2112,12 @@ fn apply_patches_direct(
     file_map: &HashMap<String, Box<[u8]>>,
     current_mod_id: &str,
 ) -> anyhow::Result<()> {
-
     // Create substitution context for variable resolution
     let context = SubstitutionContext {
         current_mod_id: current_mod_id.to_string(),
     };
 
-    info!("Applying patch file with {} patches (on_error: continue)",
-          patches.len());
+    info!("Applying patch file with {} patches (on_error: continue)", patches.len());
 
     // Evaluate top-level conditions
     if let Some(top_level_condition) = &patch_meta.condition {
@@ -2099,9 +2148,7 @@ fn apply_patches_direct(
         // Check key_exists and value_equals with target
         if top_level_condition.key_exists.is_some() || top_level_condition.value_equals.is_some() {
             let Some(target) = &top_level_condition.target else {
-                return Err(anyhow::anyhow!(
-                    "Top-level condition with key_exists/value_equals requires 'target' field"
-                ));
+                return Err(anyhow::anyhow!("Top-level condition with key_exists/value_equals requires 'target' field"));
             };
 
             // Use existing evaluation function with target
@@ -2170,8 +2217,7 @@ fn apply_patches_with_shadow(
         current_mod_id: current_mod_id.to_string(),
     };
 
-    info!("Applying patch file with {} patches (on_error: {:?})",
-          patches.len(), patch_meta.on_error);
+    info!("Applying patch file with {} patches (on_error: {:?})", patches.len(), patch_meta.on_error);
 
     // Evaluate top-level conditions
     if let Some(top_level_condition) = &patch_meta.condition {
@@ -2202,9 +2248,7 @@ fn apply_patches_with_shadow(
         // Check key_exists and value_equals with target
         if top_level_condition.key_exists.is_some() || top_level_condition.value_equals.is_some() {
             let Some(target) = &top_level_condition.target else {
-                return Err(anyhow::anyhow!(
-                    "Top-level condition with key_exists/value_equals requires 'target' field"
-                ));
+                return Err(anyhow::anyhow!("Top-level condition with key_exists/value_equals requires 'target' field"));
             };
 
             // Use existing evaluation function with target
@@ -2658,5 +2702,4 @@ mod tests {
         assert_eq!(legacy_parts.subtype, None);
         assert_eq!(legacy_parts.attribute, "name_id");
     }
-
 }

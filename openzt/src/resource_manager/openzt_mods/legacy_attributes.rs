@@ -117,7 +117,10 @@ impl FromStr for LegacyEntityType {
             "scenery" => Ok(Self::Scenery),
             "staff" => Ok(Self::Staff),
             "walls" => Ok(Self::Wall),
-            _ => anyhow::bail!("Invalid legacy entity type: '{}'. Valid types: animals, buildings, fences, food, guests, items, paths, scenery, staff, walls", s),
+            _ => anyhow::bail!(
+                "Invalid legacy entity type: '{}'. Valid types: animals, buildings, fences, food, guests, items, paths, scenery, staff, walls",
+                s
+            ),
         }
     }
 }
@@ -165,12 +168,10 @@ impl LegacyEntityAttributes {
         }
 
         // Fallback: return the first available name_id (used for all subtypes if only one exists)
-        let name_ids: Vec<_> = self.subtype_attributes.values()
-            .filter_map(|a| a.name_id)
-            .collect();
+        let name_ids: Vec<_> = self.subtype_attributes.values().filter_map(|a| a.name_id).collect();
 
         if !name_ids.is_empty() {
-            return Some(name_ids[0]);  // Return first available
+            return Some(name_ids[0]); // Return first available
         }
 
         // Otherwise return None
@@ -179,10 +180,7 @@ impl LegacyEntityAttributes {
 
     /// Get all subtypes that have attributes
     pub fn get_subtypes_with_name_id(&self) -> Vec<String> {
-        self.subtype_attributes.values()
-            .filter(|a| a.name_id.is_some())
-            .map(|a| a.subtype.clone())
-            .collect()
+        self.subtype_attributes.values().filter(|a| a.name_id.is_some()).map(|a| a.subtype.clone()).collect()
     }
 
     /// Parse attributes from an .ai file's INI content
@@ -223,7 +221,8 @@ impl LegacyEntityAttributes {
                                     if let Some(values_vec) = values {
                                         if let Some(value) = values_vec.first() {
                                             match key.as_str() {
-                                                "cNameID" | "nameID" => {  // Support both formats
+                                                "cNameID" | "nameID" => {
+                                                    // Support both formats
                                                     subtype_attrs.name_id = value.parse().ok();
                                                 }
                                                 _ => {}
@@ -248,7 +247,8 @@ impl LegacyEntityAttributes {
                                 if let Some(values_vec) = values {
                                     if let Some(value) = values_vec.first() {
                                         match key.as_str() {
-                                            "cNameID" | "nameID" => {  // Support both formats
+                                            "cNameID" | "nameID" => {
+                                                // Support both formats
                                                 subtype_attrs.name_id = value.parse().ok();
                                             }
                                             _ => {}
@@ -276,7 +276,8 @@ impl LegacyEntityAttributes {
                         if let Some(values_vec) = values {
                             if let Some(value) = values_vec.first() {
                                 match key.as_str() {
-                                    "cNameID" | "nameID" => {  // Support both formats
+                                    "cNameID" | "nameID" => {
+                                        // Support both formats
                                         subtype_attrs.name_id = value.parse().ok();
                                     }
                                     _ => {}
@@ -295,9 +296,8 @@ impl LegacyEntityAttributes {
 
     /// Get a comma-separated list of subtypes for debugging
     pub fn subtype_list(&self) -> String {
-        if self.subtype_attributes.is_empty()
-            || (self.subtype_attributes.len() == 1 && self.subtype_attributes.contains_key("")) {
-            return String::new();  // Return empty string instead of "(no subtypes)"
+        if self.subtype_attributes.is_empty() || (self.subtype_attributes.len() == 1 && self.subtype_attributes.contains_key("")) {
+            return String::new(); // Return empty string instead of "(no subtypes)"
         }
 
         let mut subtypes: Vec<_> = self.subtype_attributes.keys().filter(|k| !k.is_empty()).cloned().collect();
@@ -308,15 +308,10 @@ impl LegacyEntityAttributes {
 
 /// Global storage for legacy entity attributes
 /// Structure: entity_type -> entity_name -> attributes
-pub static LEGACY_ATTRIBUTES_MAP: LazyLock<Mutex<HashMap<LegacyEntityType, HashMap<String, LegacyEntityAttributes>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+pub static LEGACY_ATTRIBUTES_MAP: LazyLock<Mutex<HashMap<LegacyEntityType, HashMap<String, LegacyEntityAttributes>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Register a legacy entity's attributes
-pub fn add_legacy_entity(
-    entity_type: LegacyEntityType,
-    entity_name: String,
-    attributes: LegacyEntityAttributes,
-) -> anyhow::Result<()> {
+pub fn add_legacy_entity(entity_type: LegacyEntityType, entity_name: String, attributes: LegacyEntityAttributes) -> anyhow::Result<()> {
     let mut map = LEGACY_ATTRIBUTES_MAP.lock().unwrap();
 
     let subtype_list = attributes.subtype_list();
@@ -328,12 +323,13 @@ pub fn add_legacy_entity(
 
     trace!(
         "Registering legacy entity: type={:?}, name={}, name_id={}, subtypes=[{}]",
-        entity_type, entity_name, name_id_display, subtype_list
+        entity_type,
+        entity_name,
+        name_id_display,
+        subtype_list
     );
 
-    map.entry(entity_type)
-        .or_default()
-        .insert(entity_name, attributes);
+    map.entry(entity_type).or_default().insert(entity_name, attributes);
 
     Ok(())
 }
@@ -348,11 +344,7 @@ pub fn add_legacy_entity(
 /// # Returns
 /// * `Ok(String)` - The attribute value as a string
 /// * `Err` - If the entity, type, or attribute is not found
-pub fn get_legacy_attribute(
-    entity_type: LegacyEntityType,
-    entity_name: &str,
-    attribute: &str,
-) -> anyhow::Result<String> {
+pub fn get_legacy_attribute(entity_type: LegacyEntityType, entity_name: &str, attribute: &str) -> anyhow::Result<String> {
     get_legacy_attribute_with_subtype(entity_type, entity_name, None, attribute)
 }
 
@@ -367,38 +359,34 @@ pub fn get_legacy_attribute(
 /// # Returns
 /// * `Ok(String)` - The attribute value as a string
 /// * `Err` - If the entity, type, or attribute is not found
-pub fn get_legacy_attribute_with_subtype(
-    entity_type: LegacyEntityType,
-    entity_name: &str,
-    subtype: Option<&str>,
-    attribute: &str,
-) -> anyhow::Result<String> {
+pub fn get_legacy_attribute_with_subtype(entity_type: LegacyEntityType, entity_name: &str, subtype: Option<&str>, attribute: &str) -> anyhow::Result<String> {
     let map = LEGACY_ATTRIBUTES_MAP.lock().unwrap();
 
-    let entity_map = map.get(&entity_type)
+    let entity_map = map
+        .get(&entity_type)
         .ok_or_else(|| anyhow::anyhow!("No entities found for type '{}'", entity_type.as_str()))?;
 
-    let attrs = entity_map.get(entity_name)
-        .ok_or_else(|| {
-            let available: Vec<&str> = entity_map.keys().take(5).map(|s| s.as_str()).collect();
-            anyhow::anyhow!(
-                "Entity '{}' not found in type '{}'. Available entities: {}",
-                entity_name, entity_type.as_str(), available.join(", ")
-            )
-        })?;
+    let attrs = entity_map.get(entity_name).ok_or_else(|| {
+        let available: Vec<&str> = entity_map.keys().take(5).map(|s| s.as_str()).collect();
+        anyhow::anyhow!(
+            "Entity '{}' not found in type '{}'. Available entities: {}",
+            entity_name,
+            entity_type.as_str(),
+            available.join(", ")
+        )
+    })?;
 
     match attribute {
-        "name_id" => {
-            attrs.get_name_id(subtype)
-                .ok_or_else(|| {
-                    if let Some(st) = subtype {
-                        anyhow::anyhow!("Entity '{}' has no cNameID for subtype '{}'", entity_name, st)
-                    } else {
-                        anyhow::anyhow!("Entity '{}' has no cNameID", entity_name)
-                    }
-                })
-                .map(|id| id.to_string())
-        }
+        "name_id" => attrs
+            .get_name_id(subtype)
+            .ok_or_else(|| {
+                if let Some(st) = subtype {
+                    anyhow::anyhow!("Entity '{}' has no cNameID for subtype '{}'", entity_name, st)
+                } else {
+                    anyhow::anyhow!("Entity '{}' has no cNameID", entity_name)
+                }
+            })
+            .map(|id| id.to_string()),
         _ => anyhow::bail!("Unsupported attribute '{}'. Only 'name_id' is currently supported.", attribute),
     }
 }
@@ -406,9 +394,7 @@ pub fn get_legacy_attribute_with_subtype(
 /// Check if a legacy entity exists
 pub fn legacy_entity_exists(entity_type: LegacyEntityType, entity_name: &str) -> bool {
     let map = LEGACY_ATTRIBUTES_MAP.lock().unwrap();
-    map.get(&entity_type)
-        .and_then(|m| m.get(entity_name))
-        .is_some()
+    map.get(&entity_type).and_then(|m| m.get(entity_name)).is_some()
 }
 
 #[cfg(test)]
@@ -417,14 +403,8 @@ mod tests {
 
     #[test]
     fn test_legacy_entity_type_from_str() {
-        assert_eq!(
-            LegacyEntityType::from_str("animals").unwrap(),
-            LegacyEntityType::Animal
-        );
-        assert_eq!(
-            LegacyEntityType::from_str("buildings").unwrap(),
-            LegacyEntityType::Building
-        );
+        assert_eq!(LegacyEntityType::from_str("animals").unwrap(), LegacyEntityType::Animal);
+        assert_eq!(LegacyEntityType::from_str("buildings").unwrap(), LegacyEntityType::Building);
         assert!(LegacyEntityType::from_str("invalid").is_err());
     }
 

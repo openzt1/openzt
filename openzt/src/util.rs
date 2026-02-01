@@ -1,4 +1,10 @@
-use std::{ffi::{c_char, CString, CStr}, fmt, mem::transmute, path::PathBuf, ptr, marker};
+use std::{
+    ffi::{c_char, CStr, CString},
+    fmt, marker,
+    mem::transmute,
+    path::PathBuf,
+    ptr,
+};
 
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
@@ -99,8 +105,7 @@ pub fn save_string_to_memory(address: u32, string: &str) {
     save_to_memory::<u8>(char_address, 0);
 }
 
-
-// TODO: What else should we have here? 
+// TODO: What else should we have here?
 // TODO: Impl for ZTString (rename this), ZTShortString and a simple cstr/*const c_char wrapper?
 // TODO: Should implement helper methods for any struct that implements ZTString, this should just be the minimum interface requried
 pub trait ZTString {
@@ -233,9 +238,7 @@ impl fmt::Display for ZTStringPtr {
 
 impl From<CString> for ZTStringPtr {
     fn from(c_string: CString) -> Self {
-        ZTStringPtr {
-            ptr: c_string.into_raw(),
-        }
+        ZTStringPtr { ptr: c_string.into_raw() }
     }
 }
 
@@ -246,7 +249,7 @@ pub struct ZTArray<T> {
     start_ptr: u32,
     end_ptr: u32,
     buffer_end_ptr: u32,
-    // Rust doesn't allow us to have a struct that is generic over T without referencing it, 
+    // Rust doesn't allow us to have a struct that is generic over T without referencing it,
     //  because we're just storing pointers to an array of type T we use PhantomData to tell the compiler that we're using T
     _marker: marker::PhantomData<T>,
     // _marker: marker::PhantomData<&'a T>,
@@ -254,10 +257,16 @@ pub struct ZTArray<T> {
 
 impl<T> fmt::Display for ZTArray<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ZTArray {{ start_ptr: {:#x}, end_ptr: {:#x}, buffer_end_ptr: {:#x} }} -> len({})", self.start_ptr, self.end_ptr, self.buffer_end_ptr, self.len())
+        write!(
+            f,
+            "ZTArray {{ start_ptr: {:#x}, end_ptr: {:#x}, buffer_end_ptr: {:#x} }} -> len({})",
+            self.start_ptr,
+            self.end_ptr,
+            self.buffer_end_ptr,
+            self.len()
+        )
     }
 }
-
 
 impl<T> ZTArray<T> {
     pub fn len(&self) -> usize {

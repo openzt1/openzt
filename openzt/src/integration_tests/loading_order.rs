@@ -1,7 +1,5 @@
 use crate::resource_manager::lazyresourcemap::get_file;
-use crate::resource_manager::openzt_mods::{
-    get_habitat_id, get_load_events, DefFileCategory, LoadEvent,
-};
+use crate::resource_manager::openzt_mods::{get_habitat_id, get_load_events, DefFileCategory, LoadEvent};
 use openzt_configparser::ini::Ini;
 
 use super::TestResult;
@@ -38,54 +36,21 @@ pub fn create_test_mod_file_map() -> std::collections::HashMap<String, Box<[u8]>
     let mut file_map = std::collections::HashMap::new();
 
     // Add meta.toml
-    file_map.insert(
-        "meta.toml".to_string(),
-        META_TOML.as_bytes().to_vec().into_boxed_slice(),
-    );
+    file_map.insert("meta.toml".to_string(), META_TOML.as_bytes().to_vec().into_boxed_slice());
 
     // Add definition files
-    file_map.insert(
-        "defs/00-habitat-only.toml".to_string(),
-        DEF_00_HABITAT.as_bytes().to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "defs/01-location-only.toml".to_string(),
-        DEF_01_LOCATION.as_bytes().to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "defs/02-another-habitat.toml".to_string(),
-        DEF_02_HABITAT.as_bytes().to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "defs/Capitals-Test.toml".to_string(),
-        DEF_CAPITALS.as_bytes().to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "defs/50-mixed-content.toml".to_string(),
-        DEF_50_MIXED.as_bytes().to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "defs/51-second-mixed.toml".to_string(),
-        DEF_51_MIXED.as_bytes().to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "defs/98-early-patch.toml".to_string(),
-        DEF_98_PATCH.as_bytes().to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "defs/99-patches-only.toml".to_string(),
-        DEF_99_PATCH.as_bytes().to_vec().into_boxed_slice(),
-    );
+    file_map.insert("defs/00-habitat-only.toml".to_string(), DEF_00_HABITAT.as_bytes().to_vec().into_boxed_slice());
+    file_map.insert("defs/01-location-only.toml".to_string(), DEF_01_LOCATION.as_bytes().to_vec().into_boxed_slice());
+    file_map.insert("defs/02-another-habitat.toml".to_string(), DEF_02_HABITAT.as_bytes().to_vec().into_boxed_slice());
+    file_map.insert("defs/Capitals-Test.toml".to_string(), DEF_CAPITALS.as_bytes().to_vec().into_boxed_slice());
+    file_map.insert("defs/50-mixed-content.toml".to_string(), DEF_50_MIXED.as_bytes().to_vec().into_boxed_slice());
+    file_map.insert("defs/51-second-mixed.toml".to_string(), DEF_51_MIXED.as_bytes().to_vec().into_boxed_slice());
+    file_map.insert("defs/98-early-patch.toml".to_string(), DEF_98_PATCH.as_bytes().to_vec().into_boxed_slice());
+    file_map.insert("defs/99-patches-only.toml".to_string(), DEF_99_PATCH.as_bytes().to_vec().into_boxed_slice());
 
     // Add icon resources
-    file_map.insert(
-        "resources/test/icon".to_string(),
-        ICON_DATA.to_vec().into_boxed_slice(),
-    );
-    file_map.insert(
-        "resources/test/icon.pal".to_string(),
-        ICON_PALETTE.to_vec().into_boxed_slice(),
-    );
+    file_map.insert("resources/test/icon".to_string(), ICON_DATA.to_vec().into_boxed_slice());
+    file_map.insert("resources/test/icon.pal".to_string(), ICON_PALETTE.to_vec().into_boxed_slice());
 
     file_map
 }
@@ -108,8 +73,7 @@ crate::integration_tests![
 
 /// Helper to verify habitat is registered
 fn check_habitat_registered(mod_id: &str, habitat_name: &str) -> Result<u32, String> {
-    get_habitat_id(mod_id, habitat_name)
-        .ok_or_else(|| format!("Habitat '{}' not registered for mod '{}'", habitat_name, mod_id))
+    get_habitat_id(mod_id, habitat_name).ok_or_else(|| format!("Habitat '{}' not registered for mod '{}'", habitat_name, mod_id))
 }
 
 /// Helper to read INI key value from resource system
@@ -118,11 +82,9 @@ fn read_ini_key(file_path: &str, section: &str, key: &str) -> Result<String, Str
 
     let content = String::from_utf8_lossy(&data);
     let mut ini = Ini::new();
-    ini.read(content.to_string())
-        .map_err(|e| format!("Failed to parse INI: {}", e))?;
+    ini.read(content.to_string()).map_err(|e| format!("Failed to parse INI: {}", e))?;
 
-    ini.get(section, key)
-        .ok_or_else(|| format!("Key '{}.{}' not found in '{}'", section, key, file_path))
+    ini.get(section, key).ok_or_else(|| format!("Key '{}.{}' not found in '{}'", section, key, file_path))
 }
 
 /// Helper to extract filenames from load events for a specific category and mod
@@ -203,21 +165,13 @@ fn test_alphabetical_within_nopatch() -> TestResult {
     if filenames.len() != expected.len() {
         return TestResult::fail(
             test_name,
-            format!(
-                "Expected {} NoPatch files, found {}. Files: {:?}",
-                expected.len(),
-                filenames.len(),
-                filenames
-            ),
+            format!("Expected {} NoPatch files, found {}. Files: {:?}", expected.len(), filenames.len(), filenames),
         );
     }
 
     for (i, (actual, expected)) in filenames.iter().zip(expected.iter()).enumerate() {
         if actual != expected {
-            return TestResult::fail(
-                test_name,
-                format!("File at position {} should be '{}', got '{}'", i, expected, actual),
-            );
+            return TestResult::fail(test_name, format!("File at position {} should be '{}', got '{}'", i, expected, actual));
         }
     }
 
@@ -241,21 +195,13 @@ fn test_alphabetical_within_mixed() -> TestResult {
     if filenames.len() != expected.len() {
         return TestResult::fail(
             test_name,
-            format!(
-                "Expected {} Mixed files, found {}. Files: {:?}",
-                expected.len(),
-                filenames.len(),
-                filenames
-            ),
+            format!("Expected {} Mixed files, found {}. Files: {:?}", expected.len(), filenames.len(), filenames),
         );
     }
 
     for (i, (actual, expected)) in filenames.iter().zip(expected.iter()).enumerate() {
         if actual != expected {
-            return TestResult::fail(
-                test_name,
-                format!("File at position {} should be '{}', got '{}'", i, expected, actual),
-            );
+            return TestResult::fail(test_name, format!("File at position {} should be '{}', got '{}'", i, expected, actual));
         }
     }
 
@@ -279,21 +225,13 @@ fn test_alphabetical_within_patchonly() -> TestResult {
     if filenames.len() != expected.len() {
         return TestResult::fail(
             test_name,
-            format!(
-                "Expected {} PatchOnly files, found {}. Files: {:?}",
-                expected.len(),
-                filenames.len(),
-                filenames
-            ),
+            format!("Expected {} PatchOnly files, found {}. Files: {:?}", expected.len(), filenames.len(), filenames),
         );
     }
 
     for (i, (actual, expected)) in filenames.iter().zip(expected.iter()).enumerate() {
         if actual != expected {
-            return TestResult::fail(
-                test_name,
-                format!("File at position {} should be '{}', got '{}'", i, expected, actual),
-            );
+            return TestResult::fail(test_name, format!("File at position {} should be '{}', got '{}'", i, expected, actual));
         }
     }
 
@@ -347,13 +285,7 @@ fn test_cross_file_habitat_reference() -> TestResult {
         Ok(value) => {
             let value_as_id = value.parse::<u32>().unwrap_or(0);
             if value_as_id != habitat_id {
-                TestResult::fail(
-                    test_name,
-                    format!(
-                        "cAlternateHabitat should be {} (habitat ID), got {}",
-                        habitat_id, value
-                    ),
-                )
+                TestResult::fail(test_name, format!("cAlternateHabitat should be {} (habitat ID), got {}", habitat_id, value))
             } else {
                 TestResult::pass(test_name)
             }
@@ -378,10 +310,7 @@ fn test_mixed_file_self_reference() -> TestResult {
         Ok(value) => {
             let value_as_id = value.parse::<u32>().unwrap_or(0);
             if value_as_id != habitat_id {
-                TestResult::fail(
-                    test_name,
-                    format!("cHabitat should be {} (habitat ID), got {}", habitat_id, value),
-                )
+                TestResult::fail(test_name, format!("cHabitat should be {} (habitat ID), got {}", habitat_id, value))
             } else {
                 TestResult::pass(test_name)
             }
@@ -402,13 +331,7 @@ fn test_patch_execution_order() -> TestResult {
             if value == "Second" {
                 TestResult::pass(test_name)
             } else {
-                TestResult::fail(
-                    test_name,
-                    format!(
-                        "LoadOrder should be 'Second' (from 99-patches-only.toml), got '{}'",
-                        value
-                    ),
-                )
+                TestResult::fail(test_name, format!("LoadOrder should be 'Second' (from 99-patches-only.toml), got '{}'", value))
             }
         }
         Err(e) => TestResult::fail(test_name, format!("Failed to read patch result: {}", e)),

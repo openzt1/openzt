@@ -1,16 +1,15 @@
 use core::fmt;
 use num_enum::FromPrimitive;
-use tracing::info;
 use openzt_detour_macro::detour_mod;
+use tracing::info;
 
-use crate::bfentitytype::{ZTEntityTypeClass, zt_entity_type_class_is};
+use crate::bfentitytype::{zt_entity_type_class_is, ZTEntityTypeClass};
 use crate::util::get_from_memory;
 use crate::zthabitatmgr::read_zt_habitat_mgr_from_memory;
 use crate::ztworldmgr::{BFEntity, IVec3};
 // use crate::{
 //     util::get_from_memory,
 // };
-
 
 // 0049ccc3
 // void __thiscall BFUIMgr::displayMessage(void *this,uint param_1,int param_2,BFTile *param_3,BFEntity *param_4,bool param_5, bool param_6)
@@ -44,12 +43,12 @@ pub struct BFTile {
     padding: [u8; 0x34],
     pub pos: IVec3, // 0x034 + 0xc
     padding_2: [u8; 0x40],
-    unknown_byte_1: u8, // 0x080
+    unknown_byte_1: u8,     // 0x080
     pub unknown_byte_2: u8, // 0x081
-    unknown_byte_3: u8, // 0x082
-    unknown_byte_4: u8, // 0x083
-    unknown_byte_5: u8, // 0x084
-    padding_3: [u8; 0x8], // Full size 0x8c
+    unknown_byte_3: u8,     // 0x082
+    unknown_byte_4: u8,     // 0x083
+    unknown_byte_5: u8,     // 0x084
+    padding_3: [u8; 0x8],   // Full size 0x8c
 }
 
 impl PartialEq for BFTile {
@@ -80,138 +79,138 @@ impl BFTile {
     }
 
     pub fn get_local_elevation(&self, pos: IVec3) -> i32 {
-    // Helper function to perform integer division by 64
-    // Equivalent to: 16 * val / 64
-    fn scale_and_divide(val: i32) -> i32 {
-        16 * val / 64
-    }
-
-    // Helper function for negative scaling with proper rounding
-    // Equivalent to: ((((-16 * val) >> 31) & 0x3F) - 16 * val) >> 6
-    fn negative_scale_and_divide(val: i32) -> i32 {
-        let neg_scaled = -16 * val;
-        ((neg_scaled >> 31) & (0x3f + neg_scaled)) >> 6
-    }
-
-    let x = pos.x;
-    let y = pos.y;
-
-    match self.unknown_byte_2 {
-        0x1 => {
-            if 64 - x > y {
-                // LABEL_12: return 16 * (-x) / 64 - 16 * y / 64
-                scale_and_divide(-x) - scale_and_divide(y)
-            } else {
-                -16
-            }
+        // Helper function to perform integer division by 64
+        // Equivalent to: 16 * val / 64
+        fn scale_and_divide(val: i32) -> i32 {
+            16 * val / 64
         }
 
-        0x4 => {
-            if x >= y {
-                0
-            } else {
-                scale_and_divide(y) - scale_and_divide(x)
-            }
+        // Helper function for negative scaling with proper rounding
+        // Equivalent to: ((((-16 * val) >> 31) & 0x3F) - 16 * val) >> 6
+        fn negative_scale_and_divide(val: i32) -> i32 {
+            let neg_scaled = -16 * val;
+            ((neg_scaled >> 31) & (0x3f + neg_scaled)) >> 6
         }
 
-        0x5 => negative_scale_and_divide(x),
+        let x = pos.x;
+        let y = pos.y;
 
-        0x10 => {
-            if 64 - x >= y {
-                0
-            } else {
-                scale_and_divide(y) + scale_and_divide(x) - 16
+        match self.unknown_byte_2 {
+            0x1 => {
+                if 64 - x > y {
+                    // LABEL_12: return 16 * (-x) / 64 - 16 * y / 64
+                    scale_and_divide(-x) - scale_and_divide(y)
+                } else {
+                    -16
+                }
             }
-        }
 
-        0x11 => {
-            if 64 - x <= y {
-                scale_and_divide(y) + scale_and_divide(x) - 32
-            } else {
-                // LABEL_12: return 16 * (-x) / 64 - 16 * y / 64
-                scale_and_divide(-x) - scale_and_divide(y)
+            0x4 => {
+                if x >= y {
+                    0
+                } else {
+                    scale_and_divide(y) - scale_and_divide(x)
+                }
             }
-        }
 
-        0x14 => scale_and_divide(y),
+            0x5 => negative_scale_and_divide(x),
 
-        0x15 => {
-            if x <= y {
-                0
-            } else {
-                scale_and_divide(y) - scale_and_divide(x)
+            0x10 => {
+                if 64 - x >= y {
+                    0
+                } else {
+                    scale_and_divide(y) + scale_and_divide(x) - 16
+                }
             }
-        }
 
-        0x19 => scale_and_divide(y) - scale_and_divide(x),
-
-        0x40 => {
-            if x <= y {
-                0
-            } else {
-                // LABEL_17: return 16 * x / 64 - 16 * y / 64
-                scale_and_divide(x) - scale_and_divide(y)
+            0x11 => {
+                if 64 - x <= y {
+                    scale_and_divide(y) + scale_and_divide(x) - 32
+                } else {
+                    // LABEL_12: return 16 * (-x) / 64 - 16 * y / 64
+                    scale_and_divide(-x) - scale_and_divide(y)
+                }
             }
-        }
 
-        0x41 => negative_scale_and_divide(y),
+            0x14 => scale_and_divide(y),
 
-        0x44 => {
-            if x >= y {
-                // LABEL_17: return 16 * x / 64 - 16 * y / 64
-                scale_and_divide(x) - scale_and_divide(y)
-            } else {
-                scale_and_divide(y) - scale_and_divide(x)
+            0x15 => {
+                if x <= y {
+                    0
+                } else {
+                    scale_and_divide(y) - scale_and_divide(x)
+                }
             }
-        }
 
-        0x45 => {
-            if 64 - x >= y {
-                0
-            } else {
-                negative_scale_and_divide(x) - scale_and_divide(y) + 16
+            0x19 => scale_and_divide(y) - scale_and_divide(x),
+
+            0x40 => {
+                if x <= y {
+                    0
+                } else {
+                    // LABEL_17: return 16 * x / 64 - 16 * y / 64
+                    scale_and_divide(x) - scale_and_divide(y)
+                }
             }
-        }
 
-        0x46 => scale_and_divide(-x) - scale_and_divide(y),
+            0x41 => negative_scale_and_divide(y),
 
-        0x50 => scale_and_divide(x),
-
-        0x51 => {
-            if x >= y {
-                0
-            } else {
-                // LABEL_17: return 16 * x / 64 - 16 * y / 64
-                scale_and_divide(x) - scale_and_divide(y)
+            0x44 => {
+                if x >= y {
+                    // LABEL_17: return 16 * x / 64 - 16 * y / 64
+                    scale_and_divide(x) - scale_and_divide(y)
+                } else {
+                    scale_and_divide(y) - scale_and_divide(x)
+                }
             }
-        }
 
-        0x54 => {
-            if 64 - x > y {
-                scale_and_divide(x) + scale_and_divide(y)
-            } else {
-                16
+            0x45 => {
+                if 64 - x >= y {
+                    0
+                } else {
+                    negative_scale_and_divide(x) - scale_and_divide(y) + 16
+                }
             }
+
+            0x46 => scale_and_divide(-x) - scale_and_divide(y),
+
+            0x50 => scale_and_divide(x),
+
+            0x51 => {
+                if x >= y {
+                    0
+                } else {
+                    // LABEL_17: return 16 * x / 64 - 16 * y / 64
+                    scale_and_divide(x) - scale_and_divide(y)
+                }
+            }
+
+            0x54 => {
+                if 64 - x > y {
+                    scale_and_divide(x) + scale_and_divide(y)
+                } else {
+                    16
+                }
+            }
+
+            0x64 => scale_and_divide(x) + scale_and_divide(y), // Note: was 100 in original, but 0x64 = 100
+
+            0x91 => scale_and_divide(x) - scale_and_divide(y),
+
+            _ => 0,
         }
-
-        0x64 => scale_and_divide(x) + scale_and_divide(y), // Note: was 100 in original, but 0x64 = 100
-
-        0x91 => scale_and_divide(x) - scale_and_divide(y),
-
-        _ => 0,
-    }
     }
 }
 
 #[detour_mod]
 pub mod zoo_ztmapview {
-    use tracing::{info};
-    
-    use crate::ztworldmgr::{IVec3};
+    use tracing::info;
+
     use crate::util::get_from_memory;
-    use crate::ztmapview::{BFTile, ZTMapView, ErrorStringId};
-    use openzt_detour::gen::ztmapview::CHECK_TANK_PLACEMENT;
+    use crate::ztmapview::{BFTile, ErrorStringId, ZTMapView};
+    use crate::ztworldmgr::IVec3;
     use openzt_detour::gen::bftile::GET_LOCAL_ELEVATION;
+    use openzt_detour::gen::ztmapview::CHECK_TANK_PLACEMENT;
 
     // use crate::{
     //     bfregistry::{add_to_registry, get_from_registry},
@@ -227,17 +226,16 @@ pub mod zoo_ztmapview {
         // let entity = get_from_memory(temp_entity);
 
         let bf_tile = get_from_memory::<BFTile>(tile);
-        
+
         // let zt_map_view = get_from_memory::<ZTMapView>(_this);
-        
+
         if let Err(reimplemented_result) = ZTMapView::check_tank_placement(temp_entity_ptr, &bf_tile) {
-            if reimplemented_result == ErrorStringId::from(unsafe{*response_ptr}) {
+            if reimplemented_result == ErrorStringId::from(unsafe { *response_ptr }) {
                 info!("ZTMapView::checkTankPlacement success {:?}", reimplemented_result);
             } else {
-                info!("Fail {:?}", ErrorStringId::from(unsafe{*response_ptr}));
+                info!("Fail {:?}", ErrorStringId::from(unsafe { *response_ptr }));
             }
             // info!("ZTMapView::checkTankPlacement 1 -> {:?}", reimplemented_result);
-
         } else {
             info!("ZTMapView::checkTankPlacement 0 -> 0");
         }
@@ -269,7 +267,7 @@ pub fn init() {
 }
 
 pub struct ZTMapView {
-    pad: [u8; 0x5ec] // Not currently using this struct, so just padding it out to the size of the class
+    pad: [u8; 0x5ec], // Not currently using this struct, so just padding it out to the size of the class
 }
 
 #[derive(Debug, PartialEq, Eq, FromPrimitive, Clone)]
@@ -277,16 +275,16 @@ pub struct ZTMapView {
 pub enum ErrorStringId {
     #[default]
     UnknownError = 0x0000, // Unknown error
-    ObjectTooCloseToLadderOrPlatform = 0x2942, // Objects cannot be placed too close to the ladder or platform of the tank.
-    ObjectCannotBePlacedInTank = 0x293f, // This object can not be placed in a tank.
-    ObjectMustBePlacedInADeeperTank = 0x2940, // This object must be placed in a deeper tank.
-    EggsMustBePlacedOnLand = 0x294a, // Eggs must be placed on land.
-    AnimalMustBePlacedInATankWithWater = 0x293a, // This animal must be placed in a tank with water in it.
-    AnimalMustBePlacedOnLand = 0x2939, // This animal doesn't swim in tanks and must be placed in a land exhibit.
-    StaffCannotBePlacedInTank = 0x2943, // This staff member can not be placed in a tank.
-    ShowObjectMustBePlacedInShowTank = 0x293e, // Show objects can only be placed in show exhibits.
+    ObjectTooCloseToLadderOrPlatform = 0x2942,    // Objects cannot be placed too close to the ladder or platform of the tank.
+    ObjectCannotBePlacedInTank = 0x293f,          // This object can not be placed in a tank.
+    ObjectMustBePlacedInADeeperTank = 0x2940,     // This object must be placed in a deeper tank.
+    EggsMustBePlacedOnLand = 0x294a,              // Eggs must be placed on land.
+    AnimalMustBePlacedInATankWithWater = 0x293a,  // This animal must be placed in a tank with water in it.
+    AnimalMustBePlacedOnLand = 0x2939,            // This animal doesn't swim in tanks and must be placed in a land exhibit.
+    StaffCannotBePlacedInTank = 0x2943,           // This staff member can not be placed in a tank.
+    ShowObjectMustBePlacedInShowTank = 0x293e,    // Show objects can only be placed in show exhibits.
     ObjectCannotBePlacedAgainstTankWall = 0x2967, // This object cannot be placed next to a tank wall.
-    ObjectCannotBePlacedInShowTank = 0x2941, // Only show toys and animals that can do tricks can be placed in show tanks.
+    ObjectCannotBePlacedInShowTank = 0x2941,      // Only show toys and animals that can do tricks can be placed in show tanks.
 }
 
 impl ZTMapView {

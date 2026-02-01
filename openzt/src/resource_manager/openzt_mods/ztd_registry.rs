@@ -4,8 +4,8 @@
 //! are loaded, enabling the `ztd_loaded` patch condition to check if a ZTD was
 //! loaded earlier in the load order.
 
-use std::{collections::HashMap, sync::Mutex};
 use std::sync::LazyLock;
+use std::{collections::HashMap, sync::Mutex};
 
 /// Load status of a ZTD archive
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,16 +18,13 @@ pub enum ZtdLoadStatus {
 
 /// Global registry tracking ZTD load order
 /// Maps lowercase ZTD filename -> (load_position, status)
-static ZTD_LOAD_ORDER: LazyLock<Mutex<HashMap<String, (usize, ZtdLoadStatus)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static ZTD_LOAD_ORDER: LazyLock<Mutex<HashMap<String, (usize, ZtdLoadStatus)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Current load position (increments for each loaded ZTD)
-static CURRENT_LOAD_POSITION: LazyLock<Mutex<usize>> =
-    LazyLock::new(|| Mutex::new(0));
+static CURRENT_LOAD_POSITION: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 /// Map mod_id -> ZTD filename (lowercase)
-static MOD_TO_ZTD: LazyLock<Mutex<HashMap<String, String>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static MOD_TO_ZTD: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Register a ZTD archive as loaded with its status
 ///
@@ -94,7 +91,8 @@ pub fn is_ztd_loaded_before(ztd_filename: &str, current_position: usize) -> bool
     let lowercase = ztd_filename.to_lowercase();
     let registry = ZTD_LOAD_ORDER.lock().unwrap();
 
-    registry.get(&lowercase)
+    registry
+        .get(&lowercase)
         .map(|&(pos, status)| status == ZtdLoadStatus::Enabled && pos < current_position)
         .unwrap_or(false)
 }

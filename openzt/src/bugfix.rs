@@ -15,7 +15,7 @@ const LOWERCASE_LOOKUP_TABLE_SIGNED_CHAR_BUG: [u32; 6] = [
     0x0040697f, // BFResourceZip::prepare
     0x00528d0f, // BFResourceZip::BFResourceZip
     0x00529cc7, // dirsearch
-    ];
+];
 
 // Addresses where the vanilla game references its 128-entry lowercase table
 // These need to be patched to point to our 256-entry table instead

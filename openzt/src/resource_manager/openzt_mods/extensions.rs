@@ -1,7 +1,7 @@
 //! Extension mod storage and retrieval system.
 
-use std::{collections::HashMap, str::FromStr, sync::Mutex};
 use std::sync::LazyLock;
+use std::{collections::HashMap, str::FromStr, sync::Mutex};
 use tracing::debug;
 
 use crate::mods::EntityExtension;
@@ -85,15 +85,11 @@ impl ExtensionRegistry {
     }
 
     pub fn is_tag_valid(&self, tag: &str, entity_type: LegacyEntityType) -> bool {
-        self.tags.get(tag)
-            .map(|def| def.scope.includes(entity_type))
-            .unwrap_or(false)
+        self.tags.get(tag).map(|def| def.scope.includes(entity_type)).unwrap_or(false)
     }
 
     pub fn is_attribute_valid(&self, attr: &str, entity_type: LegacyEntityType) -> bool {
-        self.attributes.get(attr)
-            .map(|def| def.scope.includes(entity_type))
-            .unwrap_or(false)
+        self.attributes.get(attr).map(|def| def.scope.includes(entity_type)).unwrap_or(false)
     }
 
     pub fn list_tags(&self) -> Vec<&TagDefinition> {
@@ -106,16 +102,10 @@ impl ExtensionRegistry {
 }
 
 /// Global registry for tag and attribute definitions
-pub static EXTENSION_REGISTRY: LazyLock<Mutex<ExtensionRegistry>> =
-    LazyLock::new(|| Mutex::new(ExtensionRegistry::new()));
+pub static EXTENSION_REGISTRY: LazyLock<Mutex<ExtensionRegistry>> = LazyLock::new(|| Mutex::new(ExtensionRegistry::new()));
 
 /// Register a tag for specific entity types
-pub fn register_tag(
-    module: &str,
-    name: &str,
-    description: &str,
-    scope: EntityScope,
-) -> Result<(), String> {
+pub fn register_tag(module: &str, name: &str, description: &str, scope: EntityScope) -> Result<(), String> {
     let definition = TagDefinition {
         name: name.to_string(),
         description: description.to_string(),
@@ -127,13 +117,7 @@ pub fn register_tag(
 }
 
 /// Register an attribute for specific entity types
-pub fn register_attribute(
-    module: &str,
-    name: &str,
-    description: &str,
-    scope: EntityScope,
-    value_type: Option<&str>,
-) -> Result<(), String> {
+pub fn register_attribute(module: &str, name: &str, description: &str, scope: EntityScope, value_type: Option<&str>) -> Result<(), String> {
     let definition = AttributeDefinition {
         name: name.to_string(),
         description: description.to_string(),
@@ -150,23 +134,17 @@ pub fn register_attribute(
 pub struct ExtensionRecord {
     pub mod_id: String,
     pub base: String,          // e.g., "legacy.animals.elephant"
-    pub extension_key: String,  // e.g., "animals.elephant"
+    pub extension_key: String, // e.g., "animals.elephant"
     pub extension: EntityExtension,
 }
 
 /// Global storage: extension_key -> ExtensionRecord
-pub static EXTENSION_STORAGE: LazyLock<Mutex<HashMap<String, ExtensionRecord>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+pub static EXTENSION_STORAGE: LazyLock<Mutex<HashMap<String, ExtensionRecord>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Also store by base for lookups: base -> extension_key
-pub static EXTENSION_BY_BASE: LazyLock<Mutex<HashMap<String, String>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+pub static EXTENSION_BY_BASE: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub fn add_extension(
-    mod_id: String,
-    extension_key: String,
-    extension: EntityExtension,
-) -> anyhow::Result<()> {
+pub fn add_extension(mod_id: String, extension_key: String, extension: EntityExtension) -> anyhow::Result<()> {
     let base = extension.base().clone();
 
     // Parse entity type from base (e.g., "legacy.animals.elephant" -> Animal)
@@ -177,22 +155,14 @@ pub fn add_extension(
     // Validate all attributes against registry
     for attr_key in extension.attributes().keys() {
         if !registry.is_attribute_valid(attr_key, entity_type) {
-            return Err(anyhow::anyhow!(
-                "Unsupported attribute '{}' for entity type '{}'",
-                attr_key,
-                entity_type.as_str()
-            ));
+            return Err(anyhow::anyhow!("Unsupported attribute '{}' for entity type '{}'", attr_key, entity_type.as_str()));
         }
     }
 
     // Validate all tags against registry
     for tag in extension.tags().iter() {
         if !registry.is_tag_valid(tag, entity_type) {
-            return Err(anyhow::anyhow!(
-                "Unsupported tag '{}' for entity type '{}'",
-                tag,
-                entity_type.as_str()
-            ));
+            return Err(anyhow::anyhow!("Unsupported tag '{}' for entity type '{}'", tag, entity_type.as_str()));
         }
     }
 
@@ -213,12 +183,15 @@ pub fn add_extension(
         extension.attributes().len()
     );
 
-    storage.insert(extension_key.clone(), ExtensionRecord {
-        mod_id,
-        base,
-        extension_key,
-        extension,
-    });
+    storage.insert(
+        extension_key.clone(),
+        ExtensionRecord {
+            mod_id,
+            base,
+            extension_key,
+            extension,
+        },
+    );
 
     Ok(())
 }
@@ -233,8 +206,7 @@ fn extract_entity_type_from_base(base: &str) -> anyhow::Result<LegacyEntityType>
     }
 
     let type_str = parts[1];
-    LegacyEntityType::from_str(type_str)
-        .map_err(|_| anyhow::anyhow!("Unknown entity type '{}' in base '{}'", type_str, base))
+    LegacyEntityType::from_str(type_str).map_err(|_| anyhow::anyhow!("Unknown entity type '{}' in base '{}'", type_str, base))
 }
 
 pub fn get_extension(extension_key: &str) -> Option<ExtensionRecord> {
@@ -257,10 +229,7 @@ pub fn get_entity_tags(extension_key: &str) -> anyhow::Result<Vec<String>> {
     }
 }
 
-pub fn get_entity_attribute(
-    extension_key: &str,
-    attribute_key: &str,
-) -> anyhow::Result<Option<String>> {
+pub fn get_entity_attribute(extension_key: &str, attribute_key: &str) -> anyhow::Result<Option<String>> {
     match get_extension(extension_key) {
         Some(record) => Ok(record.extension.attributes().get(attribute_key).cloned()),
         None => Ok(None),
@@ -276,7 +245,8 @@ pub fn entity_has_tag(extension_key: &str, tag: &str) -> anyhow::Result<bool> {
 
 pub fn list_extensions_with_tag(tag: &str) -> Vec<String> {
     let storage = EXTENSION_STORAGE.lock().unwrap();
-    storage.iter()
+    storage
+        .iter()
         .filter(|(_, record)| record.extension.tags().contains(&tag.to_string()))
         .map(|(key, _)| key.clone())
         .collect()
@@ -301,18 +271,18 @@ impl ExtensionRegistry {
 /// Maps vtable addresses to entity types for runtime entity type detection
 static VTABLE_TO_ENTITY_TYPE: &[(&str, LegacyEntityType)] = &[
     ("0x6303f4", LegacyEntityType::Scenery),  // Scenery
-    ("0x6307e4", LegacyEntityType::Building),  // Building
-    ("0x630268", LegacyEntityType::Animal),    // Animal
-    ("0x62e330", LegacyEntityType::Guest),     // Guest
-    ("0x63034c", LegacyEntityType::Fence),     // Fence
-    ("0x630544", LegacyEntityType::Food),      // Food
-    ("0x63049c", LegacyEntityType::Path),      // Path
-    ("0x6305ec", LegacyEntityType::Wall),      // TankWall
-    ("0x630694", LegacyEntityType::Wall),      // TankFilter
-    ("0x62e7d8", LegacyEntityType::Staff),     // Keeper
-    ("0x62e704", LegacyEntityType::Staff),     // MaintenanceWorker
-    ("0x62e980", LegacyEntityType::Staff),     // DRT
-    ("0x62e8ac", LegacyEntityType::Staff),     // TourGuide
+    ("0x6307e4", LegacyEntityType::Building), // Building
+    ("0x630268", LegacyEntityType::Animal),   // Animal
+    ("0x62e330", LegacyEntityType::Guest),    // Guest
+    ("0x63034c", LegacyEntityType::Fence),    // Fence
+    ("0x630544", LegacyEntityType::Food),     // Food
+    ("0x63049c", LegacyEntityType::Path),     // Path
+    ("0x6305ec", LegacyEntityType::Wall),     // TankWall
+    ("0x630694", LegacyEntityType::Wall),     // TankFilter
+    ("0x62e7d8", LegacyEntityType::Staff),    // Keeper
+    ("0x62e704", LegacyEntityType::Staff),    // MaintenanceWorker
+    ("0x62e980", LegacyEntityType::Staff),    // DRT
+    ("0x62e8ac", LegacyEntityType::Staff),    // TourGuide
     ("0x62e1e8", LegacyEntityType::Scenery),  // Ambient
     ("0x63073c", LegacyEntityType::Scenery),  // Rubble
 ];
@@ -320,9 +290,7 @@ static VTABLE_TO_ENTITY_TYPE: &[(&str, LegacyEntityType)] = &[
 /// Guess entity type from vtable address
 fn guess_entity_type_from_vtable(vtable: u32) -> Option<LegacyEntityType> {
     let vtable_str = format!("{:#x}", vtable);
-    VTABLE_TO_ENTITY_TYPE.iter()
-        .find(|(vt, _)| *vt == vtable_str)
-        .map(|(_, et)| *et)
+    VTABLE_TO_ENTITY_TYPE.iter().find(|(vt, _)| *vt == vtable_str).map(|(_, et)| *et)
 }
 
 /// Get the base string (e.g., "legacy.scenery.statue") for an in-game entity

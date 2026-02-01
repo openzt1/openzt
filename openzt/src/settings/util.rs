@@ -37,7 +37,7 @@ impl<T> Setting<T> {
             Address::Indirect(base, offset) => get_from_memory::<u32>(base) + offset,
         };
         get_from_memory::<T>(address)
-    } 
+    }
 }
 
 impl Setting<bool> {
@@ -69,13 +69,12 @@ impl GettableSettable for Setting<bool> {
     fn get(&self) -> String {
         self.read().to_string()
     }
-    
+
     fn set(&self, value: &str) -> Result<(), String> {
         self.write(match value {
             "true" | "1" => true,
             "false" | "0" => false,
             _ => return Err("Invalid value for bool setting".to_string()),
-            
         });
         Ok(())
     }
@@ -93,13 +92,13 @@ impl GettableSettable for Setting<i32> {
     fn get(&self) -> String {
         self.read().to_string()
     }
-    
+
     fn set(&self, value: &str) -> Result<(), String> {
         match value.to_owned().parse() {
-            Ok(v) => { 
+            Ok(v) => {
                 self.write(v);
                 Ok(())
-            },
+            }
             Err(_) => Err("Invalid value for i32 setting".to_string()),
         }
     }

@@ -1,4 +1,4 @@
-use super::util::{Address, Setting, GettableSettable};
+use super::util::{Address, GettableSettable, Setting};
 
 pub const EXE_LOCATION_ADDRESS: u32 = 0x0064BEDC;
 pub const EXE_LOCATION_ADDRESS_2: u32 = 0x0064BED8;
@@ -56,7 +56,6 @@ const DELTA_LOG_1: Setting<bool> = Setting {
 // drawfps=1           // ZTApp + 0x509  // 004bc707
 // drawfpsx=720        // ZTApp + 0x50c  // 004bc7b0
 // drawfpsy=20         // ZTApp + 0x510  // 004bc854
-
 
 // #[derive(Debug)]
 // pub struct DebugSettings {

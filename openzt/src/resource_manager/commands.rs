@@ -15,7 +15,7 @@ pub fn init_commands() {
     lua_fn!("list_resources", "Lists all BF resource directories and files", "list_resources()", || {
         match command_list_resources(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -23,96 +23,128 @@ pub fn init_commands() {
     lua_fn!("get_bfresourcemgr", "Returns BF resource manager details", "get_bfresourcemgr()", || {
         match command_get_bf_resource_mgr(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
     // list_resource_strings([prefix]) - optional string arg
-    lua_fn!("list_resource_strings", "Lists resource strings, optionally filtered by prefix", "list_resource_strings([prefix])", |prefix: Option<String>| {
-        match prefix {
-            Some(p) => {
-                match command_list_resource_strings(vec![&p]) {
+    lua_fn!(
+        "list_resource_strings",
+        "Lists resource strings, optionally filtered by prefix",
+        "list_resource_strings([prefix])",
+        |prefix: Option<String>| {
+            match prefix {
+                Some(p) => match command_list_resource_strings(vec![&p]) {
                     Ok(result) => Ok((Some(result), None::<String>)),
-                    Err(e) => Ok((None::<String>, Some(e.to_string())))
-                }
-            },
-            None => {
-                match command_list_resource_strings(vec![]) {
+                    Err(e) => Ok((None::<String>, Some(e.to_string()))),
+                },
+                None => match command_list_resource_strings(vec![]) {
                     Ok(result) => Ok((Some(result), None::<String>)),
-                    Err(e) => Ok((None::<String>, Some(e.to_string())))
-                }
+                    Err(e) => Ok((None::<String>, Some(e.to_string()))),
+                },
             }
         }
-    });
+    );
 
     // list_openzt_resource_strings() - no args
-    lua_fn!("list_openzt_resource_strings", "Lists all OpenZT resource strings", "list_openzt_resource_strings()", || {
-        match command_list_openzt_resource_strings(vec![]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+    lua_fn!(
+        "list_openzt_resource_strings",
+        "Lists all OpenZT resource strings",
+        "list_openzt_resource_strings()",
+        || {
+            match command_list_openzt_resource_strings(vec![]) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 
     // list_openzt_mods() - no args
     lua_fn!("list_openzt_mods", "Lists all OpenZT mod IDs", "list_openzt_mods()", || {
         match command_list_openzt_mod_ids(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
     // list_openzt_locations_habitats() - no args
-    lua_fn!("list_openzt_locations_habitats", "Lists all OpenZT location and habitat IDs", "list_openzt_locations_habitats()", || {
-        match command_list_openzt_locations_habitats(vec![]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+    lua_fn!(
+        "list_openzt_locations_habitats",
+        "Lists all OpenZT location and habitat IDs",
+        "list_openzt_locations_habitats()",
+        || {
+            match command_list_openzt_locations_habitats(vec![]) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 
     // unload_resources() - no args
     lua_fn!("unload_resources", "Unload all loaded resources to free memory", "unload_resources()", || {
         let UnloadResult { count, total_size } = unload_all_resources();
-        Ok((Some(format!(
-            "Unloaded {} resources (freed {} bytes, {} MB)",
-            count,
-            total_size,
-            total_size / (1024 * 1024)
-        )), None::<String>))
+        Ok((
+            Some(format!(
+                "Unloaded {} resources (freed {} bytes, {} MB)",
+                count,
+                total_size,
+                total_size / (1024 * 1024)
+            )),
+            None::<String>,
+        ))
     });
 
     // cache_stats() - no args
     lua_fn!("cache_stats", "Show resource cache statistics", "cache_stats()", || {
         let stats = get_cache_stats();
-        Ok((Some(format!(
-            "Loaded: {} resources\nMemory: {} MB ({} bytes)",
-            stats.loaded_resources, stats.total_memory_mb, stats.total_memory_bytes
-        )), None::<String>))
+        Ok((
+            Some(format!(
+                "Loaded: {} resources\nMemory: {} MB ({} bytes)",
+                stats.loaded_resources, stats.total_memory_mb, stats.total_memory_bytes
+            )),
+            None::<String>,
+        ))
     });
 
     // increment_ref(file_name) - string arg
-    lua_fn!("increment_ref", "Increment reference count for a resource", "increment_ref(file_name)", |file_name: String| {
-        if increment_ref(&file_name) {
-            Ok((Some(format!("Incremented ref count for: {}", file_name)), None::<String>))
-        } else {
-            Ok((None::<String>, Some(format!("Resource not found: {}", file_name))))
+    lua_fn!(
+        "increment_ref",
+        "Increment reference count for a resource",
+        "increment_ref(file_name)",
+        |file_name: String| {
+            if increment_ref(&file_name) {
+                Ok((Some(format!("Incremented ref count for: {}", file_name)), None::<String>))
+            } else {
+                Ok((None::<String>, Some(format!("Resource not found: {}", file_name))))
+            }
         }
-    });
+    );
 
     // decrement_ref(file_name) - string arg
-    lua_fn!("decrement_ref", "Decrement reference count for a resource", "decrement_ref(file_name)", |file_name: String| {
-        match decrement_ref(&file_name) {
-            Some(new_count) => Ok((Some(format!("Decremented ref count for: {} (new count: {})", file_name, new_count)), None::<String>)),
-            None => Ok((None::<String>, Some(format!("Resource not found: {}", file_name)))),
+    lua_fn!(
+        "decrement_ref",
+        "Decrement reference count for a resource",
+        "decrement_ref(file_name)",
+        |file_name: String| {
+            match decrement_ref(&file_name) {
+                Some(new_count) => Ok((Some(format!("Decremented ref count for: {} (new count: {})", file_name, new_count)), None::<String>)),
+                None => Ok((None::<String>, Some(format!("Resource not found: {}", file_name)))),
+            }
         }
-    });
+    );
 
     // get_ref_count(file_name) - string arg
-    lua_fn!("get_ref_count", "Get reference count for a resource", "get_ref_count(file_name)", |file_name: String| {
-        match get_ref_count(&file_name) {
-            Some(count) => Ok((Some(format!("Ref count for {}: {}", file_name, count)), None::<String>)),
-            None => Ok((None::<String>, Some(format!("Resource not found: {}", file_name)))),
+    lua_fn!(
+        "get_ref_count",
+        "Get reference count for a resource",
+        "get_ref_count(file_name)",
+        |file_name: String| {
+            match get_ref_count(&file_name) {
+                Some(count) => Ok((Some(format!("Ref count for {}: {}", file_name, count)), None::<String>)),
+                None => Ok((None::<String>, Some(format!("Resource not found: {}", file_name)))),
+            }
         }
-    });
+    );
 }
 
 fn command_list_resource_strings(args: Vec<&str>) -> Result<String, CommandError> {
@@ -144,11 +176,7 @@ fn command_list_resources(_args: Vec<&str>) -> Result<String, CommandError> {
     let bf_resource_dir_contents = read_bf_resource_dir_contents_from_memory();
     for bf_resource_dir_content in bf_resource_dir_contents {
         let bf_resource_dir = bf_resource_dir_content.dir;
-        result_string.push_str(&format!(
-            "{} ({})\n",
-            bf_resource_dir.dir_name.copy_to_string(),
-            bf_resource_dir.num_child_files,
-        ));
+        result_string.push_str(&format!("{} ({})\n", bf_resource_dir.dir_name.copy_to_string(), bf_resource_dir.num_child_files,));
         let bf_resource_zips = bf_resource_dir_content.zips;
         for bf_resource_zip in bf_resource_zips {
             result_string.push_str(&format!("{}\n", bf_resource_zip.zip_name.copy_to_string()));

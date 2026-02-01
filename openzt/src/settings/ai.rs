@@ -1,5 +1,4 @@
-use super::util::{Address, Setting, GettableSettable};
-
+use super::util::{Address, GettableSettable, Setting};
 
 const ZTAIMGR_ADDRESS_PTR: u32 = 0x00638098;
 

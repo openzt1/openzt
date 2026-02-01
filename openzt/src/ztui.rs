@@ -1,7 +1,7 @@
 use std::fmt;
 
-use openzt_detour::gen::ztui_general::GET_SELECTED_ENTITY;
 use openzt_detour::gen::bfuimgr::GET_ELEMENT_0;
+use openzt_detour::gen::ztui_general::GET_SELECTED_ENTITY;
 use tracing::info;
 
 use crate::{
@@ -98,19 +98,24 @@ const RANDOM_SEX_STRING_PTR: u32 = 0x0063e420;
 
 pub fn init() {
     // get_selected_entity() - no args
-    lua_fn!("get_selected_entity", "Returns details of the currently selected entity", "get_selected_entity()", || {
-        match command_get_selected_entity(vec![]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+    lua_fn!(
+        "get_selected_entity",
+        "Returns details of the currently selected entity",
+        "get_selected_entity()",
+        || {
+            match command_get_selected_entity(vec![]) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 
     // get_element(id) - single u32 arg
     lua_fn!("get_element", "Returns UI element details by ID", "get_element(id)", |id: u32| {
         let id_str = id.to_string();
         match command_get_element(vec![&id_str]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -118,7 +123,7 @@ pub fn init() {
     lua_fn!("get_buy_tab", "Returns the currently active buy tab", "get_buy_tab()", || {
         match command_get_current_buy_tab(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 
@@ -126,7 +131,7 @@ pub fn init() {
     lua_fn!("ui", "Calls a UI callback function", "ui(callback_name)", |callback: String| {
         match command_call_ui_callback(vec![&callback]) {
             Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string())))
+            Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
 }
@@ -349,14 +354,10 @@ fn command_call_ui_callback(args: Vec<&str>) -> Result<String, CommandError> {
         return Err(Into::into("Expected 1 argument"));
     }
     let callback_function = match args[0] {
-        "click_continue" => {
-            unsafe {
-                openzt_detour::gen::ztui::CLICK_CONTINUE.original()
-            }
-        },
+        "click_continue" => unsafe { openzt_detour::gen::ztui::CLICK_CONTINUE.original() },
         "list" => {
             return Ok("click_continue".to_string());
-        },
+        }
         _ => return Err(Into::into("Unknown UI callback")),
     };
     unsafe {

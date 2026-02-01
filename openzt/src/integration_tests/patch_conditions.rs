@@ -1,22 +1,21 @@
 //! Integration tests for `ztd_loaded` and `entity_exists` patch conditions.
 
-use crate::mods::{ErrorHandling, Patch, PatchMeta, SetKeyPatch, PatchCondition};
+use super::TestResult;
+use crate::mods::{ErrorHandling, Patch, PatchCondition, PatchMeta, SetKeyPatch};
 use crate::resource_manager::{
     lazyresourcemap::{add_ztfile, get_file, remove_resource},
+    openzt_mods::legacy_attributes::{add_legacy_entity, LegacyEntityAttributes, LegacyEntityType, SubtypeAttributes},
     openzt_mods::patches::apply_patches,
     openzt_mods::ztd_registry::{self, ZtdLoadStatus},
-    openzt_mods::legacy_attributes::{add_legacy_entity, LegacyEntityAttributes, SubtypeAttributes, LegacyEntityType},
     ztfile::{ZTFile, ZTFileType},
 };
 use std::path::Path;
-use super::TestResult;
 
 /// Helper function to create a test INI file in the resource system
 fn create_test_ini_file(path: &str, content: &str) -> anyhow::Result<()> {
     let content_len = content.len() as u32;
     let c_string = std::ffi::CString::new(content)?;
-    let file_type = ZTFileType::try_from(Path::new(path))
-        .map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(path)).map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
     let ztfile = ZTFile::Text(c_string, file_type, content_len);
     add_ztfile(Path::new(""), path.to_string(), ztfile)?;
     Ok(())
@@ -24,8 +23,7 @@ fn create_test_ini_file(path: &str, content: &str) -> anyhow::Result<()> {
 
 /// Helper function to read a file from the resource system as string
 fn read_test_file(path: &str) -> anyhow::Result<String> {
-    let (_filename, data) = get_file(path)
-        .ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
+    let (_filename, data) = get_file(path).ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
     Ok(String::from_utf8_lossy(&data).to_string())
 }
 
@@ -343,7 +341,7 @@ fn test_ztd_loaded_case_insensitive() -> TestResult {
                 mod_loaded: None,
                 key_exists: None,
                 value_equals: None,
-                ztd_loaded: Some("mymod.ztd".to_string()),  // lowercase
+                ztd_loaded: Some("mymod.ztd".to_string()), // lowercase
                 entity_exists: None,
             }),
         }),
@@ -457,7 +455,7 @@ fn test_entity_exists_skips_when_entity_not_exists() -> TestResult {
                 key_exists: None,
                 value_equals: None,
                 ztd_loaded: None,
-                entity_exists: Some("legacy.animals.dragon".to_string()),  // doesn't exist
+                entity_exists: Some("legacy.animals.dragon".to_string()), // doesn't exist
             }),
         }),
     );
@@ -583,7 +581,7 @@ fn test_entity_exists_case_insensitive() -> TestResult {
                 key_exists: None,
                 value_equals: None,
                 ztd_loaded: None,
-                entity_exists: Some("legacy.animals.elephant".to_string()),  // lowercase
+                entity_exists: Some("legacy.animals.elephant".to_string()), // lowercase
             }),
         }),
     );
@@ -613,11 +611,7 @@ fn test_entity_exists_invalid_format() -> TestResult {
     let test_file = "test_entity_invalid_format.ini";
 
     // Test various invalid formats
-    let invalid_formats = [
-        "invalid",
-        "legacy.",
-        "legacy.animals",
-    ];
+    let invalid_formats = ["invalid", "legacy.", "legacy.animals"];
 
     let mut all_passed = true;
     let mut error_msg = String::new();
@@ -708,7 +702,7 @@ fn test_entity_exists_invalid_entity_type() -> TestResult {
                 key_exists: None,
                 value_equals: None,
                 ztd_loaded: None,
-                entity_exists: Some("legacy.dragons.elephant".to_string()),  // invalid entity type
+                entity_exists: Some("legacy.dragons.elephant".to_string()), // invalid entity type
             }),
         }),
     );
@@ -828,8 +822,8 @@ fn test_combined_ztd_loaded_fails_blocks_patch() -> TestResult {
                 mod_loaded: None,
                 key_exists: None,
                 value_equals: None,
-                ztd_loaded: Some("base.ztd".to_string()),  // fails
-                entity_exists: Some("legacy.animals.elephant".to_string()),  // passes
+                ztd_loaded: Some("base.ztd".to_string()),                   // fails
+                entity_exists: Some("legacy.animals.elephant".to_string()), // passes
             }),
         }),
     );
@@ -886,8 +880,8 @@ fn test_combined_entity_exists_fails_blocks_patch() -> TestResult {
                 mod_loaded: None,
                 key_exists: None,
                 value_equals: None,
-                ztd_loaded: Some("base.ztd".to_string()),  // passes
-                entity_exists: Some("legacy.animals.dragon".to_string()),  // fails
+                ztd_loaded: Some("base.ztd".to_string()),                 // passes
+                entity_exists: Some("legacy.animals.dragon".to_string()), // fails
             }),
         }),
     );

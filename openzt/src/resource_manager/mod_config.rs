@@ -1,6 +1,6 @@
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use indexmap::IndexMap;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use tracing::info;
@@ -22,7 +22,6 @@ pub fn init_logging(config: &LoggingConfig) -> anyhow::Result<()> {
     let level_filter = config.level.to_level_filter();
     #[cfg(feature = "integration-tests")]
     let level_filter = LevelFilter::TRACE; // Force TRACE level for integration tests
-
 
     #[cfg(not(feature = "integration-tests"))]
     let log_to_file = config.log_to_file;
@@ -53,10 +52,7 @@ pub fn init_logging(config: &LoggingConfig) -> anyhow::Result<()> {
                     .with_filter(level_filter);
 
                 // Initialize with both console and file layers
-                tracing_subscriber::registry()
-                    .with(console_layer)
-                    .with(file_layer)
-                    .init();
+                tracing_subscriber::registry().with(console_layer).with(file_layer).init();
 
                 // Store guard to prevent it from being dropped
                 // Note: We need to leak this guard to keep file logging active
@@ -66,9 +62,7 @@ pub fn init_logging(config: &LoggingConfig) -> anyhow::Result<()> {
             }
             Err(e) => {
                 // Fall back to console-only if file creation fails
-                tracing_subscriber::registry()
-                    .with(console_layer)
-                    .init();
+                tracing_subscriber::registry().with(console_layer).init();
 
                 eprintln!("Failed to create openzt.log: {}", e);
                 eprintln!("Logging initialized: level={:?}, console only", config.level);
@@ -76,9 +70,7 @@ pub fn init_logging(config: &LoggingConfig) -> anyhow::Result<()> {
         }
     } else {
         // Console-only logging
-        tracing_subscriber::registry()
-            .with(console_layer)
-            .init();
+        tracing_subscriber::registry().with(console_layer).init();
 
         eprintln!("Logging initialized: level={:?}, console only", config.level);
     }
@@ -157,7 +149,6 @@ impl LogLevel {
         }
     }
 }
-
 
 /// Logging configuration section
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -276,16 +267,12 @@ impl Default for ResourceCacheConfig {
 
 impl Default for ExpansionConfig {
     fn default() -> Self {
-        ExpansionConfig {
-            custom: IndexMap::new(),
-        }
+        ExpansionConfig { custom: IndexMap::new() }
     }
 }
 
 // Global cached configuration
-static CACHED_CONFIG: LazyLock<Mutex<OpenZTConfig>> = LazyLock::new(|| {
-    Mutex::new(load_openzt_config_from_disk())
-});
+static CACHED_CONFIG: LazyLock<Mutex<OpenZTConfig>> = LazyLock::new(|| Mutex::new(load_openzt_config_from_disk()));
 
 /// Load OpenZT configuration from openzt.toml
 ///
@@ -348,8 +335,13 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                     // No field-level validation needed for expansions since it's a free-form HashMap
 
                     // Update needed if sections missing or fields incomplete
-                    !has_mod_loading || !has_logging || !has_resource_cache || !has_expansions
-                        || !mod_loading_complete || !logging_complete || !resource_cache_complete
+                    !has_mod_loading
+                        || !has_logging
+                        || !has_resource_cache
+                        || !has_expansions
+                        || !mod_loading_complete
+                        || !logging_complete
+                        || !resource_cache_complete
                 }
                 Err(_) => false, // If we can't parse as Value, the full parse will fail below
             };
@@ -418,8 +410,7 @@ pub fn save_openzt_config(config: &OpenZTConfig, skip_cache_update: bool) -> any
     let temp_path = get_temp_config_path();
 
     // Serialize with pretty formatting
-    let toml_string = toml::to_string_pretty(config)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
+    let toml_string = toml::to_string_pretty(config).map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
 
     // Build the content with header comment
     let mut content = format!(
@@ -453,20 +444,11 @@ pub fn save_openzt_config(config: &OpenZTConfig, skip_cache_update: bool) -> any
         content.push_str(expansions_comment);
     }
 
-    // Add inline comment to disabled field to indicate it can disable vanilla ZTDs
-    // Only when empty (similar to expansions section behavior)
-    content = content.replace(
-        "disabled = []",
-        "disabled = [] # Can also be used to disable vanilla ZTD mods (e.g., \"legacy_expansion.ztd\")"
-    );
-
     // Write to temp file
-    std::fs::write(&temp_path, content)
-        .map_err(|e| anyhow::anyhow!("Failed to write temp config: {}", e))?;
+    std::fs::write(&temp_path, content).map_err(|e| anyhow::anyhow!("Failed to write temp config: {}", e))?;
 
     // Atomic rename (overwrites existing on Windows)
-    std::fs::rename(&temp_path, &config_path)
-        .map_err(|e| anyhow::anyhow!("Failed to rename temp config: {}", e))?;
+    std::fs::rename(&temp_path, &config_path).map_err(|e| anyhow::anyhow!("Failed to rename temp config: {}", e))?;
 
     info!("Updated openzt.toml with new configuration");
 
@@ -507,11 +489,7 @@ mod tests {
     #[test]
     fn test_serialize_deserialize() {
         let mut config = OpenZTConfig::default();
-        config.mod_loading.order = vec![
-            "mod_a".to_string(),
-            "mod_b".to_string(),
-            "mod_c".to_string(),
-        ];
+        config.mod_loading.order = vec!["mod_a".to_string(), "mod_b".to_string(), "mod_c".to_string()];
         config.mod_loading.disabled = vec!["disabled_mod".to_string()];
 
         let toml_str = toml::to_string(&config).unwrap();
@@ -550,19 +528,19 @@ mod tests {
     #[test]
     fn test_log_level_deserialization() {
         // Test that lowercase strings deserialize to LogLevel
-        let trace_config: LoggingConfig = toml::from_str("enabled = true\nlevel = \"trace\"").unwrap();
+        let trace_config: LoggingConfig = toml::from_str("log_to_file = true\nlevel = \"trace\"").unwrap();
         assert_eq!(trace_config.level, LogLevel::Trace);
 
-        let debug_config: LoggingConfig = toml::from_str("enabled = true\nlevel = \"debug\"").unwrap();
+        let debug_config: LoggingConfig = toml::from_str("log_to_file = true\nlevel = \"debug\"").unwrap();
         assert_eq!(debug_config.level, LogLevel::Debug);
 
-        let info_config: LoggingConfig = toml::from_str("enabled = true\nlevel = \"info\"").unwrap();
+        let info_config: LoggingConfig = toml::from_str("log_to_file = true\nlevel = \"info\"").unwrap();
         assert_eq!(info_config.level, LogLevel::Info);
 
-        let warn_config: LoggingConfig = toml::from_str("enabled = true\nlevel = \"warn\"").unwrap();
+        let warn_config: LoggingConfig = toml::from_str("log_to_file = true\nlevel = \"warn\"").unwrap();
         assert_eq!(warn_config.level, LogLevel::Warn);
 
-        let error_config: LoggingConfig = toml::from_str("enabled = true\nlevel = \"error\"").unwrap();
+        let error_config: LoggingConfig = toml::from_str("log_to_file = true\nlevel = \"error\"").unwrap();
         assert_eq!(error_config.level, LogLevel::Error);
     }
 

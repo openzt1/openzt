@@ -98,16 +98,12 @@ pub mod scripting;
 #[cfg(feature = "reimplementation-tests")]
 pub mod reimplementation_tests;
 
-/// Integration tests for patch system (requires game environment)
-#[cfg(feature = "patch-integration-tests")]
-pub mod patch_integration_tests;
-
 /// Integration tests that run via detours in live game (for CI)
 #[cfg(feature = "integration-tests")]
 pub mod integration_tests;
 
 #[cfg(target_os = "windows")]
-use windows::Win32::System::{Console::{AllocConsole, FreeConsole}};
+use windows::Win32::System::Console::{AllocConsole, FreeConsole};
 
 #[cfg(target_os = "windows")]
 use openzt_detour_macro::detour_mod;
@@ -138,7 +134,7 @@ mod zoo_init {
                 }
 
                 info!("OpenZT initialization starting");
-            },
+            }
             Err(e) => {
                 eprintln!("Failed to initialize console: {}", e);
                 return 0; // Return 0 to indicate failure
@@ -198,11 +194,11 @@ pub fn init() {
 
 #[cfg(target_os = "windows")]
 fn init_console() -> windows::core::Result<()> {
-        // Free the current console
-        unsafe { FreeConsole()? };
+    // Free the current console
+    unsafe { FreeConsole()? };
 
-        // Allocate a new console
-        unsafe { AllocConsole()? };
+    // Allocate a new console
+    unsafe { AllocConsole()? };
 
-        Ok(())
+    Ok(())
 }

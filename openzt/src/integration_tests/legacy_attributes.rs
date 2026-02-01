@@ -41,8 +41,7 @@ pub fn load_test_legacy_files() -> anyhow::Result<()> {
     let add_file = |path: &str, content: &str| -> anyhow::Result<()> {
         let content_len = content.len() as u32;
         let c_string = std::ffi::CString::new(content)?;
-        let file_type = ZTFileType::try_from(Path::new(path))
-            .map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
+        let file_type = ZTFileType::try_from(Path::new(path)).map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
         let ztfile = ZTFile::Text(c_string, file_type, content_len);
         add_ztfile(Path::new(""), path.to_string(), ztfile)?;
         Ok(())
@@ -74,8 +73,7 @@ pub fn load_test_legacy_files() -> anyhow::Result<()> {
 fn create_test_ini_file(path: &str, content: &str) -> anyhow::Result<()> {
     let content_len = content.len() as u32;
     let c_string = std::ffi::CString::new(content)?;
-    let file_type = ZTFileType::try_from(Path::new(path))
-        .map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
+    let file_type = ZTFileType::try_from(Path::new(path)).map_err(|e| anyhow::anyhow!("Invalid file type: {}", e))?;
     let ztfile = ZTFile::Text(c_string, file_type, content_len);
     add_ztfile(Path::new(""), path.to_string(), ztfile)?;
     Ok(())
@@ -83,8 +81,7 @@ fn create_test_ini_file(path: &str, content: &str) -> anyhow::Result<()> {
 
 /// Helper function to read a file from the resource system as string
 fn read_test_file(path: &str) -> anyhow::Result<String> {
-    let (_filename, data) = get_file(path)
-        .ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
+    let (_filename, data) = get_file(path).ok_or_else(|| anyhow::anyhow!("File '{}' not found", path))?;
     Ok(String::from_utf8_lossy(&data).to_string())
 }
 
@@ -602,7 +599,10 @@ fn test_patch_multiple_legacy_variables() -> TestResult {
             if has_animal && has_building {
                 TestResult::pass(test_name)
             } else {
-                TestResult::fail(test_name, format!("Missing values. has_animal={}, has_building={}. Content: {}", has_animal, has_building, content))
+                TestResult::fail(
+                    test_name,
+                    format!("Missing values. has_animal={}, has_building={}. Content: {}", has_animal, has_building, content),
+                )
             }
         }
         Err(e) => {

@@ -20,9 +20,7 @@ static SYSTEM_ENCODING: LazyLock<&'static Encoding> = LazyLock::new(|| {
 /// to support all 256 possible byte values in the system's code page.
 ///
 /// Generated at runtime based on the detected system code page.
-pub static LOWERCASE_TABLE: LazyLock<[u8; 256]> = LazyLock::new(|| {
-    generate_lowercase_table()
-});
+pub static LOWERCASE_TABLE: LazyLock<[u8; 256]> = LazyLock::new(|| generate_lowercase_table());
 
 /// Get the memory address of the lowercase lookup table
 ///
@@ -162,11 +160,7 @@ pub fn generate_lowercase_table_for_encoding(encoding: &'static Encoding) -> [u8
         let lowercase = decoded.to_lowercase();
         let (encoded, _, _) = encoding.encode(&lowercase);
 
-        table[byte_value as usize] = if encoded.len() == 1 {
-            encoded[0]
-        } else {
-            byte_value
-        };
+        table[byte_value as usize] = if encoded.len() == 1 { encoded[0] } else { byte_value };
     }
 
     table

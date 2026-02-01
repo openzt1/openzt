@@ -228,7 +228,6 @@ IF DEFINED WAIT_FLAG (
         echo.
         echo ============================================================
         echo Full logs available at:
-        echo   "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt_integration_tests.log"
         echo   "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt.log"
         echo ============================================================
         echo.
