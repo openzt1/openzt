@@ -270,7 +270,7 @@ fn handle_ztd(resource: &Path, disabled_ztds: &[String]) -> anyhow::Result<i32> 
     }
 
     // Add span for legacy loading - provides archive context for any errors
-    let span = tracing::info_span!("handle_ztd", archive_name = %ztd_filename, disabled = is_disabled);
+    let span = tracing::error_span!("handle_ztd", archive_name = %ztd_filename, disabled = is_disabled);
     let _guard = span.enter();
 
     let archive = Arc::new(Mutex::new(zip));
@@ -343,7 +343,7 @@ fn handle_ztd_with_status(resource: &Path, is_disabled: bool) -> anyhow::Result<
     let status = if is_disabled { ZtdLoadStatus::Disabled } else { ZtdLoadStatus::Enabled };
     crate::resource_manager::openzt_mods::ztd_registry::register_ztd(&ztd_filename, status);
 
-    let span = tracing::info_span!("handle_ztd_with_status", archive_name = %ztd_filename, disabled = is_disabled);
+    let span = tracing::error_span!("handle_ztd_with_status", archive_name = %ztd_filename, disabled = is_disabled);
     let _guard = span.enter();
 
     if is_disabled {
