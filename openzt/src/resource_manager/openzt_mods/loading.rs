@@ -118,7 +118,7 @@ pub fn discover_mods(paths: &[String]) -> DiscoveryResult {
 
                     // Skip if we already found this mod (earlier paths take precedence)
                     result.openzt_mods.entry(mod_id.clone()).or_insert_with(|| {
-                        let span = tracing::info_span!(
+                        let span = tracing::error_span!(
                             "discover_mod",
                             archive_path = %file_path.display().to_string(),
                             mod_id = %mod_id,
@@ -160,7 +160,7 @@ fn read_meta_from_archive(archive_path: &Path) -> anyhow::Result<Option<mods::Me
     use crate::resource_manager::ztd::ZtdArchive;
 
     let archive_path_str = archive_path.display().to_string();
-    let span = tracing::info_span!("read_meta_from_archive", archive_path = %archive_path_str);
+    let span = tracing::error_span!("read_meta_from_archive", archive_path = %archive_path_str);
     let _guard = span.enter();
 
     let mut archive = ZtdArchive::new(archive_path).with_context(|| format!("Failed to open archive: {:?}", archive_path))?;
@@ -259,7 +259,7 @@ fn load_open_zt_mod_internal(file_map: HashMap<String, Box<[u8]>>, archive_name:
 
     // Create span for the entire loading process
     let mod_name = meta.name().to_string();
-    let span = tracing::info_span!(
+    let span = tracing::error_span!(
         "load_openzt_mod",
         mod_id = %mod_id,
         mod_name = %mod_name,
@@ -412,7 +412,7 @@ impl fmt::Display for ResourceType {
 
 /// Parse a definition file from TOML without side effects
 pub fn parse_def(mod_id: &str, file_name: &str, file_map: &HashMap<String, Box<[u8]>>) -> anyhow::Result<mods::ModDefinition> {
-    let span = tracing::info_span!("parse_def", mod_id = %mod_id, file_name = %file_name);
+    let span = tracing::error_span!("parse_def", mod_id = %mod_id, file_name = %file_name);
     let _guard = span.enter();
 
     info!("Parsing defs {} from {}", file_name, mod_id);
