@@ -16,14 +16,14 @@ mod zoo_resource_mgr {
     use tracing::{debug, error, info, warn};
 
     use openzt_configparser::ini::Ini;
-    use openzt_detour::gen::bfresource::{ATTEMPT, PREPARE};
-    use openzt_detour::gen::bfresourcemgr::{ADD_PATH, CONSTRUCTOR};
-    use openzt_detour::gen::bfresourceptr::{
+    use openzt_detour::generated::bfresource::{ATTEMPT, PREPARE};
+    use openzt_detour::generated::bfresourcemgr::{ADD_PATH, CONSTRUCTOR};
+    use openzt_detour::generated::bfresourceptr::{
         DELREF_0, DELREF_1, DELREF_10, DELREF_11, DELREF_12, DELREF_13, DELREF_14, DELREF_15, DELREF_16, DELREF_17, DELREF_18, DELREF_19, DELREF_2, DELREF_20,
         DELREF_21, DELREF_22, DELREF_23, DELREF_24, DELREF_25, DELREF_26, DELREF_27, DELREF_28, DELREF_29, DELREF_3, DELREF_4, DELREF_5, DELREF_6, DELREF_7, DELREF_8,
         DELREF_9,
     };
-    use openzt_detour::gen::ztui_general::GET_INFO_IMAGE_NAME;
+    use openzt_detour::generated::ztui_general::GET_INFO_IMAGE_NAME;
 
     use crate::{
         mods,
@@ -159,7 +159,7 @@ mod zoo_resource_mgr {
                 info!("Adding mods directory to BFResourceMgr");
 
                 if let Ok(mods_path) = CString::new("./mods") {
-                    ADD_PATH.original()(this_ptr, mods_path.as_ptr() as u32);
+                    unsafe { ADD_PATH.original()(this_ptr, mods_path.as_ptr() as u32); }
                 }
 
                 paths.insert(0, "./mods".to_owned());

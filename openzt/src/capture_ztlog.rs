@@ -42,7 +42,7 @@ pub fn log_from_zt(source_file: &String, line_number: i32, level: i32, message: 
 #[detour_mod]
 mod zoo_logging {
     use crate::{capture_ztlog::log_from_zt, util::get_string_from_memory};
-    use openzt_detour::gen::bflog::LOG_MESSAGE;
+    use openzt_detour::generated::bflog::LOG_MESSAGE;
 
     #[detour(LOG_MESSAGE)]
     unsafe extern "cdecl" fn zoo_log_func(source_file: u32, line_number: i32, level: i32, _param_4: i8, _param_5: i32, _param_6: i32, log_message: u32) {

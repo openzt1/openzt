@@ -1,7 +1,7 @@
 use std::fmt;
 
-use openzt_detour::gen::bfuimgr::GET_ELEMENT_0;
-use openzt_detour::gen::ztui_general::GET_SELECTED_ENTITY;
+use openzt_detour::generated::bfuimgr::GET_ELEMENT_0;
+use openzt_detour::generated::ztui_general::GET_SELECTED_ENTITY;
 use tracing::info;
 
 use crate::{
@@ -354,7 +354,7 @@ fn command_call_ui_callback(args: Vec<&str>) -> Result<String, CommandError> {
         return Err(Into::into("Expected 1 argument"));
     }
     let callback_function = match args[0] {
-        "click_continue" => unsafe { openzt_detour::gen::ztui::CLICK_CONTINUE.original() },
+        "click_continue" => unsafe { openzt_detour::generated::ztui::CLICK_CONTINUE.original() },
         "list" => {
             return Ok("click_continue".to_string());
         }

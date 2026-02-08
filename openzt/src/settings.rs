@@ -56,7 +56,7 @@ fn command_list_settings(args: Vec<&str>) -> Result<String, CommandError> {
 
 #[detour_mod]
 mod zoo_ini_loading {
-    use openzt_detour::gen::standalone::LOAD_INI_DEBUG_SETTINGS;
+    use openzt_detour::generated::standalone::LOAD_INI_DEBUG_SETTINGS;
     use tracing::info;
 
     #[detour(LOAD_INI_DEBUG_SETTINGS)]

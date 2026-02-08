@@ -656,7 +656,7 @@ macro_rules! shortcut {
     };
 }
 
-use openzt_detour::gen::ztapp::HANDLE_KEY_DOWN;
+use openzt_detour::generated::ztapp::HANDLE_KEY_DOWN;
 use openzt_detour_macro::detour_mod;
 use tracing::info;
 

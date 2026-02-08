@@ -1,15 +1,18 @@
 [package]
 name = "openzt-dll"
-version = "0.1.0"
+version = "0.1.1-alpha"
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 repository.workspace = true
+license.workspace = true
 
 [dependencies]
-openzt = { version = "0.1.0-alpha", path = "../openzt" }
+openzt = { version = "0.1.0", path = "../openzt" }
 tracing = "0.1.44"
 windows = { version = "0.62.2", features = ["Win32_System_SystemServices"] }
+
+[build-dependencies]
+winresource = "0.1"
 
 [lib]
 name = "openzt"
@@ -18,3 +21,4 @@ crate-type = ["cdylib"]
 [features]
 command-console = ["openzt/command-console"]
 integration-tests = ["openzt/integration-tests"]
+release = ["openzt/release"]

@@ -1,6 +1,6 @@
 [package]
 name = "openzt"
-version = "0.1.0-alpha"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
@@ -40,9 +40,6 @@ encoding_rs = "0.8"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Memory", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse"] }
 
-[build-dependencies]
-winresource = "0.1"
-
 [dev-dependencies]
 
 [lib]
@@ -50,9 +47,8 @@ name = "openztlib"
 crate-type = ["lib"]
 
 [features]
-default = ["experimental", "ini", "command-console"]
+default = ["experimental", "command-console"]
 release = []
-ini = []
 capture_ztlog = []
 experimental = []
 reimplementation-tests = ["proptest"]
