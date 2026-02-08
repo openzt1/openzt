@@ -209,8 +209,8 @@ pub mod zoo_ztmapview {
     use crate::util::get_from_memory;
     use crate::ztmapview::{BFTile, ErrorStringId, ZTMapView};
     use crate::ztworldmgr::IVec3;
-    use openzt_detour::gen::bftile::GET_LOCAL_ELEVATION;
-    use openzt_detour::gen::ztmapview::CHECK_TANK_PLACEMENT;
+    use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
+    use openzt_detour::generated::ztmapview::CHECK_TANK_PLACEMENT;
 
     // use crate::{
     //     bfregistry::{add_to_registry, get_from_registry},

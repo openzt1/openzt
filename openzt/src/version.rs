@@ -10,7 +10,7 @@ pub fn init() {
 #[detour_mod]
 mod bf_version_info {
     use crate::util::{get_from_memory, get_string_from_memory, save_string_to_memory, save_to_memory};
-    use openzt_detour::gen::bfversioninfo::GET_VERSION_STRING;
+    use openzt_detour::generated::bfversioninfo::GET_VERSION_STRING;
 
     #[detour(GET_VERSION_STRING)]
     unsafe extern "cdecl" fn bf_version_info_get_version_string_hook(param_1: u32, param_2: u32, param_3: u32) -> u32 {

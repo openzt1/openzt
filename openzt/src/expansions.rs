@@ -357,8 +357,8 @@ impl Display for ExpansionList {
 pub mod custom_expansion {
     use tracing::debug;
     // use openzt_detour::{ZTUI_GENERAL_ENTITY_TYPE_IS_DISPLAYED, ZTUI_EXPANSIONSELECT_SETUP};
-    use openzt_detour::gen::ztui_expansionselect::SETUP;
-    use openzt_detour::gen::ztui_general::ENTITY_TYPE_IS_DISPLAYED;
+    use openzt_detour::generated::ztui_expansionselect::SETUP;
+    use openzt_detour::generated::ztui_general::ENTITY_TYPE_IS_DISPLAYED;
 
     use super::{initialise_expansions, read_current_expansion};
     use crate::{bfentitytype::read_zt_entity_type_from_memory, ztui::get_current_buy_tab};

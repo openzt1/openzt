@@ -241,7 +241,7 @@ fn command_get_zt_habitats(_args: Vec<&str>) -> Result<String, CommandError> {
 #[detour_mod]
 pub mod hooks_zthabitatmgr {
     use super::*;
-    use openzt_detour::gen::zthabitat::GET_GATE_TILE_IN;
+    use openzt_detour::generated::zthabitat::GET_GATE_TILE_IN;
 
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
     #[detour(GET_GATE_TILE_IN)]

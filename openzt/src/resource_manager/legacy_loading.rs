@@ -426,7 +426,7 @@ fn parse_cfg(file_name: &String) -> Vec<String> {
             LegacyCfgType::Animal => parse_simple_cfg(&ini, "animals"), //parse_subtypes_cfg(&ini, "animals"),
             LegacyCfgType::Building => parse_simple_cfg(&ini, "building"),
             LegacyCfgType::Fence => parse_simple_cfg(&ini, "fences"),  //parse_subtypes_cfg(&ini, "fences"),
-            LegacyCfgType::Filter => parse_simple_cfg(&ini, "filter"), //parse_subtypes_cfg(&ini, "filter"),
+            LegacyCfgType::Filter => parse_filters_cfg(&ini), //parse_subtypes_cfg(&ini, "filter"),
             LegacyCfgType::Food => parse_simple_cfg(&ini, "food"),
             LegacyCfgType::Freeform => parse_simple_cfg(&ini, "freeform"),
             // LegacyCfgType::Fringe => Vec::new(),
@@ -474,6 +474,27 @@ fn parse_simple_cfg(file: &Ini, section_name: &str) -> Vec<String> {
     }
     results
 }
+
+fn parse_filters_cfg(file: &Ini) -> Vec<String> {
+    let mut filter_types = Vec::new();
+    if let Some(section) = file.get_map().unwrap_or_default().get("filter") {
+        for (key, _) in section.iter() {
+                filter_types.push(key.clone());
+        }
+    }
+    let mut results = Vec::new();
+    filter_types.iter().for_each(|filter_type| {
+        if let Some(section) = file.get_map().unwrap_or_default().get(filter_type) {
+            for (key, value) in section.iter() {
+                if key == "f" && let Some(value) = value && !value.is_empty() {
+                    results.push(value[0].clone());
+                };
+            }
+        }
+    });
+    results
+}
+
 
 /// Extract entity attributes by loading each .ai file listed in the .cfg
 /// Also extracts subtype information from the .cfg file itself

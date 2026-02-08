@@ -21,8 +21,8 @@ use openzt_detour_macro::detour_mod;
 #[detour_mod]
 pub mod roof_detours {
     use super::*;
-    use openzt_detour::gen::ztmapview::PLACE_ENTITY_ON_MAP_1;
-    use openzt_detour::gen::ztui_gameopts::SAVE_GAME;
+    use openzt_detour::generated::ztmapview::PLACE_ENTITY_ON_MAP_1;
+    use openzt_detour::generated::ztui_gameopts::SAVE_GAME;
 
     /// Detour for PLACE_ENTITY_ON_MAP_1
     ///
@@ -31,7 +31,7 @@ pub mod roof_detours {
     #[detour(PLACE_ENTITY_ON_MAP_1)]
     unsafe extern "thiscall" fn place_entity_on_map_detour(_this: u32, entity_ptr: u32, _pos: f32, _rotation: i32) -> u32 {
         // Call the original function first to place the entity
-        let result = PLACE_ENTITY_ON_MAP_1_DETOUR.call(_this, entity_ptr, _pos, _rotation);
+        let result = unsafe { PLACE_ENTITY_ON_MAP_1_DETOUR.call(_this, entity_ptr, _pos, _rotation) };
 
         // Only proceed if placement succeeded and we have a valid entity pointer
         if result != 0 && entity_ptr != 0 {
@@ -45,7 +45,7 @@ pub mod roof_detours {
                             if record.base == base {
                                 // This is a roof entity, hide it
                                 let visible_ptr = (entity_ptr + 0x13f) as *mut u8;
-                                *visible_ptr = 0;
+                                unsafe { *visible_ptr = 0 };
                                 info!("Auto-hid newly placed roof entity: {} (ptr: 0x{:x})", base, entity_ptr);
                                 break;
                             }
@@ -73,7 +73,7 @@ pub mod roof_detours {
         }
 
         // Call the original SAVE_GAME function
-        let result = SAVE_GAME_DETOUR.call();
+        let result = unsafe { SAVE_GAME_DETOUR.call() };
 
         if were_roofs_hidden {
             info!("SAVE_GAME: Save complete, re-hiding roofs");

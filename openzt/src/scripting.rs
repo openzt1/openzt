@@ -139,7 +139,7 @@ pub fn init() {
     // Register the continue() function
     lua_fn!("click_continue", "Clicks the continue button", "continue()", || {
         unsafe {
-            openzt_detour::gen::ztui::CLICK_CONTINUE.original()();
+            openzt_detour::generated::ztui::CLICK_CONTINUE.original()();
         }
         Ok(())
     });

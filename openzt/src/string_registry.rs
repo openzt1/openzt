@@ -85,7 +85,7 @@ fn command_get_string(args: Vec<&str>) -> Result<String, CommandError> {
 
 #[detour_mod]
 pub mod zoo_string {
-    use openzt_detour::gen::bfapp::LOAD_STRING;
+    use openzt_detour::generated::bfapp::LOAD_STRING;
     use tracing::info;
 
     use super::{get_override_string_from_registry, is_user_type_id, STRING_REGISTRY_ID_OFFSET};

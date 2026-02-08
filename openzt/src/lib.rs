@@ -115,7 +115,7 @@ use tracing::info;
 #[detour_mod]
 mod zoo_init {
     use super::*;
-    use openzt_detour::gen::bfapp::LOAD_LANG_DLLS;
+    use openzt_detour::generated::bfapp::LOAD_LANG_DLLS;
 
     // Note(finn): We hook the LoadLangDLLs function to perform some later initialization steps. Starting
     //  the console starts a new thead which is not recommended in the DllMain function.

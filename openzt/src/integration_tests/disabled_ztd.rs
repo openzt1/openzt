@@ -566,39 +566,30 @@ fn test_disabled_ztd_handlers_work_with_empty_resources() -> TestResult {
 fn test_disabled_ztd_prevents_legacy_entity_extraction() -> TestResult {
     let test_name = "test_disabled_ztd_prevents_legacy_entity_extraction";
 
-    #[cfg(feature = "ini")]
-    {
-        use crate::resource_manager::openzt_mods::legacy_attributes::{get_legacy_attribute_with_subtype, LegacyEntityType};
+    use crate::resource_manager::openzt_mods::legacy_attributes::{get_legacy_attribute_with_subtype, LegacyEntityType};
 
-        let test_path = "animals/testentity.cfg";
+    let test_path = "animals/testentity.cfg";
 
-        // Setup: Create empty resource (simulating disabled ZTD behavior)
-        if let Err(e) = create_empty_resource_for_test(test_path, ZTFileType::Cfg) {
-            return TestResult::fail(test_name, format!("Setup failed: {}", e));
-        }
-
-        // Try to get legacy attributes from the empty .cfg
-        // Should fail because the file is empty (can't be parsed as INI)
-        let entity_name = "testentity";
-        match get_legacy_attribute_with_subtype(LegacyEntityType::Animal, entity_name, None, "name_id") {
-            Ok(attrs) => {
-                cleanup_test_resources(&[test_path]);
-                return TestResult::fail(test_name, format!("Should not get attributes from empty .cfg, got: {:?}", attrs));
-            }
-            Err(_) => {
-                // Expected - empty .cfg can't be parsed
-            }
-        }
-
-        cleanup_test_resources(&[test_path]);
-        TestResult::pass(test_name)
+    // Setup: Create empty resource (simulating disabled ZTD behavior)
+    if let Err(e) = create_empty_resource_for_test(test_path, ZTFileType::Cfg) {
+        return TestResult::fail(test_name, format!("Setup failed: {}", e));
     }
 
-    #[cfg(not(feature = "ini"))]
-    {
-        // Skip this test if ini feature is not enabled
-        TestResult::skip(test_name, "ini feature not enabled")
+    // Try to get legacy attributes from the empty .cfg
+    // Should fail because the file is empty (can't be parsed as INI)
+    let entity_name = "testentity";
+    match get_legacy_attribute_with_subtype(LegacyEntityType::Animal, entity_name, None, "name_id") {
+        Ok(attrs) => {
+            cleanup_test_resources(&[test_path]);
+            return TestResult::fail(test_name, format!("Should not get attributes from empty .cfg, got: {:?}", attrs));
+        }
+        Err(_) => {
+            // Expected - empty .cfg can't be parsed
+        }
     }
+
+    cleanup_test_resources(&[test_path]);
+    TestResult::pass(test_name)
 }
 
 /// Test 3.4: Mixed file counts (added/skipped/error) tracked correctly
