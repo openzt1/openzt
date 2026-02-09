@@ -18,6 +18,7 @@ pub mod loading_order;
 pub mod patch_conditions;
 pub mod patch_rollback;
 pub mod patch_source_resolution;
+pub mod permitted_archive_patterns;
 pub mod shortcuts;
 pub mod unified_loading_order;
 
@@ -185,7 +186,7 @@ fn load_test_mod() -> anyhow::Result<()> {
 #[detour_mod]
 mod detour_zoo_main {
     #[cfg(target_os = "windows")]
-    use openzt_detour::gen::bfapp::LOAD_LANG_DLLS;
+    use openzt_detour::generated::bfapp::LOAD_LANG_DLLS;
     use tracing::{error, info};
 
     use std::fs::OpenOptions;
@@ -338,6 +339,22 @@ mod detour_zoo_main {
         let disabled_ztd_results = super::disabled_ztd::run_all_tests();
 
         for result in &disabled_ztd_results {
+            if result.passed {
+                write_log(&format!("  ✓ {}", result.name));
+                total_passed += 1;
+            } else {
+                write_log(&format!("  ✗ {} - {}", result.name, result.error.as_ref().unwrap_or(&"Unknown error".to_string())));
+                total_failed += 1;
+            }
+        }
+
+        write_log("");
+
+        // Run permitted archive patterns tests
+        write_log("Running permitted archive pattern tests...");
+        let permitted_archive_patterns_results = super::permitted_archive_patterns::run_all_tests();
+
+        for result in &permitted_archive_patterns_results {
             if result.passed {
                 write_log(&format!("  ✓ {}", result.name));
                 total_passed += 1;

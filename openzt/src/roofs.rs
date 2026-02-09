@@ -41,15 +41,14 @@ pub mod roof_detours {
                 if let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr) {
                     let roof_extensions = list_extensions_with_tag("roof");
                     for ext_key in &roof_extensions {
-                        if let Some(record) = get_extension(ext_key) {
-                            if record.base == base {
+                        if let Some(record) = get_extension(ext_key)
+                            && record.base == base {
                                 // This is a roof entity, hide it
                                 let visible_ptr = (entity_ptr + 0x13f) as *mut u8;
                                 unsafe { *visible_ptr = 0 };
                                 info!("Auto-hid newly placed roof entity: {} (ptr: 0x{:x})", base, entity_ptr);
                                 break;
                             }
-                        }
                     }
                 }
             }
@@ -206,17 +205,15 @@ pub fn show_roofs() {
     while i < entity_array_end {
         let entity_ptr = get_from_memory::<u32>(i);
 
-        if entity_ptr != 0 {
-            if let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr) {
-                if roof_bases.contains(&base) {
+        if entity_ptr != 0
+            && let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr)
+                && roof_bases.contains(&base) {
                     unsafe {
                         let visible_ptr = (entity_ptr + 0x13f) as *mut u8;
                         *visible_ptr = 1; // Set visible
                     }
                     shown_count += 1;
                 }
-            }
-        }
 
         i += 0x4;
     }

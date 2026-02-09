@@ -99,20 +99,6 @@ impl DependencyResolver {
         // Sort new mods alphabetically for deterministic processing
         new_mods.sort();
 
-        // Keep all entries in existing_order, but log errors for missing ones
-        // Only check existence to identify new archives for insertion
-        for entry in existing_order.iter() {
-            // Check if it's a valid OpenZT mod
-            let is_openzt_mod = self.mods.contains_key(entry);
-            // Check if it's a valid pure legacy archive (by filename)
-            let is_pure_legacy = entry.to_lowercase().ends_with(".ztd") && pure_legacy_in_mods.iter().any(|(filename, _)| filename == entry);
-
-            if !is_openzt_mod && !is_pure_legacy {
-                // Entry doesn't exist - log error but keep it in order
-                error!("Mod '{}' not found: could not find mod in /mods/ directory", entry);
-            }
-        }
-
         // Categorize new OpenZT mods
         let mut legacy_type_no_deps: Vec<String> = Vec::new();
         let mut mods_with_deps: Vec<String> = Vec::new();
@@ -707,8 +693,8 @@ impl DependencyResolver {
                 .cloned()
                 .collect();
 
-            let formerly_cyclic_sorted = formerly_cyclic.iter().cloned().collect::<Vec<_>>();
-            let truly_cyclic_sorted = truly_cyclic.iter().cloned().collect::<Vec<_>>();
+            let formerly_cyclic_sorted = formerly_cyclic.to_vec();
+            let truly_cyclic_sorted = truly_cyclic.to_vec();
 
             // Sort for determinism
             never_cyclic.sort();

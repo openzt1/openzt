@@ -159,12 +159,8 @@ impl LegacyEntityAttributes {
     /// Get name_id for a specific subtype with fallback logic
     pub fn get_name_id(&self, subtype: Option<&str>) -> Option<u32> {
         // Try specified subtype first
-        if let Some(st) = subtype {
-            if let Some(attrs) = self.subtype_attributes.get(st) {
-                if attrs.name_id.is_some() {
-                    return attrs.name_id;
-                }
-            }
+        if let Some(st) = subtype && let Some(attrs) = self.subtype_attributes.get(st) && attrs.name_id.is_some() {
+            return attrs.name_id;
         }
 
         // Fallback: return the first available name_id (used for all subtypes if only one exists)
@@ -199,82 +195,49 @@ impl LegacyEntityAttributes {
 
             for (section_name, _) in map.iter() {
                 // Check if this section matches the pattern "<subtype>/<section_base>"
-                if let Some(subtype_section) = section_name.strip_suffix(&format!("/{}", section_base)) {
-                    if !subtype_section.is_empty() {
-                        let subtype = subtype_section.to_string();
+                if let Some(subtype_section) = section_name.strip_suffix(&format!("/{}", section_base)) && !subtype_section.is_empty() {
+                    let subtype = subtype_section.to_string();
 
-                        // For Guest entities, only include the section matching the entity name
-                        // because guest.ai contains sections for all guest types (man, woman, boy, girl)
-                        if entity_type == LegacyEntityType::Guest {
-                            if subtype != entity_name {
-                                continue;
-                            }
-                            // For Guest entities, convert the matching subtype to a non-subtype entity
-                            // by storing it under the empty string key instead of the subtype name
-                            if let Some(section) = map.get(section_name) {
-                                let mut subtype_attrs = SubtypeAttributes {
-                                    subtype: String::new(), // Empty string for non-subtype entities
-                                    name_id: None,
-                                };
-
-                                for (key, values) in section.iter() {
-                                    if let Some(values_vec) = values {
-                                        if let Some(value) = values_vec.first() {
-                                            match key.as_str() {
-                                                "cNameID" | "nameID" => {
-                                                    // Support both formats
-                                                    subtype_attrs.name_id = value.parse().ok();
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    }
-                                }
-
-                                attrs.subtype_attributes.insert(String::new(), subtype_attrs);
-                                found_subtypes = true;
-                            }
+                    // For Guest entities, only include the section matching the entity name
+                    // because guest.ai contains sections for all guest types (man, woman, boy, girl)
+                    if entity_type == LegacyEntityType::Guest {
+                        if subtype != entity_name {
                             continue;
                         }
-
+                        // For Guest entities, convert the matching subtype to a non-subtype entity
+                        // by storing it under the empty string key instead of the subtype name
                         if let Some(section) = map.get(section_name) {
                             let mut subtype_attrs = SubtypeAttributes {
-                                subtype: subtype.clone(),
+                                subtype: String::new(), // Empty string for non-subtype entities
                                 name_id: None,
                             };
 
                             for (key, values) in section.iter() {
-                                if let Some(values_vec) = values {
-                                    if let Some(value) = values_vec.first() {
-                                        match key.as_str() {
-                                            "cNameID" | "nameID" => {
-                                                // Support both formats
-                                                subtype_attrs.name_id = value.parse().ok();
-                                            }
-                                            _ => {}
+                                if let Some(values_vec) = values && let Some(value) = values_vec.first() {
+                                    match key.as_str() {
+                                        "cNameID" | "nameID" => {
+                                            // Support both formats
+                                            subtype_attrs.name_id = value.parse().ok();
                                         }
+                                        _ => {}
                                     }
                                 }
                             }
 
-                            attrs.subtype_attributes.insert(subtype, subtype_attrs);
+                            attrs.subtype_attributes.insert(String::new(), subtype_attrs);
                             found_subtypes = true;
                         }
+                        continue;
                     }
-                }
-            }
 
-            // If no subtype sections found, try the base section directly
-            if !found_subtypes {
-                if let Some(section) = map.get(section_base) {
-                    let mut subtype_attrs = SubtypeAttributes {
-                        subtype: String::new(), // Empty string for non-subtype entities
-                        name_id: None,
-                    };
+                    if let Some(section) = map.get(section_name) {
+                        let mut subtype_attrs = SubtypeAttributes {
+                            subtype: subtype.clone(),
+                            name_id: None,
+                        };
 
-                    for (key, values) in section.iter() {
-                        if let Some(values_vec) = values {
-                            if let Some(value) = values_vec.first() {
+                        for (key, values) in section.iter() {
+                            if let Some(values_vec) = values && let Some(value) = values_vec.first() {
                                 match key.as_str() {
                                     "cNameID" | "nameID" => {
                                         // Support both formats
@@ -284,10 +247,33 @@ impl LegacyEntityAttributes {
                                 }
                             }
                         }
-                    }
 
-                    attrs.subtype_attributes.insert(String::new(), subtype_attrs);
+                        attrs.subtype_attributes.insert(subtype, subtype_attrs);
+                        found_subtypes = true;
+                    }
                 }
+            }
+
+            // If no subtype sections found, try the base section directly
+            if !found_subtypes && let Some(section) = map.get(section_base) {
+                let mut subtype_attrs = SubtypeAttributes {
+                    subtype: String::new(), // Empty string for non-subtype entities
+                    name_id: None,
+                };
+
+                for (key, values) in section.iter() {
+                    if let Some(values_vec) = values && let Some(value) = values_vec.first() {
+                        match key.as_str() {
+                            "cNameID" | "nameID" => {
+                                // Support both formats
+                                subtype_attrs.name_id = value.parse().ok();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                attrs.subtype_attributes.insert(String::new(), subtype_attrs);
             }
         }
 

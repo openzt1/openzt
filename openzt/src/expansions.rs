@@ -12,18 +12,17 @@ use maplit::hashset;
 use openzt_configparser::ini::Ini;
 use openzt_detour_macro::detour_mod;
 use std::sync::LazyLock;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     animation::Animation,
     bfentitytype::{ZTEntityType, ZTEntityTypeClass},
     command_console::CommandError,
     lua_fn,
-    resource_manager::mod_config::get_openzt_config,
-    resource_manager::{add_handler, modify_ztfile_as_animation, modify_ztfile_as_ini, Handler, RunStage, OPENZT_DIR0},
-    string_registry::add_string_to_registry,
+    resource_manager::{Handler, OPENZT_DIR0, RunStage, add_handler, lazyresourcemap, mod_config::get_openzt_config, modify_ztfile_as_animation, modify_ztfile_as_ini},
+    string_registry::{add_string_to_registry, get_string_from_registry},
     util::{get_from_memory, get_string_from_memory, get_string_from_memory_bounded, save_to_memory},
-    ztui::{get_random_sex, get_selected_sex, BuyTab, Sex},
+    ztui::{BuyTab, Sex, get_random_sex, get_selected_sex},
 };
 
 /// List of official ZTD files so we can determine if a given ZTD file is custom content
@@ -213,6 +212,24 @@ fn get_cc_expansion_name_all() -> String {
 
 fn get_cc_expansion_name(subdir: &str) -> String {
     CUSTOM_CONTENT_EXPANSION_STRING_PREFIX.to_string() + CUSTOM_CONTENT_EXPANSION_STRING_SUBDIR + subdir
+}
+
+/// Checks if an expansion with the given display name already exists
+/// Returns the conflicting expansion name if found, None otherwise
+fn expansion_name_exists(expansion_name: &str) -> Option<String> {
+    let expansions = EXPANSION_ARRAY.lock().unwrap();
+
+    for expansion in expansions.iter() {
+        // Check if this expansion has a string_id in the OpenZT registry (>= 100000)
+        if expansion.name_id >= 100_000
+            && let Ok(existing_name) = get_string_from_registry(expansion.name_id)
+            && existing_name == expansion_name
+        {
+            return Some(existing_name);
+        }
+    }
+
+    None
 }
 
 /// Mutex containing all expansions
@@ -408,6 +425,13 @@ fn create_custom_expansions() {
 
     for (expansion_name, items) in &config.expansions.custom {
         info!("create_custom_expansions() - processing expansion: '{}'", expansion_name);
+
+        // Check if an expansion with this name already exists
+        if expansion_name_exists(expansion_name).is_some() {
+            error!("Cannot create custom expansion '{}' - an expansion with this name already exists", expansion_name);
+            continue;
+        }
+
         if expansion_id >= 0x1000 {
             error!("Maximum custom expansions reached");
             break;
@@ -428,7 +452,7 @@ fn create_custom_expansions() {
                     }
                     info!("Added {} entities from archive '{}' to expansion '{}'", entity_count, item, expansion_name);
                 } else {
-                    info!("No entities found from archive '{}' for expansion '{}'", item, expansion_name);
+                    warn!("No entities found from archive '{}' for expansion '{}'", item, expansion_name);
                 }
             } else {
                 // Item is an entity name
@@ -459,7 +483,7 @@ fn create_custom_expansions() {
                 );
                 expansion_id += 1;
             } else {
-                info!("Skipping expansion '{}' - no valid entities found", expansion_name);
+                warn!("Skipping expansion '{}' - no valid entities found", expansion_name);
             }
         }
     }
@@ -471,11 +495,9 @@ fn initialise_expansions() {
     info!("initialise_expansions() - adding 'all' expansion");
     add_expansion_with_string_id(0x0, "all".to_string(), 0x5974, false);
     info!("initialise_expansions() - checking for custom content members");
-    if let Some(member_hash) = get_members(&get_cc_expansion_name_all()) {
-        if !member_hash.is_empty() {
-            info!("initialise_expansions() - adding 'Custom Content' expansion");
-            add_expansion_with_string_value(0x4, get_cc_expansion_name_all(), "Custom Content".to_string(), false);
-        }
+    if let Some(member_hash) = get_members(&get_cc_expansion_name_all()) && !member_hash.is_empty() {
+        info!("initialise_expansions() - adding 'Custom Content' expansion");
+        add_expansion_with_string_value(0x4, get_cc_expansion_name_all(), "Custom Content".to_string(), false);
     }
 
     // Add custom expansions from config
@@ -726,11 +748,10 @@ fn parse_member_config(path: &str, file_name: &str, file: Ini) -> anyhow::Result
 
     // Extract archive name from path and add entity-to-archive mapping
     let archive_path = Path::new(path.strip_prefix("zip::").unwrap_or(path));
-    if let Some(archive_file_name) = archive_path.file_name() {
-        if let Some(archive_str) = archive_file_name.to_str() {
+    if let Some(archive_file_name) = archive_path.file_name()
+        && let Some(archive_str) = archive_file_name.to_str() {
             add_entity_to_archive_mapping(filename.clone(), archive_str.to_string());
         }
-    }
 
     // TODO: get_keys shouldn't need a mutable ini
     if let Some(keys) = file.clone().get_keys("Member") {
@@ -801,6 +822,9 @@ fn parse_expansion_config(expansion_cfg: &Ini) -> anyhow::Result<()> {
 }
 
 fn handle_expansion_config(path: &str, _: &str, file: Ini) -> Option<(String, String, Ini)> {
+    if path == lazyresourcemap::DISABLED_ARCHIVE_NAME {
+        return None;
+    }
     if let Err(e) = parse_expansion_config(&file) {
         error!("Error parsing expansion config: {} {}", path, e);
     }
@@ -903,6 +927,42 @@ pub fn init() {
             Ok(result) => Ok((Some(result), None::<String>)),
             Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
+    });
+
+    // list_ztd_entities() - no args
+    lua_fn!("list_ztd_entities", "Lists each loaded ZTD and its entities", "list_ztd_entities()", || {
+        let mapping = ENTITY_TO_ARCHIVE.lock().unwrap();
+
+        // Group entities by archive (case-insensitive, strip "zip::" prefix)
+        let mut archive_to_entities: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+        for (entity, archive) in mapping.iter() {
+            // Strip "zip::" prefix if present and normalize to lowercase
+            let archive_normalized = archive.strip_prefix("zip::").unwrap_or(archive).to_lowercase();
+            archive_to_entities.entry(archive_normalized).or_default().push(entity.clone());
+        }
+
+        // Sort archives alphabetically
+        let mut archives: Vec<_> = archive_to_entities.into_iter().collect();
+        archives.sort_by(|a, b| a.0.cmp(&b.0));
+
+        if archives.is_empty() {
+            return Ok(("No ZTDs loaded with entities yet.".to_string(), None::<String>));
+        }
+
+        let mut result = String::from("Loaded ZTDs and their entities:\n");
+        result.push_str(&format!("{} ZTD(s) found\n\n", archives.len()));
+
+        for (archive, mut entities) in archives {
+            entities.sort();
+            result.push_str(&format!("{} ({} entities):\n", archive, entities.len()));
+            for entity in entities {
+                result.push_str(&format!("  {}\n", entity));
+            }
+            result.push('\n');
+        }
+
+        Ok((result, None::<String>))
     });
     add_handler(
         Handler::builder()

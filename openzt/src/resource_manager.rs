@@ -3,6 +3,9 @@ mod commands;
 mod handlers;
 mod hooks;
 pub(crate) mod lazyresourcemap;
+#[cfg(feature = "integration-tests")]
+pub mod legacy_loading;
+#[cfg(not(feature = "integration-tests"))]
 mod legacy_loading;
 pub(crate) mod openzt_mods;
 mod ztd;

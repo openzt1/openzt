@@ -1,13 +1,13 @@
 [package]
 name = "openzt-dll"
-version = "0.1.1-alpha"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
 
 [dependencies]
-openzt = { version = "0.1.0", path = "../openzt" }
+openzt = { version = "0.1.1", path = "../openzt" }
 tracing = "0.1.44"
 windows = { version = "0.62.2", features = ["Win32_System_SystemServices"] }
 

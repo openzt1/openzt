@@ -16,25 +16,23 @@ pub fn detour_mod(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
     if let Some((_, items)) = &mut module.content {
         for item in items.iter_mut() {
-            if let syn::Item::Fn(func) = item {
-                if let Some(detour_attr) = func.attrs.iter().position(|attr| attr.path().is_ident("detour")) {
-                    let attr = func.attrs.remove(detour_attr);
+            if let syn::Item::Fn(func) = item && let Some(detour_attr) = func.attrs.iter().position(|attr| attr.path().is_ident("detour")) {
+                let attr = func.attrs.remove(detour_attr);
 
-                    let detour_name = if let Ok(meta_list) = attr.meta.require_list() {
-                        match syn::parse2::<Ident>(meta_list.tokens.clone()) {
-                            Ok(ident) => ident,
-                            Err(_) => panic!("detour attribute must contain a valid identifier"),
-                        }
-                    } else {
-                        panic!("detour attribute must be in the form #[detour(DETOUR_NAME)]");
-                    };
+                let detour_name = if let Ok(meta_list) = attr.meta.require_list() {
+                    match syn::parse2::<Ident>(meta_list.tokens.clone()) {
+                        Ok(ident) => ident,
+                        Err(_) => panic!("detour attribute must contain a valid identifier"),
+                    }
+                } else {
+                    panic!("detour attribute must be in the form #[detour(DETOUR_NAME)]");
+                };
 
-                    detour_infos.push(DetourInfo {
-                        detour_name: detour_name.clone(),
-                        function_name: func.sig.ident.clone(),
-                        function_signature: func.sig.clone(),
-                    });
-                }
+                detour_infos.push(DetourInfo {
+                    detour_name: detour_name.clone(),
+                    function_name: func.sig.ident.clone(),
+                    function_signature: func.sig.clone(),
+                });
             }
         }
 
