@@ -1,4 +1,4 @@
-use std::{ffi::CString, fmt, path::Path, slice, str};
+use std::{ffi::CString, fmt, path::Path, str};
 
 use anyhow::{anyhow, Context};
 use openzt_configparser::ini::{Ini, WriteOptions};
@@ -109,32 +109,32 @@ impl From<BFResourcePtr> for ZTFile {
             "ini" => ZTFile::Text(unsafe { CString::from_raw(data as *mut i8) }, ZTFileType::Ini, file_size),
             "txt" => ZTFile::Text(unsafe { CString::from_raw(data as *mut i8) }, ZTFileType::Txt, file_size),
             "tga" => ZTFile::RawBytes(
-                unsafe { Box::from_raw(slice::from_raw_parts_mut(data as *mut _, file_size as usize)) },
+                unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data as *mut _, file_size as usize)) },
                 ZTFileType::Tga,
                 file_size,
             ),
             "pal" => ZTFile::RawBytes(
-                unsafe { Box::from_raw(slice::from_raw_parts_mut(data as *mut _, file_size as usize)) },
+                unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data as *mut _, file_size as usize)) },
                 ZTFileType::Palette,
                 file_size,
             ),
             "wav" => ZTFile::RawBytes(
-                unsafe { Box::from_raw(slice::from_raw_parts_mut(data as *mut _, file_size as usize)) },
+                unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data as *mut _, file_size as usize)) },
                 ZTFileType::Wav,
                 file_size,
             ),
             "lle" => ZTFile::RawBytes(
-                unsafe { Box::from_raw(slice::from_raw_parts_mut(data as *mut _, file_size as usize)) },
+                unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data as *mut _, file_size as usize)) },
                 ZTFileType::Lle,
                 file_size,
             ),
             "bmp" => ZTFile::RawBytes(
-                unsafe { Box::from_raw(slice::from_raw_parts_mut(data as *mut _, file_size as usize)) },
+                unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data as *mut _, file_size as usize)) },
                 ZTFileType::Bmp,
                 file_size,
             ),
             _ => ZTFile::RawBytes(
-                unsafe { Box::from_raw(slice::from_raw_parts_mut(data as *mut _, file_size as usize)) },
+                unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(data as *mut _, file_size as usize)) },
                 ZTFileType::Animation,
                 file_size,
             ),
@@ -274,7 +274,7 @@ where
     F: Fn(&mut Animation) -> anyhow::Result<()>,
 {
     modify_ztfile(file_name, |file: &mut BFResourcePtr| {
-        let data_vec: Box<[u8]> = unsafe { Box::from_raw(slice::from_raw_parts_mut(file.data_ptr as *mut _, file.content_size as usize)) };
+        let data_vec: Box<[u8]> = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(file.data_ptr as *mut _, file.content_size as usize)) };
         let mut animation = Animation::parse(&data_vec)?;
 
         modifier(&mut animation)?;

@@ -33,15 +33,14 @@ pub fn init() {
     let mut found_dlls = HashSet::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if let Some(file_name) = path.file_name() {
-            if let Some(name_str) = file_name.to_str() {
+        if let Some(file_name) = path.file_name()
+            && let Some(name_str) = file_name.to_str() {
                 let name_lower = name_str.to_lowercase();
                 // Only include DLLs matching the lang*.dll pattern
                 if lang_dll_regex.is_match(&name_lower) {
                     found_dlls.insert(name_lower);
                 }
             }
-        }
     }
 
     // Initialize the OnceLock with our found DLLs

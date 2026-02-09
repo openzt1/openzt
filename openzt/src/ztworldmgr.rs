@@ -389,8 +389,8 @@ impl ZTWorldMgr {
 #[detour_mod]
 pub mod hooks_ztworldmgr {
     use crate::util::save_to_memory;
-    use openzt_detour::gen::bfentity::{GET_BLOCKING_RECT, GET_BLOCKING_RECT_VIRT_ZTPATH, GET_FOOTPRINT, IS_ON_TILE};
-    use openzt_detour::gen::bfmap::{GET_NEIGHBOR_1, TILE_TO_WORLD};
+    use openzt_detour::generated::bfentity::{GET_BLOCKING_RECT, GET_BLOCKING_RECT_VIRT_ZTPATH, GET_FOOTPRINT, IS_ON_TILE};
+    use openzt_detour::generated::bfmap::{GET_NEIGHBOR_1, TILE_TO_WORLD};
 
     use super::*;
 

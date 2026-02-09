@@ -21,8 +21,8 @@ use openzt_detour_macro::detour_mod;
 #[detour_mod]
 pub mod roof_detours {
     use super::*;
-    use openzt_detour::gen::ztmapview::PLACE_ENTITY_ON_MAP_1;
-    use openzt_detour::gen::ztui_gameopts::SAVE_GAME;
+    use openzt_detour::generated::ztmapview::PLACE_ENTITY_ON_MAP_1;
+    use openzt_detour::generated::ztui_gameopts::SAVE_GAME;
 
     /// Detour for PLACE_ENTITY_ON_MAP_1
     ///
@@ -31,7 +31,7 @@ pub mod roof_detours {
     #[detour(PLACE_ENTITY_ON_MAP_1)]
     unsafe extern "thiscall" fn place_entity_on_map_detour(_this: u32, entity_ptr: u32, _pos: f32, _rotation: i32) -> u32 {
         // Call the original function first to place the entity
-        let result = PLACE_ENTITY_ON_MAP_1_DETOUR.call(_this, entity_ptr, _pos, _rotation);
+        let result = unsafe { PLACE_ENTITY_ON_MAP_1_DETOUR.call(_this, entity_ptr, _pos, _rotation) };
 
         // Only proceed if placement succeeded and we have a valid entity pointer
         if result != 0 && entity_ptr != 0 {
@@ -41,15 +41,14 @@ pub mod roof_detours {
                 if let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr) {
                     let roof_extensions = list_extensions_with_tag("roof");
                     for ext_key in &roof_extensions {
-                        if let Some(record) = get_extension(ext_key) {
-                            if record.base == base {
+                        if let Some(record) = get_extension(ext_key)
+                            && record.base == base {
                                 // This is a roof entity, hide it
                                 let visible_ptr = (entity_ptr + 0x13f) as *mut u8;
-                                *visible_ptr = 0;
+                                unsafe { *visible_ptr = 0 };
                                 info!("Auto-hid newly placed roof entity: {} (ptr: 0x{:x})", base, entity_ptr);
                                 break;
                             }
-                        }
                     }
                 }
             }
@@ -73,7 +72,7 @@ pub mod roof_detours {
         }
 
         // Call the original SAVE_GAME function
-        let result = SAVE_GAME_DETOUR.call();
+        let result = unsafe { SAVE_GAME_DETOUR.call() };
 
         if were_roofs_hidden {
             info!("SAVE_GAME: Save complete, re-hiding roofs");
@@ -206,17 +205,15 @@ pub fn show_roofs() {
     while i < entity_array_end {
         let entity_ptr = get_from_memory::<u32>(i);
 
-        if entity_ptr != 0 {
-            if let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr) {
-                if roof_bases.contains(&base) {
+        if entity_ptr != 0
+            && let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr)
+                && roof_bases.contains(&base) {
                     unsafe {
                         let visible_ptr = (entity_ptr + 0x13f) as *mut u8;
                         *visible_ptr = 1; // Set visible
                     }
                     shown_count += 1;
                 }
-            }
-        }
 
         i += 0x4;
     }

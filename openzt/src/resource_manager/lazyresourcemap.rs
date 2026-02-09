@@ -100,7 +100,7 @@ impl LazyResourceMap {
             }
             ZTFileType::Animation | ZTFileType::Bmp | ZTFileType::Lle | ZTFileType::Tga | ZTFileType::Wav | ZTFileType::Palette | ZTFileType::Zoo => {
                 let data_vec: Box<[u8]> =
-                    unsafe { Box::from_raw(slice::from_raw_parts_mut(bf_resource_ptr.data_ptr as *mut _, bf_resource_ptr.content_size as usize)) };
+                    unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(bf_resource_ptr.data_ptr as *mut _, bf_resource_ptr.content_size as usize)) };
                 drop(data_vec);
             }
         }
@@ -630,6 +630,8 @@ pub fn deref_resource(file_name: &str) -> bool {
     }
 }
 
+pub const DISABLED_ARCHIVE_NAME: &str = "<disabled>";
+
 /// Create an empty resource (zero-length content)
 /// Used for disabling specific file types from ZTDs
 ///
@@ -643,7 +645,7 @@ pub fn create_empty_resource(filename: String, file_type: ZTFileType) -> anyhow:
     let empty_cstring = CString::new("")?;
     let data_ptr = empty_cstring.into_raw() as u32;
 
-    let bf_zip_name = CString::new("<disabled>".to_string())?;
+    let bf_zip_name = CString::new(DISABLED_ARCHIVE_NAME.to_string())?;
     let bf_resource_name = CString::new(lowercase_filename.clone())?;
 
     let resource_ptr = Box::into_raw(Box::new(BFResourcePtr {

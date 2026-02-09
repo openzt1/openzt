@@ -85,7 +85,7 @@ fn command_get_string(args: Vec<&str>) -> Result<String, CommandError> {
 
 #[detour_mod]
 pub mod zoo_string {
-    use openzt_detour::gen::bfapp::LOAD_STRING;
+    use openzt_detour::generated::bfapp::LOAD_STRING;
     use tracing::info;
 
     use super::{get_override_string_from_registry, is_user_type_id, STRING_REGISTRY_ID_OFFSET};
@@ -96,13 +96,12 @@ pub mod zoo_string {
         if is_user_type_id(string_id) {
             info!("BFApp::loadString {:#x} {} {:#x}", this_ptr, string_id, string_buffer);
         }
-        if string_id >= STRING_REGISTRY_ID_OFFSET {
-            if let Ok(string) = get_string_from_registry(string_id) {
+        if string_id >= STRING_REGISTRY_ID_OFFSET
+            && let Ok(string) = get_string_from_registry(string_id) {
                 info!("BFApp::loadString string_id: {}, override: {} -> {}", string_id, string, string.len());
                 save_string_to_memory(string_buffer, &string);
                 return string.len() as u32 + 1;
             }
-        }
         if let Some(override_string) = get_override_string_from_registry(string_id) {
             save_string_to_memory(string_buffer, &override_string);
             return override_string.len() as u32 + 1;

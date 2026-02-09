@@ -1959,27 +1959,21 @@ fn evaluate_patch_condition_with_target(condition: &Option<PatchCondition>, defa
     let target = cond.target.as_deref().unwrap_or(default_target);
 
     // First check mod_loaded condition (doesn't require target)
-    if let Some(required_mod) = &cond.mod_loaded {
-        if !is_mod_loaded(required_mod) {
-            info!("Patch '{}': skipping - required mod '{}' not loaded", patch_name, required_mod);
-            return Ok(false);
-        }
+    if let Some(required_mod) = &cond.mod_loaded && !is_mod_loaded(required_mod) {
+        info!("Patch '{}': skipping - required mod '{}' not loaded", patch_name, required_mod);
+        return Ok(false);
     }
 
     // Check ztd_loaded condition
-    if let Some(required_ztd) = &cond.ztd_loaded {
-        if !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
-            info!("Patch '{}': skipping - required ZTD '{}' not loaded before current mod", patch_name, required_ztd);
-            return Ok(false);
-        }
+    if let Some(required_ztd) = &cond.ztd_loaded && !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
+        info!("Patch '{}': skipping - required ZTD '{}' not loaded before current mod", patch_name, required_ztd);
+        return Ok(false);
     }
 
     // Check entity_exists condition (legacy entities only)
-    if let Some(entity_id) = &cond.entity_exists {
-        if !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
-            info!("Patch '{}': skipping - required legacy entity '{}' not loaded", patch_name, entity_id);
-            return Ok(false);
-        }
+    if let Some(entity_id) = &cond.entity_exists && !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
+        info!("Patch '{}': skipping - required legacy entity '{}' not loaded", patch_name, entity_id);
+        return Ok(false);
     }
 
     // Check key_exists condition
@@ -2119,27 +2113,21 @@ fn apply_patches_direct(
     // Evaluate top-level conditions
     if let Some(top_level_condition) = &patch_meta.condition {
         // Check mod_loaded at file level
-        if let Some(required_mod) = &top_level_condition.mod_loaded {
-            if !is_mod_loaded(required_mod) {
-                warn!("Patch file skipped - required mod '{}' not loaded", required_mod);
-                return Ok(());
-            }
+        if let Some(required_mod) = &top_level_condition.mod_loaded && !is_mod_loaded(required_mod) {
+            warn!("Patch file skipped - required mod '{}' not loaded", required_mod);
+            return Ok(());
         }
 
         // Check ztd_loaded at file level
-        if let Some(required_ztd) = &top_level_condition.ztd_loaded {
-            if !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
-                warn!("Patch file skipped - required ZTD '{}' not loaded before current mod", required_ztd);
-                return Ok(());
-            }
+        if let Some(required_ztd) = &top_level_condition.ztd_loaded && !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
+            warn!("Patch file skipped - required ZTD '{}' not loaded before current mod", required_ztd);
+            return Ok(());
         }
 
         // Check entity_exists at file level
-        if let Some(entity_id) = &top_level_condition.entity_exists {
-            if !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
-                warn!("Patch file skipped - required legacy entity '{}' not loaded", entity_id);
-                return Ok(());
-            }
+        if let Some(entity_id) = &top_level_condition.entity_exists && !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
+            warn!("Patch file skipped - required legacy entity '{}' not loaded", entity_id);
+            return Ok(());
         }
 
         // Check key_exists and value_equals with target
@@ -2219,27 +2207,21 @@ fn apply_patches_with_shadow(
     // Evaluate top-level conditions
     if let Some(top_level_condition) = &patch_meta.condition {
         // Check mod_loaded at file level
-        if let Some(required_mod) = &top_level_condition.mod_loaded {
-            if !is_mod_loaded(required_mod) {
-                warn!("Patch file skipped - required mod '{}' not loaded", required_mod);
-                return Ok(());
-            }
+        if let Some(required_mod) = &top_level_condition.mod_loaded && !is_mod_loaded(required_mod) {
+            warn!("Patch file skipped - required mod '{}' not loaded", required_mod);
+            return Ok(());
         }
 
         // Check ztd_loaded at file level
-        if let Some(required_ztd) = &top_level_condition.ztd_loaded {
-            if !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
-                warn!("Patch file skipped - required ZTD '{}' not loaded before current mod", required_ztd);
-                return Ok(());
-            }
+        if let Some(required_ztd) = &top_level_condition.ztd_loaded && !is_ztd_loaded_before_current(required_ztd, current_mod_id) {
+            warn!("Patch file skipped - required ZTD '{}' not loaded before current mod", required_ztd);
+            return Ok(());
         }
 
         // Check entity_exists at file level
-        if let Some(entity_id) = &top_level_condition.entity_exists {
-            if !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
-                warn!("Patch file skipped - required legacy entity '{}' not loaded", entity_id);
-                return Ok(());
-            }
+        if let Some(entity_id) = &top_level_condition.entity_exists && !crate::resource_manager::openzt_mods::entity_lookup::entity_exists(entity_id) {
+            warn!("Patch file skipped - required legacy entity '{}' not loaded", entity_id);
+            return Ok(());
         }
 
         // Check key_exists and value_equals with target

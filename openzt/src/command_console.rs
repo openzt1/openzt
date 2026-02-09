@@ -69,7 +69,7 @@ impl From<&str> for CommandError {
 
 #[detour_mod]
 pub mod zoo_console {
-    use openzt_detour::gen::ztapp::UPDATE_SIM;
+    use openzt_detour::generated::ztapp::UPDATE_SIM;
     use tracing::error;
 
     use super::call_next_command;

@@ -142,11 +142,10 @@ impl ZTHabitat {
         // info!("Entrance tile: {}", tile);
 
         let zthm = read_zt_habitat_mgr_from_memory();
-        if let Some(gate_habitat) = zthm.get_habitat_by_tile(&tile) {
-            if gate_habitat == *self {
+        if let Some(gate_habitat) = zthm.get_habitat_by_tile(&tile)
+            && gate_habitat == *self {
                 return Some(tile);
             }
-        }
         let ztwm = read_zt_world_mgr_from_global();
         ztwm.get_neighbour(&tile, Direction::from(self.entrance_rotation))
     }
@@ -241,7 +240,7 @@ fn command_get_zt_habitats(_args: Vec<&str>) -> Result<String, CommandError> {
 #[detour_mod]
 pub mod hooks_zthabitatmgr {
     use super::*;
-    use openzt_detour::gen::zthabitat::GET_GATE_TILE_IN;
+    use openzt_detour::generated::zthabitat::GET_GATE_TILE_IN;
 
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
     #[detour(GET_GATE_TILE_IN)]

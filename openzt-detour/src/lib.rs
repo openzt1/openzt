@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use retour::GenericDetour;
 
-pub mod gen;
+pub mod generated;
 
 pub struct FunctionDef<T> {
     pub address: u32,

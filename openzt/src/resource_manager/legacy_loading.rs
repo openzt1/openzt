@@ -11,13 +11,68 @@ use std::sync::LazyLock;
 use tracing::{debug, error, info, trace, warn};
 use walkdir::WalkDir;
 
+/// Map of regex patterns to permitted ZTD archive names
+/// Files matching a pattern are only loaded from archives in the permitted list
+/// Patterns are regex strings matched case-insensitively against filenames
+/// Archive names are case-insensitive and can include subdirectories (e.g., "xpack1/ztpack01.ztd")
+pub static PERMITTED_ARCHIVE_PATTERNS: LazyLock<Vec<(Regex, Vec<&'static str>)>> = LazyLock::new(|| {
+    vec![
+        // xpac*.cfg files are only permitted from these specific archives
+        // Regex: ^xpac.*\.cfg$ matches "xpac03.cfg", "xpac99.cfg", "xpacwhatever.cfg"
+        (Regex::new(r"(?i)^xpac.*\.cfg$").unwrap(), vec![
+            "zupdate/config2.ztd",           // Base game config
+            "xpack1/config2.ztd",  // Dino Danger pack
+            "xpack2/config3.ztd",  // Marine Mania pack
+        ]),
+        (Regex::new(r"(?i)^ui/xpac.lyt$").unwrap(), vec![
+            "zupdate/ui2.ztd",
+            "zupdate1/ui4.ztd",
+        ]),
+        (Regex::new(r"(?i)^ui/sharedui/listbk/.*").unwrap(), vec![
+            "zupdate/ui2.ztd",
+            "zupdate1/ui4.ztd",
+        ]),
+        // Future patterns can be added here, e.g.:
+        // (Regex::new(r"(?i)^ui/override.*\.lyt$").unwrap(), vec!["ui5.ztd"]),
+    ]
+});
+
+/// Check if an archive is permitted for a given file based on pattern matching
+/// Returns true if archive is permitted OR no pattern matches (file is unrestricted)
+pub fn is_archive_permitted_for_file(archive_name: &str, filename: &str) -> bool {
+    for (pattern, permitted) in PERMITTED_ARCHIVE_PATTERNS.iter() {
+        if pattern.is_match(filename) {
+            // File matches a pattern - check if archive is permitted
+            // Normalize archive name:
+            // 1. Strip leading './' or '.\'
+            // 2. Convert backslashes to forward slashes
+            // 3. Convert to lowercase
+            let mut normalized = archive_name;
+            // Strip leading './' (Unix-style)
+            if let Some(stripped) = normalized.strip_prefix("./") {
+                normalized = stripped;
+            }
+            // Strip leading '.\' (Windows-style)
+            if let Some(stripped) = normalized.strip_prefix(".\\") {
+                normalized = stripped;
+            }
+            let normalized = normalized
+                .replace('\\', "/")
+                .to_lowercase();
+            return permitted.iter().any(|p| normalized == p.to_lowercase());
+        }
+    }
+    // No pattern match = file is unrestricted
+    true
+}
+
 use super::ztd::ZtdArchive;
 use crate::{
     encoding_utils::decode_game_text,
     mods,
     resource_manager::{
         handlers::{get_handlers, RunStage},
-        lazyresourcemap::{add_lazy, check_file_loaded, create_empty_resource, get_file, get_file_names, get_num_resources, mark_disabled_ztd_file},
+        lazyresourcemap::{add_lazy, check_file_loaded, create_empty_resource, get_file, get_file_names, get_num_resources},
         openzt_mods::{
             get_num_mod_ids,
             legacy_attributes::{add_legacy_entity, LegacyEntityAttributes, LegacyEntityType, SubtypeAttributes},
@@ -29,6 +84,60 @@ use crate::{
 };
 
 pub const OPENZT_DIR0: &str = "openzt_resource";
+
+/// Process files from a disabled/filtered archive
+/// Creates empty resources for supported file types (.cfg, .uca, .ucb, .ucs)
+/// Skips unsupported file types
+/// Returns (added_count, skipped_count)
+fn process_disabled_archive_files<F>(
+    mut archive_files: F,
+    archive_name: &str,
+) -> (usize, usize)
+where
+    F: FnMut() -> Option<String>,
+{
+    use crate::resource_manager::lazyresourcemap::{check_file_loaded, create_empty_resource};
+
+    let mut added_count = 0;
+    let mut skipped_count = 0;
+
+    // Iterate through all files in the archive
+    while let Some(file_name) = archive_files() {
+        let lowercase_name = file_name.to_lowercase();
+
+        // Check if already loaded
+        if check_file_loaded(&lowercase_name) {
+            debug!("File '{}' already loaded, skipping from disabled/filtered archive '{}'", file_name, archive_name);
+            skipped_count += 1;
+            continue;
+        }
+
+        // Check file extension
+        let path = Path::new(&file_name);
+        let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+
+        match extension.as_str() {
+            "cfg" | "uca" | "ucb" | "ucs" => {
+                // Add empty resource for these types
+                if let Ok(file_type) = ZTFileType::try_from(path) {
+                    if let Err(e) = create_empty_resource(file_name.to_string(), file_type) {
+                        error!("Failed to create empty resource for '{}': {}", file_name, e);
+                    } else {
+                        debug!("Added empty resource for '{}' from disabled/filtered archive '{}'", file_name, archive_name);
+                        added_count += 1;
+                    }
+                }
+            }
+            _ => {
+                // Track unsupported files - they're skipped (no empty resource created)
+                debug!("File '{}' from disabled/filtered archive '{}' has unsupported type - skipping", file_name, archive_name);
+                added_count += 1; // Count as "handled" for tracking purposes
+            }
+        }
+    }
+
+    (added_count, skipped_count)
+}
 
 // Note: We are excluding ztat* files until we need to override anything inside them, as they have a rediculous amount of files
 fn get_ztd_resources(dir: &Path, recursive: bool) -> Vec<PathBuf> {
@@ -277,59 +386,47 @@ fn handle_ztd(resource: &Path, disabled_ztds: &[String]) -> anyhow::Result<i32> 
 
     if is_disabled {
         info!("Processing DISABLED ZTD '{}'", ztd_filename);
-        let mut added_count = 0;
-        let mut skipped_count = 0;
-
-        archive.lock().unwrap().file_names().filter(|s| !s.ends_with("/")).for_each(|file_name| {
-            let lowercase_name = file_name.to_lowercase();
-
-            // Check if already loaded
-            if check_file_loaded(&lowercase_name) {
-                debug!("File '{}' already loaded, skipping from disabled ZTD", lowercase_name);
-                skipped_count += 1;
-                return;
-            }
-
-            // Check file extension
-            let path = Path::new(&file_name);
-            let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
-
-            match extension.as_str() {
-                "cfg" | "uca" | "ucb" | "ucs" => {
-                    // Add empty resource for these types
-                    if let Ok(file_type) = ZTFileType::try_from(path) {
-                        if let Err(e) = create_empty_resource(file_name.to_string(), file_type) {
-                            error!("Failed to create empty resource for '{}': {}", file_name, e);
-                        } else {
-                            // Mark as disabled ZTD file for potential error logging later
-                            mark_disabled_ztd_file(&lowercase_name);
-                            debug!("Added empty resource for '{}' from disabled ZTD", file_name);
-                            added_count += 1;
-                        }
-                    }
-                }
-                _ => {
-                    // Track unsupported files from disabled ZTDs
-                    // Error will only be logged if vanilla actually tries to load them
-                    mark_disabled_ztd_file(&lowercase_name);
-                    debug!("File '{}' from disabled ZTD has unsupported type - will log error if vanilla loads it", file_name);
-                    added_count += 1; // Count as "added" for tracking purposes
-                }
-            }
-        });
-
-        info!(
-            "Disabled ZTD '{}': added {} empty resources, skipped {} already loaded",
-            ztd_filename, added_count, skipped_count
+        let (added_count, skipped_count) = process_disabled_archive_files(
+            || archive.lock().unwrap().file_names().filter(|s| !s.ends_with("/")).map(|s| s.to_string()).next(),
+            &ztd_filename
         );
-        Ok(added_count)
+        info!("Disabled ZTD '{}': added {} empty resources, skipped {} already loaded", ztd_filename, added_count, skipped_count);
+        Ok(added_count as i32)
     } else {
         // Normal loading for enabled ZTDs
         let mut load_count = 0;
-        archive.lock().unwrap().file_names().filter(|s| !s.ends_with("/")).for_each(|file_name| {
-            add_lazy(file_name.to_string(), archive.clone());
+        let archive_name = archive.lock().unwrap().name().to_string();
+
+        let file_names = archive.lock().unwrap().file_names()
+            .filter(|s| !s.ends_with("/"))
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+
+        for file_name in file_names {
+            // Check if file matches any pattern with archive restrictions
+            if !is_archive_permitted_for_file(&archive_name, &file_name) {
+                // File is filtered - process as disabled
+                debug!("File '{}' in archive '{}' is filtered by pattern restrictions - treating as disabled", file_name, archive_name);
+                let lowercase_name = file_name.to_lowercase();
+                if check_file_loaded(&lowercase_name) {
+                    debug!("File '{}' already loaded, skipping filtered file", file_name);
+                    continue;
+                }
+
+                if let Ok(file_type) = ZTFileType::try_from(Path::new(&file_name)) {
+                    if let Err(e) = create_empty_resource(file_name.to_string(), file_type) {
+                        error!("Failed to create empty resource for filtered file '{}': {}", file_name, e);
+                    } else {
+                        debug!("Created empty resource for filtered file '{}' from non-permitted archive '{}'", file_name, archive_name);
+                        load_count += 1;
+                    }
+                }
+                continue;
+            }
+
+            add_lazy(file_name, archive.clone());
             load_count += 1;
-        });
+        }
         Ok(load_count)
     }
 }
@@ -350,50 +447,13 @@ fn handle_ztd_with_status(resource: &Path, is_disabled: bool) -> anyhow::Result<
         info!("Processing DISABLED pure legacy ZTD '{}'", ztd_filename);
         let zip = ZtdArchive::new(resource)?;
         let archive = Arc::new(Mutex::new(zip));
-        let mut added_count = 0;
-        let mut skipped_count = 0;
 
-        archive.lock().unwrap().file_names().filter(|s| !s.ends_with("/")).for_each(|file_name| {
-            let lowercase_name = file_name.to_lowercase();
-
-            // Check if already loaded
-            if check_file_loaded(&lowercase_name) {
-                debug!("File '{}' already loaded, skipping from disabled ZTD", lowercase_name);
-                skipped_count += 1;
-                return;
-            }
-
-            // Check file extension
-            let path = Path::new(&file_name);
-            let extension = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
-
-            match extension.as_str() {
-                "cfg" | "uca" | "ucb" | "ucs" => {
-                    // Add empty resource for these types
-                    if let Ok(file_type) = ZTFileType::try_from(path) {
-                        if let Err(e) = create_empty_resource(file_name.to_string(), file_type) {
-                            error!("Failed to create empty resource for '{}': {}", file_name, e);
-                        } else {
-                            mark_disabled_ztd_file(&lowercase_name);
-                            debug!("Added empty resource for '{}' from disabled ZTD", file_name);
-                            added_count += 1;
-                        }
-                    }
-                }
-                _ => {
-                    // Track unsupported files from disabled ZTDs
-                    mark_disabled_ztd_file(&lowercase_name);
-                    debug!("File '{}' from disabled ZTD has unsupported type - will log error if vanilla loads it", file_name);
-                    added_count += 1;
-                }
-            }
-        });
-
-        info!(
-            "Disabled pure legacy ZTD '{}': added {} empty resources, skipped {} already loaded",
-            ztd_filename, added_count, skipped_count
+        let (added_count, skipped_count) = process_disabled_archive_files(
+            || archive.lock().unwrap().file_names().filter(|s| !s.ends_with("/")).map(|s| s.to_string()).next(),
+            &ztd_filename
         );
-        Ok(added_count)
+        info!("Disabled pure legacy ZTD '{}': added {} empty resources, skipped {} already loaded", ztd_filename, added_count, skipped_count);
+        Ok(added_count as i32)
     } else {
         // Normal loading for enabled ZTD
         handle_ztd(resource, &[])
@@ -426,7 +486,7 @@ fn parse_cfg(file_name: &String) -> Vec<String> {
             LegacyCfgType::Animal => parse_simple_cfg(&ini, "animals"), //parse_subtypes_cfg(&ini, "animals"),
             LegacyCfgType::Building => parse_simple_cfg(&ini, "building"),
             LegacyCfgType::Fence => parse_simple_cfg(&ini, "fences"),  //parse_subtypes_cfg(&ini, "fences"),
-            LegacyCfgType::Filter => parse_simple_cfg(&ini, "filter"), //parse_subtypes_cfg(&ini, "filter"),
+            LegacyCfgType::Filter => parse_filters_cfg(&ini), //parse_subtypes_cfg(&ini, "filter"),
             LegacyCfgType::Food => parse_simple_cfg(&ini, "food"),
             LegacyCfgType::Freeform => parse_simple_cfg(&ini, "freeform"),
             // LegacyCfgType::Fringe => Vec::new(),
@@ -475,6 +535,27 @@ fn parse_simple_cfg(file: &Ini, section_name: &str) -> Vec<String> {
     results
 }
 
+fn parse_filters_cfg(file: &Ini) -> Vec<String> {
+    let mut filter_types = Vec::new();
+    if let Some(section) = file.get_map().unwrap_or_default().get("filter") {
+        for (key, _) in section.iter() {
+                filter_types.push(key.clone());
+        }
+    }
+    let mut results = Vec::new();
+    filter_types.iter().for_each(|filter_type| {
+        if let Some(section) = file.get_map().unwrap_or_default().get(filter_type) {
+            for (key, value) in section.iter() {
+                if key == "f" && let Some(value) = value && !value.is_empty() {
+                    results.push(value[0].clone());
+                };
+            }
+        }
+    });
+    results
+}
+
+
 /// Extract entity attributes by loading each .ai file listed in the .cfg
 /// Also extracts subtype information from the .cfg file itself
 fn extract_legacy_entities(cfg: &Ini, entity_type: LegacyEntityType) {
@@ -520,43 +601,41 @@ fn extract_legacy_entities(cfg: &Ini, entity_type: LegacyEntityType) {
 
         // Now process the main section entries
         for (entity_name, ai_file_paths) in section.iter() {
-            if let Some(ai_paths_vec) = ai_file_paths {
-                if let Some(ai_path) = ai_paths_vec.first() {
-                    let ai_path = ai_path.trim().trim_matches('"');
+            if let Some(ai_paths_vec) = ai_file_paths && let Some(ai_path) = ai_paths_vec.first() {
+                let ai_path = ai_path.trim().trim_matches('"');
 
-                    // Load and parse the .ai file
-                    if let Some((_archive, ai_file)) = get_file(ai_path) {
-                        let mut ai_ini = Ini::new_cs();
-                        ai_ini.set_comment_symbols(&[';', '#', ':']);
-                        let ai_content = decode_game_text(&ai_file);
+                // Load and parse the .ai file
+                if let Some((_archive, ai_file)) = get_file(ai_path) {
+                    let mut ai_ini = Ini::new_cs();
+                    ai_ini.set_comment_symbols(&[';', '#', ':']);
+                    let ai_content = decode_game_text(&ai_file);
 
-                        if ai_ini.read(ai_content).is_ok() {
-                            match LegacyEntityAttributes::parse_from_ini(entity_name.clone(), &ai_ini, entity_type) {
-                                Ok(mut attrs) => {
-                                    // If we have subtype information from the .cfg, validate/merge it
-                                    if let Some(subtypes) = entity_subtypes.get(entity_name) {
-                                        // Ensure all declared subtypes exist in the attributes
-                                        for subtype in subtypes {
-                                            if !attrs.subtype_attributes.contains_key(subtype) {
-                                                // Add empty entry for this subtype
-                                                attrs.subtype_attributes.insert(
-                                                    subtype.clone(),
-                                                    SubtypeAttributes {
-                                                        subtype: subtype.clone(),
-                                                        name_id: None,
-                                                    },
-                                                );
-                                            }
+                    if ai_ini.read(ai_content).is_ok() {
+                        match LegacyEntityAttributes::parse_from_ini(entity_name.clone(), &ai_ini, entity_type) {
+                            Ok(mut attrs) => {
+                                // If we have subtype information from the .cfg, validate/merge it
+                                if let Some(subtypes) = entity_subtypes.get(entity_name) {
+                                    // Ensure all declared subtypes exist in the attributes
+                                    for subtype in subtypes {
+                                        if !attrs.subtype_attributes.contains_key(subtype) {
+                                            // Add empty entry for this subtype
+                                            attrs.subtype_attributes.insert(
+                                                subtype.clone(),
+                                                SubtypeAttributes {
+                                                    subtype: subtype.clone(),
+                                                    name_id: None,
+                                                },
+                                            );
                                         }
                                     }
+                                }
 
-                                    if let Err(e) = add_legacy_entity(entity_type, entity_name.clone(), attrs) {
-                                        warn!("Failed to register legacy entity '{}': {}", entity_name, e);
-                                    }
+                                if let Err(e) = add_legacy_entity(entity_type, entity_name.clone(), attrs) {
+                                    warn!("Failed to register legacy entity '{}': {}", entity_name, e);
                                 }
-                                Err(e) => {
-                                    warn!("Failed to parse attributes from '{}': {}", ai_path, e);
-                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to parse attributes from '{}': {}", ai_path, e);
                             }
                         }
                     }

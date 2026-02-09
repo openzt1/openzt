@@ -209,8 +209,8 @@ pub mod zoo_ztmapview {
     use crate::util::get_from_memory;
     use crate::ztmapview::{BFTile, ErrorStringId, ZTMapView};
     use crate::ztworldmgr::IVec3;
-    use openzt_detour::gen::bftile::GET_LOCAL_ELEVATION;
-    use openzt_detour::gen::ztmapview::CHECK_TANK_PLACEMENT;
+    use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
+    use openzt_detour::generated::ztmapview::CHECK_TANK_PLACEMENT;
 
     // use crate::{
     //     bfregistry::{add_to_registry, get_from_registry},
@@ -300,11 +300,10 @@ impl ZTMapView {
         info!("Checking tank placement for entity type class: {:?}", entity_type_class);
         if !zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Keeper) {
             info!("Not keeper, checking gate tile");
-            if let Some(t) = habitat.get_gate_tile_in() {
-                if temp_entity.is_on_tile(&t) {
+            if let Some(t) = habitat.get_gate_tile_in()
+                && temp_entity.is_on_tile(&t) {
                     return Err(ErrorStringId::ObjectTooCloseToLadderOrPlatform);
                 }
-            }
         }
         // TODO: Fix this, currently we are trying to read a ZTSceneryType from the address of a ZTScenery entity instance
         // if zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Scenery) {

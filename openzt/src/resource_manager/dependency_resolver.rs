@@ -99,20 +99,6 @@ impl DependencyResolver {
         // Sort new mods alphabetically for deterministic processing
         new_mods.sort();
 
-        // Keep all entries in existing_order, but log errors for missing ones
-        // Only check existence to identify new archives for insertion
-        for entry in existing_order.iter() {
-            // Check if it's a valid OpenZT mod
-            let is_openzt_mod = self.mods.contains_key(entry);
-            // Check if it's a valid pure legacy archive (by filename)
-            let is_pure_legacy = entry.to_lowercase().ends_with(".ztd") && pure_legacy_in_mods.iter().any(|(filename, _)| filename == entry);
-
-            if !is_openzt_mod && !is_pure_legacy {
-                // Entry doesn't exist - log error but keep it in order
-                error!("Mod '{}' not found: could not find mod in /mods/ directory", entry);
-            }
-        }
-
         // Categorize new OpenZT mods
         let mut legacy_type_no_deps: Vec<String> = Vec::new();
         let mut mods_with_deps: Vec<String> = Vec::new();
@@ -410,7 +396,7 @@ impl DependencyResolver {
         }
 
         // Start with mods that have no dependencies
-        let mut queue: Vec<_> = in_degree.iter().filter(|(_, &degree)| degree == 0).map(|(id, _)| id.clone()).collect();
+        let mut queue: Vec<_> = in_degree.iter().filter(|&(_, &degree)| degree == 0).map(|(id, _)| id.clone()).collect();
         queue.sort(); // Alphabetical for determinism
 
         let mut result = Vec::new();
@@ -673,12 +659,106 @@ impl DependencyResolver {
         truly_cyclic: &[String],
         formerly_cyclic: &[String],
     ) -> (Vec<String>, Vec<ResolutionWarning>) {
-        let mut order = existing_order.to_vec();
         let mut warnings = Vec::new();
 
         // Build sets for efficient lookup
         let truly_cyclic_set: HashSet<_> = truly_cyclic.iter().cloned().collect();
         let formerly_cyclic_set: HashSet<_> = formerly_cyclic.iter().cloned().collect();
+
+        // Fresh install path: empty existing order
+        // Use append-based approach to avoid reversal bug
+        if existing_order.is_empty() {
+            let mut order = Vec::new();
+
+            // 1. Append pure legacy archives (alphabetically sorted)
+            let mut pure_legacy_filenames: Vec<String> = new_pure_legacy.iter().map(|(filename, _)| filename.clone()).collect();
+            pure_legacy_filenames.sort_by_key(|a| a.to_lowercase());
+            for filename in &pure_legacy_filenames {
+                debug!("Fresh install: appending pure legacy archive '{}'", filename);
+                order.push(filename.clone());
+            }
+
+            // 2. Append ztd_type="legacy" with no deps (alphabetically sorted)
+            let mut legacy_no_deps_sorted = legacy_type_no_deps.to_vec();
+            legacy_no_deps_sorted.sort();
+            for mod_id in &legacy_no_deps_sorted {
+                info!("Fresh install: appending ztd_type='legacy' mod (no deps) '{}'", mod_id);
+                order.push(mod_id.clone());
+            }
+
+            // 3. Append mods with deps (resolved via dependency graph)
+            let mut never_cyclic: Vec<_> = mods_with_deps
+                .iter()
+                .filter(|id| !truly_cyclic_set.contains(*id) && !formerly_cyclic_set.contains(*id))
+                .cloned()
+                .collect();
+
+            let formerly_cyclic_sorted = formerly_cyclic.to_vec();
+            let truly_cyclic_sorted = truly_cyclic.to_vec();
+
+            // Sort for determinism
+            never_cyclic.sort();
+
+            // Build required-only graph for formerly cyclic mods
+            let formerly_cyclic_mods: HashMap<_, _> = all_mods
+                .iter()
+                .filter(|(id, _)| formerly_cyclic_set.contains(*id))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+
+            let required_only_graph = if !formerly_cyclic_mods.is_empty() {
+                self.build_dependency_graph(&formerly_cyclic_mods, DependencyInclusionMode::RequiredOnly)
+            } else {
+                DependencyGraph {
+                    before_deps: HashMap::new(),
+                    after_deps: HashMap::new(),
+                    optional: HashMap::new(),
+                }
+            };
+
+            // Generate warnings for mods with missing dependencies
+            // Use empty current_order so find_insert_position generates warnings for missing deps
+            let empty_order: Vec<String> = vec![];
+            for mod_id in &never_cyclic {
+                let (_, insert_warnings) = self.find_insert_position(mod_id, &empty_order, graph, all_mods);
+                warnings.extend(insert_warnings);
+            }
+
+            for mod_id in &formerly_cyclic_sorted {
+                let (_, insert_warnings) = self.find_insert_position(mod_id, &empty_order, &required_only_graph, all_mods);
+                warnings.extend(insert_warnings);
+            }
+
+            for mod_id in &truly_cyclic_sorted {
+                let (_, insert_warnings) = self.find_insert_position(mod_id, &empty_order, graph, all_mods);
+                warnings.extend(insert_warnings);
+            }
+
+            // Topologically sort and append never-cyclic mods
+            let never_cyclic_sorted = self.topological_sort(&never_cyclic, graph);
+            for mod_id in &never_cyclic_sorted {
+                info!("Fresh install: appending mod with deps '{}'", mod_id);
+                order.push(mod_id.clone());
+            }
+
+            // Topologically sort and append formerly cyclic mods
+            let formerly_cyclic_order = self.topological_sort(&formerly_cyclic_sorted, &required_only_graph);
+            for mod_id in &formerly_cyclic_order {
+                info!("Fresh install: appending formerly cyclic mod '{}'", mod_id);
+                order.push(mod_id.clone());
+            }
+
+            // Append truly cyclic mods (already sorted)
+            for mod_id in &truly_cyclic_sorted {
+                info!("Fresh install: appending truly cyclic mod '{}'", mod_id);
+                order.push(mod_id.clone());
+            }
+
+            return (order, warnings);
+        }
+
+        // Existing config path: use insert-at-position approach
+        let mut order = existing_order.to_vec();
 
         // Step 1: Insert pure legacy archives at position 0 (alphabetically sorted)
         // Note: We reverse before inserting because inserting at position 0 in a loop
@@ -1412,5 +1492,168 @@ mod tests {
         // Missing entry should stay in order (error is logged but not removed)
         assert_eq!(result.order.len(), 1);
         assert_eq!(result.order[0], "missing_legacy.ztd");
+    }
+
+    #[test]
+    fn test_fresh_install_mixed_legacy_and_openzt_mods() {
+        // Test the fresh install scenario (empty existing_order)
+        // Legacy .ztd files should load BEFORE OpenZT mods
+        let mut mods = HashMap::new();
+
+        // Create OpenZT mods
+        let meta_mod1 = create_test_meta(
+            r#"
+            name = "OpenZT Mod 1"
+            description = "Test mod 1"
+            authors = ["Test"]
+            mod_id = "com.openzt.mod1"
+            version = "1.0.0"
+        "#,
+        );
+
+        let meta_mod2 = create_test_meta(
+            r#"
+            name = "OpenZT Mod 2"
+            description = "Test mod 2"
+            authors = ["Test"]
+            mod_id = "com.example.mod2"
+            version = "1.0.0"
+        "#,
+        );
+
+        mods.insert("com.openzt.mod1".to_string(), meta_mod1.clone());
+        mods.insert("com.example.mod2".to_string(), meta_mod2.clone());
+
+        let mut discovered = HashMap::new();
+        discovered.insert("com.openzt.mod1".to_string(), ("com.openzt.mod1.ztd".to_string(), meta_mod1));
+        discovered.insert("com.example.mod2".to_string(), ("com.example.mod2.ztd".to_string(), meta_mod2));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
+
+        // Empty existing order (fresh install scenario)
+        let existing_order: Vec<String> = vec![];
+
+        // Mixed pure legacy and OpenZT mods
+        let pure_legacy: Vec<(String, PathBuf)> = vec![
+            ("legacy_b.ztd".to_string(), PathBuf::from("./mods/legacy_b.ztd")),
+            ("legacy_a.ztd".to_string(), PathBuf::from("./mods/legacy_a.ztd")),
+        ];
+
+        let result = resolver.resolve_order(&existing_order, &[], &pure_legacy);
+
+        // Expected order: legacy_a.ztd, legacy_b.ztd, com.example.mod2, com.openzt.mod1
+        // (alphabetically sorted within each category)
+        assert_eq!(result.order.len(), 4);
+        assert_eq!(result.order[0], "legacy_a.ztd");
+        assert_eq!(result.order[1], "legacy_b.ztd");
+        assert_eq!(result.order[2], "com.example.mod2");
+        assert_eq!(result.order[3], "com.openzt.mod1");
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_fresh_install_with_legacy_type_mods() {
+        // Test fresh install with ztd_type="legacy" mods (with meta.toml but no deps)
+        let mut mods = HashMap::new();
+
+        // Pure legacy archives (no meta.toml) are tested in existing tests
+        // This tests ztd_type="legacy" which HAS meta.toml
+        let meta_legacy = create_test_meta(
+            r#"
+            name = "Legacy Mod with Meta"
+            description = "Legacy mod with metadata"
+            authors = ["Test"]
+            mod_id = "com.legacy.withmeta"
+            version = "1.0.0"
+            ztd_type = "legacy"
+        "#,
+        );
+
+        let meta_openzt = create_test_meta(
+            r#"
+            name = "OpenZT Mod"
+            description = "OpenZT mod"
+            authors = ["Test"]
+            mod_id = "com.openzt.mod"
+            version = "1.0.0"
+        "#,
+        );
+
+        mods.insert("com.legacy.withmeta".to_string(), meta_legacy.clone());
+        mods.insert("com.openzt.mod".to_string(), meta_openzt.clone());
+
+        let mut discovered = HashMap::new();
+        discovered.insert("com.legacy.withmeta".to_string(), ("com.legacy.withmeta.ztd".to_string(), meta_legacy));
+        discovered.insert("com.openzt.mod".to_string(), ("com.openzt.mod.ztd".to_string(), meta_openzt));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
+
+        // Empty existing order (fresh install)
+        let existing_order: Vec<String> = vec![];
+        let pure_legacy: Vec<(String, PathBuf)> = vec![
+            ("pure_legacy.ztd".to_string(), PathBuf::from("./mods/pure_legacy.ztd")),
+        ];
+
+        let result = resolver.resolve_order(&existing_order, &[], &pure_legacy);
+
+        // Expected order: pure legacy first, then legacy_type, then openzt mod
+        assert_eq!(result.order.len(), 3);
+        assert_eq!(result.order[0], "pure_legacy.ztd");
+        assert_eq!(result.order[1], "com.legacy.withmeta"); // ztd_type="legacy" with no deps
+        assert_eq!(result.order[2], "com.openzt.mod"); // regular mod
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_fresh_install_with_mod_dependencies() {
+        // Test fresh install with mods that have dependencies
+        let mut mods = HashMap::new();
+
+        let meta_base = create_test_meta(
+            r#"
+            name = "Base Mod"
+            description = "Base mod"
+            authors = ["Test"]
+            mod_id = "com.base.mod"
+            version = "1.0.0"
+        "#,
+        );
+
+        let meta_dependent = create_test_meta(
+            r#"
+            name = "Dependent Mod"
+            description = "Dependent mod"
+            authors = ["Test"]
+            mod_id = "com.dependent.mod"
+            version = "1.0.0"
+            dependencies = [
+                { mod_id = "com.base.mod", name = "Base Mod", ordering = "after" }
+            ]
+        "#,
+        );
+
+        mods.insert("com.base.mod".to_string(), meta_base.clone());
+        mods.insert("com.dependent.mod".to_string(), meta_dependent.clone());
+
+        let mut discovered = HashMap::new();
+        discovered.insert("com.base.mod".to_string(), ("com.base.mod.ztd".to_string(), meta_base));
+        discovered.insert("com.dependent.mod".to_string(), ("com.dependent.mod.ztd".to_string(), meta_dependent));
+
+        let resolver = DependencyResolver::new(mods, &discovered);
+
+        // Empty existing order (fresh install)
+        let existing_order: Vec<String> = vec![];
+        let pure_legacy: Vec<(String, PathBuf)> = vec![
+            ("legacy.ztd".to_string(), PathBuf::from("./mods/legacy.ztd")),
+        ];
+
+        let result = resolver.resolve_order(&existing_order, &[], &pure_legacy);
+
+        // Expected order: legacy first, then base mod, then dependent mod
+        assert_eq!(result.order.len(), 3);
+        assert_eq!(result.order[0], "legacy.ztd");
+        assert_eq!(result.order[1], "com.base.mod");
+        assert_eq!(result.order[2], "com.dependent.mod");
+        assert!(result.warnings.is_empty());
     }
 }

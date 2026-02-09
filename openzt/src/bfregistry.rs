@@ -60,9 +60,9 @@ mod zoo_bf_registry {
         util::{get_from_memory, get_string_from_memory},
     };
     // use openzt_detour::BFREGISTRY_ADDUI; // Actually UIElement::registerit
-    use openzt_detour::gen::bfmgr::REGISTERIT as BFMGR_REGISTERIT;
-    use openzt_detour::gen::bfregistry::PTR_GET;
-    use openzt_detour::gen::uielement::REGISTERIT as UIELEMENT_REGISTERIT;
+    use openzt_detour::generated::bfmgr::REGISTERIT as BFMGR_REGISTERIT;
+    use openzt_detour::generated::bfregistry::PTR_GET;
+    use openzt_detour::generated::uielement::REGISTERIT as UIELEMENT_REGISTERIT;
 
     #[detour(PTR_GET)]
     unsafe extern "thiscall" fn prt_get(_this_prt: u32, class_name: u32, _param_2: bool) -> u32 {

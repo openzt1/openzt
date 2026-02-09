@@ -2,7 +2,7 @@
 use windows::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, DLL_THREAD_ATTACH, DLL_THREAD_DETACH};
 
 #[cfg(target_os = "windows")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "system" fn DllMain(_module: u8, reason: u32, _reserved: u8) -> i32 {
     // DO NOT uncomment any of the logs here, they will cause crashes
     match reason {

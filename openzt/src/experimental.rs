@@ -10,7 +10,7 @@ use tracing::info;
 
 #[detour_mod]
 pub mod zoo_experimental {
-    use openzt_detour::gen::bfuimgr::DISPLAY_MESSAGE_0;
+    use openzt_detour::generated::bfuimgr::DISPLAY_MESSAGE_0;
     use tracing::info;
 
     // use crate::{

@@ -73,8 +73,8 @@ mod detour_zoo_main {
     }
 
     #[cfg(target_os = "windows")]
-    use openzt_detour::gen::bfapp::LOAD_LANG_DLLS;
-    use openzt_detour::gen::bftile::GET_LOCAL_ELEVATION;
+    use openzt_detour::generated::bfapp::LOAD_LANG_DLLS;
+    use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
     use proptest::prelude::ProptestConfig;
     use tracing::{error, info};
 

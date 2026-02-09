@@ -146,15 +146,11 @@ impl Handler {
 
     // TODO: Return Result?
     pub fn handle(&self, file_name: &String) {
-        if let Some(prefix) = &self.matcher_prefix {
-            if !file_name.starts_with(prefix) {
-                return;
-            }
+        if let Some(prefix) = &self.matcher_prefix && !file_name.starts_with(prefix) {
+            return;
         }
-        if let Some(suffix) = &self.matcher_suffix {
-            if !file_name.ends_with(suffix) {
-                return;
-            }
+        if let Some(suffix) = &self.matcher_suffix && !file_name.ends_with(suffix) {
+            return;
         }
 
         let file_type = match ZTFileType::try_from(Path::new(&file_name)) {
@@ -276,10 +272,8 @@ impl Handler {
         };
 
         // TODO: Use "zip::./openzt.ztd" as archive?
-        if let Some((new_archive_name, new_file_name, ztfile)) = new_file {
-            if let Err(e) = add_ztfile(Path::new(&new_archive_name), new_file_name, ztfile) {
-                error!("Error adding file to archive: {}", e);
-            }
+        if let Some((new_archive_name, new_file_name, ztfile)) = new_file && let Err(e) = add_ztfile(Path::new(&new_archive_name), new_file_name, ztfile) {
+            error!("Error adding file to archive: {}", e);
         }
     }
 }
