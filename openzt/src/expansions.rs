@@ -434,7 +434,13 @@ fn validate_ztd_reference(item: &str) -> ExpansionItemValidation {
     };
 
     match get_ztd_status(&normalized_archive) {
-        None => ExpansionItemValidation::ZtdNotLoaded,
+        None => {
+            // ZTD not in registry — fall back to ENTITY_TO_ARCHIVE
+            match get_entities_from_archive(item) {
+                Some(entities) => ExpansionItemValidation::ZtdWithEntities(entities),
+                None => ExpansionItemValidation::ZtdNotLoaded,
+            }
+        }
         Some(status) => match status {
             crate::resource_manager::openzt_mods::ztd_registry::ZtdLoadStatus::Disabled => {
                 ExpansionItemValidation::ZtdNotLoaded
@@ -449,40 +455,10 @@ fn validate_ztd_reference(item: &str) -> ExpansionItemValidation {
     }
 }
 
-/// Check if an entity name exists in any member set or legacy attributes
+/// Check if an entity name exists in the game's entity-to-archive mapping
 fn entity_name_exists(entity_name: &str) -> bool {
-    let member_sets = MEMBER_SETS.lock().unwrap();
-
-    // Check if entity exists in ANY member set
-    for (_set_name, entities) in member_sets.iter() {
-        if entities.contains(entity_name) {
-            return true;
-        }
-    }
-
-    // Also check legacy entities
-    use crate::resource_manager::openzt_mods::legacy_attributes::{
-        legacy_entity_exists, LegacyEntityType,
-    };
-
-    for entity_type in [
-        LegacyEntityType::Animal,
-        LegacyEntityType::Building,
-        LegacyEntityType::Fence,
-        LegacyEntityType::Food,
-        LegacyEntityType::Guest,
-        LegacyEntityType::Item,
-        LegacyEntityType::Path,
-        LegacyEntityType::Scenery,
-        LegacyEntityType::Staff,
-        LegacyEntityType::Wall,
-    ] {
-        if legacy_entity_exists(entity_type, entity_name) {
-            return true;
-        }
-    }
-
-    false
+    let mapping = ENTITY_TO_ARCHIVE.lock().unwrap();
+    mapping.contains_key(entity_name)
 }
 
 /// Calculate Levenshtein distance between two strings
@@ -734,104 +710,110 @@ fn create_custom_expansions() {
                     }
                 }
             } else {
-                // Item is an entity name - validate before adding
+                // Item is an entity name - validate before adding (for suggestions), but always add
                 info!("create_custom_expansions() - validating entity reference: '{}'", item);
 
-                if entity_name_exists(item) {
-                    add_member(item.clone(), member_set_name.clone());
-                    info!("Added entity '{}' to expansion '{}'", item, expansion_name);
-                } else {
+                // Check if entity exists BEFORE adding to member set (so suggestions don't include itself)
+                let entity_exists = entity_name_exists(item);
+
+                // Always add entity to member set (backward compatible)
+                add_member(item.clone(), member_set_name.clone());
+
+                // Warn about potential issues
+                if !entity_exists {
                     let similar = find_similar_entity_names(item);
                     if !similar.is_empty() {
                         items_with_suggestions.push(format!(
-                            "{} - Entity does not exist. Similar entities: {}",
+                            "{} - Entity may not exist. Similar entities: {}",
                             item, similar.join(", ")
                         ));
                     } else {
                         items_without_suggestions.push(format!("{} (entity not found)", item));
                     }
                     invalid_items.push(format!("{} (entity not found)", item));
+                } else {
+                    info!("Added entity '{}' to expansion '{}'", item, expansion_name);
                 }
             }
         }
 
         // Check if we have any members before creating expansion
-        if let Some(members) = get_members(&member_set_name) {
-            if !members.is_empty() {
-                // Expansion WILL be loaded - log errors with a message indicating it loaded
-                if !items_with_suggestions.is_empty() {
-                    error!(
-                        "Custom expansion '{}' has {} invalid reference(s) with suggestions:\n  - {}",
-                        expansion_name,
-                        items_with_suggestions.len(),
-                        items_with_suggestions.join("\n  - ")
-                    );
-                }
+        let member_count = get_members(&member_set_name).map_or(0, |m| m.len());
 
-                if !items_without_suggestions.is_empty() {
-                    error!(
-                        "Custom expansion '{}' has {} invalid reference(s) with no suggestions:\n  - {}",
-                        expansion_name,
-                        items_without_suggestions.len(),
-                        items_without_suggestions.join("\n  - ")
-                    );
-                }
-
-                info!(
-                    "create_custom_expansions() - adding expansion to game: '{}' with {} members",
+        if member_count > 0 {
+            // Expansion WILL be loaded - log issues as warnings (expansion still created)
+            if !items_with_suggestions.is_empty() {
+                warn!(
+                    "Custom expansion '{}' has {} invalid reference(s) with suggestions:\n  - {}",
                     expansion_name,
-                    members.len()
-                );
-                add_expansion_with_string_value(
-                    expansion_id,
-                    member_set_name.clone(),
-                    expansion_name.clone(),
-                    false, // Don't save yet
-                );
-
-                // Log that expansion was loaded despite errors
-                if !invalid_items.is_empty() {
-                    warn!(
-                        "Custom expansion '{}' was loaded with {} member(s), but {} reference(s) were invalid and skipped.",
-                        expansion_name,
-                        members.len(),
-                        invalid_items.len()
-                    );
-                } else {
-                    info!(
-                        "Created custom expansion '{}' (ID: {:#x}) with {} members",
-                        expansion_name,
-                        expansion_id,
-                        members.len()
-                    );
-                }
-                expansion_id += 1;
-            } else {
-                // Expansion will NOT be loaded - all items were invalid
-                if !items_with_suggestions.is_empty() {
-                    error!(
-                        "Custom expansion '{}' has {} invalid reference(s) with suggestions:\n  - {}",
-                        expansion_name,
-                        items_with_suggestions.len(),
-                        items_with_suggestions.join("\n  - ")
-                    );
-                }
-
-                if !items_without_suggestions.is_empty() {
-                    error!(
-                        "Custom expansion '{}' has {} invalid reference(s) with no suggestions:\n  - {}",
-                        expansion_name,
-                        items_without_suggestions.len(),
-                        items_without_suggestions.join("\n  - ")
-                    );
-                }
-
-                error!(
-                    "Custom expansion '{}' was NOT loaded - all {} reference(s) were invalid.",
-                    expansion_name,
-                    invalid_items.len()
+                    items_with_suggestions.len(),
+                    items_with_suggestions.join("\n  - ")
                 );
             }
+
+            if !items_without_suggestions.is_empty() {
+                warn!(
+                    "Custom expansion '{}' has {} invalid reference(s) with no suggestions:\n  - {}",
+                    expansion_name,
+                    items_without_suggestions.len(),
+                    items_without_suggestions.join("\n  - ")
+                );
+            }
+
+            info!(
+                "create_custom_expansions() - adding expansion to game: '{}' with {} members",
+                expansion_name,
+                member_count
+            );
+            add_expansion_with_string_value(
+                expansion_id,
+                member_set_name.clone(),
+                expansion_name.clone(),
+                false, // Don't save yet
+            );
+
+            // Log that expansion was loaded despite errors
+            if !invalid_items.is_empty() {
+                warn!(
+                    "Custom expansion '{}' was loaded with {} member(s), but {} reference(s) were invalid and skipped.",
+                    expansion_name,
+                    member_count,
+                    invalid_items.len()
+                );
+            } else {
+                info!(
+                    "Created custom expansion '{}' (ID: {:#x}) with {} members",
+                    expansion_name,
+                    expansion_id,
+                    member_count
+                );
+            }
+            expansion_id += 1;
+        } else {
+            // Expansion will NOT be loaded - all items were invalid
+            if !items_with_suggestions.is_empty() {
+                error!(
+                    "Custom expansion '{}' has {} invalid reference(s) with suggestions:\n  - {}",
+                    expansion_name,
+                    items_with_suggestions.len(),
+                    items_with_suggestions.join("\n  - ")
+                );
+            }
+
+            if !items_without_suggestions.is_empty() {
+                error!(
+                    "Custom expansion '{}' has {} invalid reference(s) with no suggestions:\n  - {}",
+                    expansion_name,
+                    items_without_suggestions.len(),
+                    items_without_suggestions.join("\n  - ")
+                );
+            }
+
+            error!(
+                "Custom expansion '{}' was NOT loaded - all {} reference(s) were invalid.",
+                expansion_name,
+                invalid_items.len()
+            );
         }
     }
     info!("create_custom_expansions() - finished");
