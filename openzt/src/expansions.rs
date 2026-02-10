@@ -413,6 +413,253 @@ pub mod custom_expansion {
     }
 }
 
+/// Validation result for expansion item references
+enum ExpansionItemValidation {
+    /// ZTD archive exists and has entities
+    ZtdWithEntities(HashSet<String>),
+    /// ZTD archive exists but has no entities
+    ZtdEmpty,
+    /// ZTD archive not loaded
+    ZtdNotLoaded,
+}
+
+/// Validate a ZTD archive reference
+fn validate_ztd_reference(item: &str) -> ExpansionItemValidation {
+    use crate::resource_manager::openzt_mods::get_ztd_status;
+
+    let normalized_archive = if item.to_lowercase().ends_with(".ztd") {
+        item.to_lowercase()
+    } else {
+        format!("{}.ztd", item.to_lowercase())
+    };
+
+    match get_ztd_status(&normalized_archive) {
+        None => ExpansionItemValidation::ZtdNotLoaded,
+        Some(status) => match status {
+            crate::resource_manager::openzt_mods::ztd_registry::ZtdLoadStatus::Disabled => {
+                ExpansionItemValidation::ZtdNotLoaded
+            }
+            crate::resource_manager::openzt_mods::ztd_registry::ZtdLoadStatus::Enabled => {
+                match get_entities_from_archive(item) {
+                    Some(entities) => ExpansionItemValidation::ZtdWithEntities(entities),
+                    None => ExpansionItemValidation::ZtdEmpty,
+                }
+            }
+        },
+    }
+}
+
+/// Check if an entity name exists in any member set or legacy attributes
+fn entity_name_exists(entity_name: &str) -> bool {
+    let member_sets = MEMBER_SETS.lock().unwrap();
+
+    // Check if entity exists in ANY member set
+    for (_set_name, entities) in member_sets.iter() {
+        if entities.contains(entity_name) {
+            return true;
+        }
+    }
+
+    // Also check legacy entities
+    use crate::resource_manager::openzt_mods::legacy_attributes::{
+        legacy_entity_exists, LegacyEntityType,
+    };
+
+    for entity_type in [
+        LegacyEntityType::Animal,
+        LegacyEntityType::Building,
+        LegacyEntityType::Fence,
+        LegacyEntityType::Food,
+        LegacyEntityType::Guest,
+        LegacyEntityType::Item,
+        LegacyEntityType::Path,
+        LegacyEntityType::Scenery,
+        LegacyEntityType::Staff,
+        LegacyEntityType::Wall,
+    ] {
+        if legacy_entity_exists(entity_type, entity_name) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Calculate Levenshtein distance between two strings
+///
+/// This measures the minimum number of single-character edits (insertions, deletions, or substitutions)
+/// required to change one string into the other.
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let a_len = a_chars.len();
+    let b_len = b_chars.len();
+
+    // Early returns for empty strings
+    if a_len == 0 {
+        return b_len;
+    }
+    if b_len == 0 {
+        return a_len;
+    }
+
+    // Create a 2D vector to store distances
+    let mut matrix = vec![vec![0; b_len + 1]; a_len + 1];
+
+    // Initialize the first row and column
+    for i in 0..=a_len {
+        matrix[i][0] = i;
+    }
+    for j in 0..=b_len {
+        matrix[0][j] = j;
+    }
+
+    // Fill the matrix
+    for i in 1..=a_len {
+        for j in 1..=b_len {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            matrix[i][j] = [
+                matrix[i - 1][j] + 1,        // deletion
+                matrix[i][j - 1] + 1,        // insertion
+                matrix[i - 1][j - 1] + cost, // substitution
+            ]
+            .into_iter()
+            .min()
+            .unwrap();
+        }
+    }
+
+    matrix[a_len][b_len]
+}
+
+/// Check if two strings are similar enough to suggest
+/// Uses a combination of substring matching and Levenshtein distance
+fn are_strings_similar(a: &str, b: &str) -> bool {
+    // Handle empty strings explicitly
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+
+    let a_lower = a.to_lowercase();
+    let b_lower = b.to_lowercase();
+
+    // Exact match or substring match (both directions)
+    // Substring match only counts if the shorter string is at least 3 characters
+    // This prevents single-character matches like "a" matching "banana"
+    if a_lower == b_lower {
+        return true;
+    }
+
+    let min_len = a_lower.len().min(b_lower.len());
+    if min_len >= 3 && (a_lower.contains(&b_lower) || b_lower.contains(&a_lower)) {
+        return true;
+    }
+
+    // For very short strings, require exact or near-exact match
+    if a_lower.len() <= 3 || b_lower.len() <= 3 {
+        return levenshtein_distance(&a_lower, &b_lower) <= 1;
+    }
+
+    // For longer strings, use Levenshtein distance with a threshold
+    // Use 25% threshold for better precision
+    let max_len = a_lower.len().max(b_lower.len());
+    let threshold = (max_len as f32 * 0.25).ceil() as usize;
+    let threshold = threshold.clamp(2, 4); // Between 2 and 4 edits
+
+    let distance = levenshtein_distance(&a_lower, &b_lower);
+
+    // Don't match if the distance is too large relative to the string length
+    // Also require that at least 50% of the shorter string is preserved
+    let min_len = a_lower.len().min(b_lower.len());
+    if distance > min_len / 2 {
+        return false;
+    }
+
+    distance <= threshold
+}
+
+/// Get all ZTD names that have entities
+///
+/// This filters to only return ZTDs that have at least one registered entity,
+/// excluding ZTDs that are empty, disabled, or missing.
+fn get_ztd_names_with_entities() -> Vec<String> {
+    let mapping = ENTITY_TO_ARCHIVE.lock().unwrap();
+
+    // Collect unique archive names that have entities
+    let mut archives: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (_entity, archive) in mapping.iter() {
+        // Strip "zip::" prefix if present for consistency
+        let archive_stripped = archive.strip_prefix("zip::").unwrap_or(archive);
+        archives.insert(archive_stripped.to_lowercase());
+    }
+
+    archives.into_iter().collect()
+}
+
+/// Get similar ZTD names for suggestions
+fn find_similar_ztd_names(ztd_name: &str) -> Vec<String> {
+    // Only suggest ZTDs that have entities
+    let all_ztds = get_ztd_names_with_entities();
+
+    // Collect matches with their distance scores
+    let mut matches_with_scores: Vec<(String, usize)> = all_ztds
+        .into_iter()
+        .filter(|name| are_strings_similar(ztd_name, name))
+        .map(|name| {
+            let distance = levenshtein_distance(ztd_name, &name);
+            (name, distance)
+        })
+        .collect();
+
+    // Sort by distance (closest matches first), then alphabetically
+    matches_with_scores.sort_by_key(|(name, score)| (*score, name.clone()));
+
+    // Take up to 5 matches, deduplicate, and return just the names
+    let mut matches: Vec<String> = matches_with_scores
+        .into_iter()
+        .take(5)
+        .map(|(name, _)| name)
+        .collect();
+
+    matches.sort();
+    matches.dedup();
+    matches
+}
+
+/// Get similar entity names for suggestions
+fn find_similar_entity_names(entity_name: &str) -> Vec<String> {
+    let member_sets = MEMBER_SETS.lock().unwrap();
+    let mut all_entities: Vec<String> = Vec::new();
+
+    for (_set_name, entities) in member_sets.iter() {
+        all_entities.extend(entities.iter().cloned());
+    }
+
+    // Collect matches with their distance scores
+    let mut matches_with_scores: Vec<(String, usize)> = all_entities
+        .into_iter()
+        .filter(|name| are_strings_similar(entity_name, name))
+        .map(|name| {
+            let distance = levenshtein_distance(entity_name, &name);
+            (name, distance)
+        })
+        .collect();
+
+    // Sort by distance (closest matches first), then alphabetically
+    matches_with_scores.sort_by_key(|(name, score)| (*score, name.clone()));
+
+    // Take up to 5 matches, deduplicate, and return just the names
+    let mut matches: Vec<String> = matches_with_scores
+        .into_iter()
+        .take(5)
+        .map(|(name, _)| name)
+        .collect();
+
+    matches.sort();
+    matches.dedup();
+    matches
+}
+
 fn create_custom_expansions() {
     info!("create_custom_expansions() - starting");
     info!("create_custom_expansions() - getting config");
@@ -441,29 +688,95 @@ fn create_custom_expansions() {
         let member_set_name = format!("openzt_custom_{}", expansion_id);
 
         // Process each item in the expansion's list
+        let mut invalid_items = Vec::new();
+        let mut items_with_suggestions = Vec::new();
+        let mut items_without_suggestions = Vec::new();
+
         for item in items {
             if item.to_lowercase().ends_with(".ztd") {
-                // Item is an archive - add all entities from it
-                info!("create_custom_expansions() - getting entities from archive: '{}'", item);
-                if let Some(entities) = get_entities_from_archive(item) {
-                    let entity_count = entities.len();
-                    for entity_name in entities {
-                        add_member(entity_name, member_set_name.clone());
+                // Item is an archive - validate and add entities
+                info!("create_custom_expansions() - validating ZTD reference: '{}'", item);
+
+                match validate_ztd_reference(item) {
+                    ExpansionItemValidation::ZtdWithEntities(entities) => {
+                        let entity_count = entities.len();
+                        for entity_name in entities {
+                            add_member(entity_name, member_set_name.clone());
+                        }
+                        info!(
+                            "Added {} entities from archive '{}' to expansion '{}'",
+                            entity_count, item, expansion_name
+                        );
                     }
-                    info!("Added {} entities from archive '{}' to expansion '{}'", entity_count, item, expansion_name);
-                } else {
-                    warn!("No entities found from archive '{}' for expansion '{}'", item, expansion_name);
+                    ExpansionItemValidation::ZtdEmpty => {
+                        let similar = find_similar_ztd_names(item);
+                        if !similar.is_empty() {
+                            items_with_suggestions.push(format!(
+                                "{} - ZTD is loaded but contains no entities. Similar loaded ZTDs: {}",
+                                item, similar.join(", ")
+                            ));
+                        } else {
+                            items_without_suggestions.push(format!("{} (no entities found)", item));
+                        }
+                        invalid_items.push(format!("{} (no entities found)", item));
+                    }
+                    ExpansionItemValidation::ZtdNotLoaded => {
+                        let similar = find_similar_ztd_names(item);
+                        if !similar.is_empty() {
+                            items_with_suggestions.push(format!(
+                                "{} - ZTD is not loaded. Did you mean: {}? (Ensure the ZTD file exists in your Zoo Tycoon directory or is loaded by a mod.)",
+                                item, similar.join(", ")
+                            ));
+                        } else {
+                            items_without_suggestions.push(format!("{} (ZTD not loaded)", item));
+                        }
+                        invalid_items.push(format!("{} (ZTD not loaded)", item));
+                    }
                 }
             } else {
-                // Item is an entity name
-                add_member(item.clone(), member_set_name.clone());
-                info!("Added entity '{}' to expansion '{}'", item, expansion_name);
+                // Item is an entity name - validate before adding
+                info!("create_custom_expansions() - validating entity reference: '{}'", item);
+
+                if entity_name_exists(item) {
+                    add_member(item.clone(), member_set_name.clone());
+                    info!("Added entity '{}' to expansion '{}'", item, expansion_name);
+                } else {
+                    let similar = find_similar_entity_names(item);
+                    if !similar.is_empty() {
+                        items_with_suggestions.push(format!(
+                            "{} - Entity does not exist. Similar entities: {}",
+                            item, similar.join(", ")
+                        ));
+                    } else {
+                        items_without_suggestions.push(format!("{} (entity not found)", item));
+                    }
+                    invalid_items.push(format!("{} (entity not found)", item));
+                }
             }
         }
 
         // Check if we have any members before creating expansion
         if let Some(members) = get_members(&member_set_name) {
             if !members.is_empty() {
+                // Expansion WILL be loaded - log errors with a message indicating it loaded
+                if !items_with_suggestions.is_empty() {
+                    error!(
+                        "Custom expansion '{}' has {} invalid reference(s) with suggestions:\n  - {}",
+                        expansion_name,
+                        items_with_suggestions.len(),
+                        items_with_suggestions.join("\n  - ")
+                    );
+                }
+
+                if !items_without_suggestions.is_empty() {
+                    error!(
+                        "Custom expansion '{}' has {} invalid reference(s) with no suggestions:\n  - {}",
+                        expansion_name,
+                        items_without_suggestions.len(),
+                        items_without_suggestions.join("\n  - ")
+                    );
+                }
+
                 info!(
                     "create_custom_expansions() - adding expansion to game: '{}' with {} members",
                     expansion_name,
@@ -475,15 +788,49 @@ fn create_custom_expansions() {
                     expansion_name.clone(),
                     false, // Don't save yet
                 );
-                info!(
-                    "Created custom expansion '{}' (ID: {:#x}) with {} members",
-                    expansion_name,
-                    expansion_id,
-                    members.len()
-                );
+
+                // Log that expansion was loaded despite errors
+                if !invalid_items.is_empty() {
+                    warn!(
+                        "Custom expansion '{}' was loaded with {} member(s), but {} reference(s) were invalid and skipped.",
+                        expansion_name,
+                        members.len(),
+                        invalid_items.len()
+                    );
+                } else {
+                    info!(
+                        "Created custom expansion '{}' (ID: {:#x}) with {} members",
+                        expansion_name,
+                        expansion_id,
+                        members.len()
+                    );
+                }
                 expansion_id += 1;
             } else {
-                warn!("Skipping expansion '{}' - no valid entities found", expansion_name);
+                // Expansion will NOT be loaded - all items were invalid
+                if !items_with_suggestions.is_empty() {
+                    error!(
+                        "Custom expansion '{}' has {} invalid reference(s) with suggestions:\n  - {}",
+                        expansion_name,
+                        items_with_suggestions.len(),
+                        items_with_suggestions.join("\n  - ")
+                    );
+                }
+
+                if !items_without_suggestions.is_empty() {
+                    error!(
+                        "Custom expansion '{}' has {} invalid reference(s) with no suggestions:\n  - {}",
+                        expansion_name,
+                        items_without_suggestions.len(),
+                        items_without_suggestions.join("\n  - ")
+                    );
+                }
+
+                error!(
+                    "Custom expansion '{}' was NOT loaded - all {} reference(s) were invalid.",
+                    expansion_name,
+                    invalid_items.len()
+                );
             }
         }
     }
@@ -1012,4 +1359,185 @@ pub fn init() {
     if unsafe { custom_expansion::init_detours() }.is_err() {
         error!("Error initialising custom expansion detours");
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // Tests for levenshtein_distance()
+    // =========================================================================
+
+    #[test]
+    fn test_levenshtein_empty_strings() {
+        // Empty string vs empty string
+        assert_eq!(levenshtein_distance("", ""), 0);
+        // Empty string vs non-empty string
+        assert_eq!(levenshtein_distance("", "hello"), 5);
+        assert_eq!(levenshtein_distance("hello", ""), 5);
+    }
+
+    #[test]
+    fn test_levenshtein_identical_strings() {
+        assert_eq!(levenshtein_distance("hello", "hello"), 0);
+        assert_eq!(levenshtein_distance("elephant", "elephant"), 0);
+        assert_eq!(levenshtein_distance("a", "a"), 0);
+    }
+
+    #[test]
+    fn test_levenshtein_single_character() {
+        // Single character differences
+        assert_eq!(levenshtein_distance("a", "b"), 1);
+        assert_eq!(levenshtein_distance("ab", "a"), 1); // deletion
+        assert_eq!(levenshtein_distance("a", "ab"), 1); // insertion
+        assert_eq!(levenshtein_distance("ab", "ac"), 1); // substitution
+    }
+
+    #[test]
+    fn test_levenshtein_insertions() {
+        // Adding characters
+        assert_eq!(levenshtein_distance("cat", "cats"), 1);
+        assert_eq!(levenshtein_distance("eleph", "elephant"), 3);
+        assert_eq!(levenshtein_distance("dog", "dogs"), 1);
+    }
+
+    #[test]
+    fn test_levenshtein_deletions() {
+        // Removing characters
+        assert_eq!(levenshtein_distance("cats", "cat"), 1);
+        assert_eq!(levenshtein_distance("elephant", "eleph"), 3);
+        assert_eq!(levenshtein_distance("dogs", "dog"), 1);
+    }
+
+    #[test]
+    fn test_levenshtein_substitutions() {
+        // Replacing characters
+        assert_eq!(levenshtein_distance("cat", "bat"), 1);
+        assert_eq!(levenshtein_distance("elephnt", "elephant"), 1);
+        assert_eq!(levenshtein_distance("kitten", "sitten"), 1);
+    }
+
+    #[test]
+    fn test_levenshtein_mixed_operations() {
+        // Combination of insertions, deletions, and substitutions
+        assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
+        assert_eq!(levenshtein_distance("saturday", "sunday"), 3);
+        assert_eq!(levenshtein_distance("my_animalz", "my_animals"), 1);
+    }
+
+    #[test]
+    fn test_levenshtein_case_sensitivity() {
+        // Levenshtein distance is case-sensitive
+        assert_eq!(levenshtein_distance("hello", "HELLO"), 5);
+        assert_eq!(levenshtein_distance("Elephant", "elephant"), 1);
+    }
+
+    #[test]
+    fn test_levenshtein_real_world_typos() {
+        // Common typos that users might make
+        assert_eq!(levenshtein_distance("elephnt", "elephant"), 1); // missing 'a'
+        assert_eq!(levenshtein_distance("girafe", "giraffe"), 1); // missing 'f'
+        assert_eq!(levenshtein_distance("zebraa", "zebra"), 1); // extra 'a'
+        assert_eq!(levenshtein_distance("lio", "lion"), 1); // substitution
+        assert_eq!(levenshtein_distance("tigger", "tiger"), 1); // extra 'g'
+        assert_eq!(levenshtein_distance("monky", "monkey"), 1); // missing 'e'
+    }
+
+    // =========================================================================
+    // Tests for are_strings_similar()
+    // =========================================================================
+
+    #[test]
+    fn test_are_strings_similar_exact_match() {
+        assert!(are_strings_similar("elephant", "elephant"));
+        assert!(are_strings_similar("my_animals.ztd", "my_animals.ztd"));
+    }
+
+    #[test]
+    fn test_are_strings_similar_case_insensitive() {
+        assert!(are_strings_similar("elephant", "ELEPHANT"));
+        assert!(are_strings_similar("My_Animals.ZTD", "my_animals.ztd"));
+    }
+
+    #[test]
+    fn test_are_strings_similar_substring_match() {
+        // Input is substring of target
+        assert!(are_strings_similar("eleph", "elephant"));
+        assert!(are_strings_similar("my_animals", "my_animals.ztd"));
+
+        // Target is substring of input
+        assert!(are_strings_similar("elephant_african", "elephant"));
+        assert!(are_strings_similar("my_animals.ztd", "my_animals"));
+    }
+
+    #[test]
+    fn test_are_strings_similar_levenshtein_match() {
+        // Typos caught by Levenshtein distance
+        assert!(are_strings_similar("elephnt", "elephant"));
+        assert!(are_strings_similar("elephhant", "elephant"));
+        assert!(are_strings_similar("my_animalz", "my_animals"));
+        assert!(are_strings_similar("zebraa", "zebra"));
+        assert!(are_strings_similar("lio", "lion"));
+    }
+
+    #[test]
+    fn test_are_strings_similar_short_strings() {
+        // Very short strings require exact or near-exact match
+        assert!(are_strings_similar("cat", "cat")); // exact
+        assert!(are_strings_similar("cat", "bat")); // 1 edit
+        assert!(are_strings_similar("cat", "rat")); // 1 edit
+        assert!(!are_strings_similar("cat", "dog")); // 3 edits > threshold
+    }
+
+    #[test]
+    fn test_are_strings_similar_too_different() {
+        // Strings that are too different should not match
+        assert!(!are_strings_similar("elephant", "giraffe"));
+        assert!(!are_strings_similar("my_animals", "your_animals"));
+        assert!(!are_strings_similar("cats", "dogs"));
+        assert!(!are_strings_similar("xyz", "abc"));
+    }
+
+    #[test]
+    fn test_are_strings_similar_edge_cases() {
+        // Empty strings
+        assert!(!are_strings_similar("", "elephant"));
+        assert!(!are_strings_similar("elephant", ""));
+
+        // Very short input (1-3 chars) - requires near-exact match
+        assert!(are_strings_similar("cat", "bat")); // 1 edit
+        assert!(!are_strings_similar("cat", "bar")); // 2 edits
+
+        // Longer strings allow more edits
+        assert!(are_strings_similar("elephant", "elephnt")); // 1 edit
+        assert!(are_strings_similar("elephanta", "elephant")); // 1 edit (extra 'a')
+        assert!(are_strings_similar("elephantt", "elephant")); // 2 edits
+    }
+
+    #[test]
+    fn test_are_strings_similar_ztd_filenames() {
+        // Test realistic ZTD filename comparisons
+        assert!(are_strings_similar("animals.ztd", "animals.ztd")); // exact match
+        assert!(are_strings_similar("animals", "animals.ztd")); // substring match
+        assert!(are_strings_similar("animalz.ztd", "animals.ztd")); // typo (1 edit)
+        assert!(are_strings_similar("marine_life.ztd", "marinelife.ztd")); // missing underscore (1 edit)
+
+        // Too different
+        assert!(!are_strings_similar("animals.ztd", "scenery.ztd"));
+        assert!(!are_strings_similar("cats.ztd", "dogs.ztd"));
+    }
+
+    #[test]
+    fn test_are_strings_similar_entity_names() {
+        // Test realistic entity name comparisons
+        assert!(are_strings_similar("elephant", "elephant")); // exact match
+        assert!(are_strings_similar("elephnt", "elephant")); // common typo
+        assert!(are_strings_similar("elephant_african", "elephant")); // substring match
+        assert!(are_strings_similar("lion", "lio")); // typo (1 edit)
+
+        // Too different
+        assert!(!are_strings_similar("elephant", "giraffe"));
+        assert!(!are_strings_similar("tiger", "lion"));
+    }
 }

@@ -9,6 +9,7 @@ pub(crate) mod ztd_registry;
 pub use crate::resource_manager::openzt_mods::{
     habitats_locations::{get_location_habitat_ids, get_location_or_habitat_by_id},
     loading::{discover_mods, get_mod_ids, get_num_mod_ids, load_open_zt_mod},
+    ztd_registry::get_ztd_status,
 };
 
 // Re-export items needed for integration tests
