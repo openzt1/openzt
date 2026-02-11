@@ -604,12 +604,9 @@ fn find_similar_ztd_names(ztd_name: &str) -> Vec<String> {
 
 /// Get similar entity names for suggestions
 fn find_similar_entity_names(entity_name: &str) -> Vec<String> {
-    let member_sets = MEMBER_SETS.lock().unwrap();
-    let mut all_entities: Vec<String> = Vec::new();
-
-    for (_set_name, entities) in member_sets.iter() {
-        all_entities.extend(entities.iter().cloned());
-    }
+    // Use ENTITY_TO_ARCHIVE instead of MEMBER_SETS to get only entities that actually exist
+    let mapping = ENTITY_TO_ARCHIVE.lock().unwrap();
+    let all_entities: Vec<String> = mapping.keys().cloned().collect();
 
     // Collect matches with their distance scores
     let mut matches_with_scores: Vec<(String, usize)> = all_entities
