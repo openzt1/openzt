@@ -29,7 +29,20 @@ async fn main() -> Result<()> {
     tracing::info!("Loaded configuration: {:?}", config.server);
 
     // Create application state
-    let state = Arc::new(RwLock::new(state::AppState::new(config.clone())));
+    let mut app_state = state::AppState::new(config.clone());
+
+    // Recover existing containers from Docker
+    match app_state.recover_instances().await {
+        Ok(count) => {
+            tracing::info!("Successfully recovered {} instances on startup", count);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to recover instances: {}. Starting with empty state.", e);
+            // Don't fail startup - continue with empty state
+        }
+    }
+
+    let state = Arc::new(RwLock::new(app_state));
 
     // Build router with CORS support and increased body limit
     let app = Router::new()

@@ -65,6 +65,31 @@ impl PortPool {
     pub fn console_available(&self) -> usize {
         self.console_range.clone().count() - self.allocated_console.len()
     }
+
+    /// Add an existing RDP port allocation (for recovery)
+    pub fn add_existing_rdp(&mut self, port: u16) -> anyhow::Result<()> {
+        if !self.rdp_range.contains(&port) {
+            return Err(anyhow::anyhow!("Port {} outside RDP range {:?}", port, self.rdp_range));
+        }
+        self.allocated_rdp.insert(port);
+        Ok(())
+    }
+
+    /// Add an existing console port allocation (for recovery)
+    pub fn add_existing_console(&mut self, port: u16) -> anyhow::Result<()> {
+        if !self.console_range.contains(&port) {
+            return Err(anyhow::anyhow!("Port {} outside console range {:?}", port, self.console_range));
+        }
+        self.allocated_console.insert(port);
+        Ok(())
+    }
+
+    /// Add an existing port pair allocation (for recovery)
+    pub fn add_existing_pair(&mut self, rdp_port: u16, console_port: u16) -> anyhow::Result<()> {
+        self.add_existing_rdp(rdp_port)?;
+        self.add_existing_console(console_port)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
