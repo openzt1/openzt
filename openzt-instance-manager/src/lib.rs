@@ -16,6 +16,8 @@ pub mod client;
 #[cfg(feature = "cli")]
 pub mod client_config;
 #[cfg(feature = "cli")]
+pub mod id_resolver;
+#[cfg(feature = "cli")]
 pub mod output;
 
 // Re-export commonly used types for external consumers

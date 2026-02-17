@@ -13,6 +13,10 @@ use tabled::{
     Table, Tabled,
 };
 
+// Import ID resolution support for CLI-only error display
+#[cfg(feature = "cli")]
+use crate::id_resolver::{calculate_safe_id_length, ResolutionError};
+
 /// Output format options
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -126,6 +130,14 @@ pub fn print_instance_list(instances: &[InstanceDetails], format: OutputFormat) 
 }
 
 /// Print instance list in table format
+#[cfg(not(feature = "cli"))]
+fn print_instance_list_table(instances: &[InstanceDetails]) {
+    // Stub for non-CLI builds
+    let _ = instances;
+}
+
+/// Print instance list in table format
+#[cfg(feature = "cli")]
 fn print_instance_list_table(instances: &[InstanceDetails]) {
     #[derive(Tabled)]
     #[tabled(rename_all = "PASCAL")]
@@ -144,10 +156,13 @@ fn print_instance_list_table(instances: &[InstanceDetails]) {
         rdp_url: String,
     }
 
+    // Calculate safe ID length to avoid duplicates
+    let id_length = calculate_safe_id_length(instances);
+
     let rows: Vec<InstanceRow> = instances
         .iter()
         .map(|i| InstanceRow {
-            id: i.id[..8].to_string(),
+            id: i.id[..id_length.min(i.id.len())].to_string(),
             created_at: i.created_at.format("%Y-%m-%d %H:%M").to_string(),
             rdp_port: i.rdp_port,
             console_port: i.console_port,
@@ -230,6 +245,72 @@ pub fn confirm_action(action: &str, target: &str) -> bool {
         .ok();
 
     matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
+/// Print an ID resolution error with helpful context
+#[cfg(feature = "cli")]
+pub fn print_resolution_error(error: &ResolutionError) {
+    match error {
+        ResolutionError::NotFound(_prefix) => {
+            print_error(&error.message());
+            print_info("Use 'openzt list' to see available instances");
+        }
+        ResolutionError::Ambiguous { prefix: _, matches } => {
+            print_error(&error.message());
+            print_info("Matching instances:");
+            print_ambiguous_matches(matches);
+            let min_len = crate::id_resolver::suggest_min_length(matches);
+            print_info(&format!("Use at least {} characters to uniquely identify", min_len));
+        }
+        ResolutionError::InvalidLength(_input) => {
+            print_error(&error.message());
+        }
+        ResolutionError::ApiError(_e) => {
+            print_error(&error.message());
+        }
+    }
+}
+
+/// Print abbreviated table of ambiguous matches
+#[cfg(feature = "cli")]
+fn print_ambiguous_matches(matches: &[InstanceDetails]) {
+    #[derive(Tabled)]
+    #[tabled(rename_all = "PASCAL")]
+    struct AmbiguousRow {
+        #[tabled(rename = "ID")]
+        id: String,
+        #[tabled(rename = "Created")]
+        created_at: String,
+        #[tabled(rename = "Status")]
+        status: String,
+    }
+
+    let rows: Vec<AmbiguousRow> = matches
+        .iter()
+        .map(|i| AmbiguousRow {
+            id: truncate_id(&i.id, 12),
+            created_at: i.created_at.format("%Y-%m-%d %H:%M").to_string(),
+            status: i.status.clone(),
+        })
+        .collect();
+
+    let mut table = Table::new(rows);
+    table.with(Style::modern());
+    table.with(Modify::new(Rows::new(1..)).with(Alignment::left()));
+
+    println!("{}", table);
+}
+
+/// Truncate an ID to a specified length for display
+#[cfg(feature = "cli")]
+fn truncate_id(id: &str, length: usize) -> String {
+    let safe_len = length.min(id.len());
+    let truncated = &id[..safe_len];
+    if safe_len < id.len() {
+        format!("{}...", truncated)
+    } else {
+        truncated.to_string()
+    }
 }
 
 #[cfg(test)]

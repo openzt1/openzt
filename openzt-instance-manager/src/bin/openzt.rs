@@ -6,6 +6,10 @@ use std::path::PathBuf;
 
 // Conditionally include CLI dependencies
 #[cfg(feature = "cli")]
+use openzt_instance_manager::id_resolver::resolve_instance_id;
+
+// Conditionally include CLI dependencies
+#[cfg(feature = "cli")]
 use clap::{Parser, Subcommand, Args};
 #[cfg(feature = "cli")]
 use miette::{miette, Result};
@@ -94,13 +98,13 @@ enum Commands {
 
     /// Get instance details
     Get {
-        /// Instance ID
+        /// Instance ID (full UUID or 4+ character prefix)
         id: String,
     },
 
     /// Delete an instance
     Delete {
-        /// Instance ID
+        /// Instance ID (full UUID or 4+ character prefix)
         id: String,
 
         /// Skip confirmation prompt
@@ -110,7 +114,7 @@ enum Commands {
 
     /// Get instance logs
     Logs {
-        /// Instance ID
+        /// Instance ID (full UUID or 4+ character prefix)
         id: String,
 
         /// Follow log output (not yet implemented)
@@ -196,9 +200,18 @@ async fn cmd_get(
     id: &str,
     output_format: openzt_instance_manager::output::OutputFormat,
 ) -> Result<()> {
-    use openzt_instance_manager::output::{print_error, print_instance};
+    use openzt_instance_manager::output::{print_error, print_instance, print_resolution_error};
 
-    match client.get_instance(id).await {
+    // Resolve ID (handles both short and full UUIDs)
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
+
+    match client.get_instance(&resolved_id).await {
         Ok(instance) => print_instance(&instance, output_format),
         Err(e) => {
             print_error(&format!("Failed to get instance: {}", e));
@@ -216,20 +229,29 @@ async fn cmd_delete(
     confirm: bool,
     output_format: openzt_instance_manager::output::OutputFormat,
 ) -> Result<()> {
-    use openzt_instance_manager::output::{confirm_action, print_error, print_success};
+    use openzt_instance_manager::output::{confirm_action, print_error, print_resolution_error, print_success};
+
+    // Resolve ID (handles both short and full UUIDs)
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
 
     // Confirm unless --confirm flag was provided
     if !confirm {
-        if !confirm_action("delete instance", &format!("ID: {}", id)) {
+        if !confirm_action("delete instance", &format!("ID: {}", &resolved_id[..8])) {
             openzt_instance_manager::output::print_info("Delete cancelled");
             return Ok(());
         }
     }
 
-    match client.delete_instance(id).await {
+    match client.delete_instance(&resolved_id).await {
         Ok(()) => {
             if output_format != openzt_instance_manager::output::OutputFormat::Json {
-                print_success(&format!("Deleted instance: {}", id));
+                print_success(&format!("Deleted instance: {}", &resolved_id[..8]));
             }
         }
         Err(e) => {
@@ -250,16 +272,25 @@ async fn cmd_logs(
     output_format: openzt_instance_manager::output::OutputFormat,
 ) -> Result<()> {
     use openzt_instance_manager::instance::LogsResponse;
-    use openzt_instance_manager::output::{print_error, print_logs};
+    use openzt_instance_manager::output::{print_error, print_logs, print_resolution_error};
 
     if follow {
         openzt_instance_manager::output::print_warning("Log streaming not yet implemented");
     }
 
-    match client.get_logs(id).await {
+    // Resolve ID (handles both short and full UUIDs)
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
+
+    match client.get_logs(&resolved_id).await {
         Ok(logs) => {
             let response = LogsResponse {
-                instance_id: id.to_string(),
+                instance_id: resolved_id,
                 logs,
             };
             let output_json = output_format == openzt_instance_manager::output::OutputFormat::Json;
