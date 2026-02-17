@@ -1,0 +1,19 @@
+[server]
+listen_address = "0.0.0.0:3000"
+
+[ports]
+rdp_start = 13390
+rdp_end = 13490
+console_start = 18081
+console_end = 18181
+
+[docker]
+image = "finn/winezt:latest"
+container_prefix = "openzt-"
+
+[instances]
+max_instances = 100
+auto_cleanup_hours = 24
+
+[api]
+enable_auth = false
