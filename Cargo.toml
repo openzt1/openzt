@@ -12,13 +12,14 @@ members = [
     "openzt-console",
     "openzt-configparser",
     "openzt-test-dll",
-    "openzt-detour", 
+    "openzt-detour",
     "openzt-dll",
+    "openzt-instance-manager",
 
     # vendor
     "vendor/retour-rs",
 
-    # # TODO:	
+    # # TODO:
     # "openzt-animations",
 ]
 #exclude = ["outside-workspace"]
