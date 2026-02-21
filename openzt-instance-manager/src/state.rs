@@ -18,6 +18,7 @@ impl AppState {
         let port_pool = PortPool::new(
             config.ports.rdp_start..config.ports.rdp_end,
             config.ports.console_start..config.ports.console_end,
+            config.ports.xpra_start..config.ports.xpra_end,
         );
 
         Self {
@@ -59,7 +60,7 @@ impl AppState {
             match docker.inspect_container_for_recovery(&container_id).await {
                 Ok(info) => {
                     // Register ports in pool
-                    if let Err(e) = self.port_pool.add_existing_pair(info.rdp_port, info.console_port) {
+                    if let Err(e) = self.port_pool.add_existing_triplet(info.rdp_port, info.console_port, info.xpra_port) {
                         tracing::error!("Failed to register ports for {}: {}, skipping", instance_id, e);
                         continue;
                     }
@@ -73,6 +74,7 @@ impl AppState {
                         container_id: info.container_id,
                         rdp_port: info.rdp_port,
                         console_port: info.console_port,
+                        xpra_port: info.xpra_port,
                         status: info.status,
                         created_at: info.created_at,
                         config: info.config,
@@ -81,8 +83,8 @@ impl AppState {
                     self.instances.insert(instance_id.to_string(), instance);
                     recovered_count += 1;
 
-                    tracing::info!("Recovered instance {} (RDP: {}, Console: {}, Status: {:?})",
-                        instance_id, info.rdp_port, info.console_port, status);
+                    tracing::info!("Recovered instance {} (RDP: {}, Console: {}, XPRA: {}, Status: {:?})",
+                        instance_id, info.rdp_port, info.console_port, info.xpra_port, status);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to inspect container {}: {}", container_id, e);

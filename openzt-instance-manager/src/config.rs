@@ -27,6 +27,10 @@ pub struct PortsConfig {
     pub console_start: u16,
     #[serde(default = "default_console_end")]
     pub console_end: u16,
+    #[serde(default = "default_xpra_start")]
+    pub xpra_start: u16,
+    #[serde(default = "default_xpra_end")]
+    pub xpra_end: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +84,8 @@ impl Default for PortsConfig {
             rdp_end: default_rdp_end(),
             console_start: default_console_start(),
             console_end: default_console_end(),
+            xpra_start: default_xpra_start(),
+            xpra_end: default_xpra_end(),
         }
     }
 }
@@ -129,6 +135,14 @@ fn default_console_start() -> u16 {
 
 fn default_console_end() -> u16 {
     18181
+}
+
+fn default_xpra_start() -> u16 {
+    14500
+}
+
+fn default_xpra_end() -> u16 {
+    14600
 }
 
 fn default_docker_image() -> String {

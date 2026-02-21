@@ -70,6 +70,7 @@ impl DockerManager {
         image: &str,
         rdp_port: u16,
         console_port: u16,
+        xpra_port: u16,
         dll_path: &str,
         instance_config: &InstanceConfig,
     ) -> Result<String> {
@@ -82,6 +83,7 @@ impl DockerManager {
         let mut exposed_ports = HashMap::new();
         exposed_ports.insert("3389/tcp".to_string(), HashMap::new());
         exposed_ports.insert("8080/tcp".to_string(), HashMap::new());
+        exposed_ports.insert("14500/tcp".to_string(), HashMap::new());
 
         // Build port bindings
         let mut port_bindings = HashMap::new();
@@ -99,6 +101,13 @@ impl DockerManager {
                 host_port: Some(console_port.to_string()),
             }]),
         );
+        port_bindings.insert(
+            "14500/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: None,
+                host_port: Some(xpra_port.to_string()),
+            }]),
+        );
 
         // Build labels for persistence
         let mut labels = HashMap::new();
@@ -113,7 +122,7 @@ impl DockerManager {
             labels: Some(labels),
             env: Some(vec![
                 "RDP_SERVER=yes".to_string(),
-                "XPRA_HTML_PORT=3389".to_string(),
+                "XPRA_HTML_PORT=14500".to_string(),
                 "USE_XPRA=yes".to_string(),
                 //"USE_XVFB=yes".to_string(),
                 //"XVFB_RESOLUTION=1024x768x8".to_string(),
@@ -265,6 +274,7 @@ pub struct RecoveredInstanceInfo {
     pub container_id: String,
     pub rdp_port: u16,
     pub console_port: u16,
+    pub xpra_port: u16,
     pub status: InstanceStatus,
     pub created_at: DateTime<Utc>,
     pub config: InstanceConfig,
@@ -305,7 +315,7 @@ impl DockerManager {
             .inspect_container(container_id, None::<InspectContainerOptions>)
             .await?;
 
-        let (rdp_port, console_port) = self.extract_ports(&inspect)?;
+        let (rdp_port, console_port, xpra_port) = self.extract_ports(&inspect)?;
         let status = self.map_docker_status(&inspect.state.ok_or_else(|| anyhow!("Missing state"))?);
         let created_at = self.parse_created_timestamp(inspect.created.as_deref().ok_or_else(|| anyhow!("Missing created timestamp"))?)?;
 
@@ -322,22 +332,24 @@ impl DockerManager {
             container_id: container_id.to_string(),
             rdp_port,
             console_port,
+            xpra_port,
             status,
             created_at,
             config,
         })
     }
 
-    fn extract_ports(&self, inspect: &ContainerInspectResponse) -> Result<(u16, u16)> {
+    fn extract_ports(&self, inspect: &ContainerInspectResponse) -> Result<(u16, u16, u16)> {
         // Try NetworkSettings first (for running containers)
         if let Some(network_settings) = &inspect.network_settings {
             if let Some(ports) = &network_settings.ports {
                 if !ports.is_empty() {
-                    if let (Some(rdp), Some(console)) = (
+                    if let (Some(rdp), Some(console), Some(xpra)) = (
                         self.try_extract_port(ports, "3389/tcp"),
-                        self.try_extract_port(ports, "8080/tcp")
+                        self.try_extract_port(ports, "8080/tcp"),
+                        self.try_extract_port(ports, "14500/tcp")
                     ) {
-                        return Ok((rdp, console));
+                        return Ok((rdp, console, xpra));
                     }
                 }
             }
@@ -351,8 +363,9 @@ impl DockerManager {
 
         let rdp_port = self.extract_port_from_binding(bindings, "3389/tcp")?;
         let console_port = self.extract_port_from_binding(bindings, "8080/tcp")?;
+        let xpra_port = self.extract_port_from_binding(bindings, "14500/tcp")?;
 
-        Ok((rdp_port, console_port))
+        Ok((rdp_port, console_port, xpra_port))
     }
 
     /// Try to extract a port from bindings, returning None if not found
