@@ -10,6 +10,42 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Installation flags (default: install both)
+INSTALL_SERVER=true
+INSTALL_CLI=true
+
+# Parse command-line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --server-only)
+            INSTALL_SERVER=true
+            INSTALL_CLI=false
+            shift
+            ;;
+        --cli-only)
+            INSTALL_SERVER=false
+            INSTALL_CLI=true
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--server-only] [--cli-only] [--help]"
+            echo ""
+            echo "Options:"
+            echo "  --server-only    Install only the server component"
+            echo "  --cli-only       Install only the CLI client"
+            echo "  --help, -h       Show this help message"
+            echo ""
+            echo "If no option is specified, both server and CLI will be installed."
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            echo "Use '$0 --help' for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 # Configuration
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/openzt-instance-manager"
@@ -76,14 +112,20 @@ echo -e "${GREEN}Building binaries...${NC}"
 echo "Working directory: $(pwd)"
 
 # Build with explicit path
-cargo build --release --bin openzt-instance-manager
-cargo build --release --bin openzt --features cli
+if [[ "$INSTALL_SERVER" == true ]]; then
+    cargo build --release --bin openzt-instance-manager
+fi
+if [[ "$INSTALL_CLI" == true ]]; then
+    cargo build --release --bin openzt --features cli
+fi
 
 # Find the target directory (could be in workspace root or local)
 TARGET_DIR=""
-if [[ -f "target/release/openzt-instance-manager" ]]; then
+if [[ "$INSTALL_SERVER" == true && -f "target/release/openzt-instance-manager" ]] || \
+   [[ "$INSTALL_SERVER" == false && "$INSTALL_CLI" == true && -f "target/release/openzt" ]]; then
     TARGET_DIR="$(pwd)/target"
-elif [[ -f "$SCRIPT_DIR/target/release/openzt-instance-manager" ]]; then
+elif [[ "$INSTALL_SERVER" == true && -f "$SCRIPT_DIR/target/release/openzt-instance-manager" ]] || \
+     [[ "$INSTALL_SERVER" == false && "$INSTALL_CLI" == true && -f "$SCRIPT_DIR/target/release/openzt" ]]; then
     TARGET_DIR="$SCRIPT_DIR/target"
 else
     echo -e "${RED}Error: Cannot find built binaries${NC}"
@@ -99,19 +141,26 @@ echo ""
 echo -e "${GREEN}Installing binaries from $TARGET_DIR${NC}"
 
 # Verify binaries exist before copying
-if [[ ! -f "$TARGET_DIR/release/openzt-instance-manager" ]]; then
+if [[ "$INSTALL_SERVER" == true && ! -f "$TARGET_DIR/release/openzt-instance-manager" ]]; then
     echo -e "${RED}Error: openzt-instance-manager binary not found${NC}"
     exit 1
 fi
-if [[ ! -f "$TARGET_DIR/release/openzt" ]]; then
+if [[ "$INSTALL_CLI" == true && ! -f "$TARGET_DIR/release/openzt" ]]; then
     echo -e "${RED}Error: openzt binary not found${NC}"
     exit 1
 fi
 
-sudo cp "$TARGET_DIR/release/openzt-instance-manager" "$INSTALL_DIR/"
-sudo cp "$TARGET_DIR/release/openzt" "$INSTALL_DIR/"
-sudo chmod +x "$INSTALL_DIR/openzt-instance-manager"
-sudo chmod +x "$INSTALL_DIR/openzt"
+# Install binaries
+if [[ "$INSTALL_SERVER" == true ]]; then
+    sudo cp "$TARGET_DIR/release/openzt-instance-manager" "$INSTALL_DIR/"
+    sudo chmod +x "$INSTALL_DIR/openzt-instance-manager"
+    echo -e "${GREEN}Installed: $INSTALL_DIR/openzt-instance-manager${NC}"
+fi
+if [[ "$INSTALL_CLI" == true ]]; then
+    sudo cp "$TARGET_DIR/release/openzt" "$INSTALL_DIR/"
+    sudo chmod +x "$INSTALL_DIR/openzt"
+    echo -e "${GREEN}Installed: $INSTALL_DIR/openzt${NC}"
+fi
 
 echo ""
 echo -e "${GREEN}Creating config directory...${NC}"
@@ -135,8 +184,9 @@ fi
 echo ""
 echo -e "${GREEN}Creating systemd service...${NC}"
 
-# Create systemd service file using sudo tee
-sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
+if [[ "$INSTALL_SERVER" == true ]]; then
+    # Create systemd service file using sudo tee
+    sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
 [Unit]
 Description=OpenZT Instance Manager API Server
 After=docker.service network-online.target
@@ -163,36 +213,64 @@ NoNewPrivileges=false
 WantedBy=multi-user.target
 EOF
 
-# Reload systemd
-sudo systemctl daemon-reload
+    # Reload systemd
+    sudo systemctl daemon-reload
+    echo -e "${GREEN}Systemd service created: /etc/systemd/system/$SERVICE_NAME.service${NC}"
+else
+    echo -e "${YELLOW}Skipped: systemd service creation (server not requested)${NC}"
+fi
 
 echo ""
 echo -e "${GREEN}Installation complete!${NC}"
 echo ""
+
+# Show what was installed
 echo "Binaries installed:"
-echo "  - $INSTALL_DIR/openzt-instance-manager (server)"
-echo "  - $INSTALL_DIR/openzt (client)"
+if [[ "$INSTALL_SERVER" == true ]]; then
+    echo "  - $INSTALL_DIR/openzt-instance-manager (server)"
+fi
+if [[ "$INSTALL_CLI" == true ]]; then
+    echo "  - $INSTALL_DIR/openzt (client)"
+fi
 echo ""
-echo "Config directory: $CONFIG_DIR"
-echo ""
-echo "To start the server:"
-echo "  sudo systemctl start $SERVICE_NAME"
-echo ""
-echo "To enable the server to start on boot:"
-echo "  sudo systemctl enable $SERVICE_NAME"
-echo ""
-echo "To check server status:"
-echo "  sudo systemctl status $SERVICE_NAME"
-echo ""
-echo "To view logs:"
-echo "  sudo journalctl -u $SERVICE_NAME -f"
-echo ""
-echo -e "${GREEN}CLI usage examples:${NC}"
-echo "  openzt health                      # Check API health"
-echo "  openzt list                        # List instances"
-echo "  openzt create <path-to-dll>        # Create instance"
-echo "  openzt get <instance-id>           # Get instance details"
-echo "  openzt logs <instance-id>          # Get instance logs"
-echo "  openzt delete <instance-id>        # Delete instance"
-echo ""
-echo "Use 'openzt --help' for more information."
+
+# Show config directory info
+if [[ "$INSTALL_SERVER" == true ]]; then
+    echo "Config directory: $CONFIG_DIR"
+    echo ""
+    echo "To start the server:"
+    echo "  sudo systemctl start $SERVICE_NAME"
+    echo ""
+    echo "To enable the server to start on boot:"
+    echo "  sudo systemctl enable $SERVICE_NAME"
+    echo ""
+    echo "To check server status:"
+    echo "  sudo systemctl status $SERVICE_NAME"
+    echo ""
+    echo "To view logs:"
+    echo "  sudo journalctl -u $SERVICE_NAME -f"
+    echo ""
+fi
+
+# Show CLI usage if CLI was installed
+if [[ "$INSTALL_CLI" == true ]]; then
+    echo -e "${GREEN}CLI usage examples:${NC}"
+    echo "  openzt health                      # Check API health"
+    echo "  openzt list                        # List instances"
+    echo "  openzt create <path-to-dll>        # Create instance"
+    echo "  openzt get <instance-id>           # Get instance details"
+    echo "  openzt logs <instance-id>          # Get instance logs"
+    echo "  openzt delete <instance-id>        # Delete instance"
+    echo ""
+    echo "Use 'openzt --help' for more information."
+    echo ""
+fi
+
+# Show helpful note for CLI-only installs
+if [[ "$INSTALL_SERVER" == false && "$INSTALL_CLI" == true ]]; then
+    echo -e "${YELLOW}Note: Only the CLI was installed.${NC}"
+    echo "The CLI requires a running server. Make sure the server is installed and running"
+    echo "on a reachable host, or set the OPENZT_API_URL environment variable:"
+    echo "  export OPENZT_API_URL=http://your-server:3000"
+    echo ""
+fi
