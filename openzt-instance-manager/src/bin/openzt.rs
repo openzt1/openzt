@@ -154,10 +154,6 @@ enum Commands {
 #[cfg(feature = "cli")]
 #[derive(Args, Clone)]
 struct InstanceConfigArgs {
-    /// Optional RDP password
-    #[arg(long)]
-    rdp_password: Option<String>,
-
     /// CPU limit in cores (e.g., 0.5 = 50%, 2.0 = 2 cores)
     #[arg(long)]
     cpulimit: Option<f64>,
@@ -180,9 +176,8 @@ async fn cmd_create(
     }
 
     // Build instance config
-    let instance_config = if config_args.rdp_password.is_some() || config_args.cpulimit.is_some() {
+    let instance_config = if config_args.cpulimit.is_some() {
         Some(InstanceConfig {
-            rdp_password: config_args.rdp_password,
             wine_debug_level: None,
             cpulimit: config_args.cpulimit,
         })

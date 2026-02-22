@@ -19,18 +19,14 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortsConfig {
-    #[serde(default = "default_rdp_start")]
-    pub rdp_start: u16,
-    #[serde(default = "default_rdp_end")]
-    pub rdp_end: u16,
+    #[serde(default = "default_vnc_start")]
+    pub vnc_start: u16,
+    #[serde(default = "default_vnc_end")]
+    pub vnc_end: u16,
     #[serde(default = "default_console_start")]
     pub console_start: u16,
     #[serde(default = "default_console_end")]
     pub console_end: u16,
-    #[serde(default = "default_xpra_start")]
-    pub xpra_start: u16,
-    #[serde(default = "default_xpra_end")]
-    pub xpra_end: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,12 +76,10 @@ impl Default for ServerConfig {
 impl Default for PortsConfig {
     fn default() -> Self {
         Self {
-            rdp_start: default_rdp_start(),
-            rdp_end: default_rdp_end(),
+            vnc_start: default_vnc_start(),
+            vnc_end: default_vnc_end(),
             console_start: default_console_start(),
             console_end: default_console_end(),
-            xpra_start: default_xpra_start(),
-            xpra_end: default_xpra_end(),
         }
     }
 }
@@ -121,12 +115,12 @@ fn default_listen_address() -> SocketAddr {
     "0.0.0.0:3000".parse().unwrap()
 }
 
-fn default_rdp_start() -> u16 {
-    13390
+fn default_vnc_start() -> u16 {
+    15900
 }
 
-fn default_rdp_end() -> u16 {
-    13490
+fn default_vnc_end() -> u16 {
+    16000
 }
 
 fn default_console_start() -> u16 {
@@ -135,14 +129,6 @@ fn default_console_start() -> u16 {
 
 fn default_console_end() -> u16 {
     18181
-}
-
-fn default_xpra_start() -> u16 {
-    14500
-}
-
-fn default_xpra_end() -> u16 {
-    14600
 }
 
 fn default_docker_image() -> String {

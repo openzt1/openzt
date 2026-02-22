@@ -46,11 +46,11 @@ async fn create_instance(
     tracing::info!("Creating instance {}", instance_id);
 
     // Allocate ports
-    let (rdp_port, console_port, xpra_port) = {
+    let (vnc_port, console_port) = {
         let mut state_guard = state.write().await;
         state_guard
             .port_pool
-            .allocate_triplet()
+            .allocate_pair()
             .ok_or(ApiError::PortsExhausted)?
     };
 
@@ -65,9 +65,8 @@ async fn create_instance(
     let instance = Instance {
         id: instance_id.clone(),
         container_id: String::new(),
-        rdp_port,
+        vnc_port,
         console_port,
-        xpra_port,
         status: InstanceStatus::Creating,
         created_at: Utc::now(),
         config: req.config.unwrap_or_default(),
@@ -77,7 +76,7 @@ async fn create_instance(
         let mut state_guard = state.write().await;
         if state_guard.instances.len() >= state_guard.config.instances.max_instances {
             // Release ports
-            state_guard.port_pool.release_triplet(rdp_port, console_port, xpra_port);
+            state_guard.port_pool.release_pair(vnc_port, console_port);
             return Err(ApiError::MaxInstancesReached);
         }
         state_guard.instances.insert(instance_id.clone(), instance);
@@ -91,9 +90,8 @@ async fn create_instance(
             state_clone.clone(),
             instance_id_clone.clone(),
             container_name,
-            rdp_port,
+            vnc_port,
             console_port,
-            xpra_port,
             dll_path.clone(),
         )
         .await
@@ -108,17 +106,15 @@ async fn create_instance(
             if let Some(instance) = state_guard.instances.get_mut(&instance_id_clone) {
                 instance.status = InstanceStatus::Error(e.to_string());
             }
-            state_guard.port_pool.release_triplet(rdp_port, console_port, xpra_port);
+            state_guard.port_pool.release_pair(vnc_port, console_port);
         }
     });
 
     Ok(Json(CreateInstanceResponse {
         instance_id,
-        rdp_port,
+        vnc_port,
         console_port,
-        xpra_port,
-        rdp_url: format!("rdp://localhost:{}", rdp_port),
-        xpra_url: format!("http://localhost:{}", xpra_port),
+        vnc_url: format!("vnc://localhost:{}", vnc_port),
         status: "creating".to_string(),
     }))
 }
@@ -127,9 +123,8 @@ async fn create_container_task(
     state: Arc<RwLock<AppState>>,
     instance_id: String,
     container_name: String,
-    rdp_port: u16,
+    vnc_port: u16,
     console_port: u16,
-    xpra_port: u16,
     dll_path: String,
 ) -> anyhow::Result<()> {
     let docker_manager = super::docker::DockerManager::new()?;
@@ -157,7 +152,7 @@ async fn create_container_task(
 
     // Create container
     let container_id = match docker_manager
-        .create_container(&container_name, &image, rdp_port, console_port, xpra_port, &dll_path, &instance_config)
+        .create_container(&container_name, &image, vnc_port, console_port, &dll_path, &instance_config)
         .await
     {
         Ok(id) => id,
@@ -303,10 +298,10 @@ async fn delete_instance(
     tracing::info!("Deleting instance {}", id);
 
     // Get instance details for cleanup
-    let (container_id, rdp_port, console_port, xpra_port) = {
+    let (container_id, vnc_port, console_port) = {
         let state_guard = state.read().await;
         let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
-        (instance.container_id.clone(), instance.rdp_port, instance.console_port, instance.xpra_port)
+        (instance.container_id.clone(), instance.vnc_port, instance.console_port)
     };
 
     // Stop and remove container
@@ -324,7 +319,7 @@ async fn delete_instance(
     {
         let mut state_guard = state.write().await;
         state_guard.instances.remove(&id);
-        state_guard.port_pool.release_triplet(rdp_port, console_port, xpra_port);
+        state_guard.port_pool.release_pair(vnc_port, console_port);
     }
 
     Ok(StatusCode::NO_CONTENT)

@@ -68,9 +68,8 @@ impl DockerManager {
         &self,
         name: &str,
         image: &str,
-        rdp_port: u16,
+        vnc_port: u16,
         console_port: u16,
-        xpra_port: u16,
         dll_path: &str,
         instance_config: &InstanceConfig,
     ) -> Result<String> {
@@ -81,17 +80,16 @@ impl DockerManager {
 
         // Build exposed ports
         let mut exposed_ports = HashMap::new();
-        exposed_ports.insert("3389/tcp".to_string(), HashMap::new());
+        exposed_ports.insert("5901/tcp".to_string(), HashMap::new());
         exposed_ports.insert("8080/tcp".to_string(), HashMap::new());
-        exposed_ports.insert("14500/tcp".to_string(), HashMap::new());
 
         // Build port bindings
         let mut port_bindings = HashMap::new();
         port_bindings.insert(
-            "3389/tcp".to_string(),
+            "5901/tcp".to_string(),
             Some(vec![PortBinding {
                 host_ip: None,
-                host_port: Some(rdp_port.to_string()),
+                host_port: Some(vnc_port.to_string()),
             }]),
         );
         port_bindings.insert(
@@ -99,13 +97,6 @@ impl DockerManager {
             Some(vec![PortBinding {
                 host_ip: None,
                 host_port: Some(console_port.to_string()),
-            }]),
-        );
-        port_bindings.insert(
-            "14500/tcp".to_string(),
-            Some(vec![PortBinding {
-                host_ip: None,
-                host_port: Some(xpra_port.to_string()),
             }]),
         );
 
@@ -121,13 +112,7 @@ impl DockerManager {
             hostname: Some(name.to_string()),
             labels: Some(labels),
             env: Some(vec![
-                "RDP_SERVER=yes".to_string(),
-                "XPRA_HTML_PORT=14500".to_string(),
-                "USE_XPRA=yes".to_string(),
-                //"USE_XVFB=yes".to_string(),
-                //"XVFB_RESOLUTION=1024x768x8".to_string(),
-                //"XVFB_SCREEN=0".to_string(),
-                //"XVFB_SERVER=:95".to_string(),
+                "VNC_SERVER=yes".to_string(),
             ]),
             exposed_ports: Some(exposed_ports),
             host_config: Some(bollard::service::HostConfig {
@@ -272,9 +257,8 @@ pub fn cleanup_dll_temp(instance_id: &str) {
 #[derive(Debug)]
 pub struct RecoveredInstanceInfo {
     pub container_id: String,
-    pub rdp_port: u16,
+    pub vnc_port: u16,
     pub console_port: u16,
-    pub xpra_port: u16,
     pub status: InstanceStatus,
     pub created_at: DateTime<Utc>,
     pub config: InstanceConfig,
@@ -315,7 +299,7 @@ impl DockerManager {
             .inspect_container(container_id, None::<InspectContainerOptions>)
             .await?;
 
-        let (rdp_port, console_port, xpra_port) = self.extract_ports(&inspect)?;
+        let (vnc_port, console_port) = self.extract_ports(&inspect)?;
         let status = self.map_docker_status(&inspect.state.ok_or_else(|| anyhow!("Missing state"))?);
         let created_at = self.parse_created_timestamp(inspect.created.as_deref().ok_or_else(|| anyhow!("Missing created timestamp"))?)?;
 
@@ -330,26 +314,24 @@ impl DockerManager {
 
         Ok(RecoveredInstanceInfo {
             container_id: container_id.to_string(),
-            rdp_port,
+            vnc_port,
             console_port,
-            xpra_port,
             status,
             created_at,
             config,
         })
     }
 
-    fn extract_ports(&self, inspect: &ContainerInspectResponse) -> Result<(u16, u16, u16)> {
+    fn extract_ports(&self, inspect: &ContainerInspectResponse) -> Result<(u16, u16)> {
         // Try NetworkSettings first (for running containers)
         if let Some(network_settings) = &inspect.network_settings {
             if let Some(ports) = &network_settings.ports {
                 if !ports.is_empty() {
-                    if let (Some(rdp), Some(console), Some(xpra)) = (
-                        self.try_extract_port(ports, "3389/tcp"),
-                        self.try_extract_port(ports, "8080/tcp"),
-                        self.try_extract_port(ports, "14500/tcp")
+                    if let (Some(vnc), Some(console)) = (
+                        self.try_extract_port(ports, "5901/tcp"),
+                        self.try_extract_port(ports, "8080/tcp")
                     ) {
-                        return Ok((rdp, console, xpra));
+                        return Ok((vnc, console));
                     }
                 }
             }
@@ -361,11 +343,10 @@ impl DockerManager {
             .and_then(|hc| hc.port_bindings.as_ref())
             .ok_or_else(|| anyhow!("No port bindings found in HostConfig"))?;
 
-        let rdp_port = self.extract_port_from_binding(bindings, "3389/tcp")?;
+        let vnc_port = self.extract_port_from_binding(bindings, "5901/tcp")?;
         let console_port = self.extract_port_from_binding(bindings, "8080/tcp")?;
-        let xpra_port = self.extract_port_from_binding(bindings, "14500/tcp")?;
 
-        Ok((rdp_port, console_port, xpra_port))
+        Ok((vnc_port, console_port))
     }
 
     /// Try to extract a port from bindings, returning None if not found
