@@ -19,10 +19,10 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortsConfig {
-    #[serde(default = "default_rdp_start")]
-    pub rdp_start: u16,
-    #[serde(default = "default_rdp_end")]
-    pub rdp_end: u16,
+    #[serde(default = "default_vnc_start")]
+    pub vnc_start: u16,
+    #[serde(default = "default_vnc_end")]
+    pub vnc_end: u16,
     #[serde(default = "default_console_start")]
     pub console_start: u16,
     #[serde(default = "default_console_end")]
@@ -43,6 +43,8 @@ pub struct InstancesConfig {
     pub max_instances: usize,
     #[serde(default = "default_auto_cleanup_hours")]
     pub auto_cleanup_hours: u64,
+    #[serde(default = "default_cpulimit")]
+    pub default_cpulimit: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,8 +76,8 @@ impl Default for ServerConfig {
 impl Default for PortsConfig {
     fn default() -> Self {
         Self {
-            rdp_start: default_rdp_start(),
-            rdp_end: default_rdp_end(),
+            vnc_start: default_vnc_start(),
+            vnc_end: default_vnc_end(),
             console_start: default_console_start(),
             console_end: default_console_end(),
         }
@@ -96,6 +98,7 @@ impl Default for InstancesConfig {
         Self {
             max_instances: default_max_instances(),
             auto_cleanup_hours: default_auto_cleanup_hours(),
+            default_cpulimit: default_cpulimit(),
         }
     }
 }
@@ -112,12 +115,12 @@ fn default_listen_address() -> SocketAddr {
     "0.0.0.0:3000".parse().unwrap()
 }
 
-fn default_rdp_start() -> u16 {
-    13390
+fn default_vnc_start() -> u16 {
+    15900
 }
 
-fn default_rdp_end() -> u16 {
-    13490
+fn default_vnc_end() -> u16 {
+    16000
 }
 
 fn default_console_start() -> u16 {
@@ -142,6 +145,10 @@ fn default_max_instances() -> usize {
 
 fn default_auto_cleanup_hours() -> u64 {
     24
+}
+
+fn default_cpulimit() -> f64 {
+    0.5  // Default: 50% of 1 CPU core
 }
 
 pub fn load_config() -> Result<Config> {

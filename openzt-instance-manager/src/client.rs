@@ -3,12 +3,15 @@
 //! This module provides a convenient async client for interacting with
 //! the instance manager API endpoints.
 
-use crate::instance::{CreateInstanceResponse, InstanceConfig, InstanceDetails, LogsResponse};
+use crate::instance::{CreateInstanceResponse, InstanceConfig, InstanceDetails, LogsResponse, InstanceStatusResponse};
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
+use futures_util::stream::Stream;
+use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::de::DeserializeOwned;
 use std::path::Path;
+use std::pin::Pin;
 
 /// API client for the OpenZT Instance Manager
 #[derive(Clone)]
@@ -114,16 +117,87 @@ impl InstanceClient {
     }
 
     /// Get logs for an instance
-    pub async fn get_logs(&self, id: &str) -> Result<String> {
-        let response = self
+    pub async fn get_logs(&self, id: &str, tail: Option<u32>) -> Result<String> {
+        let mut request = self
             .http_client
-            .get(self.url(&format!("/api/instances/{}/logs", id)))
+            .get(self.url(&format!("/api/instances/{}/logs", id)));
+
+        if let Some(t) = tail {
+            request = request.query(&[("tail", t)]);
+        }
+
+        let response = request
             .send()
             .await
             .with_context(|| format!("Failed to get logs for instance {}", id))?;
 
         let logs_response: LogsResponse = self.handle_response(response).await?;
         Ok(logs_response.logs)
+    }
+
+    /// Stream logs for an instance (returns a stream of log lines)
+    pub async fn stream_logs(
+        &self,
+        id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
+        let response = self
+            .http_client
+            .get(self.url(&format!("/api/instances/{}/logs/stream", id)))
+            .send()
+            .await
+            .context("Failed to connect to log stream")?;
+
+        if response.status() != StatusCode::OK {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("Failed to stream logs ({}): {}", status, body));
+        }
+
+        // Stream the response bytes and convert to SSE events
+        let byte_stream = response.bytes_stream();
+        let stream = byte_stream.map(|result| {
+            result
+                .map_err(|e| anyhow!("Stream error: {}", e))
+                .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+        });
+
+        Ok(Box::pin(stream))
+    }
+
+    /// Stop a running instance
+    pub async fn stop_instance(&self, id: &str) -> Result<InstanceStatusResponse> {
+        let response = self
+            .http_client
+            .post(self.url(&format!("/api/instances/{}/stop", id)))
+            .send()
+            .await
+            .with_context(|| format!("Failed to stop instance {}", id))?;
+
+        self.handle_response(response).await
+    }
+
+    /// Start a stopped instance
+    pub async fn start_instance(&self, id: &str) -> Result<InstanceStatusResponse> {
+        let response = self
+            .http_client
+            .post(self.url(&format!("/api/instances/{}/start", id)))
+            .send()
+            .await
+            .with_context(|| format!("Failed to start instance {}", id))?;
+
+        self.handle_response(response).await
+    }
+
+    /// Restart a running instance
+    pub async fn restart_instance(&self, id: &str) -> Result<InstanceStatusResponse> {
+        let response = self
+            .http_client
+            .post(self.url(&format!("/api/instances/{}/restart", id)))
+            .send()
+            .await
+            .with_context(|| format!("Failed to restart instance {}", id))?;
+
+        self.handle_response(response).await
     }
 
     /// Handle a response, extracting the JSON body or returning an error

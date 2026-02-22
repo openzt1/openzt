@@ -4,6 +4,10 @@
 //! to full UUIDs for API calls. It handles both short and full IDs, provides helpful
 //! error messages for not-found and ambiguous matches, and includes utilities for
 //! determining safe display lengths.
+//!
+//! Short IDs of any length (1+ characters) are supported as long as they uniquely
+//! identify an instance. When multiple instances share the same prefix, an
+//! ambiguous match error is returned with helpful guidance.
 
 use crate::client::InstanceClient;
 use crate::instance::InstanceDetails;
@@ -24,8 +28,6 @@ pub enum ResolutionError {
         prefix: String,
         matches: Vec<InstanceDetails>,
     },
-    /// Input is too short (< 4 characters)
-    InvalidLength(String),
     /// Failed to fetch instance list from API
     ApiError(anyhow::Error),
 }
@@ -40,9 +42,6 @@ impl ResolutionError {
             ResolutionError::Ambiguous { prefix, matches } => {
                 format!("Ambiguous ID prefix '{}' matches {} instances", prefix, matches.len())
             }
-            ResolutionError::InvalidLength(input) => {
-                format!("Invalid ID '{}' (minimum 4 characters)", input)
-            }
             ResolutionError::ApiError(e) => {
                 format!("Failed to resolve instance ID: {}", e)
             }
@@ -50,16 +49,14 @@ impl ResolutionError {
     }
 }
 
-/// Minimum number of characters required for short ID lookup
-const MIN_PREFIX_LENGTH: usize = 4;
-
 /// Full UUID length
 const UUID_LENGTH: usize = 36;
 
 /// Resolve a short ID or full UUID to a full instance ID.
 ///
-/// This function accepts both short ID prefixes (4+ characters) and full UUIDs.
+/// This function accepts both short ID prefixes (any length 1+) and full UUIDs.
 /// For short IDs, it fetches all instances and finds matches starting with the prefix.
+/// Empty strings will match all instances and result in an ambiguous match error.
 ///
 /// # Arguments
 /// * `client` - The API client to use for fetching instances
@@ -71,6 +68,9 @@ const UUID_LENGTH: usize = 36;
 ///
 /// # Examples
 /// ```ignore
+/// let resolved_id = resolve_instance_id(client, "b").await?;
+/// // Returns: Ok("ba4fc512-3d48-4f9e-9a1b-123456789abc") if unique
+///
 /// let resolved_id = resolve_instance_id(client, "ba4fc512").await?;
 /// // Returns: Ok("ba4fc512-3d48-4f9e-9a1b-123456789abc")
 ///
@@ -86,11 +86,6 @@ pub async fn resolve_instance_id(
     // If it's a full UUID length, treat as exact match (passthrough)
     if input.len() == UUID_LENGTH {
         return Ok(input.to_string());
-    }
-
-    // Reject IDs that are too short
-    if input.len() < MIN_PREFIX_LENGTH {
-        return Err(ResolutionError::InvalidLength(input.to_string()));
     }
 
     // Fetch all instances to find matches
@@ -125,15 +120,6 @@ pub async fn resolve_instance_id(
 ///
 /// # Returns
 /// The number of characters to display (between 8 and 36)
-///
-/// # Examples
-/// ```
-/// // No conflicts at 8 chars
-/// assert_eq!(calculate_safe_id_length(&[id1, id2]), 8);
-///
-/// // Two IDs share first 8 chars, need 12 to differentiate
-/// assert_eq!(calculate_safe_id_length(&[ba4fc512_xxx, ba4fc512_yyy]), 12);
-/// ```
 pub fn calculate_safe_id_length(instances: &[InstanceDetails]) -> usize {
     if instances.is_empty() {
         return 8;
@@ -169,13 +155,13 @@ pub fn calculate_safe_id_length(instances: &[InstanceDetails]) -> usize {
 /// * `instances` - The list of conflicting instances
 ///
 /// # Returns
-/// The minimum length needed for unique identification
+/// The minimum length needed for unique identification (at least 1)
 pub fn suggest_min_length(instances: &[InstanceDetails]) -> usize {
     if instances.len() <= 1 {
-        return MIN_PREFIX_LENGTH;
+        return 1;
     }
 
-    let mut length = MIN_PREFIX_LENGTH;
+    let mut length = 1;
     loop {
         if length >= 36 {
             return 36;
@@ -213,6 +199,7 @@ mod tests {
             config: InstanceConfig {
                 rdp_password: None,
                 wine_debug_level: None,
+                cpulimit: None,
             },
         }
     }
@@ -246,7 +233,7 @@ mod tests {
     #[test]
     fn test_suggest_min_length_single() {
         let instances = vec![create_test_instance("ba4fc512-3d48-4f9e-9a1b-123456789abc")];
-        assert_eq!(suggest_min_length(&instances), 4);
+        assert_eq!(suggest_min_length(&instances), 1);
     }
 
     #[test]
@@ -264,8 +251,57 @@ mod tests {
         let err = ResolutionError::NotFound("abc123".to_string());
         assert!(err.message().contains("No instance found"));
         assert!(err.message().contains("abc123"));
+    }
 
-        let err = ResolutionError::InvalidLength("abc".to_string());
-        assert!(err.message().contains("minimum 4 characters"));
+    #[test]
+    fn test_single_char_id_works() {
+        // Single character 'a' should uniquely identify the 'a1b2...' instance
+        let instances = vec![
+            create_test_instance("a1b2c3d4-5e6f-7a8b-9c0d-123456789abc"),
+            create_test_instance("b2c3d4e5-6f7a-8b9c-0d1e-234567890bcd"),
+        ];
+
+        let prefixes: Vec<&str> = instances
+            .iter()
+            .filter(|i| i.id.starts_with("a"))
+            .map(|i| &i.id[..1])
+            .collect();
+
+        assert_eq!(prefixes.len(), 1);
+        assert_eq!(prefixes[0], "a");
+    }
+
+    #[test]
+    fn test_two_char_id_works() {
+        // Two character 'a1' should uniquely identify the 'a1b2...' instance
+        let instances = vec![
+            create_test_instance("a1b2c3d4-5e6f-7a8b-9c0d-123456789abc"),
+            create_test_instance("a2b3c4d5-6f7a-8b9c-0d1e-234567890bcd"),
+            create_test_instance("b2c3d4e5-6f7a-8b9c-0d1e-234567890bcd"),
+        ];
+
+        let matching: Vec<&InstanceDetails> = instances
+            .iter()
+            .filter(|i| i.id.starts_with("a1"))
+            .collect();
+
+        assert_eq!(matching.len(), 1);
+        assert!(matching[0].id.starts_with("a1b2"));
+    }
+
+    #[test]
+    fn test_ambiguous_short_id() {
+        // Single character 'a' should match multiple instances starting with 'a'
+        let instances = vec![
+            create_test_instance("a1b2c3d4-5e6f-7a8b-9c0d-123456789abc"),
+            create_test_instance("a2b3c4d5-6f7a-8b9c-0d1e-234567890bcd"),
+        ];
+
+        let matching: Vec<&InstanceDetails> = instances
+            .iter()
+            .filter(|i| i.id.starts_with("a"))
+            .collect();
+
+        assert_eq!(matching.len(), 2);
     }
 }

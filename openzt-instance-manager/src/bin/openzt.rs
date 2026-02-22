@@ -51,6 +51,9 @@ async fn main() -> Result<()> {
         Commands::Logs { id, follow, tail } => {
             cmd_logs(&client, &id, follow, tail, output_format).await
         }
+        Commands::Stop { id } => cmd_stop(&client, &id, output_format).await,
+        Commands::Start { id } => cmd_start(&client, &id, output_format).await,
+        Commands::Restart { id } => cmd_restart(&client, &id, output_format).await,
         Commands::Health {} => cmd_health(&client, output_format).await,
     }
 }
@@ -98,13 +101,13 @@ enum Commands {
 
     /// Get instance details
     Get {
-        /// Instance ID (full UUID or 4+ character prefix)
+        /// Instance ID (full UUID or short prefix)
         id: String,
     },
 
     /// Delete an instance
     Delete {
-        /// Instance ID (full UUID or 4+ character prefix)
+        /// Instance ID (full UUID or short prefix)
         id: String,
 
         /// Skip confirmation prompt
@@ -114,10 +117,10 @@ enum Commands {
 
     /// Get instance logs
     Logs {
-        /// Instance ID (full UUID or 4+ character prefix)
+        /// Instance ID (full UUID or short prefix)
         id: String,
 
-        /// Follow log output (not yet implemented)
+        /// Follow log output in real-time
         #[arg(short, long)]
         follow: bool,
 
@@ -128,14 +131,32 @@ enum Commands {
 
     /// Check API health
     Health {},
+
+    /// Stop a running instance
+    Stop {
+        /// Instance ID (full UUID or short prefix)
+        id: String,
+    },
+
+    /// Start a stopped instance
+    Start {
+        /// Instance ID (full UUID or short prefix)
+        id: String,
+    },
+
+    /// Restart a running instance
+    Restart {
+        /// Instance ID (full UUID or short prefix)
+        id: String,
+    },
 }
 
 #[cfg(feature = "cli")]
 #[derive(Args, Clone)]
 struct InstanceConfigArgs {
-    /// Optional RDP password
+    /// CPU limit in cores (e.g., 0.5 = 50%, 2.0 = 2 cores)
     #[arg(long)]
-    rdp_password: Option<String>,
+    cpulimit: Option<f64>,
 }
 
 #[cfg(feature = "cli")]
@@ -155,10 +176,10 @@ async fn cmd_create(
     }
 
     // Build instance config
-    let instance_config = if config_args.rdp_password.is_some() {
+    let instance_config = if config_args.cpulimit.is_some() {
         Some(InstanceConfig {
-            rdp_password: config_args.rdp_password,
             wine_debug_level: None,
+            cpulimit: config_args.cpulimit,
         })
     } else {
         None
@@ -268,15 +289,12 @@ async fn cmd_logs(
     client: &openzt_instance_manager::client::InstanceClient,
     id: &str,
     follow: bool,
-    _tail: usize,
+    tail: usize,
     output_format: openzt_instance_manager::output::OutputFormat,
 ) -> Result<()> {
+    use futures_util::StreamExt;
     use openzt_instance_manager::instance::LogsResponse;
-    use openzt_instance_manager::output::{print_error, print_logs, print_resolution_error};
-
-    if follow {
-        openzt_instance_manager::output::print_warning("Log streaming not yet implemented");
-    }
+    use openzt_instance_manager::output::{print_error, print_info, print_logs, print_resolution_error};
 
     // Resolve ID (handles both short and full UUIDs)
     let resolved_id = match resolve_instance_id(client, id).await {
@@ -287,22 +305,50 @@ async fn cmd_logs(
         }
     };
 
-    match client.get_logs(&resolved_id).await {
-        Ok(logs) => {
-            let response = LogsResponse {
-                instance_id: resolved_id,
-                logs,
-            };
-            let output_json = output_format == openzt_instance_manager::output::OutputFormat::Json;
-            print_logs(&response, output_json);
-        }
-        Err(e) => {
-            print_error(&format!("Failed to get logs: {}", e));
-            std::process::exit(1);
-        }
-    }
+    if follow {
+        let mut stream = client.stream_logs(&resolved_id).await
+            .map_err(|e| miette!(e))?;
 
-    Ok(())
+        print_info(&format!("Streaming logs for instance {} (Ctrl+C to stop)...", &resolved_id[..8]));
+        println!();
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(chunk) => {
+                    // Parse SSE format from the chunk
+                    // SSE format: "data: <line>\n\n" or ": keep-alive\n\n"
+                    for line in chunk.lines() {
+                        if let Some(log_line) = line.strip_prefix("data: ") {
+                            if !log_line.is_empty() {
+                                println!("{}", log_line);
+                            }
+                        }
+                        // Ignore ": keep-alive" and other comment lines
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                }
+            }
+        }
+        Ok(())
+    } else {
+        match client.get_logs(&resolved_id, Some(tail as u32)).await {
+            Ok(logs) => {
+                let response = LogsResponse {
+                    instance_id: resolved_id,
+                    logs,
+                };
+                let output_json = output_format == openzt_instance_manager::output::OutputFormat::Json;
+                print_logs(&response, output_json);
+            }
+            Err(e) => {
+                print_error(&format!("Failed to get logs: {}", e));
+                std::process::exit(1);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "cli")]
@@ -331,4 +377,106 @@ fn main() {
     eprintln!("Error: The 'openzt' CLI binary requires the 'cli' feature to be enabled.");
     eprintln!("Please build with: cargo build --bin openzt --features cli");
     std::process::exit(1);
+}
+
+#[cfg(feature = "cli")]
+async fn cmd_stop(
+    client: &openzt_instance_manager::client::InstanceClient,
+    id: &str,
+    output_format: openzt_instance_manager::output::OutputFormat,
+) -> Result<()> {
+    use openzt_instance_manager::output::{print_error, print_resolution_error, print_success};
+
+    // Resolve ID (handles both short and full UUIDs)
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
+
+    match client.stop_instance(&resolved_id).await {
+        Ok(response) => {
+            if output_format != openzt_instance_manager::output::OutputFormat::Json {
+                print_success(&format!("Stopped instance: {}", &response.id[..8]));
+            } else {
+                println!("{}", serde_json::to_string_pretty(&response).unwrap());
+            }
+        }
+        Err(e) => {
+            print_error(&format!("Failed to stop instance: {}", e));
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+async fn cmd_start(
+    client: &openzt_instance_manager::client::InstanceClient,
+    id: &str,
+    output_format: openzt_instance_manager::output::OutputFormat,
+) -> Result<()> {
+    use openzt_instance_manager::output::{print_error, print_resolution_error, print_success};
+
+    // Resolve ID (handles both short and full UUIDs)
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
+
+    match client.start_instance(&resolved_id).await {
+        Ok(response) => {
+            if output_format != openzt_instance_manager::output::OutputFormat::Json {
+                print_success(&format!("Started instance: {}", &response.id[..8]));
+            } else {
+                println!("{}", serde_json::to_string_pretty(&response).unwrap());
+            }
+        }
+        Err(e) => {
+            print_error(&format!("Failed to start instance: {}", e));
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+async fn cmd_restart(
+    client: &openzt_instance_manager::client::InstanceClient,
+    id: &str,
+    output_format: openzt_instance_manager::output::OutputFormat,
+) -> Result<()> {
+    use openzt_instance_manager::output::{print_error, print_resolution_error, print_success};
+
+    // Resolve ID (handles both short and full UUIDs)
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
+
+    match client.restart_instance(&resolved_id).await {
+        Ok(response) => {
+            if output_format != openzt_instance_manager::output::OutputFormat::Json {
+                print_success(&format!("Restarted instance: {}", &response.id[..8]));
+            } else {
+                println!("{}", serde_json::to_string_pretty(&response).unwrap());
+            }
+        }
+        Err(e) => {
+            print_error(&format!("Failed to restart instance: {}", e));
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
 }

@@ -1,19 +1,23 @@
 use super::{
     instance::{
         CreateInstanceRequest, CreateInstanceResponse, Instance,
-        InstanceDetails, InstanceStatus, LogsResponse,
+        InstanceDetails, InstanceStatus, LogsResponse, InstanceStatusResponse,
     },
     state::AppState,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json, Response},
+    response::{sse::{Event, Sse}, IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
 use chrono::Utc;
+use futures_util::stream::StreamExt;
+use serde::Deserialize;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -27,6 +31,9 @@ pub fn create_router() -> Router<Arc<RwLock<AppState>>> {
         )
         .route("/api/instances/{id}/logs", get(get_instance_logs))
         .route("/api/instances/{id}/logs/stream", get(stream_logs))
+        .route("/api/instances/{id}/stop", post(stop_instance))
+        .route("/api/instances/{id}/start", post(start_instance))
+        .route("/api/instances/{id}/restart", post(restart_instance))
 }
 
 async fn health_check() -> &'static str {
@@ -43,7 +50,7 @@ async fn create_instance(
     tracing::info!("Creating instance {}", instance_id);
 
     // Allocate ports
-    let (rdp_port, console_port) = {
+    let (vnc_port, console_port) = {
         let mut state_guard = state.write().await;
         state_guard
             .port_pool
@@ -62,7 +69,7 @@ async fn create_instance(
     let instance = Instance {
         id: instance_id.clone(),
         container_id: String::new(),
-        rdp_port,
+        vnc_port,
         console_port,
         status: InstanceStatus::Creating,
         created_at: Utc::now(),
@@ -73,7 +80,7 @@ async fn create_instance(
         let mut state_guard = state.write().await;
         if state_guard.instances.len() >= state_guard.config.instances.max_instances {
             // Release ports
-            state_guard.port_pool.release_pair(rdp_port, console_port);
+            state_guard.port_pool.release_pair(vnc_port, console_port);
             return Err(ApiError::MaxInstancesReached);
         }
         state_guard.instances.insert(instance_id.clone(), instance);
@@ -87,7 +94,7 @@ async fn create_instance(
             state_clone.clone(),
             instance_id_clone.clone(),
             container_name,
-            rdp_port,
+            vnc_port,
             console_port,
             dll_path.clone(),
         )
@@ -103,15 +110,15 @@ async fn create_instance(
             if let Some(instance) = state_guard.instances.get_mut(&instance_id_clone) {
                 instance.status = InstanceStatus::Error(e.to_string());
             }
-            state_guard.port_pool.release_pair(rdp_port, console_port);
+            state_guard.port_pool.release_pair(vnc_port, console_port);
         }
     });
 
     Ok(Json(CreateInstanceResponse {
         instance_id,
-        rdp_port,
+        vnc_port,
         console_port,
-        rdp_url: format!("rdp://localhost:{}", rdp_port),
+        vnc_url: format!("vnc://localhost:{}", vnc_port),
         status: "creating".to_string(),
     }))
 }
@@ -120,7 +127,7 @@ async fn create_container_task(
     state: Arc<RwLock<AppState>>,
     instance_id: String,
     container_name: String,
-    rdp_port: u16,
+    vnc_port: u16,
     console_port: u16,
     dll_path: String,
 ) -> anyhow::Result<()> {
@@ -133,9 +140,23 @@ async fn create_container_task(
     };
     docker_manager.ensure_image(&image).await?;
 
+    // Get instance config and apply default cpulimit if not set
+    let instance_config = {
+        let state_guard = state.read().await;
+        let mut config = state_guard.instances.get(&instance_id)
+            .map(|inst| inst.config.clone())
+            .unwrap_or_default();
+
+        // Apply default cpulimit if not set
+        if config.cpulimit.is_none() {
+            config.cpulimit = Some(state_guard.config.instances.default_cpulimit);
+        }
+        config
+    };
+
     // Create container
     let container_id = match docker_manager
-        .create_container(&container_name, &image, rdp_port, console_port, &dll_path)
+        .create_container(&container_name, &image, vnc_port, console_port, &dll_path, &instance_config)
         .await
     {
         Ok(id) => id,
@@ -178,6 +199,47 @@ async fn create_container_task(
 async fn list_instances(
     State(state): State<Arc<RwLock<AppState>>>,
 ) -> Result<Json<Vec<InstanceDetails>>, ApiError> {
+    // Collect instance IDs and container IDs first (drop read lock before acquiring write lock)
+    let instance_ids: Vec<(String, String)> = {
+        let state_guard = state.read().await;
+        state_guard.instances.iter()
+            .map(|(id, inst)| (id.clone(), inst.container_id.clone()))
+            .collect()
+    };
+
+    // Try to refresh instance statuses
+    if let Ok(docker_manager) = super::docker::DockerManager::new() {
+        let mut state_guard = state.write().await;
+        let mut deleted_count = 0;
+
+        for (id, container_id) in &instance_ids {
+            match docker_manager.refresh_instance_status(container_id).await {
+                Ok(Some(status)) => {
+                    if let Some(inst) = state_guard.instances.get_mut(id) {
+                        inst.status = status;
+                    }
+                }
+                Ok(None) => {
+                    // Container was deleted externally
+                    if let Some(inst) = state_guard.instances.get_mut(id) {
+                        inst.status = InstanceStatus::Error("Container deleted externally".to_string());
+                    }
+                    deleted_count += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to refresh status for {}: {}. Using cached.", id, e);
+                }
+            }
+        }
+
+        if deleted_count > 0 {
+            tracing::info!("Status refresh: {} containers deleted externally", deleted_count);
+        }
+    } else {
+        tracing::warn!("Failed to connect to Docker. Using cached status.");
+    }
+
+    // Return (possibly refreshed) list
     let state_guard = state.read().await;
     let instances: Vec<InstanceDetails> = state_guard
         .instances
@@ -192,6 +254,37 @@ async fn get_instance(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(id): Path<String>,
 ) -> Result<Json<InstanceDetails>, ApiError> {
+    // First check if instance exists and get container_id
+    let container_id = {
+        let state_guard = state.read().await;
+        state_guard.instances.get(&id)
+            .map(|inst| inst.container_id.clone())
+            .ok_or(ApiError::NotFound)?
+    };
+
+    // Refresh this instance's status
+    if let Ok(docker_manager) = super::docker::DockerManager::new() {
+        match docker_manager.refresh_instance_status(&container_id).await {
+            Ok(Some(status)) => {
+                let mut state_guard = state.write().await;
+                if let Some(inst) = state_guard.instances.get_mut(&id) {
+                    inst.status = status;
+                }
+            }
+            Ok(None) => {
+                // Container was deleted externally
+                let mut state_guard = state.write().await;
+                if let Some(inst) = state_guard.instances.get_mut(&id) {
+                    inst.status = InstanceStatus::Error("Container deleted externally".to_string());
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to refresh status for {}: {}. Using cached.", id, e);
+            }
+        }
+    }
+
+    // Return (possibly refreshed) instance
     let state_guard = state.read().await;
     state_guard
         .instances
@@ -209,10 +302,10 @@ async fn delete_instance(
     tracing::info!("Deleting instance {}", id);
 
     // Get instance details for cleanup
-    let (container_id, rdp_port, console_port) = {
+    let (container_id, vnc_port, console_port) = {
         let state_guard = state.read().await;
         let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
-        (instance.container_id.clone(), instance.rdp_port, instance.console_port)
+        (instance.container_id.clone(), instance.vnc_port, instance.console_port)
     };
 
     // Stop and remove container
@@ -230,15 +323,21 @@ async fn delete_instance(
     {
         let mut state_guard = state.write().await;
         state_guard.instances.remove(&id);
-        state_guard.port_pool.release_pair(rdp_port, console_port);
+        state_guard.port_pool.release_pair(vnc_port, console_port);
     }
 
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct LogsParams {
+    tail: Option<u32>,
+}
+
 async fn get_instance_logs(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(id): Path<String>,
+    Query(params): Query<LogsParams>,
 ) -> Result<Json<LogsResponse>, ApiError> {
     let state_guard = state.read().await;
     let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
@@ -252,7 +351,8 @@ async fn get_instance_logs(
     }
 
     let docker_manager = super::docker::DockerManager::new()?;
-    let logs = docker_manager.get_container_logs(container_id, 100).await?;
+    let tail = params.tail.unwrap_or(100);
+    let logs = docker_manager.get_container_logs(container_id, tail).await?;
 
     Ok(Json(LogsResponse { instance_id: id, logs }))
 }
@@ -263,19 +363,167 @@ async fn stream_logs(
 ) -> Result<Response, ApiError> {
     let state_guard = state.read().await;
     let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+    let container_id = instance.container_id.clone();
 
-    if instance.container_id.is_empty() {
+    if container_id.is_empty() {
         return Err(ApiError::NotFound);
     }
 
-    // SSE streaming requires more complex async stream handling
-    // For now, return a message indicating this is not yet implemented
-    Ok(Json(serde_json::json!({
-        "message": "Log streaming not yet implemented",
-        "instance_id": id,
-        "note": "Use /api/instances/:id/logs for recent logs"
+    let docker_manager = super::docker::DockerManager::new()?;
+    let log_stream = docker_manager.stream_container_logs(&container_id, 0);
+
+    // Convert the log stream to SSE events
+    let sse_stream = log_stream.map(|result| match result {
+        Ok(line) => {
+            if line.is_empty() {
+                // Empty lines become keep-alive comments
+                Ok::<_, Infallible>(Event::default().comment("keep-alive"))
+            } else {
+                Ok::<_, Infallible>(Event::default().data(line))
+            }
+        }
+        Err(e) => {
+            tracing::error!("Error streaming logs: {}", e);
+            Ok::<_, Infallible>(Event::default().comment("error"))
+        }
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        axum::response::sse::KeepAlive::new().interval(Duration::from_secs(10)),
+    ).into_response())
+}
+
+async fn stop_instance(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<InstanceStatusResponse>, ApiError> {
+    tracing::info!("Stopping instance {}", id);
+
+    // Get container_id
+    let container_id = {
+        let state_guard = state.read().await;
+        let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+
+        // Check if already stopped
+        if matches!(instance.status, InstanceStatus::Stopped) {
+            return Ok(Json(InstanceStatusResponse {
+                id: id.clone(),
+                status: instance.status.as_str().to_string(),
+            }));
+        }
+
+        // Check if container exists
+        if instance.container_id.is_empty() {
+            return Err(ApiError::Internal("Container not yet created".to_string()));
+        }
+
+        instance.container_id.clone()
+    };
+
+    // Stop the container
+    let docker_manager = super::docker::DockerManager::new()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    docker_manager.stop_container(&container_id).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // Update instance status
+    {
+        let mut state_guard = state.write().await;
+        if let Some(instance) = state_guard.instances.get_mut(&id) {
+            instance.status = InstanceStatus::Stopped;
+        }
+    }
+
+    Ok(Json(InstanceStatusResponse {
+        id,
+        status: "stopped".to_string(),
     }))
-    .into_response())
+}
+
+async fn start_instance(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<InstanceStatusResponse>, ApiError> {
+    tracing::info!("Starting instance {}", id);
+
+    // Get container_id
+    let container_id = {
+        let state_guard = state.read().await;
+        let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+
+        // Check if already running
+        if matches!(instance.status, InstanceStatus::Running) {
+            return Ok(Json(InstanceStatusResponse {
+                id: id.clone(),
+                status: instance.status.as_str().to_string(),
+            }));
+        }
+
+        // Check if container exists
+        if instance.container_id.is_empty() {
+            return Err(ApiError::Internal("Container not yet created".to_string()));
+        }
+
+        instance.container_id.clone()
+    };
+
+    // Start the container
+    let docker_manager = super::docker::DockerManager::new()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    docker_manager.start_container(&container_id).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // Update instance status
+    {
+        let mut state_guard = state.write().await;
+        if let Some(instance) = state_guard.instances.get_mut(&id) {
+            instance.status = InstanceStatus::Running;
+        }
+    }
+
+    Ok(Json(InstanceStatusResponse {
+        id,
+        status: "running".to_string(),
+    }))
+}
+
+async fn restart_instance(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<InstanceStatusResponse>, ApiError> {
+    tracing::info!("Restarting instance {}", id);
+
+    // Get container_id
+    let container_id = {
+        let state_guard = state.read().await;
+        let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+
+        // Check if container exists
+        if instance.container_id.is_empty() {
+            return Err(ApiError::Internal("Container not yet created".to_string()));
+        }
+
+        instance.container_id.clone()
+    };
+
+    // Restart the container
+    let docker_manager = super::docker::DockerManager::new()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    docker_manager.restart_container(&container_id).await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // Update instance status to running (restart ensures container is running)
+    {
+        let mut state_guard = state.write().await;
+        if let Some(instance) = state_guard.instances.get_mut(&id) {
+            instance.status = InstanceStatus::Running;
+        }
+    }
+
+    Ok(Json(InstanceStatusResponse {
+        id,
+        status: "running".to_string(),
+    }))
 }
 
 #[derive(Debug)]

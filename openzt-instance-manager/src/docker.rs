@@ -2,16 +2,18 @@ use anyhow::{anyhow, Context, Result};
 use bollard::{
     container::{
         Config as ContainerConfig, CreateContainerOptions, RemoveContainerOptions,
-        StartContainerOptions, LogsOptions, ListContainersOptions, InspectContainerOptions,
+        StartContainerOptions, StopContainerOptions, RestartContainerOptions,
+        LogsOptions, ListContainersOptions, InspectContainerOptions, LogOutput,
     },
     image::CreateImageOptions,
     service::{PortBinding, ContainerSummary, ContainerInspectResponse},
     Docker,
 };
 use chrono::{DateTime, Utc};
-use futures_util::stream::StreamExt;
+use futures_util::stream::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::io::Write;
+use std::pin::Pin;
 
 use crate::instance::{InstanceConfig, InstanceStatus};
 
@@ -67,9 +69,10 @@ impl DockerManager {
         &self,
         name: &str,
         image: &str,
-        rdp_port: u16,
+        vnc_port: u16,
         console_port: u16,
         dll_path: &str,
+        instance_config: &InstanceConfig,
     ) -> Result<String> {
         let options = Some(CreateContainerOptions {
             name: name.to_string(),
@@ -78,16 +81,16 @@ impl DockerManager {
 
         // Build exposed ports
         let mut exposed_ports = HashMap::new();
-        exposed_ports.insert("3389/tcp".to_string(), HashMap::new());
+        exposed_ports.insert("5901/tcp".to_string(), HashMap::new());
         exposed_ports.insert("8080/tcp".to_string(), HashMap::new());
 
         // Build port bindings
         let mut port_bindings = HashMap::new();
         port_bindings.insert(
-            "3389/tcp".to_string(),
+            "5901/tcp".to_string(),
             Some(vec![PortBinding {
                 host_ip: None,
-                host_port: Some(rdp_port.to_string()),
+                host_port: Some(vnc_port.to_string()),
             }]),
         );
         port_bindings.insert(
@@ -98,11 +101,19 @@ impl DockerManager {
             }]),
         );
 
+        // Build labels for persistence
+        let mut labels = HashMap::new();
+        labels.insert("openzt.managed".to_string(), "true".to_string());
+        if let Some(cpulimit) = instance_config.cpulimit {
+            labels.insert("openzt.cpulimit".to_string(), cpulimit.to_string());
+        }
+
         let config = ContainerConfig {
             image: Some(image.to_string()),
             hostname: Some(name.to_string()),
+            labels: Some(labels),
             env: Some(vec![
-                "RDP_SERVER=yes".to_string(),
+                "VNC_SERVER=yes".to_string(),
             ]),
             exposed_ports: Some(exposed_ports),
             host_config: Some(bollard::service::HostConfig {
@@ -111,6 +122,9 @@ impl DockerManager {
                     format!("{}:/home/wineuser/.wine/drive_c/Program Files (x86)/Microsoft Games/Zoo Tycoon/res-openzt.dll:ro", dll_path),
                 ]),
                 ipc_mode: Some("host".to_string()),
+                // CPU limits (equivalent to --cpus=<value>)
+                nano_cpus: instance_config.cpulimit
+                    .map(|cores| (cores * 1_000_000_000.0) as i64),
                 ..Default::default()
             }),
             ..Default::default()
@@ -125,6 +139,32 @@ impl DockerManager {
             .start_container(container_id, None::<StartContainerOptions<String>>)
             .await
             .context("Failed to start container")?;
+        Ok(())
+    }
+
+    /// Stop a running container without removing it
+    pub async fn stop_container(&self, container_id: &str) -> Result<()> {
+        let options = Some(StopContainerOptions {
+            t: 10, // Wait up to 10 seconds for graceful shutdown
+        });
+
+        self.docker
+            .stop_container(container_id, options)
+            .await
+            .context("Failed to stop container")?;
+        Ok(())
+    }
+
+    /// Restart a running container
+    pub async fn restart_container(&self, container_id: &str) -> Result<()> {
+        let options = Some(RestartContainerOptions {
+            t: 10, // Wait up to 10 seconds before forcefully restarting
+        });
+
+        self.docker
+            .restart_container(container_id, options)
+            .await
+            .context("Failed to restart container")?;
         Ok(())
     }
 
@@ -178,6 +218,32 @@ impl DockerManager {
 
         Ok(output)
     }
+
+    /// Stream container logs as an async stream for SSE
+    pub fn stream_container_logs(
+        &self,
+        container_id: &str,
+        tail_lines: u32,
+    ) -> Pin<Box<dyn Stream<Item = Result<String>> + Send>> {
+        let options = LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            tail: tail_lines.to_string(),
+            follow: true,
+            ..Default::default()
+        };
+
+        let stream = self.docker.logs(container_id, Some(options));
+
+        Box::pin(stream.map(|result| {
+            result.map_err(|e| anyhow!("Docker log error: {}", e)).map(|log| match log {
+                LogOutput::StdOut { message } | LogOutput::StdErr { message } => {
+                    String::from_utf8_lossy(&message).to_string()
+                }
+                _ => String::new(),
+            })
+        }))
+    }
 }
 
 /// Write base64-encoded DLL to a temporary file
@@ -218,7 +284,7 @@ pub fn cleanup_dll_temp(instance_id: &str) {
 #[derive(Debug)]
 pub struct RecoveredInstanceInfo {
     pub container_id: String,
-    pub rdp_port: u16,
+    pub vnc_port: u16,
     pub console_port: u16,
     pub status: InstanceStatus,
     pub created_at: DateTime<Utc>,
@@ -260,14 +326,22 @@ impl DockerManager {
             .inspect_container(container_id, None::<InspectContainerOptions>)
             .await?;
 
-        let (rdp_port, console_port) = self.extract_ports(&inspect)?;
+        let (vnc_port, console_port) = self.extract_ports(&inspect)?;
         let status = self.map_docker_status(&inspect.state.ok_or_else(|| anyhow!("Missing state"))?);
         let created_at = self.parse_created_timestamp(inspect.created.as_deref().ok_or_else(|| anyhow!("Missing created timestamp"))?)?;
-        let config = InstanceConfig::default(); // TODO: Extract from labels in future
+
+        // Extract cpulimit from labels (stored during creation)
+        let config = InstanceConfig {
+            cpulimit: inspect.config.as_ref()
+                .and_then(|c| c.labels.as_ref())
+                .and_then(|labels| labels.get("openzt.cpulimit"))
+                .and_then(|s| s.parse::<f64>().ok()),
+            ..Default::default()
+        };
 
         Ok(RecoveredInstanceInfo {
             container_id: container_id.to_string(),
-            rdp_port,
+            vnc_port,
             console_port,
             status,
             created_at,
@@ -280,11 +354,11 @@ impl DockerManager {
         if let Some(network_settings) = &inspect.network_settings {
             if let Some(ports) = &network_settings.ports {
                 if !ports.is_empty() {
-                    if let (Some(rdp), Some(console)) = (
-                        self.try_extract_port(ports, "3389/tcp"),
+                    if let (Some(vnc), Some(console)) = (
+                        self.try_extract_port(ports, "5901/tcp"),
                         self.try_extract_port(ports, "8080/tcp")
                     ) {
-                        return Ok((rdp, console));
+                        return Ok((vnc, console));
                     }
                 }
             }
@@ -296,10 +370,10 @@ impl DockerManager {
             .and_then(|hc| hc.port_bindings.as_ref())
             .ok_or_else(|| anyhow!("No port bindings found in HostConfig"))?;
 
-        let rdp_port = self.extract_port_from_binding(bindings, "3389/tcp")?;
+        let vnc_port = self.extract_port_from_binding(bindings, "5901/tcp")?;
         let console_port = self.extract_port_from_binding(bindings, "8080/tcp")?;
 
-        Ok((rdp_port, console_port))
+        Ok((vnc_port, console_port))
     }
 
     /// Try to extract a port from bindings, returning None if not found
@@ -351,5 +425,42 @@ impl DockerManager {
         DateTime::parse_from_rfc3339(created)
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|e| anyhow!("Invalid timestamp: {}", e))
+    }
+
+    /// Refresh the status of a single instance by inspecting its container.
+    /// Returns Ok(Some(status)) if the container exists, Ok(None) if the container
+    /// was not found (deleted externally), or Err if Docker communication failed.
+    pub async fn refresh_instance_status(
+        &self,
+        container_id: &str,
+    ) -> Result<Option<InstanceStatus>> {
+        // Handle empty container_id (container not yet created)
+        if container_id.is_empty() {
+            return Ok(Some(InstanceStatus::Creating));
+        }
+
+        // Attempt to inspect the container
+        match self.docker.inspect_container(
+            container_id,
+            None::<InspectContainerOptions>
+        ).await {
+            Ok(inspect) => {
+                let state = inspect.state
+                    .ok_or_else(|| anyhow!("Missing state in inspect response"))?;
+                Ok(Some(self.map_docker_status(&state)))
+            }
+            Err(e) => {
+                // Check if this is a 404 (container not found)
+                if e.to_string().contains("404") || e.to_string().contains("no such container") {
+                    tracing::warn!(
+                        "Container {} not found (likely deleted externally)",
+                        container_id
+                    );
+                    Ok(None)
+                } else {
+                    Err(anyhow!("Failed to inspect container: {}", e))
+                }
+            }
+        }
     }
 }

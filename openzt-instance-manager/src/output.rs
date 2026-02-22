@@ -80,19 +80,16 @@ fn print_instance_table(instance: &InstanceDetails) {
     );
     println!(
         "  {} {}",
-        style("RDP URL:").fg(Color::Cyan),
-        style(&instance.rdp_url).fg(Color::Green).bold()
+        style("VNC URL:").fg(Color::Cyan),
+        style(&instance.vnc_url).fg(Color::Green).bold()
     );
-    println!("  {} {}", style("RDP Port:").fg(Color::Cyan), instance.rdp_port);
+    println!("  {} {}", style("VNC Port:").fg(Color::Cyan), instance.vnc_port);
     println!("  {} {}", style("Console:").fg(Color::Cyan), instance.console_port);
     println!(
         "  {} {}",
         style("Status:").fg(Color::Cyan),
         format_status(&instance.status)
     );
-    if let Some(ref password) = instance.config.rdp_password {
-        println!("  {} {}", style("RDP Password:").fg(Color::Cyan), password);
-    }
     if !instance.container_id.is_empty() {
         println!("  {} {}", style("Container:").fg(Color::Cyan), &instance.container_id[..12]);
     }
@@ -146,14 +143,14 @@ fn print_instance_list_table(instances: &[InstanceDetails]) {
         id: String,
         #[tabled(rename = "Created")]
         created_at: String,
-        #[tabled(rename = "RDP Port")]
-        rdp_port: u16,
+        #[tabled(rename = "VNC Port")]
+        vnc_port: u16,
         #[tabled(rename = "Console")]
         console_port: u16,
         #[tabled(rename = "Status")]
         status: String,
-        #[tabled(rename = "RDP URL")]
-        rdp_url: String,
+        #[tabled(rename = "VNC URL")]
+        vnc_url: String,
     }
 
     // Calculate safe ID length to avoid duplicates
@@ -164,10 +161,10 @@ fn print_instance_list_table(instances: &[InstanceDetails]) {
         .map(|i| InstanceRow {
             id: i.id[..id_length.min(i.id.len())].to_string(),
             created_at: i.created_at.format("%Y-%m-%d %H:%M").to_string(),
-            rdp_port: i.rdp_port,
+            vnc_port: i.vnc_port,
             console_port: i.console_port,
             status: i.status.clone(),
-            rdp_url: i.rdp_url.clone(),
+            vnc_url: i.vnc_url.clone(),
         })
         .collect();
 
@@ -206,7 +203,7 @@ pub fn print_create_result(response: &CreateInstanceResponse, output_json: bool)
     } else {
         println!();
         print_success(&format!("Created instance: {}", response.instance_id));
-        println!("  {} {}", style("RDP URL:").fg(Color::Cyan), style(&response.rdp_url).fg(Color::Green));
+        println!("  {} {}", style("VNC URL:").fg(Color::Cyan), style(&response.vnc_url).fg(Color::Green));
         println!(
             "  {} {}",
             style("Console:").fg(Color::Cyan),
@@ -261,9 +258,6 @@ pub fn print_resolution_error(error: &ResolutionError) {
             print_ambiguous_matches(matches);
             let min_len = crate::id_resolver::suggest_min_length(matches);
             print_info(&format!("Use at least {} characters to uniquely identify", min_len));
-        }
-        ResolutionError::InvalidLength(_input) => {
-            print_error(&error.message());
         }
         ResolutionError::ApiError(_e) => {
             print_error(&error.message());

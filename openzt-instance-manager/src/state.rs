@@ -16,7 +16,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config) -> Self {
         let port_pool = PortPool::new(
-            config.ports.rdp_start..config.ports.rdp_end,
+            config.ports.vnc_start..config.ports.vnc_end,
             config.ports.console_start..config.ports.console_end,
         );
 
@@ -59,7 +59,7 @@ impl AppState {
             match docker.inspect_container_for_recovery(&container_id).await {
                 Ok(info) => {
                     // Register ports in pool
-                    if let Err(e) = self.port_pool.add_existing_pair(info.rdp_port, info.console_port) {
+                    if let Err(e) = self.port_pool.add_existing_pair(info.vnc_port, info.console_port) {
                         tracing::error!("Failed to register ports for {}: {}, skipping", instance_id, e);
                         continue;
                     }
@@ -71,7 +71,7 @@ impl AppState {
                     let instance = Instance {
                         id: instance_id.to_string(),
                         container_id: info.container_id,
-                        rdp_port: info.rdp_port,
+                        vnc_port: info.vnc_port,
                         console_port: info.console_port,
                         status: info.status,
                         created_at: info.created_at,
@@ -81,8 +81,8 @@ impl AppState {
                     self.instances.insert(instance_id.to_string(), instance);
                     recovered_count += 1;
 
-                    tracing::info!("Recovered instance {} (RDP: {}, Console: {}, Status: {:?})",
-                        instance_id, info.rdp_port, info.console_port, status);
+                    tracing::info!("Recovered instance {} (VNC: {}, Console: {}, Status: {:?})",
+                        instance_id, info.vnc_port, info.console_port, status);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to inspect container {}: {}", container_id, e);
