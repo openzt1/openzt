@@ -357,6 +357,9 @@ pub fn load_resources(
         }
     }
 
+    // Log summary of all legacy entities loaded
+    crate::resource_manager::openzt_mods::legacy_attributes::log_legacy_entity_summary();
+
     let elapsed = now.elapsed();
     info!("Extra handling took an extra: {:.2?}", elapsed);
 }
@@ -462,7 +465,7 @@ fn handle_ztd_with_status(resource: &Path, is_disabled: bool) -> anyhow::Result<
 
 fn parse_cfg(file_name: &String) -> Vec<String> {
     if let Some(legacy_cfg) = get_legacy_cfg_type(file_name) {
-        trace!("Legacy cfg: {} {:?}", file_name, legacy_cfg.cfg_type);
+        debug!("Processing legacy cfg file: {} (type: {:?})", file_name, legacy_cfg.cfg_type);
 
         let Some((_archive_name, file)) = get_file(file_name) else {
             error!("Error getting file: {}", file_name);
@@ -535,6 +538,30 @@ fn parse_simple_cfg(file: &Ini, section_name: &str) -> Vec<String> {
     results
 }
 
+/// Parse multiple sections from an INI file into the map structure expected by extract_legacy_entities
+#[allow(dead_code)]
+fn parse_multi_section_cfg(
+    ini: &Ini,
+    section_names: &[&str],
+) -> HashMap<String, HashMap<String, Vec<String>>> {
+    let mut result = HashMap::new();
+    let ini_map = ini.get_map().unwrap_or_default();
+
+    for section_name in section_names {
+        if let Some(section) = ini_map.get(*section_name) {
+            let mut section_map = HashMap::new();
+            for (key, values) in section.iter() {
+                if let Some(value_vec) = values {
+                    section_map.insert(key.to_string(), value_vec.clone());
+                }
+            }
+            result.insert(section_name.to_string(), section_map);
+        }
+    }
+
+    result
+}
+
 fn parse_filters_cfg(file: &Ini) -> Vec<String> {
     let mut filter_types = Vec::new();
     if let Some(section) = file.get_map().unwrap_or_default().get("filter") {
@@ -559,15 +586,11 @@ fn parse_filters_cfg(file: &Ini) -> Vec<String> {
 /// Extract entity attributes by loading each .ai file listed in the .cfg
 /// Also extracts subtype information from the .cfg file itself
 fn extract_legacy_entities(cfg: &Ini, entity_type: LegacyEntityType) {
+    debug!("Extracting legacy entities for {:?}", entity_type);
     let section_name = entity_type.section_name();
 
     // Get the INI map to avoid temporary value issues
     let Some(map) = cfg.get_map() else {
-        return;
-    };
-
-    // Get the section from the INI file
-    let Some(_section) = map.get(section_name) else {
         return;
     };
 
@@ -578,10 +601,15 @@ fn extract_legacy_entities(cfg: &Ini, entity_type: LegacyEntityType) {
         sections_to_check.push("other");
     }
 
+    trace!("Checking sections: {:?}", sections_to_check);
+
     for section_name in sections_to_check {
         let Some(section) = map.get(section_name) else {
+            trace!("Section '{}' not found in cfg, skipping", section_name);
             continue;
         };
+        let entity_count = section.len();
+        debug!("Processing section '{}' for {:?}: found {} entities", section_name, entity_type, entity_count);
 
         // First, scan for any subtype definitions in the .cfg
         // Format: [entityname/subtypes]
@@ -606,6 +634,7 @@ fn extract_legacy_entities(cfg: &Ini, entity_type: LegacyEntityType) {
 
                 // Load and parse the .ai file
                 if let Some((_archive, ai_file)) = get_file(ai_path) {
+                    trace!("Loading .ai file for '{}': {}", entity_name, ai_path);
                     let mut ai_ini = Ini::new_cs();
                     ai_ini.set_comment_symbols(&[';', '#', ':']);
                     let ai_content = decode_game_text(&ai_file);
@@ -613,6 +642,7 @@ fn extract_legacy_entities(cfg: &Ini, entity_type: LegacyEntityType) {
                     if ai_ini.read(ai_content).is_ok() {
                         match LegacyEntityAttributes::parse_from_ini(entity_name.clone(), &ai_ini, entity_type) {
                             Ok(mut attrs) => {
+                                trace!("Parsed attributes for '{}': {} subtypes", entity_name, attrs.subtype_attributes.len());
                                 // If we have subtype information from the .cfg, validate/merge it
                                 if let Some(subtypes) = entity_subtypes.get(entity_name) {
                                     // Ensure all declared subtypes exist in the attributes
@@ -634,14 +664,21 @@ fn extract_legacy_entities(cfg: &Ini, entity_type: LegacyEntityType) {
                                     warn!("Failed to register legacy entity '{}': {}", entity_name, e);
                                 }
                             }
-                            Err(e) => {
-                                warn!("Failed to parse attributes from '{}': {}", ai_path, e);
+                            Err(_) => {
+                                warn!("Failed to parse .ai file for '{}' ({:?}): {}", entity_name, entity_type, ai_path);
                             }
                         }
+                    } else {
+                        warn!("Failed to parse .ai file for '{}' ({:?}): {}", entity_name, entity_type, ai_path);
                     }
+                } else {
+                    warn!("Failed to load .ai file for '{}' ({:?}): file '{}' not found", entity_name, entity_type, ai_path);
+                    continue;
                 }
             }
         }
+        debug!("Completed processing section '{}' for {:?}: {} total entities extracted",
+               section_name, entity_type, section.len());
     }
 }
 
