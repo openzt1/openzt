@@ -120,7 +120,7 @@ enum Commands {
         /// Instance ID (full UUID or short prefix)
         id: String,
 
-        /// Follow log output (not yet implemented)
+        /// Follow log output in real-time
         #[arg(short, long)]
         follow: bool,
 
@@ -289,15 +289,12 @@ async fn cmd_logs(
     client: &openzt_instance_manager::client::InstanceClient,
     id: &str,
     follow: bool,
-    _tail: usize,
+    tail: usize,
     output_format: openzt_instance_manager::output::OutputFormat,
 ) -> Result<()> {
+    use futures_util::StreamExt;
     use openzt_instance_manager::instance::LogsResponse;
-    use openzt_instance_manager::output::{print_error, print_logs, print_resolution_error};
-
-    if follow {
-        openzt_instance_manager::output::print_warning("Log streaming not yet implemented");
-    }
+    use openzt_instance_manager::output::{print_error, print_info, print_logs, print_resolution_error};
 
     // Resolve ID (handles both short and full UUIDs)
     let resolved_id = match resolve_instance_id(client, id).await {
@@ -308,22 +305,50 @@ async fn cmd_logs(
         }
     };
 
-    match client.get_logs(&resolved_id).await {
-        Ok(logs) => {
-            let response = LogsResponse {
-                instance_id: resolved_id,
-                logs,
-            };
-            let output_json = output_format == openzt_instance_manager::output::OutputFormat::Json;
-            print_logs(&response, output_json);
-        }
-        Err(e) => {
-            print_error(&format!("Failed to get logs: {}", e));
-            std::process::exit(1);
-        }
-    }
+    if follow {
+        let mut stream = client.stream_logs(&resolved_id).await
+            .map_err(|e| miette!(e))?;
 
-    Ok(())
+        print_info(&format!("Streaming logs for instance {} (Ctrl+C to stop)...", &resolved_id[..8]));
+        println!();
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(chunk) => {
+                    // Parse SSE format from the chunk
+                    // SSE format: "data: <line>\n\n" or ": keep-alive\n\n"
+                    for line in chunk.lines() {
+                        if let Some(log_line) = line.strip_prefix("data: ") {
+                            if !log_line.is_empty() {
+                                println!("{}", log_line);
+                            }
+                        }
+                        // Ignore ": keep-alive" and other comment lines
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                }
+            }
+        }
+        Ok(())
+    } else {
+        match client.get_logs(&resolved_id, Some(tail as u32)).await {
+            Ok(logs) => {
+                let response = LogsResponse {
+                    instance_id: resolved_id,
+                    logs,
+                };
+                let output_json = output_format == openzt_instance_manager::output::OutputFormat::Json;
+                print_logs(&response, output_json);
+            }
+            Err(e) => {
+                print_error(&format!("Failed to get logs: {}", e));
+                std::process::exit(1);
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "cli")]

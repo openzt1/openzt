@@ -6,14 +6,18 @@ use super::{
     state::AppState,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json, Response},
+    response::{sse::{Event, Sse}, IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
 use chrono::Utc;
+use futures_util::stream::StreamExt;
+use serde::Deserialize;
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -325,9 +329,15 @@ async fn delete_instance(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct LogsParams {
+    tail: Option<u32>,
+}
+
 async fn get_instance_logs(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(id): Path<String>,
+    Query(params): Query<LogsParams>,
 ) -> Result<Json<LogsResponse>, ApiError> {
     let state_guard = state.read().await;
     let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
@@ -341,7 +351,8 @@ async fn get_instance_logs(
     }
 
     let docker_manager = super::docker::DockerManager::new()?;
-    let logs = docker_manager.get_container_logs(container_id, 100).await?;
+    let tail = params.tail.unwrap_or(100);
+    let logs = docker_manager.get_container_logs(container_id, tail).await?;
 
     Ok(Json(LogsResponse { instance_id: id, logs }))
 }
@@ -352,19 +363,34 @@ async fn stream_logs(
 ) -> Result<Response, ApiError> {
     let state_guard = state.read().await;
     let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+    let container_id = instance.container_id.clone();
 
-    if instance.container_id.is_empty() {
+    if container_id.is_empty() {
         return Err(ApiError::NotFound);
     }
 
-    // SSE streaming requires more complex async stream handling
-    // For now, return a message indicating this is not yet implemented
-    Ok(Json(serde_json::json!({
-        "message": "Log streaming not yet implemented",
-        "instance_id": id,
-        "note": "Use /api/instances/:id/logs for recent logs"
-    }))
-    .into_response())
+    let docker_manager = super::docker::DockerManager::new()?;
+    let log_stream = docker_manager.stream_container_logs(&container_id, 0);
+
+    // Convert the log stream to SSE events
+    let sse_stream = log_stream.map(|result| match result {
+        Ok(line) => {
+            if line.is_empty() {
+                // Empty lines become keep-alive comments
+                Ok::<_, Infallible>(Event::default().comment("keep-alive"))
+            } else {
+                Ok::<_, Infallible>(Event::default().data(line))
+            }
+        }
+        Err(e) => {
+            tracing::error!("Error streaming logs: {}", e);
+            Ok::<_, Infallible>(Event::default().comment("error"))
+        }
+    });
+
+    Ok(Sse::new(sse_stream).keep_alive(
+        axum::response::sse::KeepAlive::new().interval(Duration::from_secs(10)),
+    ).into_response())
 }
 
 async fn stop_instance(

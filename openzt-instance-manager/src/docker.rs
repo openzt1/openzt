@@ -3,16 +3,17 @@ use bollard::{
     container::{
         Config as ContainerConfig, CreateContainerOptions, RemoveContainerOptions,
         StartContainerOptions, StopContainerOptions, RestartContainerOptions,
-        LogsOptions, ListContainersOptions, InspectContainerOptions,
+        LogsOptions, ListContainersOptions, InspectContainerOptions, LogOutput,
     },
     image::CreateImageOptions,
     service::{PortBinding, ContainerSummary, ContainerInspectResponse},
     Docker,
 };
 use chrono::{DateTime, Utc};
-use futures_util::stream::StreamExt;
+use futures_util::stream::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::io::Write;
+use std::pin::Pin;
 
 use crate::instance::{InstanceConfig, InstanceStatus};
 
@@ -216,6 +217,32 @@ impl DockerManager {
         }
 
         Ok(output)
+    }
+
+    /// Stream container logs as an async stream for SSE
+    pub fn stream_container_logs(
+        &self,
+        container_id: &str,
+        tail_lines: u32,
+    ) -> Pin<Box<dyn Stream<Item = Result<String>> + Send>> {
+        let options = LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            tail: tail_lines.to_string(),
+            follow: true,
+            ..Default::default()
+        };
+
+        let stream = self.docker.logs(container_id, Some(options));
+
+        Box::pin(stream.map(|result| {
+            result.map_err(|e| anyhow!("Docker log error: {}", e)).map(|log| match log {
+                LogOutput::StdOut { message } | LogOutput::StdErr { message } => {
+                    String::from_utf8_lossy(&message).to_string()
+                }
+                _ => String::new(),
+            })
+        }))
     }
 }
 
