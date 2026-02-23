@@ -559,4 +559,9 @@ pub fn init() {
         crate::roofs::hide_roofs();
         Ok(("Roofs hidden".to_string(), None::<String>))
     });
+
+    // Register the ping() function
+    lua_fn!("ping", "Test console connectivity", "ping()", || {
+        Ok("pong".to_string())
+    });
 }

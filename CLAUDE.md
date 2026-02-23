@@ -136,6 +136,92 @@ end
 
 **Migration Note**: The old command-style syntax (e.g., `add_cash 1000`) is deprecated. Use Lua function calls (e.g., `add_cash(1000)`) instead. See `MIGRATION_TEMPLATE.md` for details on migrating remaining commands.
 
+### Creating Console Commands
+
+Adding new console commands to OpenZT is done using the `lua_fn!` macro in `openzt/src/scripting.rs`. This macro handles function registration, metadata for `help()`, and Lua integration automatically.
+
+#### Registration Location
+
+All commands are registered in the `init()` function in `openzt/src/scripting.rs` (around line 136). Add your command at the end of this function, before the closing brace.
+
+#### Command Patterns
+
+**No Arguments:**
+```rust
+lua_fn!("ping", "Test console connectivity", "ping()", || {
+    Ok("pong".to_string())
+});
+```
+
+**Single Argument:**
+```rust
+lua_fn!("get_string", "Get game string by ID", "get_string(id)", |id: u32| {
+    Ok(format!("String: {}", id))
+});
+```
+
+**Multiple Arguments:**
+```rust
+lua_fn!("set_setting", "Set a configuration value", "set_setting(section, key, value)",
+    |section: String, key: String, value: String| {
+        Ok(format!("Set {}.{} = {}", section, key, value))
+    }
+);
+```
+
+**Optional Arguments:**
+```rust
+lua_fn!("help", "List functions or search by keyword", "help([search_term])",
+    |search: Option<String>| {
+        match search {
+            Some(term) => Ok(format!("Searching for: {}", term)),
+            None => Ok("All functions:".to_string()),
+        }
+    }
+);
+```
+
+#### Return Value Patterns
+
+**Simple string:**
+```rust
+Ok("result".to_string())
+```
+
+**Tuple (value, error):**
+```rust
+Ok(("Success message".to_string(), None::<String>))
+// On error: Ok((String::new(), "Error message".to_string()))
+```
+
+**Unit/void:**
+```rust
+Ok(())
+```
+
+#### Error Handling
+
+Functions should return errors as a tuple with the error string in the second position:
+
+```rust
+lua_fn!("get_entity", "Get entity by ID", "get_entity(id)", |id: u32| {
+    match find_entity(id) {
+        Some(entity) => Ok((entity.name, None::<String>)),
+        None => Ok((String::new(), format!("Entity {} not found", id))),
+    }
+});
+```
+
+In Lua, callers check for errors like:
+```lua
+result, err = get_entity(123)
+if err then
+    print("Error: " .. err)
+else
+    print("Result: " .. result)
+end
+```
+
 ## Architecture Patterns
 
 ### Module Structure
