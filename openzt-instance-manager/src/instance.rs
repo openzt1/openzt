@@ -85,9 +85,42 @@ impl From<Instance> for InstanceDetails {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AppLogType {
+    #[serde(rename = "openzt")]
+    Openzt,
+    #[serde(rename = "integration-tests")]
+    IntegrationTests,
+}
+
+impl AppLogType {
+    pub fn filename(&self) -> &str {
+        match self {
+            AppLogType::Openzt => "openzt.log",
+            AppLogType::IntegrationTests => "openzt_integration_tests.log",
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            AppLogType::Openzt => "openzt",
+            AppLogType::IntegrationTests => "integration-tests",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "openzt" => Some(AppLogType::Openzt),
+            "integration-tests" => Some(AppLogType::IntegrationTests),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LogsResponse {
     pub instance_id: String,
+    pub log_type: String,
     pub logs: String,
 }
 
