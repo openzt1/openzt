@@ -184,7 +184,11 @@ pub fn print_logs(logs_response: &LogsResponse, output_json: bool) {
             println!("{}", json);
         }
     } else {
-        println!("Logs for instance {}:", style(&logs_response.instance_id[..8]).fg(Color::Cyan));
+        println!(
+            "{} logs for instance {}:",
+            style(&logs_response.log_type).fg(Color::Green).bold(),
+            style(&logs_response.instance_id[..8]).fg(Color::Cyan)
+        );
         println!();
         if logs_response.logs.is_empty() {
             print_info("(no logs available)");
