@@ -1,8 +1,38 @@
 use clap::Parser;
+use nanospinner::Spinner;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
+
+struct SpinnerHandle {
+    handle: Option<nanospinner::SpinnerHandle>,
+}
+
+impl SpinnerHandle {
+    fn new(message: &str) -> Self {
+        let handle = Spinner::new(message).start();
+        SpinnerHandle { handle: Some(handle) }
+    }
+
+    fn update(&self, message: &str) {
+        if let Some(ref h) = self.handle {
+            h.update(message);
+        }
+    }
+
+    fn success(self, message: &str) {
+        if let Some(h) = self.handle {
+            h.success_with(message);
+        }
+    }
+
+    fn fail(self, message: &str) {
+        if let Some(h) = self.handle {
+            h.fail_with(message);
+        }
+    }
+}
 
 /// OpenZT Lua Console - Interactive runtime scripting console for Zoo Tycoon
 #[derive(Parser, Debug)]
@@ -36,13 +66,8 @@ fn connect_with_wait(host: &str, wait: bool) -> io::Result<TcpStream> {
     if wait {
         loop {
             match TcpStream::connect(host) {
-                Ok(stream) => {
-                    eprintln!("Connected to {}", host);
-                    return Ok(stream);
-                }
-                Err(e) => {
-                    eprintln!("Failed to connect to {}: {}", host, e);
-                    eprintln!("Retrying in 1 second...");
+                Ok(stream) => return Ok(stream),
+                Err(_) => {
                     thread::sleep(Duration::from_secs(1));
                 }
             }
@@ -54,17 +79,38 @@ fn connect_with_wait(host: &str, wait: bool) -> io::Result<TcpStream> {
 
 /// Wait for the console server to be ready by sending ping() until we get pong
 fn wait_for_ready(host: &str, wait: bool) -> io::Result<TcpStream> {
+    let spinner = if wait {
+        Some(SpinnerHandle::new("Waiting for console to initialise..."))
+    } else {
+        None
+    };
+
     loop {
-        let mut stream = connect_with_wait(host, wait)?;
+        // Try to connect
+        if let Some(ref sp) = spinner {
+            sp.update(&format!("Connecting to {}...", host));
+        }
+        let mut stream = match connect_with_wait(host, wait) {
+            Ok(s) => s,
+            Err(e) => {
+                if wait {
+                    continue;
+                } else {
+                    return Err(e);
+                }
+            }
+        };
 
         // Send ping
-        if let Err(e) = stream.write_all(b"ping()") {
+        if let Some(ref sp) = spinner {
+            sp.update("Waiting for server to respond...");
+        }
+        if let Err(_) = stream.write_all(b"ping()") {
             if wait {
-                eprintln!("Failed to send ping: {}, retrying...", e);
                 thread::sleep(Duration::from_secs(1));
                 continue;
             } else {
-                return Err(e);
+                return Err(io::Error::new(io::ErrorKind::Other, "Failed to send ping"));
             }
         }
 
@@ -75,11 +121,13 @@ fn wait_for_ready(host: &str, wait: bool) -> io::Result<TcpStream> {
                 let response = String::from_utf8_lossy(&buffer[0..size]).trim().to_string();
                 if response == "pong" {
                     // Server is ready
+                    if let Some(sp) = spinner {
+                        sp.success(&format!("Connected to {}", host));
+                    }
                     return Ok(stream);
                 } else {
                     // Unexpected response
                     if wait {
-                        eprintln!("Unexpected response: {}, retrying...", response);
                         thread::sleep(Duration::from_secs(1));
                         continue;
                     } else {
@@ -90,14 +138,13 @@ fn wait_for_ready(host: &str, wait: bool) -> io::Result<TcpStream> {
                     }
                 }
             }
-            Err(e) => {
+            Err(_) => {
                 // Connection reset or other error
                 if wait {
-                    eprintln!("Server not ready yet: {}, retrying...", e);
                     thread::sleep(Duration::from_secs(1));
                     continue;
                 } else {
-                    return Err(e);
+                    return Err(io::Error::new(io::ErrorKind::Other, "Failed to read response"));
                 }
             }
         }

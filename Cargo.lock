@@ -1400,6 +1400,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nanospinner"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d11a05424ca9e29356fc1f31a3f165d650c4aa98f0760b3893071163dd2860a2"
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1581,6 +1587,10 @@ dependencies = [
 [[package]]
 name = "openzt-console"
 version = "0.1.0"
+dependencies = [
+ "clap",
+ "nanospinner",
+]
 
 [[package]]
 name = "openzt-detour"
