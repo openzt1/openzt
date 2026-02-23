@@ -93,6 +93,9 @@ pub struct OpenZTConfig {
 
     #[serde(default)]
     pub expansions: ExpansionConfig,
+
+    #[serde(default)]
+    pub dev: DevConfig,
 }
 
 /// Mod loading configuration section
@@ -200,8 +203,21 @@ pub struct ExpansionConfig {
     pub custom: IndexMap<String, Vec<String>>,
 }
 
+/// Development tools configuration section
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DevConfig {
+    /// Console listening address (default: "127.0.0.1:8080")
+    #[serde(default = "default_console_listen")]
+    pub console_listen: String,
+}
+
 fn default_true() -> bool {
     true
+}
+
+fn default_console_listen() -> String {
+    "127.0.0.1:8080".to_string()
 }
 
 fn default_max_memory_mb() -> u32 {
@@ -231,6 +247,7 @@ impl Default for OpenZTConfig {
             },
             resource_cache: ResourceCacheConfig::default(),
             expansions: ExpansionConfig::default(),
+            dev: DevConfig::default(),
         }
     }
 }
@@ -271,6 +288,14 @@ impl Default for ExpansionConfig {
     }
 }
 
+impl Default for DevConfig {
+    fn default() -> Self {
+        DevConfig {
+            console_listen: "127.0.0.1:8080".to_string(),
+        }
+    }
+}
+
 // Global cached configuration
 static CACHED_CONFIG: LazyLock<Mutex<OpenZTConfig>> = LazyLock::new(|| Mutex::new(load_openzt_config_from_disk()));
 
@@ -306,6 +331,7 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                     let has_logging = toml_value.get("logging").is_some();
                     let has_resource_cache = toml_value.get("resource_cache").is_some();
                     let has_expansions = toml_value.get("expansions").is_some();
+                    let has_dev = toml_value.get("dev").is_some();
 
                     // Check if all fields exist within sections
                     let mod_loading_complete = if let Some(mod_loading) = toml_value.get("mod_loading") {
@@ -331,6 +357,12 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                         false
                     };
 
+                    let dev_complete = if let Some(dev) = toml_value.get("dev") {
+                        dev.get("console_listen").is_some()
+                    } else {
+                        false
+                    };
+
                     // expansions section should always be present (even if empty)
                     // No field-level validation needed for expansions since it's a free-form HashMap
 
@@ -339,9 +371,11 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                         || !has_logging
                         || !has_resource_cache
                         || !has_expansions
+                        || !has_dev
                         || !mod_loading_complete
                         || !logging_complete
                         || !resource_cache_complete
+                        || !dev_complete
                 }
                 Err(_) => false, // If we can't parse as Value, the full parse will fail below
             };
