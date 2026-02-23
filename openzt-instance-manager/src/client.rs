@@ -117,10 +117,14 @@ impl InstanceClient {
     }
 
     /// Get logs for an instance
-    pub async fn get_logs(&self, id: &str, tail: Option<u32>) -> Result<String> {
+    pub async fn get_logs(&self, id: &str, log_type: Option<&str>, tail: Option<u32>) -> Result<String> {
         let mut request = self
             .http_client
             .get(self.url(&format!("/api/instances/{}/logs", id)));
+
+        // Default to "openzt" for backward compatibility with existing client code
+        let log_type = log_type.unwrap_or("openzt");
+        request = request.query(&[("type", log_type)]);
 
         if let Some(t) = tail {
             request = request.query(&[("tail", t)]);
@@ -139,10 +143,17 @@ impl InstanceClient {
     pub async fn stream_logs(
         &self,
         id: &str,
+        log_type: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
-        let response = self
+        let mut request = self
             .http_client
-            .get(self.url(&format!("/api/instances/{}/logs/stream", id)))
+            .get(self.url(&format!("/api/instances/{}/logs/stream", id)));
+
+        // Default to "openzt" for backward compatibility with existing client code
+        let log_type = log_type.unwrap_or("openzt");
+        request = request.query(&[("type", log_type)]);
+
+        let response = request
             .send()
             .await
             .context("Failed to connect to log stream")?;

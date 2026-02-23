@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::pin::Pin;
 
-use crate::instance::{InstanceConfig, InstanceStatus};
+use crate::instance::{AppLogType, InstanceConfig, InstanceStatus};
 
 pub struct DockerManager {
     docker: Docker,
@@ -243,6 +243,153 @@ impl DockerManager {
                 _ => String::new(),
             })
         }))
+    }
+
+    /// Read static application logs from container
+    pub async fn get_app_logs(
+        &self,
+        container_id: &str,
+        log_type: AppLogType,
+        tail_lines: u32,
+    ) -> Result<String> {
+        let log_path = format!(
+            "/home/wineuser/.wine/drive_c/Program Files (x86)/Microsoft Games/Zoo Tycoon/{}",
+            log_type.filename()
+        );
+
+        // Use docker exec to run tail command inside container
+        let exec_options = bollard::exec::CreateExecOptions {
+            cmd: Some(vec![
+                "tail".to_string(),
+                "-n".to_string(),
+                tail_lines.to_string(),
+                log_path.clone(),
+            ]),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            ..Default::default()
+        };
+
+        // Create exec instance
+        let exec = self.docker
+            .create_exec(container_id, exec_options)
+            .await
+            .context("Failed to create exec instance")?;
+
+        // Start exec and capture output
+        let exec_result = self.docker
+            .start_exec(&exec.id, None)
+            .await
+            .context("Failed to start exec instance")?;
+
+        let mut result = String::new();
+
+        // Process exec output
+        match exec_result {
+            bollard::exec::StartExecResults::Attached { mut output, .. } => {
+                while let Some(item) = output.next().await {
+                    match item {
+                        Ok(chunk) => {
+                            match chunk {
+                                bollard::container::LogOutput::StdOut { message } => {
+                                    result.push_str(&String::from_utf8_lossy(&message));
+                                }
+                                bollard::container::LogOutput::StdErr { message } => {
+                                    // Check if tail command failed (file not found)
+                                    let err_msg = String::from_utf8_lossy(&message);
+                                    if err_msg.contains("No such file or directory") {
+                                        return Err(anyhow!(
+                                            "Log file not found in container: {} (container may not have been started yet, or the game may not have run)",
+                                            log_type.filename()
+                                        ));
+                                    }
+                                    result.push_str(&err_msg);
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            return Err(anyhow!("Error reading exec output: {}", e));
+                        }
+                    }
+                }
+            }
+            bollard::exec::StartExecResults::Detached => {
+                return Err(anyhow!("Exec detached unexpectedly"));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Stream application logs using file following
+    pub fn stream_app_logs(
+        &self,
+        container_id: &str,
+        log_type: AppLogType,
+    ) -> Pin<Box<dyn Stream<Item = Result<String>> + Send>> {
+        let log_path = format!(
+            "/home/wineuser/.wine/drive_c/Program Files (x86)/Microsoft Games/Zoo Tycoon/{}",
+            log_type.filename()
+        );
+
+        // Use docker exec with tail -f for streaming
+        let exec_options = bollard::exec::CreateExecOptions {
+            cmd: Some(vec![
+                "tail".to_string(),
+                "-f".to_string(),
+                log_path,
+            ]),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            ..Default::default()
+        };
+
+        let docker = self.docker.clone();
+        let container_id = container_id.to_string();
+
+        Box::pin(async_stream::stream! {
+            // Create exec instance
+            let exec = match docker.create_exec(&container_id, exec_options).await {
+                Ok(e) => e,
+                Err(e) => {
+                    yield Err(anyhow!("Failed to create exec instance: {}", e));
+                    return;
+                }
+            };
+
+            // Start exec and get output stream
+            match docker.start_exec(&exec.id, None).await {
+                Ok(bollard::exec::StartExecResults::Attached { mut output, .. }) => {
+                    while let Some(result) = output.next().await {
+                        match result {
+                            Ok(chunk) => {
+                                match chunk {
+                                    bollard::container::LogOutput::StdOut { message } |
+                                    bollard::container::LogOutput::StdErr { message } => {
+                                        let line = String::from_utf8_lossy(&message).to_string();
+                                        if !line.is_empty() {
+                                            yield Ok(line);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Err(e) => {
+                                yield Err(anyhow!("Stream error: {}", e));
+                                break;
+                            }
+                        }
+                    }
+                }
+                Ok(bollard::exec::StartExecResults::Detached) => {
+                    yield Err(anyhow!("Exec detached unexpectedly"));
+                }
+                Err(e) => {
+                    yield Err(anyhow!("Failed to start exec instance: {}", e));
+                }
+            }
+        })
     }
 }
 

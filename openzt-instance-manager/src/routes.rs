@@ -1,6 +1,6 @@
 use super::{
     instance::{
-        CreateInstanceRequest, CreateInstanceResponse, Instance,
+        AppLogType, CreateInstanceRequest, CreateInstanceResponse, Instance,
         InstanceDetails, InstanceStatus, LogsResponse, InstanceStatusResponse,
     },
     state::AppState,
@@ -331,7 +331,13 @@ async fn delete_instance(
 
 #[derive(Deserialize)]
 struct LogsParams {
+    #[serde(default = "default_log_type")]
+    r#type: String,
     tail: Option<u32>,
+}
+
+fn default_log_type() -> String {
+    "openzt".to_string()
 }
 
 async fn get_instance_logs(
@@ -346,20 +352,43 @@ async fn get_instance_logs(
     if container_id.is_empty() {
         return Ok(Json(LogsResponse {
             instance_id: id,
+            log_type: params.r#type.clone(),
             logs: "Container not yet created".to_string(),
         }));
     }
 
     let docker_manager = super::docker::DockerManager::new()?;
     let tail = params.tail.unwrap_or(100);
-    let logs = docker_manager.get_container_logs(container_id, tail).await?;
 
-    Ok(Json(LogsResponse { instance_id: id, logs }))
+    let logs = match params.r#type.as_str() {
+        "docker" => {
+            docker_manager.get_container_logs(container_id, tail).await?
+        }
+        "openzt" => {
+            docker_manager.get_app_logs(container_id, AppLogType::Openzt, tail).await?
+        }
+        "integration-tests" => {
+            docker_manager.get_app_logs(container_id, AppLogType::IntegrationTests, tail).await?
+        }
+        _ => {
+            return Err(ApiError::Internal(format!(
+                "Invalid log type: {}. Valid types are: docker, openzt, integration-tests",
+                params.r#type
+            )));
+        }
+    };
+
+    Ok(Json(LogsResponse {
+        instance_id: id,
+        log_type: params.r#type,
+        logs,
+    }))
 }
 
 async fn stream_logs(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(id): Path<String>,
+    Query(params): Query<LogsParams>,
 ) -> Result<Response, ApiError> {
     let state_guard = state.read().await;
     let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
@@ -370,7 +399,24 @@ async fn stream_logs(
     }
 
     let docker_manager = super::docker::DockerManager::new()?;
-    let log_stream = docker_manager.stream_container_logs(&container_id, 0);
+
+    let log_stream = match params.r#type.as_str() {
+        "docker" => {
+            docker_manager.stream_container_logs(&container_id, 0)
+        }
+        "openzt" => {
+            docker_manager.stream_app_logs(&container_id, AppLogType::Openzt)
+        }
+        "integration-tests" => {
+            docker_manager.stream_app_logs(&container_id, AppLogType::IntegrationTests)
+        }
+        _ => {
+            return Err(ApiError::Internal(format!(
+                "Invalid log type: {}. Valid types are: docker, openzt, integration-tests",
+                params.r#type
+            )));
+        }
+    };
 
     // Convert the log stream to SSE events
     let sse_stream = log_stream.map(|result| match result {

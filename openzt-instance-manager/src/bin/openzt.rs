@@ -48,8 +48,8 @@ async fn main() -> Result<()> {
         Commands::List {} => cmd_list(&client, output_format).await,
         Commands::Get { id } => cmd_get(&client, &id, output_format).await,
         Commands::Delete { id, confirm } => cmd_delete(&client, &id, confirm, output_format).await,
-        Commands::Logs { id, follow, tail } => {
-            cmd_logs(&client, &id, follow, tail, output_format).await
+        Commands::Logs { id, log_type, follow, tail } => {
+            cmd_logs(&client, &id, &log_type, follow, tail, output_format).await
         }
         Commands::Stop { id } => cmd_stop(&client, &id, output_format).await,
         Commands::Start { id } => cmd_start(&client, &id, output_format).await,
@@ -119,6 +119,10 @@ enum Commands {
     Logs {
         /// Instance ID (full UUID or short prefix)
         id: String,
+
+        /// Log type to read (docker, openzt, integration-tests)
+        #[arg(long, default_value = "openzt")]
+        log_type: String,
 
         /// Follow log output in real-time
         #[arg(short, long)]
@@ -288,6 +292,7 @@ async fn cmd_delete(
 async fn cmd_logs(
     client: &openzt_instance_manager::client::InstanceClient,
     id: &str,
+    log_type: &str,
     follow: bool,
     tail: usize,
     output_format: openzt_instance_manager::output::OutputFormat,
@@ -295,6 +300,15 @@ async fn cmd_logs(
     use futures_util::StreamExt;
     use openzt_instance_manager::instance::LogsResponse;
     use openzt_instance_manager::output::{print_error, print_info, print_logs, print_resolution_error};
+
+    // Validate log type
+    if !matches!(log_type, "docker" | "openzt" | "integration-tests") {
+        print_error(&format!(
+            "Invalid log type: '{}'. Valid types are: docker, openzt, integration-tests",
+            log_type
+        ));
+        std::process::exit(1);
+    }
 
     // Resolve ID (handles both short and full UUIDs)
     let resolved_id = match resolve_instance_id(client, id).await {
@@ -306,10 +320,14 @@ async fn cmd_logs(
     };
 
     if follow {
-        let mut stream = client.stream_logs(&resolved_id).await
+        let mut stream = client.stream_logs(&resolved_id, Some(log_type)).await
             .map_err(|e| miette!(e))?;
 
-        print_info(&format!("Streaming logs for instance {} (Ctrl+C to stop)...", &resolved_id[..8]));
+        print_info(&format!(
+            "Streaming {} logs for instance {} (Ctrl+C to stop)...",
+            log_type,
+            &resolved_id[..8]
+        ));
         println!();
 
         while let Some(result) = stream.next().await {
@@ -333,10 +351,11 @@ async fn cmd_logs(
         }
         Ok(())
     } else {
-        match client.get_logs(&resolved_id, Some(tail as u32)).await {
+        match client.get_logs(&resolved_id, Some(log_type), Some(tail as u32)).await {
             Ok(logs) => {
                 let response = LogsResponse {
                     instance_id: resolved_id,
+                    log_type: log_type.to_string(),
                     logs,
                 };
                 let output_json = output_format == openzt_instance_manager::output::OutputFormat::Json;

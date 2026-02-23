@@ -90,7 +90,8 @@ pub mod zoo_console {
 }
 
 pub fn init() {
-    info!("Initializing Lua console on 127.0.0.1:8080");
+    let config = crate::resource_manager::mod_config::get_openzt_config();
+    info!("Initializing Lua console on {}", config.dev.console_listen);
     zoo_console::init();
 }
 
@@ -172,12 +173,15 @@ fn handle_client(mut stream: TcpStream) {
 }
 
 pub fn start_server() {
-    let Ok(listener) = TcpListener::bind("127.0.0.1:8080") else {
-        error!("Failed to bind socket 127.0.0.1:8080, console will not work");
+    let config = crate::resource_manager::mod_config::get_openzt_config();
+    let listen_addr = config.dev.console_listen.clone();
+
+    let Ok(listener) = TcpListener::bind(&listen_addr) else {
+        error!("Failed to bind socket {}, console will not work", listen_addr);
         return;
     };
 
-    info!("Listening on 127.0.0.1:8080...");
+    info!("Listening on {}...", listen_addr);
 
     for stream in listener.incoming() {
         match stream {
