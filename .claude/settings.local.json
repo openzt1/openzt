@@ -36,7 +36,12 @@
       "Bash(git fetch:*)",
       "Bash(for:*)",
       "Bash(do)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(pkill:*)",
+      "Bash(lsof:*)",
+      "Bash(head:*)",
+      "Bash(jq:*)",
+      "Bash(openzt:*)"
     ],
     "deny": [],
     "ask": []
