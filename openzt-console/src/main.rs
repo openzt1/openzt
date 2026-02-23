@@ -1,28 +1,111 @@
+use clap::Parser;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::thread;
+use std::time::Duration;
 
-fn main() -> io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let server_address = "127.0.0.1:8080";
+/// OpenZT Lua Console - Interactive runtime scripting console for Zoo Tycoon
+#[derive(Parser, Debug)]
+#[command(name = "openzt-console")]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Host address to connect to (default: 127.0.0.1:8080)
+    #[arg(short = 'H', long, default_value = "127.0.0.1:8080")]
+    host: String,
 
-    // Check for --oneshot flag
-    if let Some(pos) = args.iter().position(|arg| arg == "--oneshot") {
-        if pos + 1 >= args.len() {
-            eprintln!("Error: --oneshot requires a command argument");
-            eprintln!("Usage: openzt-console --oneshot <command>");
-            std::process::exit(1);
-        }
+    /// Retry connection until successful
+    #[arg(long)]
+    wait: bool,
 
-        let command = &args[pos + 1];
-        return run_oneshot(server_address, command);
-    }
-
-    // Interactive mode (existing behavior)
-    run_interactive(server_address)
+    /// Execute a single command and exit
+    #[arg(long)]
+    oneshot: Option<String>,
 }
 
-fn run_oneshot(server_address: &str, command: &str) -> io::Result<()> {
-    let mut stream = TcpStream::connect(server_address)?;
+fn main() -> io::Result<()> {
+    let cli = Cli::parse();
+
+    if let Some(command) = cli.oneshot {
+        run_oneshot(&cli.host, &command, cli.wait)
+    } else {
+        run_interactive(&cli.host, cli.wait)
+    }
+}
+
+fn connect_with_wait(host: &str, wait: bool) -> io::Result<TcpStream> {
+    if wait {
+        loop {
+            match TcpStream::connect(host) {
+                Ok(stream) => {
+                    eprintln!("Connected to {}", host);
+                    return Ok(stream);
+                }
+                Err(e) => {
+                    eprintln!("Failed to connect to {}: {}", host, e);
+                    eprintln!("Retrying in 1 second...");
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+    } else {
+        TcpStream::connect(host)
+    }
+}
+
+/// Wait for the console server to be ready by sending ping() until we get pong
+fn wait_for_ready(host: &str, wait: bool) -> io::Result<TcpStream> {
+    loop {
+        let mut stream = connect_with_wait(host, wait)?;
+
+        // Send ping
+        if let Err(e) = stream.write_all(b"ping()") {
+            if wait {
+                eprintln!("Failed to send ping: {}, retrying...", e);
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            } else {
+                return Err(e);
+            }
+        }
+
+        // Read response
+        let mut buffer = [0; 1024];
+        match stream.read(&mut buffer) {
+            Ok(size) => {
+                let response = String::from_utf8_lossy(&buffer[0..size]).trim().to_string();
+                if response == "pong" {
+                    // Server is ready
+                    return Ok(stream);
+                } else {
+                    // Unexpected response
+                    if wait {
+                        eprintln!("Unexpected response: {}, retrying...", response);
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Expected 'pong', got: {}", response)
+                        ));
+                    }
+                }
+            }
+            Err(e) => {
+                // Connection reset or other error
+                if wait {
+                    eprintln!("Server not ready yet: {}, retrying...", e);
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+fn run_oneshot(host: &str, command: &str, wait: bool) -> io::Result<()> {
+    let mut stream = wait_for_ready(host, wait)?;
 
     // Send command
     stream.write_all(command.as_bytes())?;
@@ -39,9 +122,9 @@ fn run_oneshot(server_address: &str, command: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn run_interactive(server_address: &str) -> io::Result<()> {
-    let mut stream = TcpStream::connect(server_address)?;
-    println!("Connected to server at {}", server_address);
+fn run_interactive(host: &str, wait: bool) -> io::Result<()> {
+    let mut stream = wait_for_ready(host, wait)?;
+    println!("Connected to server at {}", host);
 
     loop {
         let mut input = String::new();
