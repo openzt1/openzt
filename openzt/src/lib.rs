@@ -15,6 +15,9 @@ pub mod ztworldmgr;
 
 mod resource_manager;
 
+/// Centralized logging initialization
+pub mod logging;
+
 /// Reading and changing the state of the UI, contains hooks for UI elements and some basic UI manipulation functions.
 mod ztui;
 
@@ -103,9 +106,6 @@ pub mod reimplementation_tests;
 pub mod integration_tests;
 
 #[cfg(target_os = "windows")]
-use windows::Win32::System::Console::{AllocConsole, FreeConsole};
-
-#[cfg(target_os = "windows")]
 use openzt_detour_macro::detour_mod;
 
 #[cfg(target_os = "windows")]
@@ -121,25 +121,16 @@ mod zoo_init {
     //  the console starts a new thead which is not recommended in the DllMain function.
     #[detour(LOAD_LANG_DLLS)]
     unsafe extern "thiscall" fn load_lang_dlls(this: u32) -> u32 {
-        match init_console() {
-            Ok(_) => {
-                let _enable_ansi = enable_ansi_support::enable_ansi_support().is_ok();
+        // Load config to determine logging settings
+        let config = resource_manager::mod_config::get_openzt_config();
 
-                // Load config to determine logging settings
-                let config = resource_manager::mod_config::get_openzt_config();
-
-                // Initialize logging with config settings
-                if let Err(e) = resource_manager::mod_config::init_logging(&config.logging) {
-                    eprintln!("Failed to initialize logging: {}", e);
-                }
-
-                info!("OpenZT initialization starting");
-            }
-            Err(e) => {
-                eprintln!("Failed to initialize console: {}", e);
-                return 0; // Return 0 to indicate failure
-            }
+        // Initialize console and logging with config settings
+        if let Err(e) = logging::init_with_console(&config.logging) {
+            eprintln!("Failed to initialize logging: {}", e);
+            return 0; // Return 0 to indicate failure
         }
+
+        info!("OpenZT initialization starting");
 
         // Command console is broken on latest stable Rust so we disable it by default.
         if cfg!(feature = "command-console") {
@@ -190,15 +181,4 @@ pub fn init() {
     unsafe {
         zoo_init::init_detours().expect("Failed to initialize detours");
     }
-}
-
-#[cfg(target_os = "windows")]
-fn init_console() -> windows::core::Result<()> {
-    // Free the current console
-    unsafe { FreeConsole()? };
-
-    // Allocate a new console
-    unsafe { AllocConsole()? };
-
-    Ok(())
 }

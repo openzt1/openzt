@@ -4,8 +4,6 @@ use std::{any::Any, fmt};
 
 use proptest::test_runner::{FailurePersistence, PersistedSeed};
 use tracing::{error, info};
-#[cfg(target_os = "windows")]
-use windows::Win32::System::Console::{AllocConsole, FreeConsole};
 
 #[cfg(target_os = "windows")]
 use crate::detour_mod;
@@ -13,31 +11,16 @@ use crate::detour_mod;
 pub fn init() {
     #[cfg(target_os = "windows")]
     {
-        match init_console() {
-            Ok(_) => {
-                let enable_ansi = enable_ansi_support::enable_ansi_support().is_ok();
-                tracing_subscriber::fmt().with_ansi(enable_ansi).init();
-            }
-            Err(e) => {
-                info!("Failed to initialize console: {}", e);
-            }
+        if let Err(e) = crate::logging::init_with_console(
+            &crate::logging::LoggingConfig::default()
+        ) {
+            eprintln!("Failed to initialize logging: {}", e);
         }
 
         unsafe { detour_zoo_main::init_detours() }.is_err().then(|| {
             error!("Error initialising zoo_main detours");
         });
     }
-}
-
-#[cfg(target_os = "windows")]
-fn init_console() -> windows::core::Result<()> {
-    // Free the current console
-    unsafe { FreeConsole()? };
-
-    // Allocate a new console
-    unsafe { AllocConsole()? };
-
-    Ok(())
 }
 
 #[derive(Debug, Default, PartialEq)]
