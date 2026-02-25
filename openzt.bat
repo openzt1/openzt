@@ -224,7 +224,7 @@ IF DEFINED WAIT_FLAG (
         echo ============================================================
         echo Integration Test Results
         echo ============================================================
-        type "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt_integration_tests.log"
+        powershell -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Path 'C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt_integration_tests.log' | Out-Host"
         echo.
         echo ============================================================
         echo Full logs available at:

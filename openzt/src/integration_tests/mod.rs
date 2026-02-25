@@ -1,11 +1,7 @@
 #![allow(dead_code)]
 
-use std::fs::OpenOptions;
-use std::io::Write as IoWrite;
-
+use std::io::Write;
 use tracing::{error, info};
-#[cfg(target_os = "windows")]
-use windows::Win32::System::Console::{AllocConsole, FreeConsole};
 
 #[cfg(target_os = "windows")]
 use crate::detour_mod;
@@ -99,48 +95,16 @@ macro_rules! integration_tests {
 pub fn init() {
     #[cfg(target_os = "windows")]
     {
-        match init_console() {
-            Ok(_) => {
-                // let enable_ansi = enable_ansi_support::enable_ansi_support().is_ok();
-                // tracing_subscriber::fmt().with_ansi(enable_ansi).init();
-                let enable_ansi = enable_ansi_support::enable_ansi_support().is_ok();
-
-                // Set up file appender - truncate file on startup
-                let log_file = std::fs::File::create("openzt.log").expect("Failed to create openzt.log");
-                let (non_blocking_file, _guard) = tracing_appender::non_blocking(log_file);
-
-                // Set up layered logging to both console and file
-                use tracing_subscriber::layer::SubscriberExt;
-                use tracing_subscriber::util::SubscriberInitExt;
-
-                tracing_subscriber::registry()
-                    .with(tracing_subscriber::fmt::layer().with_ansi(enable_ansi).with_writer(std::io::stdout))
-                    .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(non_blocking_file))
-                    .init();
-
-                // Store the guard to prevent it from being dropped
-                std::mem::forget(_guard);
-            }
-            Err(e) => {
-                info!("Failed to initialize console: {}", e);
-            }
+        if let Err(e) = crate::logging::init_with_console(
+            &crate::logging::LoggingConfig::default()
+        ) {
+            eprintln!("Failed to initialize logging: {}", e);
         }
 
         unsafe { detour_zoo_main::init_detours() }.is_err().then(|| {
             error!("Error initialising zoo_main detours");
         });
     }
-}
-
-#[cfg(target_os = "windows")]
-fn init_console() -> windows::core::Result<()> {
-    // Free the current console
-    unsafe { FreeConsole()? };
-
-    // Allocate a new console
-    unsafe { AllocConsole()? };
-
-    Ok(())
 }
 
 /// Setup test target files for loading order tests
@@ -234,7 +198,11 @@ mod detour_zoo_main {
 
         // Create or truncate the file
         let mut test_log = match OpenOptions::new().create(true).write(true).truncate(true).open(&test_log_path) {
-            Ok(file) => Some(file),
+            Ok(mut file) => {
+                // Write UTF-8 BOM so Windows terminals correctly display the file
+                let _ = file.write_all(&[0xEF, 0xBB, 0xBF]);
+                Some(file)
+            },
             Err(e) => {
                 error!("Failed to create test log file '{}': {}", test_log_path, e);
                 None
