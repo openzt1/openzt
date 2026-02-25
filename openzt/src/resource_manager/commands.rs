@@ -2,7 +2,7 @@ use crate::{
     command_console::CommandError,
     lua_fn,
     resource_manager::{
-        bfresourcemgr::{read_bf_resource_dir_contents_from_memory, read_bf_resource_mgr_from_memory},
+        bfresourcemgr::read_bf_resource_dir_contents_from_memory,
         lazyresourcemap::{decrement_ref, get_cache_stats, get_file_names, get_ref_count, increment_ref, unload_all_resources, UnloadResult},
         openzt_mods::{get_location_habitat_ids, get_mod_ids},
     },
@@ -186,7 +186,7 @@ fn command_list_resources(_args: Vec<&str>) -> Result<String, CommandError> {
 }
 
 fn command_get_bf_resource_mgr(_args: Vec<&str>) -> Result<String, CommandError> {
-    let bf_resource_mgr = read_bf_resource_mgr_from_memory();
+    let bf_resource_mgr = crate::globals::globals().bfresourcemgr();
     Ok(format!("{}", bf_resource_mgr))
 }
 

@@ -5,8 +5,6 @@ use tracing::{error, info};
 
 use crate::util::{get_from_memory, ZTBoundedString, ZTString, ZTStringPtr};
 
-const GLOBAL_BFRESOURCEMGR_ADDRESS: u32 = 0x006380C0;
-
 #[public]
 #[derive(Debug)]
 #[repr(C)]
@@ -90,13 +88,10 @@ impl Display for BFResourcePtr {
     }
 }
 
-pub fn read_bf_resource_mgr_from_memory() -> BFResourceMgr {
-    get_from_memory::<BFResourceMgr>(GLOBAL_BFRESOURCEMGR_ADDRESS)
-}
 
 pub fn read_bf_resource_dir_contents_from_memory() -> Vec<BFResourceDirContents> {
     info!("Reading BFResourceDir from memory");
-    let bf_resource_mgr = read_bf_resource_mgr_from_memory();
+    let bf_resource_mgr = crate::globals::globals().bfresourcemgr();
     let mut bf_resource_dir_contents: Vec<BFResourceDirContents> = Vec::new();
     let mut bf_resource_dir_ptr = bf_resource_mgr.resource_array_start;
     let mut bf_resource_zips: Vec<BFResourceZip> = Vec::new();

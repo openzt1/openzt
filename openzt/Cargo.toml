@@ -38,7 +38,7 @@ mlua = { version = "0.11.5", features = ["luajit52", "vendored", "send"] }
 encoding_rs = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.2", features = ["Win32", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Memory", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.62.2", features = ["Win32", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [dev-dependencies]
 

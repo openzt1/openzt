@@ -8,12 +8,11 @@ use crate::{
     util::{get_from_memory, ZTBufferString},
 };
 
-const GLOBAL_ZTADVTERRAINMGR_ADDRESS: u32 = 0x00638058;
 const BFTERRAINTYPEINFO_SIZE: usize = 0x30;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
-struct ZTAdvTerrainMgr_raw {
+pub struct ZTAdvTerrainMgr_raw {
     vtable: u32,
     unknown_u32_1: u32,
     unknown_u32_2: u32,
@@ -69,12 +68,9 @@ struct BFTerrainTypeInfo {
     icon_string: ZTBufferString,
 }
 
-fn read_ztadvterrainmgr_raw_from_memory() -> ZTAdvTerrainMgr_raw {
-    get_from_memory(get_from_memory::<u32>(GLOBAL_ZTADVTERRAINMGR_ADDRESS))
-}
 
 fn read_ztadvterrainmgr_from_memory() -> ZTAdvTerrainMgr {
-    ZTAdvTerrainMgr::from(read_ztadvterrainmgr_raw_from_memory())
+    ZTAdvTerrainMgr::from(*crate::globals::globals().ztadvterrainmgr())
 }
 
 fn read_bfterraintypeinfo_from_memory(address: u32) -> BFTerrainTypeInfo {

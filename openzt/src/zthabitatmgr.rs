@@ -10,10 +10,8 @@ use crate::{
     lua_fn,
     util::{get_from_memory, ZTArray, ZTBoundedString, ZTString},
     ztmapview::BFTile,
-    ztworldmgr::{read_zt_world_mgr_from_global, Direction},
+    ztworldmgr::Direction,
 };
-
-pub const GLOBAL_ZTHABITATMGR_ADDRESS: u32 = 0x0063805c;
 
 /// ZTHabitatMgr struct
 #[derive(Debug)]
@@ -98,9 +96,6 @@ impl fmt::Display for ZTHabitatMgr {
     }
 }
 
-pub fn read_zt_habitat_mgr_from_memory() -> ZTHabitatMgr {
-    get_from_memory::<ZTHabitatMgr>(get_from_memory(GLOBAL_ZTHABITATMGR_ADDRESS))
-}
 
 #[derive(Debug, Getters)]
 #[repr(C)]
@@ -141,12 +136,12 @@ impl ZTHabitat {
         let tile = get_from_memory::<BFTile>(self.entrance_tile_ptr);
         // info!("Entrance tile: {}", tile);
 
-        let zthm = read_zt_habitat_mgr_from_memory();
+        let zthm = crate::globals::globals().zthabitatmgr();
         if let Some(gate_habitat) = zthm.get_habitat_by_tile(&tile)
             && gate_habitat == *self {
                 return Some(tile);
             }
-        let ztwm = read_zt_world_mgr_from_global();
+        let ztwm = crate::globals::globals().ztworldmgr();
         ztwm.get_neighbour(&tile, Direction::from(self.entrance_rotation))
     }
 }
@@ -210,12 +205,12 @@ impl fmt::Display for ZTHabitat {
 }
 
 fn command_get_zt_habitat_mgr(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_habitat_mgr = read_zt_habitat_mgr_from_memory();
+    let zt_habitat_mgr = crate::globals::globals().zthabitatmgr();
     Ok(format!("{}", zt_habitat_mgr))
 }
 
 fn command_get_zt_habitats(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_habitat_mgr = read_zt_habitat_mgr_from_memory();
+    let zt_habitat_mgr = crate::globals::globals().zthabitatmgr();
     let mut result_string = String::new();
     for i in 0..zt_habitat_mgr.exhibit_array.len() {
         let habitat = zt_habitat_mgr.exhibit_array.get(i);
@@ -247,7 +242,7 @@ pub mod hooks_zthabitatmgr {
     unsafe extern "thiscall" fn get_gate_tile_in(_this: u32) -> u32 {
         let habitat = get_from_memory::<ZTHabitat>(_this);
         match habitat.get_gate_tile_in() {
-            Some(tile) => read_zt_world_mgr_from_global().get_ptr_from_bftile(&tile),
+            Some(tile) => crate::globals::globals().ztworldmgr().get_ptr_from_bftile(&tile),
             None => 0,
         }
     }

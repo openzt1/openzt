@@ -1,4 +1,4 @@
-mod bfresourcemgr;
+pub(crate) mod bfresourcemgr;
 mod commands;
 mod handlers;
 mod hooks;

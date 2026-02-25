@@ -8,7 +8,6 @@ use crate::resource_manager::openzt_mods::legacy_attributes::LegacyEntityType;
 use crate::runtime_state;
 use crate::shortcuts::{Ctrl, R};
 use crate::util::get_from_memory;
-use crate::ztworldmgr::read_zt_world_mgr_from_global;
 
 #[cfg(target_os = "windows")]
 use openzt_detour_macro::detour_mod;
@@ -120,7 +119,7 @@ pub fn hide_roofs() {
     info!("Looking for {} roof-tagged base strings: {:?}", roof_bases.len(), roof_bases);
 
     // Get all in-game entities
-    let zt_world_mgr = read_zt_world_mgr_from_global();
+    let zt_world_mgr = crate::globals::globals().ztworldmgr();
     let entity_array_start = zt_world_mgr.entity_array_start();
     let entity_array_end = zt_world_mgr.entity_array_end();
 
@@ -195,7 +194,7 @@ pub fn show_roofs() {
     }
 
     // Get all entities and show roof-tagged ones
-    let zt_world_mgr = read_zt_world_mgr_from_global();
+    let zt_world_mgr = crate::globals::globals().ztworldmgr();
     let entity_array_start = zt_world_mgr.entity_array_start();
     let entity_array_end = zt_world_mgr.entity_array_end();
 

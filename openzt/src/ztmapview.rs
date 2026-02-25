@@ -5,7 +5,6 @@ use tracing::info;
 
 use crate::bfentitytype::{zt_entity_type_class_is, ZTEntityTypeClass};
 use crate::util::get_from_memory;
-use crate::zthabitatmgr::read_zt_habitat_mgr_from_memory;
 use crate::ztworldmgr::{BFEntity, IVec3};
 // use crate::{
 //     util::get_from_memory,
@@ -291,7 +290,7 @@ impl ZTMapView {
     pub fn check_tank_placement(temp_entity_ptr: u32, tile: &BFTile) -> Result<(), ErrorStringId> {
         info!("Entity Ptr {:#x} -> {:#x}", temp_entity_ptr, get_from_memory::<u32>(temp_entity_ptr));
         let temp_entity: BFEntity = get_from_memory(temp_entity_ptr);
-        let habitat_mgr = read_zt_habitat_mgr_from_memory();
+        let habitat_mgr = crate::globals::globals().zthabitatmgr();
         let Some(habitat) = habitat_mgr.get_habitat(tile.pos.x, tile.pos.y) else {
             info!("No habitat found at tile position: {:?}", tile.pos);
             return Ok(());
