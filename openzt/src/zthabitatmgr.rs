@@ -1,4 +1,4 @@
-use nt_time::{time::OffsetDateTime, FileTime};
+use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour_macro::detour_mod;
 use std::fmt;
 use tracing::info;
@@ -178,11 +178,11 @@ impl fmt::Display for ZTHabitat {
         writeln!(f, "  unknown_u32_2: {:#x},", self.unknown_u32_2)?;
         writeln!(f, "  unknown_u32_3: {:#x},", self.unknown_u32_3)?;
         writeln!(f, "  unknown_u32_4: {:#x},", self.unknown_u32_4)?;
-        writeln!(f, "  created_timestamp: {},", OffsetDateTime::try_from(self.created_timestamp).unwrap())?;
+        writeln!(f, "  created_timestamp: {},", UtcDateTime::try_from(self.created_timestamp).unwrap())?;
         writeln!(
             f,
             "  unknown_nt_time: {} ({}, {}, {}),",
-            OffsetDateTime::try_from(self.unknown_nt_time).unwrap(),
+            UtcDateTime::try_from(self.unknown_nt_time).unwrap(),
             self.unknown_nt_time.to_raw() as f64,
             self.unknown_nt_time.to_raw() as u32,
             (self.unknown_nt_time.to_raw() >> 32) as u32
