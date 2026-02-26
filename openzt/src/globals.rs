@@ -113,20 +113,6 @@ impl<T> CachedGlobalInstance<T> {
             *addr as *mut T
         }
     }
-
-    /// Returns a shared reference. Panics if the pointer is null.
-    pub unsafe fn get_ref(&self) -> &T {
-        let ptr = unsafe { self.get() };
-        assert!(!ptr.is_null(), "CachedGlobalInstance pointer is null");
-        unsafe { &*ptr }
-    }
-
-    /// Returns a mutable reference. Panics if the pointer is null.
-    pub unsafe fn get_mut(&self) -> &mut T {
-        let ptr = unsafe { self.get() };
-        assert!(!ptr.is_null(), "CachedGlobalInstance pointer is null");
-        unsafe { &mut *ptr }
-    }
 }
 
 // SAFETY: CachedGlobalInstance only contains plain integers (base address and offsets)
@@ -144,39 +130,73 @@ pub struct Globals {
 }
 
 impl Globals {
-    /// Returns a mutable reference to the ZTWorldMgr.
-    pub fn ztworldmgr(&self) -> &mut crate::ztworldmgr::ZTWorldMgr {
+    /// Returns a shared reference to the ZTWorldMgr (read-only).
+    pub fn ztworldmgr(&self) -> &crate::ztworldmgr::ZTWorldMgr {
         unsafe {
-            // Cast from opaque type to concrete type
-            &mut *(self.ztworldmgr.get_mut() as *mut ZTWorldMgr as *mut crate::ztworldmgr::ZTWorldMgr)
+            &*(self.ztworldmgr.get() as *const crate::ztworldmgr::ZTWorldMgr)
         }
     }
 
-    /// Returns a mutable reference to the ZTHabitatMgr.
-    pub fn zthabitatmgr(&self) -> &mut crate::zthabitatmgr::ZTHabitatMgr {
+    /// Returns a raw mutable pointer to the ZTWorldMgr for mutation.
+    pub fn ztworldmgr_ptr(&self) -> *mut crate::ztworldmgr::ZTWorldMgr {
         unsafe {
-            &mut *(self.zthabitatmgr.get_mut() as *mut ZTHabitatMgr as *mut crate::zthabitatmgr::ZTHabitatMgr)
+            self.ztworldmgr.get() as *mut crate::ztworldmgr::ZTWorldMgr
         }
     }
 
-    /// Returns a mutable reference to the ZTAdvTerrainMgr_raw.
-    pub fn ztadvterrainmgr(&self) -> &mut crate::ztadvterrainmgr::ZTAdvTerrainMgr_raw {
+    /// Returns a shared reference to the ZTHabitatMgr (read-only).
+    pub fn zthabitatmgr(&self) -> &crate::zthabitatmgr::ZTHabitatMgr {
         unsafe {
-            &mut *(self.ztadvterrainmgr.get_mut() as *mut ZTAdvTerrainMgr_raw as *mut crate::ztadvterrainmgr::ZTAdvTerrainMgr_raw)
+            &*(self.zthabitatmgr.get() as *const crate::zthabitatmgr::ZTHabitatMgr)
         }
     }
 
-    /// Returns a mutable reference to the ZTGameMgr.
-    pub fn ztgamemgr(&self) -> &mut crate::ztgamemgr::ZTGameMgr {
+    /// Returns a raw mutable pointer to the ZTHabitatMgr for mutation.
+    pub fn zthabitatmgr_ptr(&self) -> *mut crate::zthabitatmgr::ZTHabitatMgr {
         unsafe {
-            &mut *(self.ztgamemgr.get_mut() as *mut ZTGameMgr as *mut crate::ztgamemgr::ZTGameMgr)
+            self.zthabitatmgr.get() as *mut crate::zthabitatmgr::ZTHabitatMgr
         }
     }
 
-    /// Returns a mutable reference to the BFResourceMgr.
-    pub fn bfresourcemgr(&self) -> &mut crate::resource_manager::bfresourcemgr::BFResourceMgr {
+    /// Returns a shared reference to the ZTAdvTerrainMgr_raw (read-only).
+    pub fn ztadvterrainmgr(&self) -> &crate::ztadvterrainmgr::ZTAdvTerrainMgr_raw {
         unsafe {
-            &mut *(self.bfresourcemgr.get_mut() as *mut BFResourceMgr as *mut crate::resource_manager::bfresourcemgr::BFResourceMgr)
+            &*(self.ztadvterrainmgr.get() as *const crate::ztadvterrainmgr::ZTAdvTerrainMgr_raw)
+        }
+    }
+
+    /// Returns a raw mutable pointer to the ZTAdvTerrainMgr_raw for mutation.
+    pub fn ztadvterrainmgr_ptr(&self) -> *mut crate::ztadvterrainmgr::ZTAdvTerrainMgr_raw {
+        unsafe {
+            self.ztadvterrainmgr.get() as *mut crate::ztadvterrainmgr::ZTAdvTerrainMgr_raw
+        }
+    }
+
+    /// Returns a shared reference to the ZTGameMgr (read-only).
+    pub fn ztgamemgr(&self) -> &crate::ztgamemgr::ZTGameMgr {
+        unsafe {
+            &*(self.ztgamemgr.get() as *const crate::ztgamemgr::ZTGameMgr)
+        }
+    }
+
+    /// Returns a raw mutable pointer to the ZTGameMgr for mutation.
+    pub fn ztgamemgr_ptr(&self) -> *mut crate::ztgamemgr::ZTGameMgr {
+        unsafe {
+            self.ztgamemgr.get() as *mut crate::ztgamemgr::ZTGameMgr
+        }
+    }
+
+    /// Returns a shared reference to the BFResourceMgr (read-only).
+    pub fn bfresourcemgr(&self) -> &crate::resource_manager::bfresourcemgr::BFResourceMgr {
+        unsafe {
+            &*(self.bfresourcemgr.get() as *const crate::resource_manager::bfresourcemgr::BFResourceMgr)
+        }
+    }
+
+    /// Returns a raw mutable pointer to the BFResourceMgr for mutation.
+    pub fn bfresourcemgr_ptr(&self) -> *mut crate::resource_manager::bfresourcemgr::BFResourceMgr {
+        unsafe {
+            self.bfresourcemgr.get() as *mut crate::resource_manager::bfresourcemgr::BFResourceMgr
         }
     }
 }

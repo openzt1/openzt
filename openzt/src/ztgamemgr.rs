@@ -80,8 +80,10 @@ pub fn command_get_date_str(_args: Vec<&str>) -> Result<String, CommandError> {
 /// a command that adds cash to the player's account
 /// usage: `add_cash <amount>`
 pub fn command_add_cash(args: Vec<&str>) -> Result<String, CommandError> {
-    let ztgamemgr = globals().ztgamemgr();
-    ztgamemgr.cash += args[0].parse::<f32>()?;
+    let ptr = globals().ztgamemgr_ptr();
+    unsafe {
+        (*ptr).cash += args[0].parse::<f32>()?;
+    }
     Ok(format!("Added ${}", args[0]))
 }
 
