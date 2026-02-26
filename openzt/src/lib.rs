@@ -1,4 +1,7 @@
 #![allow(dead_code)]
+/// Centralized registry for accessing global C++ manager instances
+mod globals;
+
 /// Reimplementation of the BFRegistry, a vanilla system used to store pointers to the ZT*Mgr classes. In theory this
 /// allowed customization via zoo.ini, but in practice it appears unused.
 mod bfregistry;
