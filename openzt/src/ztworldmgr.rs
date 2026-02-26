@@ -552,7 +552,7 @@ fn log_zt_world_mgr(zt_world_mgr: &ZTWorldMgr) {
 
 fn command_get_zt_world_mgr_entities(_args: Vec<&str>) -> Result<String, CommandError> {
     let zt_world_mgr = globals().ztworldmgr();
-    let entities = get_zt_world_mgr_entities(&zt_world_mgr);
+    let entities = get_zt_world_mgr_entities(zt_world_mgr);
     info!("Found {} entities", entities.len());
     if entities.is_empty() {
         return Ok("No entities found".to_string());
@@ -566,7 +566,7 @@ fn command_get_zt_world_mgr_entities(_args: Vec<&str>) -> Result<String, Command
 
 fn command_get_zt_world_mgr_entities_2(_args: Vec<&str>) -> Result<String, CommandError> {
     let zt_world_mgr = globals().ztworldmgr();
-    let entities = get_zt_world_mgr_entities_2(&zt_world_mgr);
+    let entities = get_zt_world_mgr_entities_2(zt_world_mgr);
     info!("Found {} entities", entities.len());
     if entities.is_empty() {
         return Ok("No entities found".to_string());
@@ -590,7 +590,7 @@ fn command_get_entity_unique_vtable_entries(args: Vec<&str>) -> Result<String, C
     };
 
     let zt_world_mgr = globals().ztworldmgr();
-    let entities = get_zt_world_mgr_entities(&zt_world_mgr);
+    let entities = get_zt_world_mgr_entities(zt_world_mgr);
 
     let mut result = String::new();
 
@@ -616,7 +616,7 @@ fn command_get_entity_type_unique_vtable_entries(args: Vec<&str>) -> Result<Stri
     };
 
     let zt_world_mgr = globals().ztworldmgr();
-    let entities = get_zt_world_mgr_types(&zt_world_mgr);
+    let entities = get_zt_world_mgr_types(zt_world_mgr);
 
     let mut result = String::new();
 
@@ -633,7 +633,7 @@ fn command_get_entity_type_unique_vtable_entries(args: Vec<&str>) -> Result<Stri
 
 fn command_get_zt_world_mgr_types(_args: Vec<&str>) -> Result<String, CommandError> {
     let zt_world_mgr = globals().ztworldmgr();
-    let types = get_zt_world_mgr_types(&zt_world_mgr);
+    let types = get_zt_world_mgr_types(zt_world_mgr);
     info!("Found {} types", types.len());
     if types.is_empty() {
         return Ok("No types found".to_string());
@@ -652,7 +652,7 @@ fn command_get_zt_world_mgr(_args: Vec<&str>) -> Result<String, CommandError> {
 
 fn command_zt_world_mgr_types_summary(_args: Vec<&str>) -> Result<String, CommandError> {
     let zt_world_mgr = globals().ztworldmgr();
-    let types = get_zt_world_mgr_types(&zt_world_mgr);
+    let types = get_zt_world_mgr_types(zt_world_mgr);
     let mut summary = "\n".to_string();
     let mut subtype: HashMap<String, u32> = HashMap::new();
     if types.is_empty() {
