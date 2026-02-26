@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use tracing::info;
 
+use crate::globals::globals;
 use crate::resource_manager::openzt_mods::extensions::{get_extension, list_extensions_with_tag, register_tag, EntityScope};
 use crate::resource_manager::openzt_mods::legacy_attributes::LegacyEntityType;
 use crate::runtime_state;
@@ -119,7 +120,7 @@ pub fn hide_roofs() {
     info!("Looking for {} roof-tagged base strings: {:?}", roof_bases.len(), roof_bases);
 
     // Get all in-game entities
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let entity_array_start = zt_world_mgr.entity_array_start();
     let entity_array_end = zt_world_mgr.entity_array_end();
 
@@ -194,7 +195,7 @@ pub fn show_roofs() {
     }
 
     // Get all entities and show roof-tagged ones
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let entity_array_start = zt_world_mgr.entity_array_start();
     let entity_array_end = zt_world_mgr.entity_array_end();
 

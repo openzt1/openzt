@@ -7,6 +7,7 @@ use getset::Getters;
 
 use crate::{
     command_console::CommandError,
+    globals::globals,
     lua_fn,
     util::{get_from_memory, ZTArray, ZTBoundedString, ZTString},
     ztmapview::BFTile,
@@ -136,12 +137,12 @@ impl ZTHabitat {
         let tile = get_from_memory::<BFTile>(self.entrance_tile_ptr);
         // info!("Entrance tile: {}", tile);
 
-        let zthm = crate::globals::globals().zthabitatmgr();
+        let zthm = globals().zthabitatmgr();
         if let Some(gate_habitat) = zthm.get_habitat_by_tile(&tile)
             && gate_habitat == *self {
                 return Some(tile);
             }
-        let ztwm = crate::globals::globals().ztworldmgr();
+        let ztwm = globals().ztworldmgr();
         ztwm.get_neighbour(&tile, Direction::from(self.entrance_rotation))
     }
 }
@@ -205,12 +206,12 @@ impl fmt::Display for ZTHabitat {
 }
 
 fn command_get_zt_habitat_mgr(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_habitat_mgr = crate::globals::globals().zthabitatmgr();
+    let zt_habitat_mgr = globals().zthabitatmgr();
     Ok(format!("{}", zt_habitat_mgr))
 }
 
 fn command_get_zt_habitats(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_habitat_mgr = crate::globals::globals().zthabitatmgr();
+    let zt_habitat_mgr = globals().zthabitatmgr();
     let mut result_string = String::new();
     for i in 0..zt_habitat_mgr.exhibit_array.len() {
         let habitat = zt_habitat_mgr.exhibit_array.get(i);
@@ -242,7 +243,7 @@ pub mod hooks_zthabitatmgr {
     unsafe extern "thiscall" fn get_gate_tile_in(_this: u32) -> u32 {
         let habitat = get_from_memory::<ZTHabitat>(_this);
         match habitat.get_gate_tile_in() {
-            Some(tile) => crate::globals::globals().ztworldmgr().get_ptr_from_bftile(&tile),
+            Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile),
             None => 0,
         }
     }

@@ -1,6 +1,6 @@
 use tracing::info;
 
-use crate::{command_console::CommandError, lua_fn};
+use crate::{command_console::CommandError, globals::globals, lua_fn};
 
 /// ZTGameMgr struct
 #[derive(Debug)]
@@ -67,7 +67,7 @@ impl ZTGameMgr {
 /// a command that prints the SYSTEMTIME struct in memory in a human-readable format
 /// usage: `get_date`
 pub fn command_get_date_str(_args: Vec<&str>) -> Result<String, CommandError> {
-    let ztgamemgr = crate::globals::globals().ztgamemgr();
+    let ztgamemgr = globals().ztgamemgr();
     let date = ztgamemgr.date.clone();
     info!("Date: {:#?}", date);
 
@@ -80,7 +80,7 @@ pub fn command_get_date_str(_args: Vec<&str>) -> Result<String, CommandError> {
 /// a command that adds cash to the player's account
 /// usage: `add_cash <amount>`
 pub fn command_add_cash(args: Vec<&str>) -> Result<String, CommandError> {
-    let ztgamemgr = crate::globals::globals().ztgamemgr();
+    let ztgamemgr = globals().ztgamemgr();
     ztgamemgr.cash += args[0].parse::<f32>()?;
     Ok(format!("Added ${}", args[0]))
 }
@@ -96,7 +96,7 @@ pub fn command_enable_dev_mode(args: Vec<&str>) -> Result<String, CommandError> 
 /// a command that prints various stats about the zoo
 /// usage: `zoostats`
 pub fn command_zoostats(_args: Vec<&str>) -> Result<String, CommandError> {
-    let ztgamemgr = crate::globals::globals().ztgamemgr();
+    let ztgamemgr = globals().ztgamemgr();
     Ok(format!("\nBudget: {}\nAnimals: {}\nSpecies: {}\nTired Guests: {}\nHungry Guests: {}\nThirsty Guests: {}\nGuests Need Restroom: {}\nNum Guests: {}\nZoo Admission Cost: ${}", ztgamemgr.cash, ztgamemgr.num_animals, ztgamemgr.num_species, ztgamemgr.num_tired_guests, ztgamemgr.num_hungry_guests, ztgamemgr.num_thirst_guests, ztgamemgr.num_guests_restroom_need, ztgamemgr.num_guests, ztgamemgr.zoo_admission_cost))
 }
 

@@ -1,5 +1,6 @@
 use crate::{
     command_console::CommandError,
+    globals::globals,
     lua_fn,
     resource_manager::{
         bfresourcemgr::read_bf_resource_dir_contents_from_memory,
@@ -186,7 +187,7 @@ fn command_list_resources(_args: Vec<&str>) -> Result<String, CommandError> {
 }
 
 fn command_get_bf_resource_mgr(_args: Vec<&str>) -> Result<String, CommandError> {
-    let bf_resource_mgr = crate::globals::globals().bfresourcemgr();
+    let bf_resource_mgr = globals().bfresourcemgr();
     Ok(format!("{}", bf_resource_mgr))
 }
 

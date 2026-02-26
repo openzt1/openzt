@@ -13,6 +13,7 @@ use crate::ztmapview::BFTile;
 use crate::{
     bfentitytype::{read_zt_entity_type_from_memory, BFEntityType, ZTEntityType, ZTSceneryType},
     command_console::CommandError,
+    globals::globals,
     lua_fn,
     util::{get_from_memory, get_string_from_memory, map_from_memory},
 };
@@ -154,7 +155,7 @@ impl BFEntity {
 
         let rect = self.get_blocking_rect();
         let tile_size = IVec3 { x: 0x20, y: 0x20, z: 0 };
-        rect.contains_point(&crate::globals::globals().ztworldmgr().tile_to_world(tile.pos, tile_size))
+        rect.contains_point(&globals().ztworldmgr().tile_to_world(tile.pos, tile_size))
     }
 
     pub fn get_blocking_rect(&self) -> Rectangle {
@@ -212,7 +213,7 @@ impl BFEntity {
     }
 
     pub fn get_tile(&self) -> Option<BFTile> {
-        crate::globals::globals().ztworldmgr().get_tile_from_coords(self.x_coord, self.y_coord)
+        globals().ztworldmgr().get_tile_from_coords(self.x_coord, self.y_coord)
     }
 }
 
@@ -395,7 +396,7 @@ pub mod hooks_ztworldmgr {
 
     #[detour(GET_NEIGHBOR_1)]
     unsafe extern "thiscall" fn bfmap_get_neighbour(_this: u32, bftile: u32, direction: u32) -> u32 {
-        let ztwm = crate::globals::globals().ztworldmgr();
+        let ztwm = globals().ztworldmgr();
         let bftile = get_from_memory::<BFTile>(bftile);
         let direction = Direction::from(direction);
         match ztwm.get_neighbour(&bftile, direction) {
@@ -435,7 +436,7 @@ pub mod hooks_ztworldmgr {
     // // 0040f26c BFPos * __thiscall OOAnalyzer::BFMap::tileToWorld(BFMap *this,BFPos *param_1,BFPos *param_2,BFPos *param_3)
     #[detour(TILE_TO_WORLD)]
     unsafe extern "thiscall" fn bfmap_tile_to_world(_this: u32, param_1: u32, param_2: u32, param_3: u32) -> u32 {
-        let ztwm = crate::globals::globals().ztworldmgr();
+        let ztwm = globals().ztworldmgr();
         let tile_pos = get_from_memory::<IVec3>(param_2);
         let local_pos = get_from_memory::<IVec3>(param_3);
         let world_pos = ztwm.tile_to_world(tile_pos, local_pos);
@@ -550,7 +551,7 @@ fn log_zt_world_mgr(zt_world_mgr: &ZTWorldMgr) {
 }
 
 fn command_get_zt_world_mgr_entities(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let entities = get_zt_world_mgr_entities(&zt_world_mgr);
     info!("Found {} entities", entities.len());
     if entities.is_empty() {
@@ -564,7 +565,7 @@ fn command_get_zt_world_mgr_entities(_args: Vec<&str>) -> Result<String, Command
 }
 
 fn command_get_zt_world_mgr_entities_2(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let entities = get_zt_world_mgr_entities_2(&zt_world_mgr);
     info!("Found {} entities", entities.len());
     if entities.is_empty() {
@@ -588,7 +589,7 @@ fn command_get_entity_unique_vtable_entries(args: Vec<&str>) -> Result<String, C
         None => u32::from_str(args[0])?,
     };
 
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let entities = get_zt_world_mgr_entities(&zt_world_mgr);
 
     let mut result = String::new();
@@ -614,7 +615,7 @@ fn command_get_entity_type_unique_vtable_entries(args: Vec<&str>) -> Result<Stri
         None => u32::from_str(args[0])?,
     };
 
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let entities = get_zt_world_mgr_types(&zt_world_mgr);
 
     let mut result = String::new();
@@ -631,7 +632,7 @@ fn command_get_entity_type_unique_vtable_entries(args: Vec<&str>) -> Result<Stri
 }
 
 fn command_get_zt_world_mgr_types(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let types = get_zt_world_mgr_types(&zt_world_mgr);
     info!("Found {} types", types.len());
     if types.is_empty() {
@@ -645,12 +646,12 @@ fn command_get_zt_world_mgr_types(_args: Vec<&str>) -> Result<String, CommandErr
 }
 
 fn command_get_zt_world_mgr(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     Ok(zt_world_mgr.to_string())
 }
 
 fn command_zt_world_mgr_types_summary(_args: Vec<&str>) -> Result<String, CommandError> {
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let types = get_zt_world_mgr_types(&zt_world_mgr);
     let mut summary = "\n".to_string();
     let mut subtype: HashMap<String, u32> = HashMap::new();
@@ -722,7 +723,7 @@ fn get_zt_world_mgr_types(zt_world_mgr: &ZTWorldMgr) -> Vec<ZTEntityType> {
 }
 
 pub fn get_entity_type_by_id(id: u32) -> u32 {
-    let zt_world_mgr = crate::globals::globals().ztworldmgr();
+    let zt_world_mgr = globals().ztworldmgr();
     let entity_type_array_start = zt_world_mgr.entity_type_array_start;
     let entity_type_array_end = zt_world_mgr.entity_type_array_end;
 

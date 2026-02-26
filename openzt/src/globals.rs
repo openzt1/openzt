@@ -216,13 +216,13 @@ fn ensure_globals() -> &'static Globals {
         Globals {
             // All offsets are &[0] because each address points to a pointer to the struct
             // (single indirection)
-            ztworldmgr: CachedGlobalInstance::new(base + 0x00638040, &[0]),
-            zthabitatmgr: CachedGlobalInstance::new(base + 0x0063805c, &[0]),
-            ztadvterrainmgr: CachedGlobalInstance::new(base + 0x00638058, &[0]),
-            ztgamemgr: CachedGlobalInstance::new(base + 0x00638048, &[0]),
+            ztworldmgr: CachedGlobalInstance::new(base + 0x00238040, &[0]),
+            zthabitatmgr: CachedGlobalInstance::new(base + 0x0023805c, &[0]),
+            ztadvterrainmgr: CachedGlobalInstance::new(base + 0x00238058, &[0]),
+            ztgamemgr: CachedGlobalInstance::new(base + 0x00238048, &[0]),
             // BFResourceMgr uses empty offsets because the global address points directly
             // to the struct (no indirection)
-            bfresourcemgr: CachedGlobalInstance::new(base + 0x006380C0, &[]),
+            bfresourcemgr: CachedGlobalInstance::new(base + 0x002380C0, &[]),
         }
     })
 }
@@ -233,7 +233,7 @@ fn ensure_globals() -> &'static Globals {
 ///
 /// # Example
 /// ```ignore
-/// let world_mgr = crate::globals::globals().ztworldmgr();
+/// let world_mgr = globals().ztworldmgr();
 /// println!("Map size: {}x{}", world_mgr.map_x_size, world_mgr.map_y_size);
 /// ```
 pub fn globals() -> &'static Globals {

@@ -4,6 +4,7 @@ use tracing::info;
 
 use crate::{
     command_console::CommandError,
+    globals::globals,
     lua_fn,
     util::{get_from_memory, ZTBufferString},
 };
@@ -70,7 +71,7 @@ struct BFTerrainTypeInfo {
 
 
 fn read_ztadvterrainmgr_from_memory() -> ZTAdvTerrainMgr {
-    ZTAdvTerrainMgr::from(*crate::globals::globals().ztadvterrainmgr())
+    ZTAdvTerrainMgr::from(*globals().ztadvterrainmgr())
 }
 
 fn read_bfterraintypeinfo_from_memory(address: u32) -> BFTerrainTypeInfo {
