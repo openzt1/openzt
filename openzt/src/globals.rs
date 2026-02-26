@@ -45,30 +45,33 @@ pub struct BFResourceMgr {
 ///
 /// # Arguments
 /// * `base` - The starting address
-/// * `offsets` - Array of offsets to apply. For all but the last offset,
-///   the address is dereferenced before adding the offset.
+/// * `offsets` - Array of offsets to apply:
+///   - `&[]`: Direct access, no dereference
+///   - `&[0]`: Dereference once, add 0
+///   - `&[0, 0x58]`: Dereference, add 0, dereference, add 0x58
 ///
 /// # Safety
 /// This function performs raw pointer dereferencing. The caller must ensure
 /// that all addresses in the chain are valid and aligned.
-///
-/// # Example
-/// For offsets `[0]`, this dereferences the base address once (effectively
-/// treating the base as a pointer to a pointer).
 unsafe fn resolve_chain(base: usize, offsets: &[usize]) -> Option<usize> {
     let mut addr = base;
-    for (i, &offset) in offsets.iter().enumerate() {
-        if i < offsets.len() - 1 {
-            // Dereference for all but the last offset
-            unsafe {
-                addr = *(addr as *const usize);
-            }
-            if addr == 0 {
-                return None;
-            }
+
+    // Empty offsets = direct access, no dereference
+    if offsets.is_empty() {
+        return Some(addr);
+    }
+
+    // For each offset: dereference, then add offset
+    for &offset in offsets {
+        unsafe {
+            addr = *(addr as *const usize);
+        }
+        if addr == 0 {
+            return None;
         }
         addr = addr.wrapping_add(offset);
     }
+
     Some(addr)
 }
 
