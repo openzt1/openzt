@@ -2,13 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## ⚠️ CRITICAL: ALWAYS USE openzt.bat
+## ⚠️ CRITICAL: ALWAYS USE openzt.bat (Windows) or specific cargo commands (Linux)
 
-**NEVER use `cargo` directly** - ALWAYS use `./openzt.bat` for ANY cargo command (build, check, clippy, test, run, etc.).
+**On Windows**: NEVER use `cargo` directly - ALWAYS use `./openzt.bat` for ANY cargo command (build, check, clippy, test, run, etc.).
 
 The project uses a specific toolchain and target configuration that is managed by `openzt.bat`. Running `cargo` directly will use the wrong toolchain/target.
 
-**Examples:**
+**On Linux**: Batch files do not work. Use specific cargo commands directly:
+- Build: `cargo build --manifest-path openzt/Cargo.toml --lib --target=i686-pc-windows-gnu`
+- Check: `cargo check --manifest-path openzt/Cargo.toml --lib --target=i686-pc-windows-gnu`
+- Clippy: `cargo clippy --manifest-path openzt/Cargo.toml --lib --target=i686-pc-windows-gnu`
+- Test: `cargo test --manifest-path openzt/Cargo.toml --lib --target=i686-pc-windows-gnu`
+
+**⚠️ CRITICAL: ALWAYS specify `--target=i686-pc-windows-gnu` on Linux** - The `thiscall` and `stdcall` ABIs are Windows-specific. Without the target, cargo will use the Linux host target and fail with ABI errors. These errors are expected when cross-compiling and the code will compile correctly on Windows with the proper target specified.
+
+**Windows Examples:**
 - ❌ `cargo check` → ✅ `./openzt.bat check`
 - ❌ `cargo build` → ✅ `./openzt.bat build`
 - ❌ `cargo clippy` → ✅ `./openzt.bat clippy`

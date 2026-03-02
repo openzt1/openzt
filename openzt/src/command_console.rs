@@ -11,6 +11,9 @@ use openzt_detour_macro::detour_mod;
 use std::sync::LazyLock;
 use tracing::{error, info};
 
+#[cfg(feature = "tui")]
+use crate::tui_console;
+
 /// Error type for command execution (kept for backward compatibility with existing command implementations)
 #[derive(Debug)]
 pub struct CommandError {
@@ -119,6 +122,9 @@ pub fn call_next_command() {
         Err(err) => err,
     };
 
+    #[cfg(feature = "tui")]
+    tui_console::add_command_output(result.clone());
+
     let mut result_mutex = COMMAND_RESULTS.lock().unwrap();
     result_mutex.push(result);
 }
@@ -128,7 +134,7 @@ pub fn get_next_result() -> Option<String> {
     data_mutex.pop()
 }
 
-fn add_to_command_queue(command: String) {
+pub fn add_to_command_queue(command: String) {
     info!("Adding Lua code to queue: {}", command);
     let mut data_mutex = COMMAND_QUEUE.lock().unwrap();
     data_mutex.push(command);

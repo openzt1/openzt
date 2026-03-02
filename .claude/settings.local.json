@@ -41,7 +41,8 @@
       "Bash(lsof:*)",
       "Bash(head:*)",
       "Bash(jq:*)",
-      "Bash(openzt:*)"
+      "Bash(openzt:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

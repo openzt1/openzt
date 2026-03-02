@@ -21,6 +21,10 @@ mod resource_manager;
 /// Centralized logging initialization
 pub mod logging;
 
+/// Terminal User Interface console
+#[cfg(feature = "tui")]
+mod tui_console;
+
 /// Reading and changing the state of the UI, contains hooks for UI elements and some basic UI manipulation functions.
 mod ztui;
 
@@ -128,12 +132,25 @@ mod zoo_init {
         let config = resource_manager::mod_config::get_openzt_config();
 
         // Initialize console and logging with config settings
-        if let Err(e) = logging::init_with_console(&config.logging) {
+        #[cfg(feature = "tui")]
+        let tui_config = Some(&config.tui);
+        #[cfg(not(feature = "tui"))]
+        let tui_config = None;
+
+        if let Err(e) = logging::init_with_console(&config.logging, tui_config) {
             eprintln!("Failed to initialize logging: {}", e);
             return 0; // Return 0 to indicate failure
         }
 
         info!("OpenZT initialization starting");
+
+        // Initialize TUI if enabled
+        #[cfg(feature = "tui")]
+        if config.tui.enabled {
+            if let Err(e) = tui_console::init(&config.tui) {
+                info!("Failed to initialize TUI: {}", e);
+            }
+        }
 
         // Command console is broken on latest stable Rust so we disable it by default.
         if cfg!(feature = "command-console") {
