@@ -256,7 +256,6 @@ fn run_tui() -> anyhow::Result<()> {
         use ratatui::{
             backend::CrosstermBackend,
             crossterm::{
-                event::{DisableMouseCapture, EnableMouseCapture},
                 execute,
                 terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
             },
@@ -265,7 +264,7 @@ fn run_tui() -> anyhow::Result<()> {
 
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(stdout, EnterAlternateScreen)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -275,8 +274,7 @@ fn run_tui() -> anyhow::Result<()> {
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
+            LeaveAlternateScreen
         )?;
         terminal.show_cursor()?;
 
@@ -317,15 +315,19 @@ fn run_tui_inner(
         terminal.draw(|f| {
             let size = f.area();
 
-            // Split screen: logs on top, input at bottom
+            // Split screen: 3-way split for logs, command output, and input
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .margin(0)
-                .constraints([Constraint::Min(0), Constraint::Length(3)])
+                .constraints([
+                    Constraint::Percentage(40),  // Logs
+                    Constraint::Min(10),         // Command output (at least 10 lines)
+                    Constraint::Length(3),       // Input
+                ])
                 .split(size);
 
-            // Log/view area
-            let (log_entries, output_entries, min_level) = {
+            // Get log entries for the logs section
+            let (log_entries, min_level) = {
                 let state = GLOBAL_TUI_STATE.lock().unwrap();
                 let logs: Vec<LogEntry> = state.log_buffer.iter()
                     .filter(|e| e.level <= state.min_log_level)
@@ -333,15 +335,11 @@ fn run_tui_inner(
                     .skip(state.log_scroll)
                     .cloned()
                     .collect();
-                let output: Vec<String> = state.command_output.iter()
-                    .rev()
-                    .skip(state.output_scroll)
-                    .cloned()
-                    .collect();
                 let min_lvl = state.min_log_level;
-                (logs, output, min_lvl)
+                (logs, min_lvl)
             };
 
+            // Render logs section
             let log_lines: Vec<Line> = log_entries.iter()
                 .filter(|e| e.level <= min_level)
                 .map(|e| {
@@ -360,39 +358,34 @@ fn run_tui_inner(
                 })
                 .collect();
 
+            let log_text = Text::from(log_lines);
+            let log_paragraph = Paragraph::new(log_text)
+                .block(Block::default().borders(Borders::ALL).title("Logs"))
+                .wrap(Wrap { trim: true });
+            f.render_widget(log_paragraph, chunks[0]);
+
+            // Get command output entries
+            let output_entries = {
+                let state = GLOBAL_TUI_STATE.lock().unwrap();
+                state.command_output.iter()
+                    .rev()
+                    .skip(state.output_scroll)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+
+            // Render command output section
             let output_lines: Vec<Line> = output_entries.iter()
                 .map(|s| Line::from(s.as_str()))
                 .collect();
 
-            // Combine logs and output
-            let mut view_lines = Vec::new();
-
-            // Add command output first (more recent)
-            for line in output_lines {
-                view_lines.push(line);
-            }
-
-            // Add separator if both exist
-            if !view_lines.is_empty() && !log_lines.is_empty() {
-                view_lines.push(Line::from(vec![
-                    Span::styled("─".repeat(80), Style::default().fg(Color::DarkGray)),
-                ]));
-            }
-
-            // Add logs
-            for line in log_lines {
-                view_lines.push(line);
-            }
-
-            let view_text = Text::from(view_lines);
-
-            let view_paragraph = Paragraph::new(view_text)
-                .block(Block::default().borders(Borders::ALL).title("OpenZT Console"))
+            let output_text = Text::from(output_lines);
+            let output_paragraph = Paragraph::new(output_text)
+                .block(Block::default().borders(Borders::ALL).title("Command Output"))
                 .wrap(Wrap { trim: true });
+            f.render_widget(output_paragraph, chunks[1]);
 
-            f.render_widget(view_paragraph, chunks[0]);
-
-            // Input line
+            // Render input line
             let (input_text, cursor_pos) = {
                 let state = GLOBAL_TUI_STATE.lock().unwrap();
                 (state.input.clone(), state.input.len())
@@ -405,10 +398,10 @@ fn run_tui_inner(
             .block(Block::default().borders(Borders::ALL))
             .alignment(Alignment::Left);
 
-            f.render_widget(input_paragraph, chunks[1]);
+            f.render_widget(input_paragraph, chunks[2]);
             f.set_cursor_position(ratatui::layout::Position::new(
-                chunks[1].x + 5 + cursor_pos as u16,
-                chunks[1].y + 1,
+                chunks[2].x + 5 + cursor_pos as u16,
+                chunks[2].y + 1,
             ));
         })?;
 
