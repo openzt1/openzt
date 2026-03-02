@@ -424,8 +424,18 @@ fn run_tui_inner(
             };
 
             // Render command output section
+            // Echo lines ("Lua> <cmd>") get coloured spans; result lines stay plain.
             let output_lines: Vec<Line> = output_entries.iter()
-                .map(|s| Line::from(s.as_str()))
+                .map(|s| {
+                    if let Some(cmd) = s.strip_prefix("Lua> ") {
+                        Line::from(vec![
+                            Span::styled("Lua> ", Style::default().fg(Color::Green)),
+                            Span::styled(cmd.to_string(), Style::default().fg(Color::Yellow)),
+                        ])
+                    } else {
+                        Line::from(s.as_str())
+                    }
+                })
                 .collect();
 
             let output_text = Text::from(output_lines);
