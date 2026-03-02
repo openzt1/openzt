@@ -7,6 +7,10 @@ use tracing::info;
 
 // Re-export LoggingConfig from the logging module
 pub use crate::logging::LoggingConfig;
+
+// Re-export TuiConfig from the tui_console module
+#[cfg(feature = "tui")]
+pub use crate::tui_console::TuiConfig;
 /// OpenZT configuration file structure (openzt.toml)
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +29,10 @@ pub struct OpenZTConfig {
 
     #[serde(default)]
     pub dev: DevConfig,
+
+    #[cfg(feature = "tui")]
+    #[serde(default)]
+    pub tui: TuiConfig,
 }
 
 /// Mod loading configuration section
@@ -135,6 +143,8 @@ impl Default for OpenZTConfig {
             resource_cache: ResourceCacheConfig::default(),
             expansions: ExpansionConfig::default(),
             dev: DevConfig::default(),
+            #[cfg(feature = "tui")]
+            tui: TuiConfig::default(),
         }
     }
 }
@@ -210,6 +220,10 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                     let has_resource_cache = toml_value.get("resource_cache").is_some();
                     let has_expansions = toml_value.get("expansions").is_some();
                     let has_dev = toml_value.get("dev").is_some();
+                    #[cfg(feature = "tui")]
+                    let has_tui = toml_value.get("tui").is_some();
+                    #[cfg(not(feature = "tui"))]
+                    let has_tui = false;
 
                     // Check if all fields exist within sections
                     let mod_loading_complete = if let Some(mod_loading) = toml_value.get("mod_loading") {
@@ -241,6 +255,17 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                         false
                     };
 
+                    #[cfg(feature = "tui")]
+                    let tui_complete = if let Some(tui) = toml_value.get("tui") {
+                        tui.get("enabled").is_some()
+                            && tui.get("show_logs").is_some()
+                            && tui.get("log_level").is_some()
+                    } else {
+                        false
+                    };
+                    #[cfg(not(feature = "tui"))]
+                    let tui_complete = true;
+
                     // expansions section should always be present (even if empty)
                     // No field-level validation needed for expansions since it's a free-form HashMap
 
@@ -254,6 +279,8 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                         || !logging_complete
                         || !resource_cache_complete
                         || !dev_complete
+                        || !has_tui
+                        || !tui_complete
                 }
                 Err(_) => false, // If we can't parse as Value, the full parse will fail below
             };
