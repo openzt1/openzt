@@ -18,7 +18,7 @@ use crate::{
         bfresourcemgr::BFResourcePtr,
         ztfile::{ztfile_to_raw_resource, ZTFile, ZTFileType},
     },
-    util::{get_from_memory, ZTString},
+    util::{ref_from_memory, ZTString},
 };
 
 static LAZY_RESOURCE_MAP: LazyLock<Mutex<HashMap<String, LazyResource>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -443,7 +443,7 @@ pub fn get_file_ptr(file_name: &str) -> Option<u32> {
 pub fn get_file(file_name: &str) -> Option<(String, Box<[u8]>)> {
     match LazyResourceMap::get(file_name) {
         Ok(Some(file)) => {
-            let resource_ptr = get_from_memory::<BFResourcePtr>(file.data);
+            let resource_ptr = unsafe { ref_from_memory::<BFResourcePtr>(file.data) };
             let tmp_slice = unsafe { slice::from_raw_parts(resource_ptr.data_ptr as *const _, resource_ptr.content_size as usize) };
             let mut new_slice = vec![0; resource_ptr.content_size as usize];
             new_slice.copy_from_slice(tmp_slice);

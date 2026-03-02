@@ -15,7 +15,7 @@ use crate::{
     command_console::CommandError,
     globals::globals,
     lua_fn,
-    util::{get_from_memory, get_string_from_memory, map_from_memory},
+    util::{get_from_memory, get_string_from_memory, map_from_memory, ref_from_memory},
 };
 
 
@@ -397,9 +397,9 @@ pub mod hooks_ztworldmgr {
     #[detour(GET_NEIGHBOR_1)]
     unsafe extern "thiscall" fn bfmap_get_neighbour(_this: u32, bftile: u32, direction: u32) -> u32 {
         let ztwm = globals().ztworldmgr();
-        let bftile = get_from_memory::<BFTile>(bftile);
+        let bftile = unsafe { ref_from_memory::<BFTile>(bftile) };
         let direction = Direction::from(direction);
-        match ztwm.get_neighbour(&bftile, direction) {
+        match ztwm.get_neighbour(bftile, direction) {
             Some(neighbour) => ztwm.get_ptr_from_bftile(&neighbour),
             None => 0,
         }
@@ -408,7 +408,7 @@ pub mod hooks_ztworldmgr {
     // 0x0040f916 int * __thiscall OOAnalyzer::BFEntity::getFootprint(BFEntity *this,undefined4 *param_1)
     #[detour(GET_FOOTPRINT)]
     unsafe extern "thiscall" fn bfentity_get_footprint(_this: u32, param_1: u32, _param_2: bool) -> u32 {
-        let entity = get_from_memory::<BFEntity>(_this);
+        let entity = unsafe { ref_from_memory::<BFEntity>(_this) };
         let footprint = entity.get_footprint();
         save_to_memory(param_1, footprint.x);
         save_to_memory(param_1 + 0x4, footprint.y);
@@ -420,7 +420,7 @@ pub mod hooks_ztworldmgr {
     // 0x0042721a u32 __thiscall OOAnalyzer::BFEntity::getBlockingRect(BFEntity *this,u32 param_1)
     #[detour(GET_BLOCKING_RECT)]
     unsafe extern "thiscall" fn bfentity_get_blocking_rect(_this: u32, param_1: u32) -> u32 {
-        let entity = get_from_memory::<BFEntity>(_this);
+        let entity = unsafe { ref_from_memory::<BFEntity>(_this) };
         save_to_memory(param_1, entity.get_blocking_rect());
         param_1
     }
@@ -428,7 +428,7 @@ pub mod hooks_ztworldmgr {
     // 0x004fbbee u32 __thiscall OOAnalyzer::BFEntity::getBlockingRect(BFEntity *this,u32 param_1)
     #[detour(GET_BLOCKING_RECT_VIRT_ZTPATH)]
     unsafe extern "thiscall" fn bfentity_get_blocking_rect_ztpath(_this: u32, param_1: u32) -> u32 {
-        let entity = get_from_memory::<BFEntity>(_this);
+        let entity = unsafe { ref_from_memory::<BFEntity>(_this) };
         save_to_memory(param_1, entity.get_blocking_rect());
         param_1
     }
@@ -449,9 +449,9 @@ pub mod hooks_ztworldmgr {
     #[detour(IS_ON_TILE)]
     unsafe extern "thiscall" fn bfentity_is_on_tile(_this: u32, param_1: u32) -> bool {
         let result = unsafe { IS_ON_TILE_DETOUR.call(_this, param_1) };
-        let entity = get_from_memory::<BFEntity>(_this);
-        let tile = get_from_memory::<BFTile>(param_1);
-        let reimimplented_result = entity.is_on_tile(&tile);
+        let entity = unsafe { ref_from_memory::<BFEntity>(_this) };
+        let tile = unsafe { ref_from_memory::<BFTile>(param_1) };
+        let reimimplented_result = entity.is_on_tile(tile);
         if result != reimimplented_result {
             error!(
                 "BFEntity::is_on_tile: Detour result ({}) does not match reimplemented result ({}) for entity {}",
