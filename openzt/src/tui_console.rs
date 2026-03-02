@@ -32,6 +32,10 @@ pub struct TuiConfig {
     /// Minimum log level for TUI display (default: Info)
     #[serde(default)]
     pub log_level: TuiLogLevel,
+
+    /// Number of lines scrolled per mouse wheel tick (default: 1)
+    #[serde(default = "default_mouse_scroll_lines")]
+    pub mouse_scroll_lines: usize,
 }
 
 /// Log level setting for TUI
@@ -77,12 +81,17 @@ impl Default for TuiConfig {
             enabled: true,
             show_logs: true,
             log_level: TuiLogLevel::Info,
+            mouse_scroll_lines: default_mouse_scroll_lines(),
         }
     }
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_mouse_scroll_lines() -> usize {
+    1
 }
 
 /// A single log entry
@@ -116,6 +125,8 @@ pub struct TuiState {
     pub min_log_level: Level,
     /// Whether to show logs
     pub show_logs: bool,
+    /// Lines scrolled per mouse wheel tick
+    pub mouse_scroll_lines: usize,
 }
 
 impl Default for TuiState {
@@ -131,6 +142,7 @@ impl Default for TuiState {
             running: false,
             min_log_level: Level::INFO,
             show_logs: true,
+            mouse_scroll_lines: default_mouse_scroll_lines(),
         }
     }
 }
@@ -224,6 +236,7 @@ pub fn init(config: &TuiConfig) -> anyhow::Result<()> {
         let mut state = GLOBAL_TUI_STATE.lock().unwrap();
         state.min_log_level = config.log_level.to_level();
         state.show_logs = config.show_logs;
+        state.mouse_scroll_lines = config.mouse_scroll_lines;
         state.running = true;
     }
 
@@ -294,7 +307,7 @@ fn run_tui_inner(
 ) -> anyhow::Result<()> {
     use ratatui::{
         crossterm::event::{self, Event},
-        layout::{Alignment, Constraint, Direction, Layout},
+        layout::{Alignment, Constraint, Direction, Layout, Rect},
         style::{Color, Style},
         text::{Line, Span, Text},
         widgets::{Block, Borders, Paragraph, Wrap},
@@ -304,6 +317,9 @@ fn run_tui_inner(
     let mut last_tick = std::time::Instant::now();
     let tick_rate = Duration::from_millis(100);
 
+    // Updated at the top of each tick before event handling; tracks which pane the mouse is over
+    let mut last_pane_rects: [Rect; 2];
+
     loop {
         // Check if still running
         {
@@ -311,6 +327,22 @@ fn run_tui_inner(
             if !state.running {
                 return Ok(());
             }
+        }
+
+        // Refresh pane rects for mouse hit-testing
+        {
+            let term_size = terminal.size()?;
+            let term_rect = Rect::new(0, 0, term_size.width, term_size.height);
+            let computed = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(0)
+                .constraints([
+                    Constraint::Percentage(40),
+                    Constraint::Min(10),
+                    Constraint::Length(3),
+                ])
+                .split(term_rect);
+            last_pane_rects = [computed[0], computed[1]];
         }
 
         // Draw UI
@@ -328,15 +360,22 @@ fn run_tui_inner(
                 ])
                 .split(size);
 
-            // Get log entries for the logs section
+            // Get log entries for the logs section — newest at bottom, like a terminal.
+            // 1. Reverse so we start from the most recent entry.
+            // 2. Skip entries the user has scrolled past.
+            // 3. Take only as many lines as the pane can display.
+            // 4. Reverse again so the slice is in chronological order (oldest → newest).
             let (log_entries, min_level) = {
                 let state = GLOBAL_TUI_STATE.lock().unwrap();
-                let logs: Vec<LogEntry> = state.log_buffer.iter()
+                let visible = chunks[0].height.saturating_sub(2) as usize;
+                let mut logs: Vec<LogEntry> = state.log_buffer.iter()
                     .filter(|e| e.level <= state.min_log_level)
                     .rev()
                     .skip(state.log_scroll)
+                    .take(visible)
                     .cloned()
                     .collect();
+                logs.reverse();
                 let min_lvl = state.min_log_level;
                 (logs, min_lvl)
             };
@@ -366,14 +405,22 @@ fn run_tui_inner(
                 .wrap(Wrap { trim: true });
             f.render_widget(log_paragraph, chunks[0]);
 
-            // Get command output entries
+            // Get command output entries — newest at bottom, like a terminal.
+            // 1. Reverse the deque so we start from the most recent entry.
+            // 2. Skip any entries the user has scrolled past.
+            // 3. Take only as many lines as the pane can display.
+            // 4. Reverse again so the slice is in chronological order (oldest → newest).
             let output_entries = {
                 let state = GLOBAL_TUI_STATE.lock().unwrap();
-                state.command_output.iter()
+                let visible = chunks[1].height.saturating_sub(2) as usize;
+                let mut entries: Vec<String> = state.command_output.iter()
                     .rev()
                     .skip(state.output_scroll)
+                    .take(visible)
                     .cloned()
-                    .collect::<Vec<_>>()
+                    .collect();
+                entries.reverse();
+                entries
             };
 
             // Render command output section
@@ -407,14 +454,32 @@ fn run_tui_inner(
             ));
         })?;
 
+        // Clamp scroll offsets so neither pane can scroll past its content
+        {
+            let mut state = GLOBAL_TUI_STATE.lock().unwrap();
+
+            let log_visible = last_pane_rects[0].height.saturating_sub(2) as usize;
+            let log_total: usize = state.log_buffer
+                .iter()
+                .filter(|e| e.level <= state.min_log_level)
+                .count();
+            state.log_scroll = state.log_scroll.min(log_total.saturating_sub(log_visible));
+
+            let out_visible = last_pane_rects[1].height.saturating_sub(2) as usize;
+            let out_total = state.command_output.len();
+            state.output_scroll = state.output_scroll.min(out_total.saturating_sub(out_visible));
+        }
+
         // Handle input with timeout
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
 
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                handle_key_event(key);
+            match event::read()? {
+                Event::Key(key) => handle_key_event(key),
+                Event::Mouse(mouse) => handle_mouse_event(mouse, last_pane_rects),
+                _ => {}
             }
         }
 
@@ -427,7 +492,11 @@ fn run_tui_inner(
 /// Handle keyboard input
 #[cfg(feature = "tui")]
 fn handle_key_event(key: ratatui::crossterm::event::KeyEvent) {
-    use ratatui::crossterm::event::KeyCode;
+    use ratatui::crossterm::event::{KeyCode, KeyEventKind};
+
+    if key.kind != KeyEventKind::Press {
+        return;
+    }
 
     match key.code {
         KeyCode::Char(c) => {
@@ -450,6 +519,13 @@ fn handle_key_event(key: ratatui::crossterm::event::KeyEvent) {
                 while state.command_history.len() > MAX_COMMAND_HISTORY {
                     state.command_history.pop_front();
                 }
+
+                // Echo the command to the output pane and jump to the bottom
+                state.command_output.push_back(format!("Lua> {}", input));
+                while state.command_output.len() > MAX_LOG_ENTRIES {
+                    state.command_output.pop_front();
+                }
+                state.output_scroll = 0;
 
                 // Add to command queue for execution
                 drop(state);
@@ -508,6 +584,47 @@ fn handle_key_event(key: ratatui::crossterm::event::KeyEvent) {
     }
 }
 
+/// Handle mouse events (scroll wheel in either pane)
+#[cfg(feature = "tui")]
+fn handle_mouse_event(
+    mouse: ratatui::crossterm::event::MouseEvent,
+    pane_rects: [ratatui::layout::Rect; 2],
+) {
+    use ratatui::crossterm::event::MouseEventKind;
+
+    let in_logs = rect_contains(pane_rects[0], mouse.column, mouse.row);
+    let in_output = rect_contains(pane_rects[1], mouse.column, mouse.row);
+    if !in_logs && !in_output {
+        return;
+    }
+
+    let mut state = GLOBAL_TUI_STATE.lock().unwrap();
+    let scroll_amount = state.mouse_scroll_lines;
+    match mouse.kind {
+        MouseEventKind::ScrollUp => {
+            if in_logs {
+                state.log_scroll = state.log_scroll.saturating_add(scroll_amount);
+            }
+            if in_output {
+                state.output_scroll = state.output_scroll.saturating_add(scroll_amount);
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if in_logs {
+                state.log_scroll = state.log_scroll.saturating_sub(scroll_amount);
+            }
+            if in_output {
+                state.output_scroll = state.output_scroll.saturating_sub(scroll_amount);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rect_contains(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
+
 /// Add a command to the queue for execution on the game thread
 fn add_command_to_queue(command: String) {
     // Reuse the existing command console queue
@@ -524,6 +641,8 @@ pub fn add_command_output(output: String) {
     while state.command_output.len() > MAX_LOG_ENTRIES {
         state.command_output.pop_front();
     }
+    // Jump to bottom so results are always visible
+    state.output_scroll = 0;
 }
 
 /// Shut down the TUI
