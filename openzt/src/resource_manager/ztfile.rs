@@ -6,7 +6,7 @@ use openzt_configparser::ini::{Ini, WriteOptions};
 use crate::{
     animation::Animation,
     resource_manager::{bfresourcemgr::BFResourcePtr, lazyresourcemap::get_file_ptr},
-    util::{get_from_memory, save_to_memory, ZTString},
+    util::{mut_from_memory, ZTString},
 };
 
 #[derive(Debug, Clone)]
@@ -233,11 +233,9 @@ where
     F: Fn(&mut BFResourcePtr) -> anyhow::Result<()>,
 {
     let bf_resource_ptr_ptr = get_file_ptr(file_name).ok_or_else(|| anyhow!("File not found: {}", file_name))?;
-    let mut bf_resource_ptr = get_from_memory::<BFResourcePtr>(bf_resource_ptr_ptr);
+    let bf_resource_ptr = unsafe { mut_from_memory::<BFResourcePtr>(bf_resource_ptr_ptr) };
 
-    modifier(&mut bf_resource_ptr)?;
-
-    save_to_memory::<BFResourcePtr>(bf_resource_ptr_ptr, bf_resource_ptr.clone());
+    modifier(bf_resource_ptr)?;
 
     Ok(())
 }

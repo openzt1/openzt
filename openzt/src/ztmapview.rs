@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::bfentitytype::{zt_entity_type_class_is, ZTEntityTypeClass};
 use crate::globals::globals;
-use crate::util::get_from_memory;
+use crate::util::{get_from_memory, ref_from_memory};
 use crate::ztworldmgr::{BFEntity, IVec3};
 // use crate::{
 //     util::get_from_memory,
@@ -206,7 +206,7 @@ impl BFTile {
 pub mod zoo_ztmapview {
     use tracing::info;
 
-    use crate::util::get_from_memory;
+    use crate::util::{get_from_memory, ref_from_memory};
     use crate::ztmapview::{BFTile, ErrorStringId, ZTMapView};
     use crate::ztworldmgr::IVec3;
     use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
@@ -225,11 +225,11 @@ pub mod zoo_ztmapview {
 
         // let entity = get_from_memory(temp_entity);
 
-        let bf_tile = get_from_memory::<BFTile>(tile);
+        let bf_tile = unsafe { ref_from_memory::<BFTile>(tile) };
 
         // let zt_map_view = get_from_memory::<ZTMapView>(_this);
 
-        if let Err(reimplemented_result) = ZTMapView::check_tank_placement(temp_entity_ptr, &bf_tile) {
+        if let Err(reimplemented_result) = ZTMapView::check_tank_placement(temp_entity_ptr, bf_tile) {
             if reimplemented_result == ErrorStringId::from(unsafe { *response_ptr }) {
                 info!("ZTMapView::checkTankPlacement success {:?}", reimplemented_result);
             } else {
@@ -254,7 +254,7 @@ pub mod zoo_ztmapview {
     // 0040f24d int __thiscall OOAnalyzer::BFTile::getLocalElevation(BFTile *this,BFPos *param_1)
     #[detour(GET_LOCAL_ELEVATION)]
     unsafe extern "thiscall" fn get_local_elevation(_this: u32, pos: u32) -> i32 {
-        let tile = get_from_memory::<BFTile>(_this);
+        let tile = unsafe { ref_from_memory::<BFTile>(_this) };
         let pos_vec = get_from_memory::<IVec3>(pos);
         tile.get_local_elevation(pos_vec)
     }
@@ -290,7 +290,7 @@ pub enum ErrorStringId {
 impl ZTMapView {
     pub fn check_tank_placement(temp_entity_ptr: u32, tile: &BFTile) -> Result<(), ErrorStringId> {
         info!("Entity Ptr {:#x} -> {:#x}", temp_entity_ptr, get_from_memory::<u32>(temp_entity_ptr));
-        let temp_entity: BFEntity = get_from_memory(temp_entity_ptr);
+        let temp_entity = unsafe { ref_from_memory::<BFEntity>(temp_entity_ptr) };
         let habitat_mgr = globals().zthabitatmgr();
         let Some(habitat) = habitat_mgr.get_habitat(tile.pos.x, tile.pos.y) else {
             info!("No habitat found at tile position: {:?}", tile.pos);
