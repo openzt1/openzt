@@ -256,6 +256,7 @@ fn run_tui() -> anyhow::Result<()> {
         use ratatui::{
             backend::CrosstermBackend,
             crossterm::{
+                event::{DisableMouseCapture, EnableMouseCapture},
                 execute,
                 terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
             },
@@ -264,7 +265,7 @@ fn run_tui() -> anyhow::Result<()> {
 
         enable_raw_mode()?;
         let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -274,7 +275,8 @@ fn run_tui() -> anyhow::Result<()> {
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
-            LeaveAlternateScreen
+            LeaveAlternateScreen,
+            DisableMouseCapture
         )?;
         terminal.show_cursor()?;
 
