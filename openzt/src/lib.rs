@@ -112,6 +112,12 @@ pub mod reimplementation_tests;
 #[cfg(feature = "integration-tests")]
 pub mod integration_tests;
 
+/// Pass-through logging stubs for validating addresses in generated.rs.
+/// Annotate consts with #[validate_detour("name")] and run:
+///   ./openzt.bat validate-detours [names...] (or "all")
+#[cfg(all(feature = "detour-validation", target_os = "windows"))]
+mod detour_validation;
+
 #[cfg(target_os = "windows")]
 use openzt_detour_macro::detour_mod;
 
@@ -143,6 +149,17 @@ mod zoo_init {
         }
 
         info!("OpenZT initialization starting");
+
+        #[cfg(feature = "detour-validation")]
+        {
+            let names_env = std::env::var("OPENZT_VALIDATE_DETOURS").unwrap_or_default();
+            let names: Vec<&str> = names_env
+                .split([',', ' '])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            detour_validation::init(&names);
+        }
 
         // Initialize TUI if enabled
         #[cfg(feature = "tui")]

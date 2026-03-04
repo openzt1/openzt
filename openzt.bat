@@ -20,6 +20,7 @@ IF "%~1"=="check" GOTO check
 IF "%~1"=="clippy" GOTO clippy
 IF "%~1"=="test" GOTO test
 IF "%~1"=="integration-tests" GOTO integration_tests
+IF "%~1"=="validate-detours" GOTO validate_detours
 
 echo Error: Unknown subcommand "%~1"
 echo.
@@ -50,6 +51,34 @@ SET WAIT_FLAG=1
 SET CARGO_ARGS=--features integration-tests
 SET INTEGRATION_TESTS_MODE=1
 SHIFT
+GOTO build
+
+REM ============================================================
+REM Validate Detours Command
+REM ============================================================
+
+:validate_detours
+SHIFT
+SET VALIDATE_DETOUR_NAMES=
+:validate_collect_args
+IF "%~1"=="" GOTO validate_build
+IF DEFINED VALIDATE_DETOUR_NAMES (
+    SET VALIDATE_DETOUR_NAMES=!VALIDATE_DETOUR_NAMES!,%~1
+) ELSE (
+    SET VALIDATE_DETOUR_NAMES=%~1
+)
+SHIFT
+GOTO validate_collect_args
+
+:validate_build
+IF "!VALIDATE_DETOUR_NAMES!"=="" SET VALIDATE_DETOUR_NAMES=all
+SET OPENZT_VALIDATE_DETOURS=!VALIDATE_DETOUR_NAMES!
+SET VALIDATE_DETOURS_MODE=1
+SET RUN_AFTER_BUILD=1
+SET RELEASE_FLAG=1
+SET WAIT_FLAG=1
+SET CARGO_ARGS=--features detour-validation
+echo Validate-detours: [!VALIDATE_DETOUR_NAMES!]
 GOTO build
 
 :parse_flags
@@ -232,6 +261,22 @@ IF DEFINED WAIT_FLAG (
         echo ============================================================
         echo.
     )
+
+    REM Display detour validation results if in validate-detours mode
+    IF DEFINED VALIDATE_DETOURS_MODE (
+        echo.
+        echo ============================================================
+        echo Detour Validation Results  [!OPENZT_VALIDATE_DETOURS!]
+        echo ============================================================
+        powershell -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Select-String -Path 'C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt.log' -Pattern 'DETOUR_CALLED|[Vv]alidation detour' | Select-Object -ExpandProperty Line | Out-Host"
+        echo.
+        powershell -Command "if (Select-String -Path 'C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt.log' -Pattern 'OPENZT_CLEAN_SHUTDOWN' -Quiet) { Write-Host 'Exit status: clean' } else { Write-Host 'Exit status: CRASHED (no clean shutdown marker in log)' }"
+        echo.
+        echo Full logs:
+        echo   "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt.log"
+        echo ============================================================
+        echo.
+    )
 ) ELSE (
     echo Launching Zoo Tycoon...
     start "Zoo Tycoon" "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\zoo.exe"
@@ -360,6 +405,7 @@ echo   check              Run cargo check on openzt crate
 echo   clippy             Run cargo clippy on openzt crate
 echo   test               Run cargo test on openzt crate
 echo   integration-tests  Run integration tests (builds release, launches game, displays results)
+echo   validate-detours   Validate detour addresses (builds release, launches game, shows calls)
 echo   docs               Generate and open documentation
 echo   console            Open interactive Lua console or run oneshot command
 echo   help               Show this help message
@@ -382,6 +428,8 @@ echo   openzt.bat check                     Run cargo check on openzt
 echo   openzt.bat clippy                    Run cargo clippy on openzt
 echo   openzt.bat test                      Run cargo test on openzt
 echo   openzt.bat integration-tests         Run integration tests (builds release, displays results)
+echo   openzt.bat validate-detours          Validate all annotated detours
+echo   openzt.bat validate-detours bfanimcache/update    Validate specific detour
 echo   openzt.bat docs                      Generate and open docs
 echo   openzt.bat console                   Open interactive Lua console
 echo   openzt.bat console --oneshot "help()"          Run single Lua command and exit
