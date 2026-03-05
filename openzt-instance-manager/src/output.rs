@@ -7,8 +7,9 @@ use crate::instance::{CreateInstanceResponse, InstanceDetails, LogsResponse};
 use console::{style, Color};
 use tabled::{
     settings::{
+        object::Columns,
         object::Rows,
-        Alignment, Modify, Style,
+        Alignment, Modify, Style, Width,
     },
     Table, Tabled,
 };
@@ -171,6 +172,8 @@ fn print_instance_list_table(instances: &[InstanceDetails]) {
     let mut table = Table::new(rows);
     table.with(Style::modern());
     table.with(Modify::new(Rows::new(1..)).with(Alignment::left()));
+    // Wrap status column (index 4) to prevent overflow
+    table.with(Modify::new(Columns::new(4..5)).with(Width::wrap(50)));
 
     println!();
     println!("{}", table);

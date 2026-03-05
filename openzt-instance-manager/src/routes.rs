@@ -100,7 +100,8 @@ async fn create_instance(
         )
         .await
         {
-            tracing::error!("Failed to create container for instance {}: {}", instance_id_clone, e);
+            let error_msg = format!("{:?}", e); // Use debug format to show full error chain
+            tracing::error!("Failed to create container for instance {}:\n{}", instance_id_clone, error_msg);
 
             // Clean up temp DLL file
             super::docker::cleanup_dll_temp(&instance_id_clone);
@@ -108,7 +109,10 @@ async fn create_instance(
             // Update instance status to error and release ports
             let mut state_guard = state_clone.write().await;
             if let Some(instance) = state_guard.instances.get_mut(&instance_id_clone) {
-                instance.status = InstanceStatus::Error(e.to_string());
+                tracing::info!("Updating instance {} status to Error", instance_id_clone);
+                instance.status = InstanceStatus::Error(error_msg.clone());
+            } else {
+                tracing::error!("Instance {} not found in state map when trying to set error status", instance_id_clone);
             }
             state_guard.port_pool.release_pair(vnc_port, console_port);
         }
@@ -216,7 +220,10 @@ async fn list_instances(
             match docker_manager.refresh_instance_status(container_id).await {
                 Ok(Some(status)) => {
                     if let Some(inst) = state_guard.instances.get_mut(id) {
-                        inst.status = status;
+                        // Don't overwrite Error statuses - they represent permanent failures
+                        if !matches!(inst.status, InstanceStatus::Error(_)) {
+                            inst.status = status;
+                        }
                     }
                 }
                 Ok(None) => {

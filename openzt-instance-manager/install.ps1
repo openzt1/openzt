@@ -180,6 +180,18 @@ if ($InstallCli -and -not (Test-Path "$TargetDir\openzt.exe")) {
     exit 1
 }
 
+# Stop existing scheduled task if present (must stop BEFORE copying binaries)
+if ($InstallServer) {
+    $existingTask = Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Yellow "Existing scheduled task found; stopping it first..."
+        Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
+        # Wait a moment for the process to fully stop
+        Start-Sleep -Seconds 1
+        Write-Green "Server stopped."
+    }
+}
+
 # Create install dir
 Write-Host ""
 Write-Green "Creating install directory: $InstallDir"
@@ -229,12 +241,37 @@ if ($currentPath -split ";" -contains $InstallDir) {
 }
 
 if ($InstallServer) {
-    # Remove existing scheduled task if present
+    # Enable Task Scheduler history (disabled by default on Windows)
+    Write-Host "Enabling Task Scheduler history..."
+    wevtutil set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true | Out-Null
+    Write-Green "Task Scheduler history enabled."
+
+    # Create a launcher script.
+    # Redirects server stdout/stderr to a log file so output is not silently discarded
+    # when running as a Scheduled Task. Task Scheduler itself handles WorkingDirectory.
+    Write-Host ""
+    Write-Green "Creating server launcher script..."
+    $LauncherPath = "$InstallDir\start-server.ps1"
+    $launcherContent = @"
+# OpenZT Instance Manager - Server Launcher
+# Captures stdout/stderr to a log file. Overwritten on each start.
+Start-Process ``
+    -FilePath "$InstallDir\openzt-instance-manager.exe" ``
+    -WorkingDirectory "$ConfigDir" ``
+    -RedirectStandardOutput "$ConfigDir\server.log" ``
+    -RedirectStandardError "$ConfigDir\server-error.log" ``
+    -NoNewWindow ``
+    -Wait
+"@
+    Set-Content -Path $LauncherPath -Value $launcherContent -Encoding UTF8
+    Write-Green "Created: $LauncherPath"
+
+    # Remove existing scheduled task registration if present (task already stopped above)
     $existingTask = Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
     if ($existingTask) {
-        Write-Yellow "Existing scheduled task found; removing it first..."
-        Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
+        Write-Yellow "Removing existing scheduled task registration..."
         Unregister-ScheduledTask -TaskName $ServiceName -Confirm:$false
+        Write-Green "Task removed."
     }
 
     # Register a Scheduled Task.
@@ -245,10 +282,14 @@ if ($InstallServer) {
     Write-Green "Registering Scheduled Task: $ServiceName"
 
     $action = New-ScheduledTaskAction `
-        -Execute "$InstallDir\openzt-instance-manager.exe" `
+        -Execute "powershell.exe" `
+        -Argument "-WindowStyle Hidden -NonInteractive -NoProfile -ExecutionPolicy Bypass -File `"$LauncherPath`"" `
         -WorkingDirectory $ConfigDir
 
-    $trigger = New-ScheduledTaskTrigger -AtStartup
+    # Create multiple triggers: at startup and at logon
+    $trigger1 = New-ScheduledTaskTrigger -AtStartup
+    $trigger2 = New-ScheduledTaskTrigger -AtLogon
+    $triggers = @($trigger1, $trigger2)
 
     $settings = New-ScheduledTaskSettingsSet `
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
@@ -257,20 +298,25 @@ if ($InstallServer) {
         -MultipleInstances IgnoreNew
 
     $principal = New-ScheduledTaskPrincipal `
-        -UserId "SYSTEM" `
-        -LogonType ServiceAccount `
+        -UserId $env:USERNAME `
+        -LogonType Interactive `
         -RunLevel Highest
 
     Register-ScheduledTask `
         -TaskName $ServiceName `
         -Description "OpenZT Instance Manager API Server" `
         -Action $action `
-        -Trigger $trigger `
+        -Trigger $triggers `
         -Settings $settings `
         -Principal $principal `
         -Force | Out-Null
 
     Write-Green "Scheduled task registered: $ServiceName"
+
+    # Start the scheduled task
+    Write-Host "Starting server..."
+    Start-ScheduledTask -TaskName $ServiceName
+    Write-Green "Server started via scheduled task."
 }
 
 # Summary
@@ -298,9 +344,13 @@ if ($InstallServer) {
     Write-Host "To check task status:"
     Write-Host "  Get-ScheduledTask -TaskName $ServiceName"
     Write-Host ""
-    Write-Host "To view logs:"
-    Write-Host "  Open Task Scheduler > Task Scheduler Library, select '$ServiceName', click History"
-    Write-Host "  Or check the log files in: $ConfigDir"
+    Write-Host "To view server logs:"
+    Write-Host "  Get-Content '$ConfigDir\server.log'"
+    Write-Host "  Get-Content '$ConfigDir\server-error.log'"
+    Write-Host "  (logs are overwritten each time the server starts)"
+    Write-Host ""
+    Write-Host "To follow logs in real time:"
+    Write-Host "  Get-Content '$ConfigDir\server.log' -Wait"
     Write-Host ""
 }
 
