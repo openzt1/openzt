@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::bfentitytype::{zt_entity_type_class_is, ZTEntityTypeClass};
 use crate::globals::globals;
-use crate::util::{get_from_memory, ref_from_memory};
+use crate::util::{get_from_memory, ref_from_memory, Addr, MemAddr};
 use crate::ztworldmgr::{BFEntity, IVec3};
 // use crate::{
 //     util::get_from_memory,
@@ -229,7 +229,7 @@ pub mod zoo_ztmapview {
 
         // let zt_map_view = get_from_memory::<ZTMapView>(_this);
 
-        if let Err(reimplemented_result) = ZTMapView::check_tank_placement(temp_entity_ptr as u32, bf_tile) {
+        if let Err(reimplemented_result) = ZTMapView::check_tank_placement(temp_entity_ptr, bf_tile) {
             if reimplemented_result == ErrorStringId::from(unsafe { *response_ptr }) {
                 info!("ZTMapView::checkTankPlacement success {:?}", reimplemented_result);
             } else {
@@ -288,8 +288,8 @@ pub enum ErrorStringId {
 }
 
 impl ZTMapView {
-    pub fn check_tank_placement(temp_entity_ptr: u32, tile: &BFTile) -> Result<(), ErrorStringId> {
-        info!("Entity Ptr {:#x} -> {:#x}", temp_entity_ptr, get_from_memory::<u32>(temp_entity_ptr));
+    pub fn check_tank_placement(temp_entity_ptr: impl MemAddr, tile: &BFTile) -> Result<(), ErrorStringId> {
+        info!("Entity Ptr {:#x} -> {:#x}", Addr::of(temp_entity_ptr), get_from_memory::<u32>(temp_entity_ptr));
         let temp_entity = unsafe { ref_from_memory::<BFEntity>(temp_entity_ptr) };
         let habitat_mgr = globals().zthabitatmgr();
         let Some(habitat) = habitat_mgr.get_habitat(tile.pos.x, tile.pos.y) else {

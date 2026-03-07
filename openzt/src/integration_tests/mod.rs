@@ -96,7 +96,8 @@ pub fn init() {
     #[cfg(target_os = "windows")]
     {
         if let Err(e) = crate::logging::init_with_console(
-            &crate::logging::LoggingConfig::default()
+            &crate::logging::LoggingConfig::default(),
+            #[cfg(feature = "tui")] None,
         ) {
             eprintln!("Failed to initialize logging: {}", e);
         }

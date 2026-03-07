@@ -163,11 +163,10 @@ mod zoo_init {
 
         // Initialize TUI if enabled
         #[cfg(feature = "tui")]
-        if config.tui.enabled {
-            if let Err(e) = tui_console::init(&config.tui) {
+        if config.tui.enabled
+            && let Err(e) = tui_console::init(&config.tui) {
                 info!("Failed to initialize TUI: {}", e);
             }
-        }
 
         // Command console is broken on latest stable Rust so we disable it by default.
         if cfg!(feature = "command-console") {

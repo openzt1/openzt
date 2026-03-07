@@ -12,6 +12,7 @@ use tracing::info;
 pub mod zoo_experimental {
     use openzt_detour::generated::bfuimgr::DISPLAY_MESSAGE_0;
     use tracing::info;
+    use crate::util::Addr;
 
     // use crate::{
     //     bfregistry::{add_to_registry, get_from_registry},
@@ -22,7 +23,7 @@ pub mod zoo_experimental {
     unsafe extern "thiscall" fn prt_get(_this_prt: *const u32, param_1: u32, param_2: i32, param_3: *const u32, param_4: *const u32, param_5: bool, param_6: bool) {
         info!(
             "BFUIMgr::displayMessage called with params: {}, {}, {}, {}, {}, {}",
-            param_1, param_2, param_3 as u32, param_4 as u32, param_5, param_6
+            param_1, param_2, Addr::of(param_3), Addr::of(param_4), param_5, param_6
         );
         unsafe { DISPLAY_MESSAGE_0_DETOUR.call(_this_prt, param_1, param_2, param_3, param_4, param_5, param_6) };
     }

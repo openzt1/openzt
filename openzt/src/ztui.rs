@@ -7,7 +7,7 @@ use tracing::info;
 use crate::{
     command_console::CommandError,
     lua_fn,
-    util::{get_from_memory, get_string_from_memory_bounded, ZTBufferString},
+    util::{get_from_memory, get_string_from_memory_bounded, ZTBufferString, Addr},
     ztworldmgr::read_zt_entity_from_memory,
 };
 
@@ -157,7 +157,7 @@ fn command_get_element(args: Vec<&str>) -> Result<String, CommandError> {
         return Err(Into::into("No element found"));
     }
     let element: UIElement = get_from_memory(ui_element_addr);
-    info!("{:#x} {:#x}", address, ui_element_addr as u32);
+    info!("{:#x} {:#x}", address, Addr::of(ui_element_addr));
     Ok(format!("{}", element))
 }
 

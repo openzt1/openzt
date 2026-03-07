@@ -24,6 +24,25 @@ impl<T> MemAddr for *mut T {
     fn as_u32(self) -> u32 { self as u32 }
 }
 
+/// Display wrapper for memory addresses. Accepts any `MemAddr` (u32 or raw pointer).
+/// Use in format strings instead of `ptr as u32`:
+///   info!("{:#x}", Addr::of(this_ptr));
+pub struct Addr(pub u32);
+
+impl Addr {
+    pub fn of(addr: impl MemAddr) -> Self { Addr(addr.as_u32()) }
+}
+
+impl fmt::LowerHex for Addr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { fmt::LowerHex::fmt(&self.0, f) }
+}
+impl fmt::UpperHex for Addr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { fmt::UpperHex::fmt(&self.0, f) }
+}
+impl fmt::Display for Addr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:#010x}", self.0) }
+}
+
 pub unsafe fn ref_from_memory<T>(address: impl MemAddr) -> &'static T {
     unsafe { &*(address.as_u32() as *const T) }
 }
