@@ -3,7 +3,7 @@
 //! This module provides a convenient async client for interacting with
 //! the instance manager API endpoints.
 
-use crate::instance::{CreateInstanceResponse, InstanceConfig, InstanceDetails, LogsResponse, InstanceStatusResponse};
+use crate::instance::{CreateInstanceResponse, DetourTestResults, InstanceConfig, InstanceDetails, LogsResponse, InstanceStatusResponse};
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use futures_util::stream::Stream;
@@ -195,6 +195,18 @@ impl InstanceClient {
             .send()
             .await
             .with_context(|| format!("Failed to start instance {}", id))?;
+
+        self.handle_response(response).await
+    }
+
+    /// Get detour validation results for an instance
+    pub async fn get_detour_results(&self, id: &str) -> Result<DetourTestResults> {
+        let response = self
+            .http_client
+            .get(self.url(&format!("/api/instances/{}/detour-results", id)))
+            .send()
+            .await
+            .with_context(|| format!("Failed to get detour results for instance {}", id))?;
 
         self.handle_response(response).await
     }

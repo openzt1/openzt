@@ -1,7 +1,8 @@
 use super::{
     instance::{
-        AppLogType, CreateInstanceRequest, CreateInstanceResponse, Instance,
-        InstanceDetails, InstanceStatus, LogsResponse, InstanceStatusResponse,
+        AppLogType, CreateInstanceRequest, CreateInstanceResponse, DetourResult,
+        DetourTestResults, Instance, InstanceDetails, InstanceStatus, LogsResponse,
+        InstanceStatusResponse,
     },
     state::AppState,
 };
@@ -34,6 +35,7 @@ pub fn create_router() -> Router<Arc<RwLock<AppState>>> {
         .route("/api/instances/{id}/stop", post(stop_instance))
         .route("/api/instances/{id}/start", post(start_instance))
         .route("/api/instances/{id}/restart", post(restart_instance))
+        .route("/api/instances/{id}/detour-results", get(get_detour_results))
 }
 
 async fn health_check() -> &'static str {
@@ -576,6 +578,65 @@ async fn restart_instance(
     Ok(Json(InstanceStatusResponse {
         id,
         status: "running".to_string(),
+    }))
+}
+
+async fn get_detour_results(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<DetourTestResults>, ApiError> {
+    let (container_id, validate_detours) = {
+        let state_guard = state.read().await;
+        let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+        let detours = instance.config.validate_detours.clone().ok_or_else(|| {
+            ApiError::Internal(
+                "No detours configured for this instance. Use --validate-detours when creating."
+                    .to_string(),
+            )
+        })?;
+        if detours.is_empty() {
+            return Err(ApiError::Internal(
+                "No detours configured for this instance".to_string(),
+            ));
+        }
+        (instance.container_id.clone(), detours)
+    };
+
+    if container_id.is_empty() {
+        return Err(ApiError::Internal("Container not yet created".to_string()));
+    }
+
+    let docker_manager = super::docker::DockerManager::new()?;
+    // Read the full openzt.log (large tail to get everything)
+    let log_content = docker_manager
+        .get_app_logs(&container_id, AppLogType::Openzt, 1_000_000)
+        .await?;
+
+    // Collect all DETOUR_CALLED names from the log.
+    // Log lines are structured tracing output, e.g.:
+    //   2026-03-07T04:15:33Z  INFO openzt_detour::...: DETOUR_CALLED: ztworldmgr/create
+    let called: std::collections::HashSet<String> = log_content
+        .lines()
+        .filter_map(|line| {
+            let marker = "DETOUR_CALLED: ";
+            line.find(marker).map(|pos| line[pos + marker.len()..].trim().to_string())
+        })
+        .collect();
+
+    let results: Vec<DetourResult> = validate_detours
+        .iter()
+        .map(|name| DetourResult {
+            name: name.clone(),
+            called: called.contains(name.as_str()),
+        })
+        .collect();
+
+    let passed = results.iter().all(|r| r.called);
+
+    Ok(Json(DetourTestResults {
+        instance_id: id,
+        results,
+        passed,
     }))
 }
 

@@ -3,7 +3,7 @@
 //! This module provides utilities for formatting and displaying output
 //! in various formats (table, JSON) with colored terminal output.
 
-use crate::instance::{CreateInstanceResponse, InstanceDetails, LogsResponse};
+use crate::instance::{CreateInstanceResponse, DetourTestResults, InstanceDetails, LogsResponse};
 use console::{style, Color};
 use tabled::{
     settings::{
@@ -199,6 +199,37 @@ pub fn print_logs(logs_response: &LogsResponse, output_json: bool) {
             println!("{}", logs_response.logs);
         }
     }
+}
+
+/// Print detour validation results
+pub fn print_detour_results(results: &DetourTestResults, output_json: bool) {
+    if output_json {
+        if let Ok(json) = serde_json::to_string_pretty(results) {
+            println!("{}", json);
+        }
+        return;
+    }
+
+    println!();
+    println!(
+        "  Detour results for instance {}:",
+        style(&results.instance_id[..8]).fg(Color::Cyan)
+    );
+    println!();
+    for result in &results.results {
+        if result.called {
+            println!("  {}  {}", style("✓ PASS").fg(Color::Green).bold(), result.name);
+        } else {
+            println!("  {}  {}", style("✗ FAIL").fg(Color::Red).bold(), result.name);
+        }
+    }
+    println!();
+    if results.passed {
+        print_success("ALL PASSED");
+    } else {
+        print_error("FAILED");
+    }
+    println!();
 }
 
 /// Print the result of creating an instance

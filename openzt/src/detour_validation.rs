@@ -13,14 +13,12 @@ use openzt_detour_macro::detour_mod;
 #[detour_mod]
 mod detours_validation {
 
-    use openzt_detour::generated::standalone::EXIT_3;
+    use openzt_detour::generated::ztui::EXIT_APP;
 
-    #[detour(EXIT_3)]
-    unsafe extern "stdcall" fn exit_3() {
-        // write_shutdown_marker();
+    #[detour(EXIT_APP)]
+    unsafe extern "stdcall" fn exit_app() {
         tracing::info!("OPENZT_CLEAN_SHUTDOWN");
-        // tracing::info!("EXIT_3 called, writing shutdown marker");
-        unsafe { EXIT_3_DETOUR.call() };
+        unsafe { EXIT_APP_DETOUR.call() };
     }
 }
 
@@ -60,6 +58,15 @@ pub fn init(enabled: &[&str]) {
                     "Panic enabling validation detour '{}'. \
                      Address in generated.rs is likely wrong.", entry.name
                 ),
+        }
+    }
+
+    // Auto-load detour test script if it exists
+    #[cfg(feature = "command-console")]
+    {
+        match crate::scripting::load_lua_file("scripts/detour.lua") {
+            Ok(msg) => tracing::info!("Detour script loaded: {}", msg),
+            Err(e) => tracing::warn!("Detour script loading failed: {}", e),
         }
     }
 }

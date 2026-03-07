@@ -107,6 +107,11 @@ impl DockerManager {
         if let Some(cpulimit) = instance_config.cpulimit {
             labels.insert("openzt.cpulimit".to_string(), cpulimit.to_string());
         }
+        if let Some(ref detours) = instance_config.validate_detours {
+            if !detours.is_empty() {
+                labels.insert("openzt.validate_detours".to_string(), detours.join(","));
+            }
+        }
 
         // The path is already in the correct format (Windows path on Windows, Linux path on Linux)
         let dll_mount = Mount {
@@ -118,13 +123,19 @@ impl DockerManager {
         };
         tracing::debug!("Using mount: source={}, target={}", dll_path, dll_mount.target.as_ref().unwrap());
 
+        // Build env vars
+        let mut env_vars = vec!["VNC_SERVER=yes".to_string()];
+        if let Some(ref detours) = instance_config.validate_detours {
+            if !detours.is_empty() {
+                env_vars.push(format!("OPENZT_VALIDATE_DETOURS={}", detours.join(",")));
+            }
+        }
+
         let config = ContainerConfig {
             image: Some(image.to_string()),
             hostname: Some(name.to_string()),
             labels: Some(labels),
-            env: Some(vec![
-                "VNC_SERVER=yes".to_string(),
-            ]),
+            env: Some(env_vars),
             exposed_ports: Some(exposed_ports),
             host_config: Some(bollard::service::HostConfig {
                 port_bindings: Some(port_bindings),
@@ -493,12 +504,16 @@ impl DockerManager {
         let status = self.map_docker_status(&inspect.state.ok_or_else(|| anyhow!("Missing state"))?);
         let created_at = self.parse_created_timestamp(inspect.created.as_deref().ok_or_else(|| anyhow!("Missing created timestamp"))?)?;
 
-        // Extract cpulimit from labels (stored during creation)
+        // Extract config fields from labels (stored during creation)
+        let labels = inspect.config.as_ref().and_then(|c| c.labels.as_ref());
         let config = InstanceConfig {
-            cpulimit: inspect.config.as_ref()
-                .and_then(|c| c.labels.as_ref())
-                .and_then(|labels| labels.get("openzt.cpulimit"))
+            cpulimit: labels
+                .and_then(|l| l.get("openzt.cpulimit"))
                 .and_then(|s| s.parse::<f64>().ok()),
+            validate_detours: labels
+                .and_then(|l| l.get("openzt.validate_detours"))
+                .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
+                .filter(|v| !v.is_empty()),
             ..Default::default()
         };
 
