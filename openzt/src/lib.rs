@@ -133,7 +133,7 @@ mod zoo_init {
     // Note(finn): We hook the LoadLangDLLs function to perform some later initialization steps. Starting
     //  the console starts a new thead which is not recommended in the DllMain function.
     #[detour(LOAD_LANG_DLLS)]
-    unsafe extern "thiscall" fn load_lang_dlls(this: u32) -> u32 {
+    unsafe extern "thiscall" fn load_lang_dlls(this: * const u32) -> u32 {
         // Load config to determine logging settings
         let config = resource_manager::mod_config::get_openzt_config();
 

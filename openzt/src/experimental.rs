@@ -19,10 +19,10 @@ pub mod zoo_experimental {
     // };
 
     #[detour(DISPLAY_MESSAGE_0)]
-    unsafe extern "thiscall" fn prt_get(_this_prt: u32, param_1: u32, param_2: i32, param_3: u32, param_4: u32, param_5: bool, param_6: bool) {
+    unsafe extern "thiscall" fn prt_get(_this_prt: *const u32, param_1: u32, param_2: i32, param_3: *const u32, param_4: *const u32, param_5: bool, param_6: bool) {
         info!(
             "BFUIMgr::displayMessage called with params: {}, {}, {}, {}, {}, {}",
-            param_1, param_2, param_3, param_4, param_5, param_6
+            param_1, param_2, param_3 as u32, param_4 as u32, param_5, param_6
         );
         unsafe { DISPLAY_MESSAGE_0_DETOUR.call(_this_prt, param_1, param_2, param_3, param_4, param_5, param_6) };
     }

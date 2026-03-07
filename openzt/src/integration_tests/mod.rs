@@ -157,7 +157,7 @@ mod detour_zoo_main {
     use std::io::Write as IoWrite;
 
     #[detour(LOAD_LANG_DLLS)]
-    unsafe extern "thiscall" fn detour_target(_this: u32) -> u32 {
+    unsafe extern "thiscall" fn detour_target(_this: *const u32) -> u32 {
         info!("Integration tests starting...");
 
         // Clear load order tracker

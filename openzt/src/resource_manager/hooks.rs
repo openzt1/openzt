@@ -41,8 +41,8 @@ mod zoo_resource_mgr {
 
     ///When Zoo Tycoon tries to load a resource we check if it's a resource we've already loaded and return that instead
     #[detour(ATTEMPT)]
-    unsafe extern "thiscall" fn zoo_bf_resource_attempt(this_ptr: u32, file_name: u32) -> bool {
-        if bf_resource_inner(this_ptr, file_name) {
+    unsafe extern "thiscall" fn zoo_bf_resource_attempt(this_ptr: *const u32, file_name: *const i8) -> bool {
+        if bf_resource_inner(this_ptr as u32, file_name as u32) {
             return true;
         }
         unsafe { ATTEMPT_DETOUR.call(this_ptr, file_name) }
@@ -50,8 +50,8 @@ mod zoo_resource_mgr {
 
     ///When Zoo Tycoon tries to load a resource we check if it's a resource we've already loaded and return that instead
     #[detour(PREPARE)]
-    unsafe extern "thiscall" fn zoo_bf_resource_prepare(this_ptr: u32, file_name: u32) -> bool {
-        if bf_resource_inner(this_ptr, file_name) {
+    unsafe extern "thiscall" fn zoo_bf_resource_prepare(this_ptr: *const u32, file_name: *const u8) -> bool {
+        if bf_resource_inner(this_ptr as u32, file_name as u32) {
             return true;
         }
 
@@ -134,8 +134,8 @@ mod zoo_resource_mgr {
     }
 
     #[detour(CONSTRUCTOR)]
-    unsafe extern "thiscall" fn zoo_bf_resource_mgr_constructor(this_ptr: u32) -> u32 {
-        info!("BFResourceMgr::constructor({:X})", this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_mgr_constructor(this_ptr: *const u32) -> *const u32 {
+        info!("BFResourceMgr::constructor({:X})", this_ptr as u32);
 
         let now = Instant::now();
 
@@ -159,7 +159,7 @@ mod zoo_resource_mgr {
                 info!("Adding mods directory to BFResourceMgr");
 
                 if let Ok(mods_path) = CString::new("./mods") {
-                    unsafe { ADD_PATH.original()(this_ptr, mods_path.as_ptr() as u32); }
+                    unsafe { ADD_PATH.original()(this_ptr, mods_path.as_ptr()); }
                 }
 
                 paths.insert(0, "./mods".to_owned());
@@ -279,153 +279,153 @@ mod zoo_resource_mgr {
 
     // BFResourcePtr::delref detours (30 different call sites in the game)
     #[detour(DELREF_0)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_0(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_0(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_1)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_1(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_1(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_2)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_2(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_2(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_3)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_3(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_3(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_4)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_4(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_4(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_5)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_5(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_5(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_6)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_6(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_6(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_7)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_7(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_7(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_8)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_8(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_8(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_9)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_9(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_9(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_10)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_10(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_10(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_11)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_11(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_11(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_12)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_12(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_12(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_13)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_13(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_13(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_14)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_14(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_14(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_15)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_15(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_15(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_16)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_16(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_16(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_17)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_17(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_17(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_18)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_18(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_18(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_19)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_19(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_19(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_20)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_20(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_20(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_21)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_21(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_21(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_22)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_22(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_22(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_23)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_23(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_23(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_24)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_24(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_24(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_25)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_25(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_25(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_26)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_26(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_26(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_27)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_27(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_27(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_28)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_28(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_28(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     #[detour(DELREF_29)]
-    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_29(this_ptr: u32) {
-        handle_delref(this_ptr);
+    unsafe extern "thiscall" fn zoo_bf_resource_ptr_delref_29(this_ptr: *const u32) {
+        handle_delref(this_ptr as u32);
     }
 
     // #[detour(DIR_SEARCH)]

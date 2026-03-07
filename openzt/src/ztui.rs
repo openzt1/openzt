@@ -152,19 +152,19 @@ fn command_get_element(args: Vec<&str>) -> Result<String, CommandError> {
     }
     let address = args[0].parse()?;
     let get_element_fn = unsafe { GET_ELEMENT_0.original() };
-    let ui_element_addr = unsafe { get_element_fn(BFUIMGR_PTR, address) };
-    if ui_element_addr == 0 {
+    let ui_element_addr = unsafe { get_element_fn(BFUIMGR_PTR as *const u32, address) };
+    if ui_element_addr.is_null() {
         return Err(Into::into("No element found"));
     }
     let element: UIElement = get_from_memory(ui_element_addr);
-    info!("{:#x} {:#x}", address, ui_element_addr);
+    info!("{:#x} {:#x}", address, ui_element_addr as u32);
     Ok(format!("{}", element))
 }
 
 fn get_element(id: UIElementId) -> Option<UIElement> {
     let get_element_fn = unsafe { GET_ELEMENT_0.original() };
-    let ui_element_addr = unsafe { get_element_fn(BFUIMGR_PTR, id as i32) };
-    if ui_element_addr == 0 {
+    let ui_element_addr = unsafe { get_element_fn(BFUIMGR_PTR as *const u32, id as i32) };
+    if ui_element_addr.is_null() {
         return None;
     }
     Some(get_from_memory(ui_element_addr))

@@ -45,7 +45,7 @@ mod zoo_logging {
     use openzt_detour::generated::bflog::LOG_MESSAGE;
 
     #[detour(LOG_MESSAGE)]
-    unsafe extern "cdecl" fn zoo_log_func(source_file: u32, line_number: i32, level: i32, _param_4: i8, _param_5: i32, _param_6: i32, log_message: u32) {
+    unsafe extern "cdecl" fn zoo_log_func(source_file: *const i8, line_number: i32, level: i32, _param_4: i8, _param_5: i32, _param_6: u32, log_message: *const u8) {
         let source_file_string = get_string_from_memory(source_file);
         let log_message_string = get_string_from_memory(log_message);
         log_from_zt(&source_file_string, line_number, level, &log_message_string);

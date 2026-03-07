@@ -9,30 +9,46 @@ use std::{
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Memory::{VirtualProtect, PAGE_EXECUTE_READWRITE, PAGE_PROTECTION_FLAGS};
 
-pub unsafe fn ref_from_memory<T>(address: u32) -> &'static T {
-    unsafe { &*(address as *const T) }
+/// Allows memory utility functions to accept either raw `u32` addresses or typed raw pointers.
+/// On 32-bit Windows all pointers are 4 bytes, so a pointer's numeric value is a valid `u32` address.
+pub trait MemAddr: Copy {
+    fn as_u32(self) -> u32;
+}
+impl MemAddr for u32 {
+    fn as_u32(self) -> u32 { self }
+}
+impl<T> MemAddr for *const T {
+    fn as_u32(self) -> u32 { self as u32 }
+}
+impl<T> MemAddr for *mut T {
+    fn as_u32(self) -> u32 { self as u32 }
 }
 
-pub unsafe fn mut_from_memory<T>(address: u32) -> &'static mut T {
-    unsafe { &mut *(address as *mut T) }
+pub unsafe fn ref_from_memory<T>(address: impl MemAddr) -> &'static T {
+    unsafe { &*(address.as_u32() as *const T) }
+}
+
+pub unsafe fn mut_from_memory<T>(address: impl MemAddr) -> &'static mut T {
+    unsafe { &mut *(address.as_u32() as *mut T) }
 }
 
 // TODO: Test replacing most uses of get_from_memory with map_from_memory : Unclear if we need mem::forget each reference afterwards?
-pub fn map_from_memory<T>(address: u32) -> &'static mut T {
-    unsafe { transmute::<u32, &mut T>(address) }
+pub fn map_from_memory<T>(address: impl MemAddr) -> &'static mut T {
+    unsafe { transmute::<u32, &mut T>(address.as_u32()) }
 }
 
-pub fn get_from_memory<T>(address: u32) -> T {
-    unsafe { ptr::read(address as *const T) }
+pub fn get_from_memory<T>(address: impl MemAddr) -> T {
+    unsafe { ptr::read(address.as_u32() as *const T) }
 }
 
-pub fn checked_get_from_memory<T: Checkable>(address: u32) -> anyhow::Result<T> {
-    T::check(address)?;
-    Ok(unsafe { ptr::read(address as *const T) })
+pub fn checked_get_from_memory<T: Checkable>(address: impl MemAddr) -> anyhow::Result<T> {
+    let addr = address.as_u32();
+    T::check(addr)?;
+    Ok(unsafe { ptr::read(addr as *const T) })
 }
 
-pub fn save_to_memory<T>(address: u32, value: T) {
-    unsafe { ptr::write(address as *mut T, value) };
+pub fn save_to_memory<T>(address: impl MemAddr, value: T) {
+    unsafe { ptr::write(address.as_u32() as *mut T, value) };
 }
 
 #[cfg(target_os = "windows")]
@@ -90,9 +106,9 @@ pub fn get_string_from_memory_bounded(start: u32, end: u32, buffer_end: u32) -> 
     crate::encoding_utils::decode_game_text(&bytes)
 }
 
-pub fn get_string_from_memory(address: u32) -> String {
+pub fn get_string_from_memory(address: impl MemAddr) -> String {
+    let mut char_address = address.as_u32();
     let mut bytes = Vec::new();
-    let mut char_address = address;
     while {
         let byte = get_from_memory::<u8>(char_address);
         byte != 0
@@ -103,9 +119,9 @@ pub fn get_string_from_memory(address: u32) -> String {
     crate::encoding_utils::decode_game_text(&bytes)
 }
 
-pub fn save_string_to_memory(address: u32, string: &str) {
+pub fn save_string_to_memory(address: impl MemAddr, string: &str) {
     let encoded_bytes = crate::encoding_utils::encode_to_ansi(string);
-    let mut char_address = address;
+    let mut char_address = address.as_u32();
     for byte in encoded_bytes {
         save_to_memory::<u8>(char_address, byte);
         char_address += 1;
@@ -290,11 +306,11 @@ impl<T> ZTArray<T> {
     }
 
     pub fn get(&self, index: usize) -> T {
-        get_from_memory::<T>(get_from_memory(self.start_ptr + (index * 4) as u32))
+        get_from_memory::<T>(get_from_memory::<u32>(self.start_ptr + (index * 4) as u32))
     }
 
     pub fn set(&self, index: usize, value: T) {
-        save_to_memory(get_from_memory(self.start_ptr + (index * 4) as u32), value);
+        save_to_memory(get_from_memory::<u32>(self.start_ptr + (index * 4) as u32), value);
     }
 
     pub fn get_vec(&self) -> Vec<T> {

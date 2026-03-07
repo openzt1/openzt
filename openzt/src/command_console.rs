@@ -78,7 +78,7 @@ pub mod zoo_console {
     use super::call_next_command;
 
     #[detour(UPDATE_SIM)]
-    unsafe extern "thiscall" fn zoo_zt_app_update_game(_this_ptr: u32, param_2: i32) {
+    unsafe extern "thiscall" fn zoo_zt_app_update_game(_this_ptr: *const u32, param_2: i32) {
         call_next_command();
         unsafe { UPDATE_SIM_DETOUR.call(_this_ptr, param_2) }
     }
