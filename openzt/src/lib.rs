@@ -112,6 +112,12 @@ pub mod reimplementation_tests;
 #[cfg(feature = "integration-tests")]
 pub mod integration_tests;
 
+/// Pass-through logging stubs for validating addresses in generated.rs.
+/// Annotate consts with #[validate_detour("name")] and run:
+///   ./openzt.bat validate-detours [names...] (or "all")
+#[cfg(all(feature = "detour-validation", target_os = "windows"))]
+mod detour_validation;
+
 #[cfg(target_os = "windows")]
 use openzt_detour_macro::detour_mod;
 
@@ -127,7 +133,7 @@ mod zoo_init {
     // Note(finn): We hook the LoadLangDLLs function to perform some later initialization steps. Starting
     //  the console starts a new thead which is not recommended in the DllMain function.
     #[detour(LOAD_LANG_DLLS)]
-    unsafe extern "thiscall" fn load_lang_dlls(this: u32) -> u32 {
+    unsafe extern "thiscall" fn load_lang_dlls(this: * const u32) -> u32 {
         // Load config to determine logging settings
         let config = resource_manager::mod_config::get_openzt_config();
 
@@ -144,13 +150,23 @@ mod zoo_init {
 
         info!("OpenZT initialization starting");
 
+        #[cfg(feature = "detour-validation")]
+        {
+            let names_env = std::env::var("OPENZT_VALIDATE_DETOURS").unwrap_or_default();
+            let names: Vec<&str> = names_env
+                .split([',', ' '])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            detour_validation::init(&names);
+        }
+
         // Initialize TUI if enabled
         #[cfg(feature = "tui")]
-        if config.tui.enabled {
-            if let Err(e) = tui_console::init(&config.tui) {
+        if config.tui.enabled
+            && let Err(e) = tui_console::init(&config.tui) {
                 info!("Failed to initialize TUI: {}", e);
             }
-        }
 
         // Command console is broken on latest stable Rust so we disable it by default.
         if cfg!(feature = "command-console") {

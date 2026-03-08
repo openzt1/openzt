@@ -38,6 +38,21 @@ pub struct InstanceConfig {
     pub wine_debug_level: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpulimit: Option<f64>,  // CPU cores (e.g., 0.5 = 50%, 2.0 = 2 cores)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate_detours: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetourResult {
+    pub name: String,
+    pub called: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetourTestResults {
+    pub instance_id: String,
+    pub results: Vec<DetourResult>,
+    pub passed: bool,
 }
 
 #[derive(Debug, Deserialize)]

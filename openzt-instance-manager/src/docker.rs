@@ -6,7 +6,7 @@ use bollard::{
         LogsOptions, ListContainersOptions, InspectContainerOptions, LogOutput,
     },
     image::CreateImageOptions,
-    service::{PortBinding, ContainerSummary, ContainerInspectResponse},
+    service::{PortBinding, ContainerSummary, ContainerInspectResponse, Mount, MountTypeEnum},
     Docker,
 };
 use chrono::{DateTime, Utc};
@@ -107,20 +107,39 @@ impl DockerManager {
         if let Some(cpulimit) = instance_config.cpulimit {
             labels.insert("openzt.cpulimit".to_string(), cpulimit.to_string());
         }
+        if let Some(ref detours) = instance_config.validate_detours {
+            if !detours.is_empty() {
+                labels.insert("openzt.validate_detours".to_string(), detours.join(","));
+            }
+        }
+
+        // The path is already in the correct format (Windows path on Windows, Linux path on Linux)
+        let dll_mount = Mount {
+            target: Some("/home/wineuser/res-openzt.dll".to_string()),
+            source: Some(dll_path.to_string()),
+            typ: Some(MountTypeEnum::BIND),
+            read_only: Some(true),
+            ..Default::default()
+        };
+        tracing::debug!("Using mount: source={}, target={}", dll_path, dll_mount.target.as_ref().unwrap());
+
+        // Build env vars
+        let mut env_vars = vec!["VNC_SERVER=yes".to_string()];
+        if let Some(ref detours) = instance_config.validate_detours {
+            if !detours.is_empty() {
+                env_vars.push(format!("OPENZT_VALIDATE_DETOURS={}", detours.join(",")));
+            }
+        }
 
         let config = ContainerConfig {
             image: Some(image.to_string()),
             hostname: Some(name.to_string()),
             labels: Some(labels),
-            env: Some(vec![
-                "VNC_SERVER=yes".to_string(),
-            ]),
+            env: Some(env_vars),
             exposed_ports: Some(exposed_ports),
             host_config: Some(bollard::service::HostConfig {
                 port_bindings: Some(port_bindings),
-                binds: Some(vec![
-                    format!("{}:/home/wineuser/.wine/drive_c/Program Files (x86)/Microsoft Games/Zoo Tycoon/res-openzt.dll:ro", dll_path),
-                ]),
+                mounts: Some(vec![dll_mount]),
                 ipc_mode: Some("host".to_string()),
                 // CPU limits (equivalent to --cpus=<value>)
                 nano_cpus: instance_config.cpulimit
@@ -130,7 +149,8 @@ impl DockerManager {
             ..Default::default()
         };
 
-        let result = self.docker.create_container(options, config).await?;
+        let result = self.docker.create_container(options, config).await
+            .map_err(|e| anyhow::anyhow!("Docker error: {}", e))?;
         Ok(result.id)
     }
 
@@ -394,6 +414,9 @@ impl DockerManager {
 }
 
 /// Write base64-encoded DLL to a temporary file
+///
+/// On Windows with WSL2, this copies the file into the WSL2 filesystem
+/// to ensure proper bind mount behavior.
 pub fn write_dll_to_temp(instance_id: &str, dll_base64: &str) -> Result<String> {
     let dll_bytes = base64::Engine::decode(&base64::prelude::BASE64_STANDARD, dll_base64)
         .context("Failed to decode base64 DLL")?;
@@ -406,24 +429,28 @@ pub fn write_dll_to_temp(instance_id: &str, dll_base64: &str) -> Result<String> 
         return Err(anyhow!("Invalid DLL format: missing MZ header"));
     }
 
-    let temp_path = format!("/tmp/openzt-{}.dll", instance_id);
+    // Write to temp directory
+    let mut temp_path = std::env::temp_dir();
+    temp_path.push(format!("openzt-{}.dll", instance_id));
 
     let mut file = std::fs::File::create(&temp_path)
         .context("Failed to create temp DLL file")?;
     file.write_all(&dll_bytes)
         .context("Failed to write DLL data")?;
 
-    tracing::info!("Wrote DLL to {}", temp_path);
-    Ok(temp_path)
+    let temp_path_str = temp_path.to_string_lossy().to_string();
+    tracing::info!("Wrote DLL to {}", temp_path_str);
+    Ok(temp_path_str)
 }
 
 /// Clean up temporary DLL file
 pub fn cleanup_dll_temp(instance_id: &str) {
-    let temp_path = format!("/tmp/openzt-{}.dll", instance_id);
+    let mut temp_path = std::env::temp_dir();
+    temp_path.push(format!("openzt-{}.dll", instance_id));
     if let Err(e) = std::fs::remove_file(&temp_path) {
-        tracing::warn!("Failed to remove temp DLL file {}: {}", temp_path, e);
+        tracing::warn!("Failed to remove temp DLL file {}: {}", temp_path.display(), e);
     } else {
-        tracing::info!("Removed temp DLL file {}", temp_path);
+        tracing::info!("Removed temp DLL file {}", temp_path.display());
     }
 }
 
@@ -477,12 +504,16 @@ impl DockerManager {
         let status = self.map_docker_status(&inspect.state.ok_or_else(|| anyhow!("Missing state"))?);
         let created_at = self.parse_created_timestamp(inspect.created.as_deref().ok_or_else(|| anyhow!("Missing created timestamp"))?)?;
 
-        // Extract cpulimit from labels (stored during creation)
+        // Extract config fields from labels (stored during creation)
+        let labels = inspect.config.as_ref().and_then(|c| c.labels.as_ref());
         let config = InstanceConfig {
-            cpulimit: inspect.config.as_ref()
-                .and_then(|c| c.labels.as_ref())
-                .and_then(|labels| labels.get("openzt.cpulimit"))
+            cpulimit: labels
+                .and_then(|l| l.get("openzt.cpulimit"))
                 .and_then(|s| s.parse::<f64>().ok()),
+            validate_detours: labels
+                .and_then(|l| l.get("openzt.validate_detours"))
+                .map(|s| s.split(',').map(String::from).collect::<Vec<_>>())
+                .filter(|v| !v.is_empty()),
             ..Default::default()
         };
 

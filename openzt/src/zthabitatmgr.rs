@@ -240,11 +240,11 @@ pub mod hooks_zthabitatmgr {
 
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
     #[detour(GET_GATE_TILE_IN)]
-    unsafe extern "thiscall" fn get_gate_tile_in(_this: u32) -> u32 {
+    unsafe extern "thiscall" fn get_gate_tile_in(_this: *const u32) -> *const u32 {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(_this) };
         match habitat.get_gate_tile_in() {
-            Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile),
-            None => 0,
+            Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile) as *const u32,
+            None => std::ptr::null(),
         }
     }
 }

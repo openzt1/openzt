@@ -55,6 +55,7 @@ async fn main() -> Result<()> {
         Commands::Start { id } => cmd_start(&client, &id, output_format).await,
         Commands::Restart { id } => cmd_restart(&client, &id, output_format).await,
         Commands::Health {} => cmd_health(&client, output_format).await,
+        Commands::DetourResults { id } => cmd_detour_results(&client, &id, output_format).await,
     }
 }
 
@@ -153,6 +154,12 @@ enum Commands {
         /// Instance ID (full UUID or short prefix)
         id: String,
     },
+
+    /// Show detour validation results for an instance
+    DetourResults {
+        /// Instance ID (full UUID or short prefix)
+        id: String,
+    },
 }
 
 #[cfg(feature = "cli")]
@@ -161,6 +168,10 @@ struct InstanceConfigArgs {
     /// CPU limit in cores (e.g., 0.5 = 50%, 2.0 = 2 cores)
     #[arg(long)]
     cpulimit: Option<f64>,
+
+    /// Comma-separated list of detour names to validate (e.g. bfapp/load_string,bfapp/win_main)
+    #[arg(long, value_delimiter = ',')]
+    validate_detours: Vec<String>,
 }
 
 #[cfg(feature = "cli")]
@@ -180,10 +191,16 @@ async fn cmd_create(
     }
 
     // Build instance config
-    let instance_config = if config_args.cpulimit.is_some() {
+    let validate_detours = if config_args.validate_detours.is_empty() {
+        None
+    } else {
+        Some(config_args.validate_detours.clone())
+    };
+    let instance_config = if config_args.cpulimit.is_some() || validate_detours.is_some() {
         Some(InstanceConfig {
             wine_debug_level: None,
             cpulimit: config_args.cpulimit,
+            validate_detours,
         })
     } else {
         None
@@ -385,6 +402,39 @@ async fn cmd_health(
     // Exit with error code if unhealthy (unless JSON output)
     if !healthy && !output_json {
         std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+async fn cmd_detour_results(
+    client: &openzt_instance_manager::client::InstanceClient,
+    id: &str,
+    output_format: openzt_instance_manager::output::OutputFormat,
+) -> Result<()> {
+    use openzt_instance_manager::output::{print_detour_results, print_error, print_resolution_error};
+
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
+
+    match client.get_detour_results(&resolved_id).await {
+        Ok(results) => {
+            let output_json = output_format == openzt_instance_manager::output::OutputFormat::Json;
+            print_detour_results(&results, output_json);
+            if !results.passed {
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            print_error(&format!("Failed to get detour results: {}", e));
+            std::process::exit(1);
+        }
     }
 
     Ok(())
