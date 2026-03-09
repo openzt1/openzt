@@ -125,6 +125,13 @@ pub fn call_next_command() {
     #[cfg(feature = "tui")]
     tui_console::add_command_output(result.clone());
 
+    // Log command output if enabled in config or when detour-validation is active
+    let config = crate::resource_manager::mod_config::get_openzt_config();
+    let should_log = cfg!(feature = "detour-validation") || config.logging.log_command_output;
+    if should_log {
+        info!("Command result: {}", result);
+    }
+
     let mut result_mutex = COMMAND_RESULTS.lock().unwrap();
     result_mutex.push(result);
 }
