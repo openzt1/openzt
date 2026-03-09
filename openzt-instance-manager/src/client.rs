@@ -3,7 +3,7 @@
 //! This module provides a convenient async client for interacting with
 //! the instance manager API endpoints.
 
-use crate::instance::{CreateInstanceResponse, DetourTestResults, InstanceConfig, InstanceDetails, LogsResponse, InstanceStatusResponse};
+use crate::instance::{CreateInstanceResponse, DetourTestResults, InstanceConfig, InstanceDetails, LogsResponse, InstanceStatusResponse, UploadScriptResponse, ScriptFile};
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use futures_util::stream::Stream;
@@ -51,6 +51,7 @@ impl InstanceClient {
         &self,
         dll_path: &Path,
         config: Option<InstanceConfig>,
+        scripts: Vec<ScriptFile>,
     ) -> Result<CreateInstanceResponse> {
         // Read and encode the DLL file
         let dll_bytes = std::fs::read(dll_path)
@@ -61,6 +62,7 @@ impl InstanceClient {
         let request = serde_json::json!({
             "openzt_dll": dll_base64,
             "config": config,
+            "scripts": scripts,
         });
 
         let response = self
@@ -219,6 +221,37 @@ impl InstanceClient {
             .send()
             .await
             .with_context(|| format!("Failed to restart instance {}", id))?;
+
+        self.handle_response(response).await
+    }
+
+    /// Upload a Lua script to an instance
+    pub async fn upload_script(
+        &self,
+        id: &str,
+        script_path: &Path,
+    ) -> Result<UploadScriptResponse> {
+        // Read and encode the script file
+        let script_bytes = std::fs::read(script_path)
+            .with_context(|| format!("Failed to read script file: {}", script_path.display()))?;
+
+        let script_base64 = base64::prelude::BASE64_STANDARD.encode(&script_bytes);
+        let filename = script_path.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow!("Invalid script filename"))?;
+
+        let request = serde_json::json!({
+            "script_content": script_base64,
+            "filename": filename,
+        });
+
+        let response = self
+            .http_client
+            .post(self.url(&format!("/api/instances/{}/scripts", id)))
+            .json(&request)
+            .send()
+            .await
+            .with_context(|| format!("Failed to upload script to instance {}", id))?;
 
         self.handle_response(response).await
     }

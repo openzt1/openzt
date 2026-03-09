@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 // Conditionally include CLI dependencies
 #[cfg(feature = "cli")]
+use base64::Engine;
+#[cfg(feature = "cli")]
 use openzt_instance_manager::id_resolver::resolve_instance_id;
 
 // Conditionally include CLI dependencies
@@ -56,6 +58,9 @@ async fn main() -> Result<()> {
         Commands::Restart { id } => cmd_restart(&client, &id, output_format).await,
         Commands::Health {} => cmd_health(&client, output_format).await,
         Commands::DetourResults { id } => cmd_detour_results(&client, &id, output_format).await,
+        Commands::UploadScript { id, script_path } => {
+            cmd_upload_script(&client, &id, &script_path, output_format).await
+        }
     }
 }
 
@@ -160,6 +165,15 @@ enum Commands {
         /// Instance ID (full UUID or short prefix)
         id: String,
     },
+
+    /// Upload a Lua script to a running instance
+    UploadScript {
+        /// Instance ID (full UUID or short prefix)
+        id: String,
+
+        /// Path to the Lua script file
+        script_path: PathBuf,
+    },
 }
 
 #[cfg(feature = "cli")]
@@ -172,6 +186,10 @@ struct InstanceConfigArgs {
     /// Comma-separated list of detour names to validate (e.g. bfapp/load_string,bfapp/win_main)
     #[arg(long, value_delimiter = ',')]
     validate_detours: Vec<String>,
+
+    /// Lua script files to upload to the instance
+    #[arg(long = "script", value_name = "FILE")]
+    scripts: Vec<PathBuf>,
 }
 
 #[cfg(feature = "cli")]
@@ -181,7 +199,7 @@ async fn cmd_create(
     config_args: InstanceConfigArgs,
     output_format: openzt_instance_manager::output::OutputFormat,
 ) -> Result<()> {
-    use openzt_instance_manager::instance::InstanceConfig;
+    use openzt_instance_manager::instance::{InstanceConfig, ScriptFile};
     use openzt_instance_manager::output::{print_create_result, print_error};
 
     // Check if DLL file exists
@@ -189,6 +207,29 @@ async fn cmd_create(
         print_error(&format!("DLL file not found: {}", dll_path.display()));
         std::process::exit(1);
     }
+
+    // Load and encode scripts if provided
+    let scripts: Vec<ScriptFile> = config_args
+        .scripts
+        .iter()
+        .map(|path| {
+            let content = std::fs::read(path)
+                .map_err(|e| miette!("Failed to read script {}: {}", path.display(), e))?;
+            let filename = path.file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| miette!("Invalid script filename"))?
+                .to_string();
+            let content_base64 = base64::prelude::BASE64_STANDARD.encode(&content);
+            Ok::<_, miette::ErrReport>(ScriptFile {
+                filename,
+                content: content_base64,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|e| {
+            print_error(&format!("Failed to load scripts: {}", e));
+            std::process::exit(1);
+        });
 
     // Build instance config
     let validate_detours = if config_args.validate_detours.is_empty() {
@@ -208,7 +249,7 @@ async fn cmd_create(
 
     // Call the API
     let response = client
-        .create_instance(dll_path, instance_config)
+        .create_instance(dll_path, instance_config, scripts)
         .await
         .map_err(|e| miette!(e))?;
 
@@ -433,6 +474,52 @@ async fn cmd_detour_results(
         }
         Err(e) => {
             print_error(&format!("Failed to get detour results: {}", e));
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "cli")]
+async fn cmd_upload_script(
+    client: &openzt_instance_manager::client::InstanceClient,
+    id: &str,
+    script_path: &PathBuf,
+    output_format: openzt_instance_manager::output::OutputFormat,
+) -> Result<()> {
+    use openzt_instance_manager::output::{print_error, print_resolution_error, print_success};
+
+    // Check if script file exists
+    if !script_path.exists() {
+        print_error(&format!("Script file not found: {}", script_path.display()));
+        std::process::exit(1);
+    }
+
+    // Resolve ID (handles both short and full UUIDs)
+    let resolved_id = match resolve_instance_id(client, id).await {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            print_resolution_error(&e);
+            std::process::exit(1);
+        }
+    };
+
+    match client.upload_script(&resolved_id, script_path).await {
+        Ok(response) => {
+            if output_format != openzt_instance_manager::output::OutputFormat::Json {
+                print_success(&format!(
+                    "Uploaded script '{}' to instance {}",
+                    response.filename,
+                    &response.instance_id[..8]
+                ));
+                println!("  Path: {}", response.path);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&response).unwrap());
+            }
+        }
+        Err(e) => {
+            print_error(&format!("Failed to upload script: {}", e));
             std::process::exit(1);
         }
     }

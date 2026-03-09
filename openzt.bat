@@ -77,7 +77,7 @@ SET VALIDATE_DETOURS_MODE=1
 SET RUN_AFTER_BUILD=1
 SET RELEASE_FLAG=1
 SET WAIT_FLAG=1
-SET CARGO_ARGS=--features detour-validation
+SET CARGO_ARGS=--features "detour-validation,command-console"
 echo Validate-detours: [!VALIDATE_DETOUR_NAMES!]
 GOTO build
 

@@ -60,13 +60,4 @@ pub fn init(enabled: &[&str]) {
                 ),
         }
     }
-
-    // Auto-load detour test script if it exists
-    #[cfg(feature = "command-console")]
-    {
-        match crate::scripting::load_lua_file("scripts/detour.lua") {
-            Ok(msg) => tracing::info!("Detour script loaded: {}", msg),
-            Err(e) => tracing::warn!("Detour script loading failed: {}", e),
-        }
-    }
 }

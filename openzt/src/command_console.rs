@@ -189,6 +189,15 @@ pub fn start_server() {
 
     info!("Listening on {}...", listen_addr);
 
+    // Auto-load detour test script if detour-validation is enabled
+    #[cfg(all(feature = "detour-validation", feature = "command-console"))]
+    {
+        match crate::scripting::load_lua_file("scripts/detour.lua") {
+            Ok(msg) => info!("Detour script loaded: {}", msg),
+            Err(e) => info!("Detour script loading failed: {}", e),
+        }
+    }
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {

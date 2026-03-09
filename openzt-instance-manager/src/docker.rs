@@ -4,6 +4,7 @@ use bollard::{
         Config as ContainerConfig, CreateContainerOptions, RemoveContainerOptions,
         StartContainerOptions, StopContainerOptions, RestartContainerOptions,
         LogsOptions, ListContainersOptions, InspectContainerOptions, LogOutput,
+        UploadToContainerOptions,
     },
     image::CreateImageOptions,
     service::{PortBinding, ContainerSummary, ContainerInspectResponse, Mount, MountTypeEnum},
@@ -14,6 +15,8 @@ use futures_util::stream::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::io::Write;
 use std::pin::Pin;
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
 
 use crate::instance::{AppLogType, InstanceConfig, InstanceStatus};
 
@@ -72,6 +75,7 @@ impl DockerManager {
         vnc_port: u16,
         console_port: u16,
         dll_path: &str,
+        scripts_dir: Option<&str>,
         instance_config: &InstanceConfig,
     ) -> Result<String> {
         let options = Some(CreateContainerOptions {
@@ -123,13 +127,33 @@ impl DockerManager {
         };
         tracing::debug!("Using mount: source={}, target={}", dll_path, dll_mount.target.as_ref().unwrap());
 
+        // Build mounts array - start with DLL mount
+        let mut mounts = vec![dll_mount];
+
+        // Add scripts mount if directory provided
+        if let Some(scripts_path) = scripts_dir {
+            let scripts_mount = Mount {
+                target: Some("/home/wineuser/scripts".to_string()),
+                source: Some(scripts_path.to_string()),
+                typ: Some(MountTypeEnum::BIND),
+                read_only: Some(true),
+                ..Default::default()
+            };
+            tracing::debug!(
+                "Adding scripts mount: {} -> {}",
+                scripts_path,
+                scripts_mount.target.as_ref().unwrap()
+            );
+            mounts.push(scripts_mount);
+        }
+
         // Build env vars
         let mut env_vars = vec!["VNC_SERVER=yes".to_string()];
-        if let Some(ref detours) = instance_config.validate_detours {
-            if !detours.is_empty() {
-                env_vars.push(format!("OPENZT_VALIDATE_DETOURS={}", detours.join(",")));
-            }
+        if let Some(ref detours) = instance_config.validate_detours && !detours.is_empty() {
+            env_vars.push(format!("OPENZT_VALIDATE_DETOURS={}", detours.join(",")));
         }
+
+        env_vars.push("LIBGL_ALWAYS_SOFTWARE=1".to_string()); // Force software rendering for better compatibility
 
         let config = ContainerConfig {
             image: Some(image.to_string()),
@@ -139,7 +163,7 @@ impl DockerManager {
             exposed_ports: Some(exposed_ports),
             host_config: Some(bollard::service::HostConfig {
                 port_bindings: Some(port_bindings),
-                mounts: Some(vec![dll_mount]),
+                mounts: Some(mounts),
                 ipc_mode: Some("host".to_string()),
                 // CPU limits (equivalent to --cpus=<value>)
                 nano_cpus: instance_config.cpulimit
@@ -454,6 +478,70 @@ pub fn cleanup_dll_temp(instance_id: &str) {
     }
 }
 
+/// Get the scripts directory path for an instance
+pub fn get_scripts_dir(instance_id: &str) -> std::path::PathBuf {
+    let mut temp_path = std::env::temp_dir();
+    temp_path.push(format!("openzt-scripts-{}", instance_id));
+    temp_path
+}
+
+/// Create the scripts directory for an instance
+pub fn ensure_scripts_dir(instance_id: &str) -> Result<std::path::PathBuf> {
+    let scripts_dir = get_scripts_dir(instance_id);
+
+    if !scripts_dir.exists() {
+        std::fs::create_dir(&scripts_dir)
+            .context("Failed to create scripts directory")?;
+        tracing::info!("Created scripts directory: {}", scripts_dir.display());
+    }
+
+    Ok(scripts_dir)
+}
+
+/// Write a single script file to host temp directory
+pub fn write_script_to_temp(
+    instance_id: &str,
+    filename: &str,
+    script_content_base64: &str,
+) -> Result<String> {
+    let script_bytes = base64::Engine::decode(
+        &base64::prelude::BASE64_STANDARD,
+        script_content_base64
+    ).context("Failed to decode base64 script content")?;
+
+    // Validate UTF-8
+    let _script_content = String::from_utf8(script_bytes.clone())
+        .context("Script content is not valid UTF-8")?;
+
+    let scripts_dir = ensure_scripts_dir(instance_id)?;
+    let script_path = scripts_dir.join(filename);
+
+    let mut file = std::fs::File::create(&script_path)
+        .context("Failed to create script file")?;
+    file.write_all(&script_bytes)
+        .context("Failed to write script content")?;
+
+    tracing::info!("Wrote script to {}", script_path.display());
+    Ok(script_path.to_string_lossy().to_string())
+}
+
+/// Clean up all script files for an instance
+pub fn cleanup_scripts_temp(instance_id: &str) {
+    let scripts_dir = get_scripts_dir(instance_id);
+
+    if let Err(e) = std::fs::remove_dir_all(&scripts_dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                "Failed to remove scripts directory {}: {}",
+                scripts_dir.display(),
+                e
+            );
+        }
+    } else {
+        tracing::info!("Removed scripts directory {}", scripts_dir.display());
+    }
+}
+
 /// Holds information extracted from a container during recovery
 #[derive(Debug)]
 pub struct RecoveredInstanceInfo {
@@ -603,6 +691,35 @@ impl DockerManager {
         DateTime::parse_from_rfc3339(created)
             .map(|dt| dt.with_timezone(&Utc))
             .map_err(|e| anyhow!("Invalid timestamp: {}", e))
+    }
+
+    /// Copy a file from host path into container using docker cp
+    pub async fn cp_to_container(
+        &self,
+        container_id: &str,
+        host_path: &str,
+        container_path: &str,
+    ) -> Result<()> {
+        // Read the file content
+        let mut file = File::open(host_path).await
+            .context("Failed to open file for copying")?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).await
+            .context("Failed to read file content")?;
+
+        // Use bollard's upload to container (this implements docker cp)
+        let options = Some(UploadToContainerOptions {
+            path: container_path.to_string(),
+            ..Default::default()
+        });
+
+        self.docker
+            .upload_to_container(container_id, options, buffer.into())
+            .await
+            .context("Failed to copy file to container")?;
+
+        tracing::info!("Copied {} to container:{}", host_path, container_path);
+        Ok(())
     }
 
     /// Refresh the status of a single instance by inspecting its container.
