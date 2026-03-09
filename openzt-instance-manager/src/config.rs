@@ -132,7 +132,7 @@ fn default_console_end() -> u16 {
 }
 
 fn default_docker_image() -> String {
-    "finn/winezt:latest".to_string()
+    "finn/wine32-zoo:latest".to_string()
 }
 
 fn default_container_prefix() -> String {

@@ -65,7 +65,7 @@ mod detour_zoo_main {
 
     // TODO: Fix this so it works with a crate/mod prefix
     #[detour(LOAD_LANG_DLLS)]
-    unsafe extern "thiscall" fn detour_target(_this: u32) -> u32 {
+    unsafe extern "thiscall" fn detour_target(_this: *const u32) -> u32 {
         info!("Detour success");
 
         // Read filepath from environment variable with default

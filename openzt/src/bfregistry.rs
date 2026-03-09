@@ -4,7 +4,7 @@ use openzt_detour_macro::detour_mod;
 use std::sync::LazyLock;
 use tracing::info;
 
-use crate::{command_console::CommandError, lua_fn, util::get_from_memory};
+use crate::{command_console::CommandError, lua_fn, util::{get_from_memory, MemAddr}};
 
 static BF_REGISTRY: LazyLock<Mutex<HashMap<String, u32>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -21,9 +21,9 @@ pub fn list_registry() -> Result<String, String> {
     Ok(string_array.join("\n"))
 }
 
-pub fn add_to_registry(key: &String, value: u32) {
+pub fn add_to_registry(key: &String, value: impl MemAddr) {
     let mut data_mutex = BF_REGISTRY.lock().unwrap();
-    data_mutex.insert(key.to_string(), value);
+    data_mutex.insert(key.to_string(), value.as_u32());
 }
 
 pub fn get_from_registry(key: String) -> Option<u32> {
@@ -65,19 +65,19 @@ mod zoo_bf_registry {
     use openzt_detour::generated::uielement::REGISTERIT as UIELEMENT_REGISTERIT;
 
     #[detour(PTR_GET)]
-    unsafe extern "thiscall" fn prt_get(_this_prt: u32, class_name: u32, _param_2: bool) -> u32 {
+    unsafe extern "thiscall" fn prt_get(_this_prt: *const u32, class_name: *const i8, _param_2: bool) -> u32 {
         get_from_registry(get_string_from_memory(get_from_memory::<u32>(class_name))).unwrap()
     }
 
     #[detour(BFMGR_REGISTERIT)]
-    unsafe extern "cdecl" fn add_to_bfregistry(param_1: u32, param_2: u32) -> u32 {
+    unsafe extern "cdecl" fn add_to_bfregistry(param_1: *const u32, param_2: *const u32) -> u32 {
         let param_1_string = get_string_from_memory(get_from_memory::<u32>(param_1));
         add_to_registry(&param_1_string, param_2);
         0x638001
     }
 
     #[detour(UIELEMENT_REGISTERIT)]
-    unsafe extern "cdecl" fn add_to_bfregistry_ui(param_1: u32, param_2: u32) -> u32 {
+    unsafe extern "cdecl" fn add_to_bfregistry_ui(param_1: *const u32, param_2: *const u32) -> u32 {
         let param_1_string = get_string_from_memory(get_from_memory::<u32>(param_1));
         add_to_registry(&param_1_string, param_2);
         0x638001

@@ -28,3 +28,12 @@ where
         unsafe { ::retour::Function::from_ptr(self.address as *const ()) }
     }
 }
+
+#[cfg(feature = "detour-validation")]
+pub struct ValidationEntry {
+    pub name: &'static str,
+    pub enable: fn() -> retour::Result<()>,
+}
+
+#[cfg(feature = "detour-validation")]
+inventory::collect!(ValidationEntry);

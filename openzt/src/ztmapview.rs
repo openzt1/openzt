@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::bfentitytype::{zt_entity_type_class_is, ZTEntityTypeClass};
 use crate::globals::globals;
-use crate::util::{get_from_memory, ref_from_memory};
+use crate::util::{get_from_memory, ref_from_memory, Addr, MemAddr};
 use crate::ztworldmgr::{BFEntity, IVec3};
 // use crate::{
 //     util::get_from_memory,
@@ -220,7 +220,7 @@ pub mod zoo_ztmapview {
     //004df688
     #[detour(CHECK_TANK_PLACEMENT)]
     // fn check_tank_placement(ZTMapView *other_this, BFEntity *param_2, BFTile *param_3, int *param_4)
-    unsafe extern "stdcall" fn check_tank_placement(temp_entity_ptr: u32, tile: u32, response_ptr: *mut u32) -> bool {
+    unsafe extern "stdcall" fn check_tank_placement(temp_entity_ptr: *const u32, tile: *const u32, response_ptr: *mut u32) -> bool {
         let result = unsafe { CHECK_TANK_PLACEMENT_DETOUR.call(temp_entity_ptr, tile, response_ptr) };
 
         // let entity = get_from_memory(temp_entity);
@@ -253,7 +253,7 @@ pub mod zoo_ztmapview {
 
     // 0040f24d int __thiscall OOAnalyzer::BFTile::getLocalElevation(BFTile *this,BFPos *param_1)
     #[detour(GET_LOCAL_ELEVATION)]
-    unsafe extern "thiscall" fn get_local_elevation(_this: u32, pos: u32) -> i32 {
+    unsafe extern "thiscall" fn get_local_elevation(_this: *const u32, pos: *const u32) -> i32 {
         let tile = unsafe { ref_from_memory::<BFTile>(_this) };
         let pos_vec = get_from_memory::<IVec3>(pos);
         tile.get_local_elevation(pos_vec)
@@ -288,8 +288,8 @@ pub enum ErrorStringId {
 }
 
 impl ZTMapView {
-    pub fn check_tank_placement(temp_entity_ptr: u32, tile: &BFTile) -> Result<(), ErrorStringId> {
-        info!("Entity Ptr {:#x} -> {:#x}", temp_entity_ptr, get_from_memory::<u32>(temp_entity_ptr));
+    pub fn check_tank_placement(temp_entity_ptr: impl MemAddr, tile: &BFTile) -> Result<(), ErrorStringId> {
+        info!("Entity Ptr {:#x} -> {:#x}", Addr::of(temp_entity_ptr), get_from_memory::<u32>(temp_entity_ptr));
         let temp_entity = unsafe { ref_from_memory::<BFEntity>(temp_entity_ptr) };
         let habitat_mgr = globals().zthabitatmgr();
         let Some(habitat) = habitat_mgr.get_habitat(tile.pos.x, tile.pos.y) else {

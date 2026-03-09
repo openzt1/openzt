@@ -236,7 +236,9 @@ fn load_openzt_config_from_disk() -> OpenZTConfig {
                     };
 
                     let logging_complete = if let Some(logging) = toml_value.get("logging") {
-                        logging.get("log_to_file").is_some() && logging.get("level").is_some()
+                        logging.get("log_to_file").is_some()
+                            && logging.get("level").is_some()
+                            && logging.get("log_command_output").is_some()
                     } else {
                         false
                     };
