@@ -8,6 +8,7 @@ use num_enum::FromPrimitive;
 use tracing::info;
 
 use crate::util::ZTBoundedString;
+use crate::ztworldmgr::IVec3;
 use crate::{
     command_console::CommandError,
     expansions::is_member,
@@ -73,9 +74,9 @@ pub struct BFEntityType {
     pub uses_placement_cube: bool,    // 0x06E
     pub show: bool,                   // 0x06F
     pub hit_threshold: u32,           // 0x070
-    pub avoid_edges: bool,            // 0x074
+    pub avoid_edges: u32,             // 0x074 (How close to the edge of a tank can an entity be placed)
     // TODO: Add to display impl and test these bits, if they work replace usage of ZTEntityType with BFEntityType
-    pad8: [u8; 0x080 - 0x075],        // ----------------------- padding: 11 bytes
+    pad8: [u8; 0x080 - 0x078],        // ----------------------- padding: 8 bytes
     pub bf_config_file_ptr: u32,      // 0x080
     pad9: [u8; 0x098 - 0x084],        // ----------------------- padding: 20 bytes
     pub zt_type: ZTBoundedString,     // 0x098
@@ -88,7 +89,7 @@ pub struct BFEntityType {
     pub placement_footprinty: i32,    // 0x0C4
     pub placement_footprintz: i32,    // 0x0C8
     pub available_at_startup: bool,   // 0x0CC
-    pad11: [u8; 0x100 - 0x0CD],       // ----------------------- padding: 35 bytes
+    pad11: [u8; 0x100 - 0x0CD],       // ----------------------- padding: 51 bytes
 }
 
 impl BFEntityType {
@@ -182,6 +183,7 @@ impl EntityType for BFEntityType {
 // Does BF/ZTUnitType also load purchase cost, name id etc?
 #[derive(Debug, Getters, Setters, FieldAccessorAsString)]
 #[repr(C)]
+#[get = "pub"]
 pub struct ZTSceneryType {
     #[deref_field]
     pub bfentitytype: BFEntityType, // bytes: 0x100 - 0x000 = 0x100 = 256 bytes
@@ -215,7 +217,7 @@ pub struct ZTSceneryType {
     pub uses_tree_rubble: bool,      // 0x139
     pub forces_scenery_rubble: bool, // 0x13A
     pub blocks_los: bool,            // 0x13B
-    pad7: [u8; 0x168 - 0x13C],       // ----------------------- padding: 51 bytes
+    pad7: [u8; 0x168 - 0x13C],       // ----------------------- padding: 44 bytes
 }
 
 impl ZTSceneryType {
@@ -1031,9 +1033,7 @@ pub struct ZTAnimalType {
     #[deref_field]
     pub ztunit_type: ZTUnitType, // bytes: 0x188 - 0x100 = 0x88 = 136 bytes
     pad00: [u8; 0x1D8 - 0x188],         // ----------------------- padding: 72 bytes
-    pub box_footprint_x: i32,           // 0x1D8
-    pub box_footprint_y: i32,           // 0x1DC
-    pub box_footprint_z: i32,           // 0x1E0
+    pub box_footprint: IVec3,           // 0x1D8
     pub family: i32,                    // 0x1E4
     pub genus: i32,                     // 0x1E8
     pad01: [u8; 0x1F0 - 0x1EC],         // ----------------------- padding: 4 bytes
@@ -1136,15 +1136,17 @@ pub struct ZTAnimalType {
     pub need_shelter: bool,       // 0x3D2
     pub need_toys: bool,          // 0x3D3
     pub babies_attack: bool,      // 0x3D4
+    pad19: [u8; 0x410 - 0x3D8],   // ----------------------- padding: 8 bytes
+    pub egg_footprint: IVec3,         // 0x410
 }
 
 impl EntityType for ZTAnimalType {
     fn print_config_integers(&self) -> String {
-        format!("{}\ncBoxFootprintX: {}\ncBoxFootprintY: {}\ncBoxFootprintZ: {}\ncFamily: {}\ncGenus: {}\ncHabitat: {}\ncLocation: {}\ncEra: {}\ncBreathThreshold: {}\ncBreathIncrement: {}\ncHungerThreshold: {}\ncHungryHealthChange: {}\ncHungerIncrement: {}\ncFoodUnitValue: {}\ncKeeperFoodUnitsEaten: {}\ncNeededFood: {}\ncNoFoodChange: {}\ncInitialHappiness: {}\ncMaxHits: {}\ncPctHits: {}\ncMaxEnergy: {}\ncMaxDirty: {}\ncMinDirty: {}\ncSickChange: {}\ncOtherAnimalSickChange: {}\ncSickChance: {}\ncSickRandomChance: {}\ncCrowd: {}\ncCrowdHappinessChange: {}\ncZapHappinessChange: {}\ncCaptivity: {}\ncReproductionChance: {}\ncReproductionInterval: {}\ncMatingType: {}\ncOffspring: {}\ncKeeperFrequency: {}\ncNotEnoughKeepersChange: {}\ncSocial: {}\ncHabitatSize: {}\ncNumberAnimalsMin: {}\ncNumberAnimalsMax: {}\ncNumberMinChange: {}\ncNumberMaxChange: {}\ncHabitatPreference: {}\ncBabyBornChange: {}\ncEnergyIncrement: {}\ncEnergyThreshold: {}\ncDirtyIncrement: {}\ncDirtyThreshold: {}\ncSickTime: {}\ncBabyToAdult: {}\ncOtherFood: {}\ncTreePref: {}\ncRockPref: {}\ncSpacePref: {}\ncElevationPref: {}\ncDepthMin: {}\ncDepthMax: {}\ncDepthChange: {}\ncSalinityChange: {}\ncSalinityHealthChange: {}\ncHappyReproduceThreshold: {}\ncBuildingUseChance: {}\ncNoMateChange: {}\ncTimeDeath: {}\ncDeathChance: {}\ncDirtChance: {}\ncWaterNeeded: {}\ncUnderwaterNeeded: {}\ncLandNeeded: {}\ncEnterWaterChance: {}\ncEnterTankChance: {}\ncEnterLandChance: {}\ncDrinkWaterChance: {}\ncChaseAnimalChance: {}\ncClimbsCliffs: {}\ncBashStrength: {}\ncAttractiveness: {}\ncKeeperFoodType: {}\ncIsClimber: {}\ncIsJumper: {}\ncSmallZoodoo: {}\ncDinoZoodoo: {}\ncGiantZoodoo: {}\ncIsSpecialAnimal: {}\ncNeedShelter: {}\ncNeedToys: {}\ncBabiesAttack: {}\n",
+        format!("{}\ncBoxFootprintX: {}\ncBoxFootprintY: {}\ncBoxFootprintZ: {}\ncFamily: {}\ncGenus: {}\ncHabitat: {}\ncLocation: {}\ncEra: {}\ncBreathThreshold: {}\ncBreathIncrement: {}\ncHungerThreshold: {}\ncHungryHealthChange: {}\ncHungerIncrement: {}\ncFoodUnitValue: {}\ncKeeperFoodUnitsEaten: {}\ncNeededFood: {}\ncNoFoodChange: {}\ncInitialHappiness: {}\ncMaxHits: {}\ncPctHits: {}\ncMaxEnergy: {}\ncMaxDirty: {}\ncMinDirty: {}\ncSickChange: {}\ncOtherAnimalSickChange: {}\ncSickChance: {}\ncSickRandomChance: {}\ncCrowd: {}\ncCrowdHappinessChange: {}\ncZapHappinessChange: {}\ncCaptivity: {}\ncReproductionChance: {}\ncReproductionInterval: {}\ncMatingType: {}\ncOffspring: {}\ncKeeperFrequency: {}\ncNotEnoughKeepersChange: {}\ncSocial: {}\ncHabitatSize: {}\ncNumberAnimalsMin: {}\ncNumberAnimalsMax: {}\ncNumberMinChange: {}\ncNumberMaxChange: {}\ncHabitatPreference: {}\ncBabyBornChange: {}\ncEnergyIncrement: {}\ncEnergyThreshold: {}\ncDirtyIncrement: {}\ncDirtyThreshold: {}\ncSickTime: {}\ncBabyToAdult: {}\ncOtherFood: {}\ncTreePref: {}\ncRockPref: {}\ncSpacePref: {}\ncElevationPref: {}\ncDepthMin: {}\ncDepthMax: {}\ncDepthChange: {}\ncSalinityChange: {}\ncSalinityHealthChange: {}\ncHappyReproduceThreshold: {}\ncBuildingUseChance: {}\ncNoMateChange: {}\ncTimeDeath: {}\ncDeathChance: {}\ncDirtChance: {}\ncWaterNeeded: {}\ncUnderwaterNeeded: {}\ncLandNeeded: {}\ncEnterWaterChance: {}\ncEnterTankChance: {}\ncEnterLandChance: {}\ncDrinkWaterChance: {}\ncChaseAnimalChance: {}\ncClimbsCliffs: {}\ncBashStrength: {}\ncAttractiveness: {}\ncKeeperFoodType: {}\ncIsClimber: {}\ncIsJumper: {}\ncSmallZoodoo: {}\ncDinoZoodoo: {}\ncGiantZoodoo: {}\ncIsSpecialAnimal: {}\ncNeedShelter: {}\ncNeedToys: {}\ncBabiesAttack: {}\n EggFootprintX: {}\ncEggFootprintY: {}\ncEggFootprintZ: {}\n",
         self.ztunit_type.print_config_integers(),
-        self.box_footprint_x,
-        self.box_footprint_y,
-        self.box_footprint_z,
+        self.box_footprint.x,
+        self.box_footprint.y,
+        self.box_footprint.z,
         self.family,
         self.genus,
         self.habitat,
@@ -1230,6 +1232,9 @@ impl EntityType for ZTAnimalType {
         self.need_shelter as i32,
         self.need_toys as i32,
         self.babies_attack as i32,
+        self.egg_footprint.x,
+        self.egg_footprint.y,
+        self.egg_footprint.z,
         )
     }
 
@@ -1821,6 +1826,36 @@ pub enum ZTEntityTypeClass {
     BFEntity = 0x62e28c,
     #[num_enum(default)]
     Unknown = 0x0,
+}
+
+impl std::str::FromStr for ZTEntityTypeClass {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "animal" => Ok(ZTEntityTypeClass::Animal),
+            "ambient" => Ok(ZTEntityTypeClass::Ambient),
+            "guest" => Ok(ZTEntityTypeClass::Guest),
+            "fence" => Ok(ZTEntityTypeClass::Fence),
+            "tourguide" => Ok(ZTEntityTypeClass::TourGuide),
+            "building" => Ok(ZTEntityTypeClass::Building),
+            "scenery" => Ok(ZTEntityTypeClass::Scenery),
+            "food" => Ok(ZTEntityTypeClass::Food),
+            "tankfilter" => Ok(ZTEntityTypeClass::TankFilter),
+            "path" => Ok(ZTEntityTypeClass::Path),
+            "rubble" => Ok(ZTEntityTypeClass::Rubble),
+            "tankwall" => Ok(ZTEntityTypeClass::TankWall),
+            "keeper" => Ok(ZTEntityTypeClass::Keeper),
+            "maintenanceworker" => Ok(ZTEntityTypeClass::MaintenanceWorker),
+            "drt" => Ok(ZTEntityTypeClass::Drt),
+            "bfoverlay" => Ok(ZTEntityTypeClass::BFOverlay),
+            "bfunit" => Ok(ZTEntityTypeClass::BFUnit),
+            "ztunit" => Ok(ZTEntityTypeClass::ZTUnit),
+            "staff" => Ok(ZTEntityTypeClass::Staff),
+            "bfentity" => Ok(ZTEntityTypeClass::BFEntity),
+            _ => Err(format!("Unknown entity type class: {}", s)),
+        }
+    }
 }
 
 pub fn zt_entity_type_class_is(original_class: &ZTEntityTypeClass, class: &ZTEntityTypeClass) -> bool {

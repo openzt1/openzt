@@ -6,7 +6,7 @@ pub mod generated;
 
 pub struct FunctionDef<T> {
     pub address: u32,
-    function_type: PhantomData<T>,
+    pub function_type: PhantomData<T>,
 }
 
 impl<T> FunctionDef<T>

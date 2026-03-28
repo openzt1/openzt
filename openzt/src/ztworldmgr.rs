@@ -7,8 +7,9 @@ use std::str::FromStr;
 use std::{collections::HashMap, fmt};
 use tracing::{error, info};
 
-use crate::bfentitytype::ZTEntityTypeClass;
-use crate::util::ZTBufferString;
+use crate::bfentitytype::{ZTAnimalType, ZTEntityTypeClass, ZTUnitType};
+use crate::shortcuts::M;
+use crate::util::{ZTBufferString, mut_from_memory};
 use crate::ztmapview::BFTile;
 use crate::{
     bfentitytype::{read_zt_entity_type_from_memory, BFEntityType, ZTEntityType, ZTSceneryType},
@@ -41,6 +42,31 @@ pub enum ZTEntityClass {
     Unknown = 0x0,
 }
 
+impl std::str::FromStr for ZTEntityClass {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "food" => Ok(ZTEntityClass::Food),
+            "path" => Ok(ZTEntityClass::Path),
+            "fences" => Ok(ZTEntityClass::Fences),
+            "building" => Ok(ZTEntityClass::Building),
+            "animal" => Ok(ZTEntityClass::Animal),
+            "guest" => Ok(ZTEntityClass::Guest),
+            "scenery" => Ok(ZTEntityClass::Scenery),
+            "keeper" => Ok(ZTEntityClass::Keeper),
+            "maintenanceworker" => Ok(ZTEntityClass::MaintenanceWorker),
+            "tourguide" => Ok(ZTEntityClass::TourGuide),
+            "drt" => Ok(ZTEntityClass::Drt),
+            "ambient" => Ok(ZTEntityClass::Ambient),
+            "rubble" => Ok(ZTEntityClass::Rubble),
+            "tankwall" => Ok(ZTEntityClass::TankWall),
+            "tankfilter" => Ok(ZTEntityClass::TankFilter),
+            _ => Err(format!("Unknown entity type: {}", s)),
+        }
+    }
+}
+
 // TODO: Make this look like other structs with proper offsets and padding ->
 #[derive(Debug, Getters)]
 #[get = "pub"]
@@ -53,6 +79,18 @@ pub struct ZTEntity {
     name: String,
     pos1: u32,
     pos2: u32,
+}
+
+#[derive(Debug)]
+struct ZTEntityWithPtr {
+    ptr: u32,
+    entity: ZTEntity,
+}
+
+#[derive(Debug)]
+struct ZTEntityTypeWithPtr {
+    ptr: u32,
+    entity_type: ZTEntityType,
 }
 
 // Move to util or use existing implementation
@@ -98,18 +136,16 @@ impl Rectangle {
 #[derive(Debug, Getters)]
 #[get = "pub"]
 #[repr(C)]
-pub struct BFEntity {
+pub struct BFEntity { // Full size is 0x154 bytes
     vtable: u32,
     padding: [u8; 0x104],
     name: ZTBufferString,      // 0x108
-    x_coord: i32,              // 0x114
-    y_coord: i32,              // 0x118
-    z_coord: i32,              // 0x11c
+    pos: IVec3,              // 0x114
     height_above_terrain: u32, // 0x120
     padding4: [u8; 0x4],       // ----- padding: 4 bytes
     inner_class_ptr: u32,      // 0x128
     rotation: i32,             // 0x12c
-    padding5: [u8; 0x14],      // ----- padding: 28 bytes
+    padding_2: [u8; 0xc],      // ----- padding: 28 bytes
     unknown_flag1: u8,         // 0x13c // isRemoved
     unknown_flag2: u8,         // 0x13d // isRemovedUndo
     unknown_flag3: u8,         // 0x13e
@@ -121,6 +157,8 @@ pub struct BFEntity {
     draw_dithered: u8,         // 0x144
     unknown_flag6: u8,         // 0x145 // If != 0; Draw selection graphic
     stop_at_end: u8,           // 0x146
+    padding_3: [u8; 0x9],      // ----- padding: 10 bytes
+    map_footprint: i32,        // 0x150
 }
 
 impl fmt::Display for BFEntity {
@@ -128,19 +166,18 @@ impl fmt::Display for BFEntity {
         write!(
             f,
             "BFEntity {{ name: {}, x_coord: {}, y_coord: {}, z_coord: {}, height_above_terrain: {}, rotation: {}, inner_class_ptr: {:#x}, visible: {}, snap_to_ground: {}, selected: {}, draw_dithered: {} }}",
-            self.name, self.x_coord, self.y_coord, self.z_coord, self.height_above_terrain, self.rotation, self.inner_class_ptr, self.visible, self.snap_to_ground, self.selected, self.draw_dithered
+            self.name, self.pos.x, self.pos.y, self.pos.z, self.height_above_terrain, self.rotation, self.inner_class_ptr, self.visible, self.snap_to_ground, self.selected, self.draw_dithered
         )
     }
 }
 
 impl BFEntity {
     pub fn entity_type_class(&self) -> ZTEntityTypeClass {
-        // info!("Getting inner_class_ptr: {:#x} -> {:#x}", self.inner_class_ptr, get_from_memory::<u32>(self.inner_class_ptr));
         ZTEntityTypeClass::from(get_from_memory::<u32>(self.inner_class_ptr))
     }
 
-    pub fn entity_type(&self) -> BFEntityType {
-        get_from_memory(self.inner_class_ptr)
+    pub fn entity_type(&self) -> &'static BFEntityType {
+        unsafe { ref_from_memory(self.inner_class_ptr) }
     }
 
     // TODO: Hook this and check that it works
@@ -179,10 +216,10 @@ impl BFEntity {
 
         // Construct and return the rectangle
         Rectangle {
-            min_x: self.x_coord - half_width,
-            min_y: self.y_coord - half_height,
-            max_x: self.x_coord + half_width,
-            max_y: self.y_coord + half_height,
+            min_x: self.pos.x - half_width,
+            min_y: self.pos.y - half_height,
+            max_x: self.pos.x + half_width,
+            max_y: self.pos.y + half_height,
         }
     }
 
@@ -195,7 +232,7 @@ impl BFEntity {
         get_from_memory::<IVec3>(footprint_ptr)
     }
 
-    pub fn get_footprint(&self) -> IVec3 {
+    pub fn get_footprint(&self, _use_map_footprint: bool) -> IVec3 {
         let entity_type = self.entity_type();
         if self.rotation % 4 == 0 {
             IVec3 {
@@ -213,9 +250,135 @@ impl BFEntity {
     }
 
     pub fn get_tile(&self) -> Option<BFTile> {
-        globals().ztworldmgr().get_tile_from_coords(self.x_coord, self.y_coord)
+        globals().ztworldmgr().get_tile_from_coords(self.pos.x, self.pos.y)
     }
 }
+
+#[derive(Debug, Getters)]
+#[get = "pub"]
+#[repr(C)]
+struct BFUnit {
+    base: BFEntity, // bytes: 0x154 = 340 bytes
+    // TODO
+    padding: [u8; 0x214-0x154], // ----- padding: 192 bytes
+}
+
+
+impl std::ops::Deref for BFUnit {
+    type Target = BFEntity;
+    fn deref(&self) -> &BFEntity {
+        &self.base
+    }
+}
+
+impl std::ops::DerefMut for BFUnit {
+    fn deref_mut(&mut self) -> &mut BFEntity {
+        &mut self.base
+    }
+}
+
+#[derive(Debug, Getters)]
+#[get = "pub"]
+#[repr(C)]
+struct ZTUnit {
+    base: BFUnit, // bytes: 0x214 = 532 bytes
+    padding: [u8; 0x260-0x214], // ----- padding: 76 bytes
+}
+
+impl ZTUnit {
+
+    pub fn entity_type(&self) -> &'static ZTUnitType {
+        unsafe { ref_from_memory(self.inner_class_ptr) }
+    }
+
+    pub fn get_footprint(&self, use_map_footprint: bool) -> IVec3 {
+        if !use_map_footprint {
+            self.base.get_footprint(use_map_footprint)
+        } else {
+            IVec3 {
+                x: self.map_footprint as i32,
+                y: self.map_footprint as i32,
+                z: 0,
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for ZTUnit {
+    type Target = BFUnit;
+    fn deref(&self) -> &BFUnit {
+        &self.base
+    }
+}
+
+impl std::ops::DerefMut for ZTUnit {
+    fn deref_mut(&mut self) -> &mut BFUnit {
+        &mut self.base
+    }
+}
+
+#[derive(Debug, Getters)]
+#[get = "pub"]
+#[repr(C)]
+struct ZTAnimal {
+    base: ZTUnit,  // offset: 0x0000
+    _pad_0x0260: [u8; 300],
+    food_tile: *const BFTile,  // offset: 0x038c
+    _pad_0x0390: [u8; 4],
+    is_boxed: bool,  // offset: 0x0394
+    is_egg: bool,  // offset: 0x0395
+    _pad_0x0396: [u8; 6],
+    mbr_0x39c: u8,  // offset: 0x039c
+    mbr_0x3a0: u8,  // offset: 0x03a0
+    mbr_0x3a4: i8,  // offset: 0x03a4
+    mbr_0x3a5: i8,  // offset: 0x03a5
+    is_dying: bool,  // offset: 0x03a6
+    mbr_0x3a7: i8,  // offset: 0x03a7
+    mbr_0x3a8: u8,  // offset: 0x03a8
+    mbr_0x3ac: u8,  // offset: 0x03ac
+    mbr_0x3b0: u8,  // offset: 0x03b0
+    mbr_0x3b4: u8,  // offset: 0x03b4
+}
+
+impl ZTAnimal {
+
+    pub fn entity_type(&self) -> &'static ZTAnimalType {
+        unsafe { ref_from_memory(self.inner_class_ptr) }
+    }
+
+    pub fn get_footprint(&self, use_map_footprint: bool) -> IVec3 {
+        if !self.is_egg && !self.is_boxed {
+            return self.base.get_footprint(use_map_footprint);
+        }
+
+        let type_info = self.entity_type();
+        let footprint = if self.is_egg {
+            type_info.egg_footprint
+        } else {
+            type_info.box_footprint
+        };
+
+        if self.rotation % 4 == 0 {
+            IVec3 { x: footprint.y, y: footprint.x, z: footprint.z }
+        } else {
+            IVec3 { x: footprint.x, y: footprint.y, z: footprint.z }
+        }
+    }
+}
+
+impl std::ops::Deref for ZTAnimal {
+    type Target = ZTUnit;
+    fn deref(&self) -> &ZTUnit {
+        &self.base
+    }
+}
+
+impl std::ops::DerefMut for ZTAnimal {
+    fn deref_mut(&mut self) -> &mut ZTUnit {
+        &mut self.base
+    }
+}
+
 
 // ZTAnimal -> 0x3a6 = animalDying
 
@@ -387,6 +550,46 @@ impl ZTWorldMgr {
 }
 
 #[detour_mod]
+pub mod hooks_ztunit {
+    use super::*;
+
+    use crate::util::save_to_memory;
+    use openzt_detour::generated::ztunit::GET_FOOTPRINT;
+
+    #[detour(GET_FOOTPRINT)]
+    unsafe extern "thiscall" fn ztunit_get_footprint(_this: *const u32, param_1: *const u32, use_map_footprint: bool) -> *const u32 {
+        let entity = unsafe { ref_from_memory::<ZTUnit>(_this) };
+        let footprint: IVec3 = entity.get_footprint(use_map_footprint);
+
+        save_to_memory(param_1 as u32, footprint.x);
+        save_to_memory(param_1 as u32 + 0x4, footprint.y);
+        save_to_memory(param_1 as u32 + 0x8, footprint.z);
+
+        param_1
+    }
+}
+
+#[detour_mod]
+pub mod hooks_ztanimal {
+    use super::*;
+
+    use crate::util::save_to_memory;
+    use openzt_detour::generated::ztanimal::GET_FOOTPRINT;
+
+    #[detour(GET_FOOTPRINT)]
+    unsafe extern "thiscall" fn ztanimal_get_footprint(_this: *const u32, param_1: *const u32, use_map_footprint: bool) -> *const u32 {
+        let entity = unsafe { ref_from_memory::<ZTAnimal>(_this) };
+        let footprint: IVec3 = entity.get_footprint(use_map_footprint);
+
+        save_to_memory(param_1 as u32, footprint.x);
+        save_to_memory(param_1 as u32 + 0x4, footprint.y);
+        save_to_memory(param_1 as u32 + 0x8, footprint.z);
+
+        param_1
+    }
+}
+
+#[detour_mod]
 pub mod hooks_ztworldmgr {
     use crate::util::save_to_memory;
     use openzt_detour::generated::bfentity::{GET_BLOCKING_RECT, GET_BLOCKING_RECT_VIRT_ZTPATH, GET_FOOTPRINT, IS_ON_TILE};
@@ -407,9 +610,9 @@ pub mod hooks_ztworldmgr {
 
     // 0x0040f916 int * __thiscall OOAnalyzer::BFEntity::getFootprint(BFEntity *this,undefined4 *param_1)
     #[detour(GET_FOOTPRINT)]
-    unsafe extern "thiscall" fn bfentity_get_footprint(_this: *const u32, param_1: *const u32, _param_2: bool) -> *const u32 {
+    unsafe extern "thiscall" fn bfentity_get_footprint(_this: *const u32, param_1: *const u32, use_map_footprint: bool) -> *const u32 {
         let entity = unsafe { ref_from_memory::<BFEntity>(_this) };
-        let footprint = entity.get_footprint();
+        let footprint: IVec3 = entity.get_footprint(use_map_footprint);
         save_to_memory(param_1 as u32, footprint.x);
         save_to_memory(param_1 as u32 + 0x4, footprint.y);
         save_to_memory(param_1 as u32 + 0x8, footprint.z);
@@ -463,13 +666,16 @@ pub mod hooks_ztworldmgr {
 }
 
 pub fn init() {
-    // list_entities() - no args
-    lua_fn!("list_entities", "Lists all entities in the world", "list_entities()", || {
-        match command_get_zt_world_mgr_entities(vec![]) {
-            Ok(result) => Ok((Some(result), None::<String>)),
-            Err(e) => Ok((None::<String>, Some(e.to_string()))),
+    // list_entities([entity_type]) - optional arg
+    lua_fn!("list_entities", "Lists all entities in the world", "list_entities([entity_type])",
+        |entity_type: Option<String>| {
+            let args = entity_type.as_ref().map(|s| vec![s.as_str()]).unwrap_or_default();
+            match command_get_zt_world_mgr_entities(args) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
         }
-    });
+    );
 
     // list_entities_2() - no args
     lua_fn!("list_entities_2", "Lists all entities in the world (alternate format)", "list_entities_2()", || {
@@ -478,6 +684,40 @@ pub fn init() {
             Err(e) => Ok((None::<String>, Some(e.to_string()))),
         }
     });
+
+    // read_entity_offset(offset [, type] [, entity_type]) - required arg, optional type and filter
+    lua_fn!("read_entity_offset", "Read value at offset from entities (types: ptr, u32, i32, u16, i16, u8, i8, f32, bool)", "read_entity_offset(offset [, type] [, entity_type])",
+        |offset: String, type_arg: Option<String>, entity_type: Option<String>| {
+            let mut args = vec![offset.as_str()];
+            if let Some(t) = &type_arg {
+                args.push(t.as_str());
+            }
+            if let Some(et) = &entity_type {
+                args.push(et.as_str());
+            }
+            match command_read_entity_offset(args) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
+        }
+    );
+
+    // read_entity_type_offset(offset [, type] [, entity_type_class]) - required arg, optional type and filter
+    lua_fn!("read_entity_type_offset", "Read value at offset from entity types (types: ptr, u32, i32, u16, i16, u8, i8, f32, bool)", "read_entity_type_offset(offset [, type] [, entity_type_class])",
+        |offset: String, type_arg: Option<String>, entity_type_class: Option<String>| {
+            let mut args = vec![offset.as_str()];
+            if let Some(t) = &type_arg {
+                args.push(t.as_str());
+            }
+            if let Some(et) = &entity_type_class {
+                args.push(et.as_str());
+            }
+            match command_read_entity_type_offset(args) {
+                Ok(result) => Ok((Some(result), None::<String>)),
+                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            }
+        }
+    );
 
     // list_types() - no args
     lua_fn!("list_types", "Lists all entity types in the world", "list_types()", || {
@@ -529,7 +769,11 @@ pub fn init() {
         }
     );
 
-    unsafe { hooks_ztworldmgr::init_detours().unwrap() };
+    unsafe {
+        hooks_ztworldmgr::init_detours().unwrap();
+        hooks_ztunit::init_detours().unwrap();
+        hooks_ztanimal::init_detours().unwrap();
+    };
 }
 
 pub fn read_zt_entity_from_memory(zt_entity_ptr: u32) -> ZTEntity {
@@ -550,16 +794,184 @@ fn log_zt_world_mgr(zt_world_mgr: &ZTWorldMgr) {
     info!("zt_world_mgr: {:#?}", zt_world_mgr);
 }
 
-fn command_get_zt_world_mgr_entities(_args: Vec<&str>) -> Result<String, CommandError> {
+fn command_get_zt_world_mgr_entities(args: Vec<&str>) -> Result<String, CommandError> {
+    let filter = if args.len() > 1 {
+        return Err(CommandError::new("Too many arguments".to_string()));
+    } else if args.len() == 1 {
+        Some(args[0].parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?)
+    } else {
+        None
+    };
+
     let zt_world_mgr = globals().ztworldmgr();
     let entities = get_zt_world_mgr_entities(zt_world_mgr);
-    info!("Found {} entities", entities.len());
-    if entities.is_empty() {
+
+    let filtered: Vec<_> = if let Some(ref entity_type) = filter {
+        entities.iter().filter(|e| e.entity.class == *entity_type).collect()
+    } else {
+        entities.iter().collect()
+    };
+
+    info!("Found {} entities (filtered from {})", filtered.len(), entities.len());
+    if filtered.is_empty() {
         return Ok("No entities found".to_string());
     }
+
     let mut string_array = Vec::new();
-    for entity in entities {
-        string_array.push(entity.to_string());
+    for ewp in filtered {
+        string_array.push(ewp.entity.to_string());
+    }
+    Ok(string_array.join("\n"))
+}
+
+fn command_read_entity_offset(args: Vec<&str>) -> Result<String, CommandError> {
+    if args.len() < 1 || args.len() > 3 {
+        return Err(CommandError::new("Usage: read_entity_offset(offset [, type] [, entity_type])".to_string()));
+    }
+
+    // Parse offset
+    let offset = match args[0].strip_prefix("0x") {
+        Some(hex_str) => u32::from_str_radix(hex_str, 16).map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
+        None => args[0].parse::<u32>().map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
+    };
+
+    // Valid types
+    let valid_types = ["ptr", "u32", "i32", "u16", "i16", "u8", "i8", "f32", "bool"];
+
+    // Parse optional type and entity type filter
+    // args[1] could be either type or entity_type
+    // args[2] would be entity_type if args[1] was type
+    let (type_str, filter) = match args.len() {
+        1 => ("u32", None), // default
+        2 => {
+            // Check if args[1] is a valid type
+            if valid_types.contains(&args[1]) {
+                (args[1], None)
+            } else {
+                // args[1] is entity_type
+                ("u32", Some(args[1].parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?))
+            }
+        }
+        3 => {
+            // args[1] is type, args[2] is entity_type
+            if !valid_types.contains(&args[1]) {
+                return Err(CommandError::new(format!("Invalid type: {}. Valid types: {}", args[1], valid_types.join(", "))));
+            }
+            (args[1], Some(args[2].parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?))
+        }
+        _ => unreachable!(),
+    };
+
+    let zt_world_mgr = globals().ztworldmgr();
+    let entities = get_zt_world_mgr_entities(zt_world_mgr);
+
+    let filtered: Vec<_> = if let Some(ref entity_type) = filter {
+        entities.iter().filter(|e| e.entity.class == *entity_type).collect()
+    } else {
+        entities.iter().collect()
+    };
+
+    if filtered.is_empty() {
+        return Ok("No entities found".to_string());
+    }
+
+    let mut string_array = Vec::new();
+    for ewp in filtered {
+        let value_str = match type_str {
+            "ptr" => format!("{:#x}", get_from_memory::<u32>(ewp.ptr + offset)),
+            "u32" => format!("{}", get_from_memory::<u32>(ewp.ptr + offset)),
+            "i32" => format!("{}", get_from_memory::<i32>(ewp.ptr + offset)),
+            "u16" => format!("{}", get_from_memory::<u16>(ewp.ptr + offset)),
+            "i16" => format!("{}", get_from_memory::<i16>(ewp.ptr + offset)),
+            "u8" => format!("{}", get_from_memory::<u8>(ewp.ptr + offset)),
+            "i8" => format!("{}", get_from_memory::<i8>(ewp.ptr + offset)),
+            "f32" => format!("{}", get_from_memory::<f32>(ewp.ptr + offset)),
+            "bool" => format!("{}", get_from_memory::<bool>(ewp.ptr + offset)),
+            _ => unreachable!(),
+        };
+
+        if filter.is_some() {
+            // Filtered: addr, name, value only
+            string_array.push(format!("{:#x} | {} | {}", ewp.ptr, ewp.entity.name, value_str));
+        } else {
+            // No filter: mem address, entity name, type, value
+            string_array.push(format!("{:#x} | {} | {:?} | {}", ewp.ptr, ewp.entity.name, ewp.entity.class, value_str));
+        }
+    }
+    Ok(string_array.join("\n"))
+}
+
+fn command_read_entity_type_offset(args: Vec<&str>) -> Result<String, CommandError> {
+    if args.len() < 1 || args.len() > 3 {
+        return Err(CommandError::new("Usage: read_entity_type_offset(offset [, type] [, entity_type_class])".to_string()));
+    }
+
+    // Parse offset
+    let offset = match args[0].strip_prefix("0x") {
+        Some(hex_str) => u32::from_str_radix(hex_str, 16).map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
+        None => args[0].parse::<u32>().map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
+    };
+
+    // Valid types
+    let valid_types = ["ptr", "u32", "i32", "u16", "i16", "u8", "i8", "f32", "bool"];
+
+    // Parse optional type and entity type class filter
+    let (type_str, filter) = match args.len() {
+        1 => ("u32", None), // default
+        2 => {
+            // Check if args[1] is a valid type
+            if valid_types.contains(&args[1]) {
+                (args[1], None)
+            } else {
+                // args[1] is entity_type_class
+                ("u32", Some(args[1].parse::<ZTEntityTypeClass>().map_err(|e| CommandError::new(e))?))
+            }
+        }
+        3 => {
+            // args[1] is type, args[2] is entity_type_class
+            if !valid_types.contains(&args[1]) {
+                return Err(CommandError::new(format!("Invalid type: {}. Valid types: {}", args[1], valid_types.join(", "))));
+            }
+            (args[1], Some(args[2].parse::<ZTEntityTypeClass>().map_err(|e| CommandError::new(e))?))
+        }
+        _ => unreachable!(),
+    };
+
+    let zt_world_mgr = globals().ztworldmgr();
+    let entity_types = get_zt_world_mgr_types(zt_world_mgr);
+
+    let filtered: Vec<_> = if let Some(ref entity_type_class) = filter {
+        entity_types.iter().filter(|et| et.entity_type.class == *entity_type_class).collect()
+    } else {
+        entity_types.iter().collect()
+    };
+
+    if filtered.is_empty() {
+        return Ok("No entity types found".to_string());
+    }
+
+    let mut string_array = Vec::new();
+    for etwp in filtered {
+        let value_str = match type_str {
+            "ptr" => format!("{:#x}", get_from_memory::<u32>(etwp.ptr + offset)),
+            "u32" => format!("{}", get_from_memory::<u32>(etwp.ptr + offset)),
+            "i32" => format!("{}", get_from_memory::<i32>(etwp.ptr + offset)),
+            "u16" => format!("{}", get_from_memory::<u16>(etwp.ptr + offset)),
+            "i16" => format!("{}", get_from_memory::<i16>(etwp.ptr + offset)),
+            "u8" => format!("{}", get_from_memory::<u8>(etwp.ptr + offset)),
+            "i8" => format!("{}", get_from_memory::<i8>(etwp.ptr + offset)),
+            "f32" => format!("{}", get_from_memory::<f32>(etwp.ptr + offset)),
+            "bool" => format!("{}", get_from_memory::<bool>(etwp.ptr + offset)),
+            _ => unreachable!(),
+        };
+
+        if filter.is_some() {
+            // Filtered: addr, type, subtype, value only
+            string_array.push(format!("{:#x} | {} | {} | {}", etwp.ptr, etwp.entity_type.zt_type, etwp.entity_type.zt_sub_type, value_str));
+        } else {
+            // No filter: mem address, type, subtype, class, value
+            string_array.push(format!("{:#x} | {} | {} | {:?} | {}", etwp.ptr, etwp.entity_type.zt_type, etwp.entity_type.zt_sub_type, etwp.entity_type.class, value_str));
+        }
     }
     Ok(string_array.join("\n"))
 }
@@ -596,7 +1008,7 @@ fn command_get_entity_unique_vtable_entries(args: Vec<&str>) -> Result<String, C
 
     entities
         .iter()
-        .map(|entity| (entity.type_class.class.clone(), entity.vtable + vtable_offset))
+        .map(|ewp| (ewp.entity.type_class.class.clone(), ewp.entity.vtable + vtable_offset))
         .unique_by(|t| t.1)
         .for_each(|(type_name, vfunc_ptr)| {
             result.push_str(&format!("{:?} -> {:#x}\n", type_name, get_from_memory::<u32>(vfunc_ptr)));
@@ -616,13 +1028,13 @@ fn command_get_entity_type_unique_vtable_entries(args: Vec<&str>) -> Result<Stri
     };
 
     let zt_world_mgr = globals().ztworldmgr();
-    let entities = get_zt_world_mgr_types(zt_world_mgr);
+    let entity_types = get_zt_world_mgr_types(zt_world_mgr);
 
     let mut result = String::new();
 
-    entities
+    entity_types
         .iter()
-        .map(|entity_type| (entity_type.class.clone(), entity_type.vtable + vtable_offset))
+        .map(|etwp| (etwp.entity_type.class.clone(), etwp.entity_type.vtable + vtable_offset))
         .unique_by(|t| t.1)
         .for_each(|(type_name, vfunc_ptr)| {
             result.push_str(&format!("{:?} -> {:#x}\n", type_name, get_from_memory::<u32>(vfunc_ptr)));
@@ -639,8 +1051,8 @@ fn command_get_zt_world_mgr_types(_args: Vec<&str>) -> Result<String, CommandErr
         return Ok("No types found".to_string());
     }
     let mut string_array = Vec::new();
-    for zt_type in types {
-        string_array.push(zt_type.to_string());
+    for etwp in types {
+        string_array.push(etwp.entity_type.to_string());
     }
     Ok(string_array.join("\n"))
 }
@@ -658,9 +1070,9 @@ fn command_zt_world_mgr_types_summary(_args: Vec<&str>) -> Result<String, Comman
     if types.is_empty() {
         return Ok("No types found".to_string());
     }
-    let mut current_class = types[0].class.clone();
-    for zt_type in types {
-        if current_class != zt_type.class {
+    let mut current_class = types[0].entity_type.class.clone();
+    for etwp in types {
+        if current_class != etwp.entity_type.class {
             let mut string_array = Vec::new();
             let mut total = 0;
             for (class, count) in subtype {
@@ -670,24 +1082,25 @@ fn command_zt_world_mgr_types_summary(_args: Vec<&str>) -> Result<String, Comman
             summary.push_str(&format!("{:?}: ({})\n{}\n", current_class, total, string_array.join("\n")));
             info!("{:?}: ({})\n{}", current_class, total, string_array.join("\n"));
             subtype = HashMap::new();
-            current_class = zt_type.class.clone();
+            current_class = etwp.entity_type.class.clone();
         }
-        info!("{:?}, {}", current_class, zt_type.zt_type);
-        let count = subtype.entry(zt_type.zt_type).or_insert(0);
+        info!("{:?}, {}", current_class, etwp.entity_type.zt_type);
+        let count = subtype.entry(etwp.entity_type.zt_type.clone()).or_insert(0);
         *count += 1;
     }
     Ok(summary)
 }
 
-fn get_zt_world_mgr_entities(zt_world_mgr: &ZTWorldMgr) -> Vec<ZTEntity> {
+fn get_zt_world_mgr_entities(zt_world_mgr: &ZTWorldMgr) -> Vec<ZTEntityWithPtr> {
     let entity_array_start = zt_world_mgr.entity_array_start;
     let entity_array_end = zt_world_mgr.entity_array_end;
 
-    let mut entities: Vec<ZTEntity> = Vec::new();
+    let mut entities: Vec<ZTEntityWithPtr> = Vec::new();
     let mut i = entity_array_start;
     while i < entity_array_end {
-        let zt_entity = read_zt_entity_from_memory(get_from_memory::<u32>(i));
-        entities.push(zt_entity);
+        let entity_ptr = get_from_memory::<u32>(i);
+        let zt_entity = read_zt_entity_from_memory(entity_ptr);
+        entities.push(ZTEntityWithPtr { ptr: entity_ptr, entity: zt_entity });
         i += 0x4;
     }
     entities
@@ -707,16 +1120,17 @@ fn get_zt_world_mgr_entities_2(zt_world_mgr: &ZTWorldMgr) -> Vec<BFEntity> {
     entities
 }
 
-fn get_zt_world_mgr_types(zt_world_mgr: &ZTWorldMgr) -> Vec<ZTEntityType> {
+fn get_zt_world_mgr_types(zt_world_mgr: &ZTWorldMgr) -> Vec<ZTEntityTypeWithPtr> {
     let entity_type_array_start = zt_world_mgr.entity_type_array_start;
     let entity_type_array_end = zt_world_mgr.entity_type_array_end;
 
-    let mut entity_types: Vec<ZTEntityType> = Vec::new();
+    let mut entity_types: Vec<ZTEntityTypeWithPtr> = Vec::new();
     let mut i = entity_type_array_start;
     while i < entity_type_array_end {
-        info!("Reading entity at {:#x} -> {:#x}", i, get_from_memory::<u32>(i));
-        let zt_entity_type = read_zt_entity_type_from_memory(get_from_memory::<u32>(i));
-        entity_types.push(zt_entity_type);
+        let type_ptr = get_from_memory::<u32>(i);
+        info!("Reading entity at {:#x} -> {:#x}", i, type_ptr);
+        let zt_entity_type = read_zt_entity_type_from_memory(type_ptr);
+        entity_types.push(ZTEntityTypeWithPtr { ptr: type_ptr, entity_type: zt_entity_type });
         i += 0x4;
     }
     entity_types
@@ -740,7 +1154,8 @@ pub fn get_entity_type_by_id(id: u32) -> u32 {
     // let overlay_types: HashSet<&str> = ["Ambient"].iter().cloned().collect();
 
     while i > 0 {
-        let entity_type_ptr = entity_type_array_start + i * 0x4;
+        let array_entry = entity_type_array_start + i * 0x4;
+        let entity_type_ptr = get_from_memory::<u32>(array_entry);
         info!("Checking entity type at {:#x}", entity_type_ptr);
         let entity_type = map_from_memory::<ZTSceneryType>(entity_type_ptr);
         info!("Entity type name id: {}", entity_type.name_id);
