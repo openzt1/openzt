@@ -10,6 +10,7 @@ pub struct Instance {
     pub status: InstanceStatus,
     pub created_at: DateTime<Utc>,
     pub config: InstanceConfig,
+    pub script_files: Vec<String>,  // Track script filenames for cleanup
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,15 +39,36 @@ pub struct InstanceConfig {
     pub wine_debug_level: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpulimit: Option<f64>,  // CPU cores (e.g., 0.5 = 50%, 2.0 = 2 cores)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate_detours: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetourResult {
+    pub name: String,
+    pub called: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetourTestResults {
+    pub instance_id: String,
+    pub results: Vec<DetourResult>,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptFile {
+    pub filename: String,
+    pub content: String,  // base64-encoded Lua file content
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateInstanceRequest {
     pub openzt_dll: String,
     #[serde(default)]
-    pub mods: Vec<String>,
-    #[serde(default)]
     pub config: Option<InstanceConfig>,
+    #[serde(default)]
+    pub scripts: Vec<ScriptFile>,  // Scripts to upload at creation time
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,21 +122,6 @@ impl AppLogType {
             AppLogType::IntegrationTests => "openzt_integration_tests.log",
         }
     }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            AppLogType::Openzt => "openzt",
-            AppLogType::IntegrationTests => "integration-tests",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "openzt" => Some(AppLogType::Openzt),
-            "integration-tests" => Some(AppLogType::IntegrationTests),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -128,4 +135,17 @@ pub struct LogsResponse {
 pub struct InstanceStatusResponse {
     pub id: String,
     pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UploadScriptRequest {
+    pub script_content: String,  // base64-encoded Lua file content
+    pub filename: String,         // script filename (e.g., "detour.lua")
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UploadScriptResponse {
+    pub instance_id: String,
+    pub filename: String,
+    pub path: String,  // Full path where script was uploaded
 }

@@ -1,7 +1,8 @@
 use super::{
     instance::{
-        AppLogType, CreateInstanceRequest, CreateInstanceResponse, Instance,
-        InstanceDetails, InstanceStatus, LogsResponse, InstanceStatusResponse,
+        AppLogType, CreateInstanceRequest, CreateInstanceResponse, DetourResult,
+        DetourTestResults, Instance, InstanceDetails, InstanceStatus, LogsResponse,
+        InstanceStatusResponse, UploadScriptRequest, UploadScriptResponse,
     },
     state::AppState,
 };
@@ -34,6 +35,8 @@ pub fn create_router() -> Router<Arc<RwLock<AppState>>> {
         .route("/api/instances/{id}/stop", post(stop_instance))
         .route("/api/instances/{id}/start", post(start_instance))
         .route("/api/instances/{id}/restart", post(restart_instance))
+        .route("/api/instances/{id}/detour-results", get(get_detour_results))
+        .route("/api/instances/{id}/scripts", post(upload_script))
 }
 
 async fn health_check() -> &'static str {
@@ -65,6 +68,23 @@ async fn create_instance(
             ApiError::InvalidDll(e.to_string())
         })?;
 
+    // Write scripts to temp directory if provided
+    let (scripts_dir, script_filenames) = if !req.scripts.is_empty() {
+        let dir = super::docker::ensure_scripts_dir(&instance_id)
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+        let mut filenames = Vec::new();
+        for script in &req.scripts {
+            super::docker::write_script_to_temp(&instance_id, &script.filename, &script.content)
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+            filenames.push(script.filename.clone());
+        }
+
+        (Some(dir.to_string_lossy().to_string()), filenames)
+    } else {
+        (None, Vec::new())
+    };
+
     // Create instance record
     let instance = Instance {
         id: instance_id.clone(),
@@ -74,6 +94,7 @@ async fn create_instance(
         status: InstanceStatus::Creating,
         created_at: Utc::now(),
         config: req.config.unwrap_or_default(),
+        script_files: script_filenames,
     };
 
     {
@@ -89,6 +110,7 @@ async fn create_instance(
     // Create Docker container (background task)
     let state_clone = state.clone();
     let instance_id_clone = instance_id.clone();
+    let scripts_dir_clone = scripts_dir.clone();
     tokio::spawn(async move {
         if let Err(e) = create_container_task(
             state_clone.clone(),
@@ -97,18 +119,26 @@ async fn create_instance(
             vnc_port,
             console_port,
             dll_path.clone(),
+            scripts_dir_clone,
         )
         .await
         {
-            tracing::error!("Failed to create container for instance {}: {}", instance_id_clone, e);
+            let error_msg = format!("{:?}", e); // Use debug format to show full error chain
+            tracing::error!("Failed to create container for instance {}:\n{}", instance_id_clone, error_msg);
 
             // Clean up temp DLL file
             super::docker::cleanup_dll_temp(&instance_id_clone);
 
+            // Clean up temp script files
+            super::docker::cleanup_scripts_temp(&instance_id_clone);
+
             // Update instance status to error and release ports
             let mut state_guard = state_clone.write().await;
             if let Some(instance) = state_guard.instances.get_mut(&instance_id_clone) {
-                instance.status = InstanceStatus::Error(e.to_string());
+                tracing::info!("Updating instance {} status to Error", instance_id_clone);
+                instance.status = InstanceStatus::Error(error_msg.clone());
+            } else {
+                tracing::error!("Instance {} not found in state map when trying to set error status", instance_id_clone);
             }
             state_guard.port_pool.release_pair(vnc_port, console_port);
         }
@@ -130,6 +160,7 @@ async fn create_container_task(
     vnc_port: u16,
     console_port: u16,
     dll_path: String,
+    scripts_dir: Option<String>,
 ) -> anyhow::Result<()> {
     let docker_manager = super::docker::DockerManager::new()?;
 
@@ -156,7 +187,7 @@ async fn create_container_task(
 
     // Create container
     let container_id = match docker_manager
-        .create_container(&container_name, &image, vnc_port, console_port, &dll_path, &instance_config)
+        .create_container(&container_name, &image, vnc_port, console_port, &dll_path, scripts_dir.as_deref(), &instance_config)
         .await
     {
         Ok(id) => id,
@@ -216,7 +247,10 @@ async fn list_instances(
             match docker_manager.refresh_instance_status(container_id).await {
                 Ok(Some(status)) => {
                     if let Some(inst) = state_guard.instances.get_mut(id) {
-                        inst.status = status;
+                        // Don't overwrite Error statuses - they represent permanent failures
+                        if !matches!(inst.status, InstanceStatus::Error(_)) {
+                            inst.status = status;
+                        }
                     }
                 }
                 Ok(None) => {
@@ -318,6 +352,9 @@ async fn delete_instance(
 
     // Clean up temp DLL file
     super::docker::cleanup_dll_temp(&id);
+
+    // Clean up temp script files
+    super::docker::cleanup_scripts_temp(&id);
 
     // Remove instance and release ports
     {
@@ -572,12 +609,129 @@ async fn restart_instance(
     }))
 }
 
+async fn get_detour_results(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(id): Path<String>,
+) -> Result<Json<DetourTestResults>, ApiError> {
+    let (container_id, validate_detours) = {
+        let state_guard = state.read().await;
+        let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+        let detours = instance.config.validate_detours.clone().ok_or_else(|| {
+            ApiError::Internal(
+                "No detours configured for this instance. Use --validate-detours when creating."
+                    .to_string(),
+            )
+        })?;
+        if detours.is_empty() {
+            return Err(ApiError::Internal(
+                "No detours configured for this instance".to_string(),
+            ));
+        }
+        (instance.container_id.clone(), detours)
+    };
+
+    if container_id.is_empty() {
+        return Err(ApiError::Internal("Container not yet created".to_string()));
+    }
+
+    let docker_manager = super::docker::DockerManager::new()?;
+    // Read the full openzt.log (large tail to get everything)
+    let log_content = docker_manager
+        .get_app_logs(&container_id, AppLogType::Openzt, 1_000_000)
+        .await?;
+
+    // Collect all DETOUR_CALLED names from the log.
+    // Log lines are structured tracing output, e.g.:
+    //   2026-03-07T04:15:33Z  INFO openzt_detour::...: DETOUR_CALLED: ztworldmgr/create
+    let called: std::collections::HashSet<String> = log_content
+        .lines()
+        .filter_map(|line| {
+            let marker = "DETOUR_CALLED: ";
+            line.find(marker).map(|pos| line[pos + marker.len()..].trim().to_string())
+        })
+        .collect();
+
+    let results: Vec<DetourResult> = validate_detours
+        .iter()
+        .map(|name| DetourResult {
+            name: name.clone(),
+            called: called.contains(name.as_str()),
+        })
+        .collect();
+
+    let passed = results.iter().all(|r| r.called);
+
+    Ok(Json(DetourTestResults {
+        instance_id: id,
+        results,
+        passed,
+    }))
+}
+
+async fn upload_script(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(id): Path<String>,
+    Json(req): Json<UploadScriptRequest>,
+) -> Result<Json<UploadScriptResponse>, ApiError> {
+    let (container_id, instance_id_full) = {
+        let state_guard = state.read().await;
+        let instance = state_guard.instances.get(&id).ok_or(ApiError::NotFound)?;
+
+        if !matches!(instance.status, InstanceStatus::Running) {
+            return Err(ApiError::BadRequest("Instance must be running to upload scripts".to_string()));
+        }
+
+        (instance.container_id.clone(), id.clone())
+    };
+
+    if container_id.is_empty() {
+        return Err(ApiError::Internal("Container not yet created".to_string()));
+    }
+
+    // Write script to temp
+    let script_path = super::docker::write_script_to_temp(
+        &instance_id_full,
+        &req.filename,
+        &req.script_content,
+    ).map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // Copy to container using docker cp
+    let zt_scripts_path = "/home/wineuser/.wine/drive_c/Program Files (x86)/Microsoft Games/Zoo Tycoon/scripts";
+    let container_path = format!("{}/{}", zt_scripts_path, req.filename);
+
+    let docker_mgr = super::docker::DockerManager::new()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    docker_mgr.cp_to_container(&container_id, &script_path, &container_path)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    // Track for cleanup
+    {
+        let mut state_guard = state.write().await;
+        if let Some(instance) = state_guard.instances.get_mut(&instance_id_full) {
+            if !instance.script_files.contains(&req.filename) {
+                instance.script_files.push(req.filename.clone());
+            }
+        }
+    }
+
+    tracing::info!("Uploaded script {} to instance {}", req.filename, instance_id_full);
+
+    Ok(Json(UploadScriptResponse {
+        instance_id: instance_id_full,
+        filename: req.filename,
+        path: container_path,
+    }))
+}
+
 #[derive(Debug)]
 pub enum ApiError {
     NotFound,
     PortsExhausted,
     MaxInstancesReached,
     InvalidDll(String),
+    BadRequest(String),
     Internal(String),
 }
 
@@ -596,6 +750,7 @@ impl IntoResponse for ApiError {
                 (StatusCode::SERVICE_UNAVAILABLE, "Maximum instances reached".to_string())
             }
             ApiError::InvalidDll(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 

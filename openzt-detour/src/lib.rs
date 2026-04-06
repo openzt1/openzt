@@ -6,7 +6,7 @@ pub mod generated;
 
 pub struct FunctionDef<T> {
     pub address: u32,
-    function_type: PhantomData<T>,
+    pub function_type: PhantomData<T>,
 }
 
 impl<T> FunctionDef<T>
@@ -28,3 +28,12 @@ where
         unsafe { ::retour::Function::from_ptr(self.address as *const ()) }
     }
 }
+
+#[cfg(feature = "detour-validation")]
+pub struct ValidationEntry {
+    pub name: &'static str,
+    pub enable: fn() -> retour::Result<()>,
+}
+
+#[cfg(feature = "detour-validation")]
+inventory::collect!(ValidationEntry);

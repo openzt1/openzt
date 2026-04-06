@@ -1,0 +1,17 @@
+# Testing constraints
+[testing]
+max_parallel_instances = 10  # Maximum instances to test at once
+dll_path = "F:/RustroverProjects/openzt/target/i686-pc-windows-msvc/release/openzt.dll"
+test_script_path = "F:/RustroverProjects/openzt/openzt/scripts/auto_test_detours.lua"
+results_csv_path = "F:/RustroverProjects/openzt/detour_test_results.csv"
+
+# OpenZT Instance Manager endpoints
+# Multiple endpoints allow distributing load across servers
+[[endpoints]]
+url = "http://localhost:3000"
+max_instances = 5  # Max instances this endpoint can support
+
+# Test execution settings
+[execution]
+test_timeout_seconds = 180  # Total time to wait for test completion (startup + test + shutdown)
+poll_interval_seconds = 5   # How often to check instance/detour status

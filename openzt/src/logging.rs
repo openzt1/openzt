@@ -237,6 +237,10 @@ pub struct LoggingConfig {
     /// Log level (default: Warn)
     #[serde(default)]
     pub level: LogLevel,
+
+    /// Log command execution results to openzt.log (default: false, overridden to true when detour-validation enabled)
+    #[serde(default)]
+    pub log_command_output: bool,
 }
 
 /// Log level setting for OpenZT logging
@@ -270,6 +274,7 @@ impl Default for LoggingConfig {
         LoggingConfig {
             log_to_file: true,
             level: LogLevel::Warn,
+            log_command_output: false,
         }
     }
 }
