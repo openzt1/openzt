@@ -82,6 +82,7 @@ pub struct BFEntityType {
     pub zt_type: ZTBoundedString,     // 0x098
     pub zt_sub_type: ZTBoundedString, // 0x0A4
     pad10: [u8; 0x0B4 - 0x0A8],       // ----------------------- padding: 4 bytes
+    // pad10: [u8; 0x0B4 - 0x0B0],       // ----------------------- padding: 4 bytes
     pub footprintx: i32,              // 0x0B4
     pub footprinty: i32,              // 0x0B8
     pub footprintz: i32,              // 0x0BC
@@ -758,12 +759,17 @@ pub struct BFUnitType {
     pad0: [u8; 0x114 - 0x112],  // ----------------------- padding: 2 bytes
     pub min_height: u32,        // 0x114 <--- unsure if accurate
     pub max_height: u32,        // 0x118 <--- unsure if accurate
+    pad1: [u8; 0x12C - 0x11C],        // ----------------------- padding: 16 bytes
+    pub purchase_cost: f32,           // 0x12C
+    pub name_id: i32,                 // 0x130
+    pub help_id: i32,                 // 0x134
+    pad2: [u8; 0x144 - 0x138],        // ----------------------- padding: 16 bytes
 }
 
 impl EntityType for BFUnitType {
     fn print_config_integers(&self) -> String {
         format!(
-            "{}\ncSlowRate: {}\ncMediumRate: {}\ncFastRate: {}\ncSlowAnimSpeed: {}\ncMediumAnimSpeed: {}\ncFastAnimSpeed: {}\ncMinHeight: {}\ncMaxHeight: {}\n",
+            "{}\ncSlowRate: {}\ncMediumRate: {}\ncFastRate: {}\ncSlowAnimSpeed: {}\ncMediumAnimSpeed: {}\ncFastAnimSpeed: {}\ncMinHeight: {}\ncMaxHeight: {}\ncPurchaseCost: {}\ncNameID: {}\ncHelpID: {}\n",
             self.bfentitytype.print_config_integers(),
             self.slow_rate,
             self.medium_rate,
@@ -773,6 +779,9 @@ impl EntityType for BFUnitType {
             self.fast_anim_speed,
             self.min_height,
             self.max_height,
+            self.purchase_cost,
+            self.name_id,
+            self.help_id,
         )
     }
 
@@ -802,23 +811,18 @@ impl Deref for BFUnitType {
 #[repr(C)]
 pub struct ZTUnitType {
     #[deref_field]
-    pub bfunit_type: BFUnitType, // bytes: 0x11C - 0x100 = 0x1C = 28 bytes
-    pad0: [u8; 0x12C - 0x11C],        // ----------------------- padding: 16 bytes
-    pub purchase_cost: f32,           // 0x12C
-    pub name_id: i32,                 // 0x130
-    pub help_id: i32,                 // 0x134
-    pad1: [u8; 0x150 - 0x138],        // ----------------------- padding: 24 bytes
+    pub bfunit_type: BFUnitType, // bytes: 0x144 - 0x100 = 0x44 = 68 bytes
+    pad1: [u8; 0x150 - 0x144],        // ----------------------- padding: 24 bytes
     pub map_footprint: i32,           // 0x150
     pub slow_anim_speed_water: u16,   // 0x154
     pub medium_anim_speed_water: u16, // 0x156
     pub fast_anim_speed_water: u16,   // 0x158
-    pad2: [u8; 0x17C - 0x15C],        // ----------------------- padding: 32 bytes
+    pad2: [u8; 0x17C - 0x15A],        // ----------------------- padding: 32 bytes
     // pub list_image_name: String,    // 0x168 TODO: fix offset for string getters in unittype
     pub swims: bool,               // 0x17C
     pub surface: bool,             // 0x17D
     pub underwater: bool,          // 0x17E
     pub only_underwater: bool,     // 0x17F
-    pad3: [u8; 0x180 - 0x17F],     // ----------------------- padding: 1 byte
     pub skip_trick_happiness: u32, // 0x180 TODO: potentially not accurate
     pub skip_trick_chance: i32,    // 0x184
 }
@@ -832,11 +836,8 @@ impl ZTUnitType {
 
 impl EntityType for ZTUnitType {
     fn print_config_integers(&self) -> String {
-        format!("{}\ncPurchaseCost: {}\ncNameID: {}\ncHelpID: {}\ncMapFootprint: {}\ncSlowAnimSpeedWater: {}\ncMediumAnimSpeedWater: {}\ncFastAnimSpeedWater: {}\ncSwims: {}\ncSurface: {}\ncUnderwater: {}\ncOnlyUnderwater: {}\ncSkipTrickHappiness: {}\ncSkipTrickChance: {}\n",
+        format!("{}\ncMapFootprint: {}\ncSlowAnimSpeedWater: {}\ncMediumAnimSpeedWater: {}\ncFastAnimSpeedWater: {}\ncSwims: {}\ncSurface: {}\ncUnderwater: {}\ncOnlyUnderwater: {}\ncSkipTrickHappiness: {}\ncSkipTrickChance: {}\n",
                 self.bfunit_type.print_config_integers(),
-                self.purchase_cost,
-                self.name_id,
-                self.help_id,
                 self.map_footprint,
                 self.slow_anim_speed_water,
                 self.medium_anim_speed_water,

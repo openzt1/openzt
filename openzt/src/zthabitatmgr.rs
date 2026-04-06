@@ -152,6 +152,10 @@ impl ZTHabitat {
     pub fn is_tank(&self) -> bool {
         self.vtable == Self::TANK_VTABLE_PTR
     }
+
+    pub fn is_show_tank(&self) -> bool {
+        self.zt_show_info_ptr != 0
+    }
 }
 
 impl PartialEq for ZTHabitat {

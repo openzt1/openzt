@@ -252,12 +252,48 @@ impl BFEntity {
     pub fn get_tile(&self) -> Option<BFTile> {
         globals().ztworldmgr().get_tile_from_coords(self.pos.x, self.pos.y)
     }
+
+    pub fn check_avoid_edges(&self, tile: &BFTile) -> bool {
+        let radius = self.entity_type().avoid_edges - 1;
+
+        if radius < 0 {
+            return false;
+        }
+
+        if radius == 0 {
+            return tile.north_fence != 0 || tile.east_fence != 0 || tile.south_fence != 0 || tile.west_fence != 0
+        }
+
+        // Check all tiles in a square of `radius` around the placement tile
+        let world_mgr = globals().ztworldmgr();
+
+        let x_min = tile.pos.x - radius as i32;
+        let x_max = tile.pos.x + radius as i32;
+        let y_min = tile.pos.y - radius as i32;
+        let y_max = tile.pos.y + radius as i32;
+
+        for check_x in x_min..=x_max {
+            for check_y in y_min..=y_max {
+                // Bounds check — skip tiles outside the map
+                if check_x < 0 || check_y < 0 || check_x >= world_mgr.map_x_size as i32 || check_y >= world_mgr.map_y_size as i32 {
+                    continue;
+                }
+
+                if let Some(tile) = world_mgr.get_tile_from_coords(check_x, check_y) {
+                    if tile.north_fence != 0 || tile.east_fence != 0 || tile.south_fence != 0 || tile.west_fence != 0 {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 #[derive(Debug, Getters)]
 #[get = "pub"]
 #[repr(C)]
-struct BFUnit {
+pub(crate) struct BFUnit {
     base: BFEntity, // bytes: 0x154 = 340 bytes
     // TODO
     padding: [u8; 0x214-0x154], // ----- padding: 192 bytes
@@ -280,7 +316,7 @@ impl std::ops::DerefMut for BFUnit {
 #[derive(Debug, Getters)]
 #[get = "pub"]
 #[repr(C)]
-struct ZTUnit {
+pub(crate) struct ZTUnit {
     base: BFUnit, // bytes: 0x214 = 532 bytes
     padding: [u8; 0x260-0x214], // ----- padding: 76 bytes
 }
@@ -320,7 +356,7 @@ impl std::ops::DerefMut for ZTUnit {
 #[derive(Debug, Getters)]
 #[get = "pub"]
 #[repr(C)]
-struct ZTAnimal {
+pub(crate) struct ZTAnimal {
     base: ZTUnit,  // offset: 0x0000
     _pad_0x0260: [u8; 300],
     food_tile: *const BFTile,  // offset: 0x038c
@@ -408,8 +444,8 @@ impl fmt::Display for ZTEntity {
 #[repr(C)]
 pub struct ZTWorldMgr {
     padding_1: [u8; 0x34],
-    map_x_size: u32,
-    map_y_size: u32,
+    pub map_x_size: u32,
+    pub map_y_size: u32,
     padding_2: [u8; 0x4],
     tile_array: u32,
     padding_3: [u8; 0x3c],
@@ -685,34 +721,22 @@ pub fn init() {
         }
     });
 
-    // read_entity_offset(offset [, type] [, entity_type]) - required arg, optional type and filter
-    lua_fn!("read_entity_offset", "Read value at offset from entities (types: ptr, u32, i32, u16, i16, u8, i8, f32, bool)", "read_entity_offset(offset [, type] [, entity_type])",
-        |offset: String, type_arg: Option<String>, entity_type: Option<String>| {
-            let mut args = vec![offset.as_str()];
-            if let Some(t) = &type_arg {
-                args.push(t.as_str());
-            }
-            if let Some(et) = &entity_type {
-                args.push(et.as_str());
-            }
-            match command_read_entity_offset(args) {
+    // read_entity_offset(offsets..., types..., [entity_type]) - offsets (1 or more), types (1 or same count as offsets), optional entity type filter
+    lua_fn!("read_entity_offset", "Read value(s) at offset(s) from entities. Offsets: one or more. Types: one (applied to all) or same count as offsets. Optional: entity_type filter. (types: ptr, u32, i32, u16, i16, u8, i8, f32, bool)", "read_entity_offset(offsets..., [types...], [entity_type])",
+        |args: mlua::Variadic<String>| {
+            let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            match command_read_entity_offset(str_args) {
                 Ok(result) => Ok((Some(result), None::<String>)),
                 Err(e) => Ok((None::<String>, Some(e.to_string()))),
             }
         }
     );
 
-    // read_entity_type_offset(offset [, type] [, entity_type_class]) - required arg, optional type and filter
-    lua_fn!("read_entity_type_offset", "Read value at offset from entity types (types: ptr, u32, i32, u16, i16, u8, i8, f32, bool)", "read_entity_type_offset(offset [, type] [, entity_type_class])",
-        |offset: String, type_arg: Option<String>, entity_type_class: Option<String>| {
-            let mut args = vec![offset.as_str()];
-            if let Some(t) = &type_arg {
-                args.push(t.as_str());
-            }
-            if let Some(et) = &entity_type_class {
-                args.push(et.as_str());
-            }
-            match command_read_entity_type_offset(args) {
+    // read_entity_type_offset(offsets..., types..., [entity_type_class]) - offsets (1 or more), types (1 or same count as offsets), optional entity type class filter
+    lua_fn!("read_entity_type_offset", "Read value(s) at offset(s) from entity types. Offsets: one or more. Types: one (applied to all) or same count as offsets. Optional: entity_type_class filter. (types: ptr, u32, i32, u16, i16, u8, i8, f32, bool)", "read_entity_type_offset(offsets..., [types...], [entity_type_class])",
+        |args: mlua::Variadic<String>| {
+            let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            match command_read_entity_type_offset(str_args) {
                 Ok(result) => Ok((Some(result), None::<String>)),
                 Err(e) => Ok((None::<String>, Some(e.to_string()))),
             }
@@ -824,42 +848,138 @@ fn command_get_zt_world_mgr_entities(args: Vec<&str>) -> Result<String, CommandE
     Ok(string_array.join("\n"))
 }
 
-fn command_read_entity_offset(args: Vec<&str>) -> Result<String, CommandError> {
-    if args.len() < 1 || args.len() > 3 {
-        return Err(CommandError::new("Usage: read_entity_offset(offset [, type] [, entity_type])".to_string()));
+// Helper struct for offset reads
+#[derive(Clone)]
+struct OffsetRead {
+    offset: u32,
+    type_str: String,
+}
+
+// Helper function to parse offset and type strings into OffsetRead structs
+fn parse_offset_reads(
+    offset_strs: &[&str],
+    type_strs: &[&str],
+    valid_types: &[&str],
+) -> Result<Vec<OffsetRead>, CommandError> {
+    if offset_strs.is_empty() {
+        return Err(CommandError::new("At least one offset must be provided".to_string()));
     }
 
-    // Parse offset
-    let offset = match args[0].strip_prefix("0x") {
-        Some(hex_str) => u32::from_str_radix(hex_str, 16).map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
-        None => args[0].parse::<u32>().map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
+    // Parse offsets
+    let mut offsets: Vec<u32> = Vec::new();
+    for offset_str in offset_strs {
+        let offset = match offset_str.strip_prefix("0x") {
+            Some(hex_str) => u32::from_str_radix(hex_str, 16).map_err(|e| CommandError::new(format!("Invalid offset '{}': {}", offset_str, e)))?,
+            None => offset_str.parse::<u32>().map_err(|e| CommandError::new(format!("Invalid offset '{}': {}", offset_str, e)))?,
+        };
+        offsets.push(offset);
+    }
+
+    // Validate types
+    for type_str in type_strs {
+        if !valid_types.contains(type_str) {
+            return Err(CommandError::new(format!("Invalid type '{}'. Valid types: {}", type_str, valid_types.join(", "))));
+        }
+    }
+
+    // Create OffsetRead structs
+    let mut offset_reads: Vec<OffsetRead> = Vec::new();
+    match type_strs.len() {
+        0 => {
+            // Default type "u32" for all offsets
+            for offset in offsets {
+                offset_reads.push(OffsetRead { offset, type_str: "u32".to_string() });
+            }
+        }
+        1 => {
+            // Single type applies to all offsets
+            let type_str = type_strs[0].to_string();
+            for offset in offsets {
+                offset_reads.push(OffsetRead { offset, type_str: type_str.clone() });
+            }
+        }
+        n if n == offsets.len() => {
+            // One type per offset
+            for (i, offset) in offsets.into_iter().enumerate() {
+                offset_reads.push(OffsetRead { offset, type_str: type_strs[i].to_string() });
+            }
+        }
+        n => {
+            return Err(CommandError::new(format!(
+                "Type count ({}) must be 1 or match offset count ({})",
+                n, offsets.len()
+            )));
+        }
+    }
+
+    Ok(offset_reads)
+}
+
+// Helper function to parse variadic args into (offsets, types, filter)
+fn parse_offset_type_filter_args<'a>(
+    args: &'a [&'a str],
+    valid_types: &[&str],
+) -> Result<(Vec<&'a str>, Vec<&'a str>, Option<&'a str>), CommandError> {
+    if args.is_empty() {
+        return Err(CommandError::new("At least one offset must be provided".to_string()));
+    }
+
+    // Find where types start (first valid type string)
+    let mut types_start_idx = args.len();
+    for (i, arg) in args.iter().enumerate() {
+        // Skip first arg (must be an offset)
+        if i == 0 {
+            continue;
+        }
+        if valid_types.contains(arg) {
+            types_start_idx = i;
+            break;
+        }
+    }
+
+    // Check if last arg is entity type filter (not a valid type)
+    let (offset_strs, type_strs, filter): (&[&str], &[&str], Option<&str>) = if types_start_idx < args.len() {
+        // Found type(s)
+        let offset_strs = &args[0..types_start_idx];
+        let remaining = &args[types_start_idx..];
+
+        // Check if last arg is entity type filter (not a valid type)
+        if remaining.len() > 1 && !valid_types.contains(remaining.last().unwrap()) {
+            let type_strs = &remaining[..remaining.len() - 1];
+            let filter = Some(*remaining.last().unwrap());
+            (offset_strs, type_strs, filter)
+        } else {
+            let type_strs = remaining;
+            (offset_strs, type_strs, None)
+        }
+    } else {
+        // No types provided, check if last arg is entity type filter
+        let offset_strs = &args[0..args.len()];
+        if offset_strs.len() > 1 && !valid_types.contains(offset_strs.last().unwrap()) {
+            // Last arg might be filter
+            let (offsets, filter) = offset_strs.split_at(offset_strs.len() - 1);
+            (offsets, &[].as_slice(), Some(filter[0]))
+        } else {
+            (offset_strs, &[].as_slice(), None)
+        }
     };
 
-    // Valid types
+    Ok((offset_strs.to_vec(), type_strs.to_vec(), filter))
+}
+
+fn command_read_entity_offset(args: Vec<&str>) -> Result<String, CommandError> {
     let valid_types = ["ptr", "u32", "i32", "u16", "i16", "u8", "i8", "f32", "bool"];
 
-    // Parse optional type and entity type filter
-    // args[1] could be either type or entity_type
-    // args[2] would be entity_type if args[1] was type
-    let (type_str, filter) = match args.len() {
-        1 => ("u32", None), // default
-        2 => {
-            // Check if args[1] is a valid type
-            if valid_types.contains(&args[1]) {
-                (args[1], None)
-            } else {
-                // args[1] is entity_type
-                ("u32", Some(args[1].parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?))
-            }
-        }
-        3 => {
-            // args[1] is type, args[2] is entity_type
-            if !valid_types.contains(&args[1]) {
-                return Err(CommandError::new(format!("Invalid type: {}. Valid types: {}", args[1], valid_types.join(", "))));
-            }
-            (args[1], Some(args[2].parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?))
-        }
-        _ => unreachable!(),
+    // Parse: offsets..., [types...], [entity_type]
+    let (offset_strs, type_strs, filter) = parse_offset_type_filter_args(&args, &valid_types)?;
+
+    let offset_reads = parse_offset_reads(&offset_strs, &type_strs, &valid_types)?;
+
+    // Parse entity type filter
+    let filter = if let Some(filter_str) = filter {
+        Some(filter_str.parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?)
+    } else {
+        None
     };
 
     let zt_world_mgr = globals().ztworldmgr();
@@ -877,64 +997,50 @@ fn command_read_entity_offset(args: Vec<&str>) -> Result<String, CommandError> {
 
     let mut string_array = Vec::new();
     for ewp in filtered {
-        let value_str = match type_str {
-            "ptr" => format!("{:#x}", get_from_memory::<u32>(ewp.ptr + offset)),
-            "u32" => format!("{}", get_from_memory::<u32>(ewp.ptr + offset)),
-            "i32" => format!("{}", get_from_memory::<i32>(ewp.ptr + offset)),
-            "u16" => format!("{}", get_from_memory::<u16>(ewp.ptr + offset)),
-            "i16" => format!("{}", get_from_memory::<i16>(ewp.ptr + offset)),
-            "u8" => format!("{}", get_from_memory::<u8>(ewp.ptr + offset)),
-            "i8" => format!("{}", get_from_memory::<i8>(ewp.ptr + offset)),
-            "f32" => format!("{}", get_from_memory::<f32>(ewp.ptr + offset)),
-            "bool" => format!("{}", get_from_memory::<bool>(ewp.ptr + offset)),
-            _ => unreachable!(),
-        };
+        let mut parts = vec![
+            format!("{:#x}", ewp.ptr),
+            ewp.entity.name.clone()
+        ];
 
-        if filter.is_some() {
-            // Filtered: addr, name, value only
-            string_array.push(format!("{:#x} | {} | {}", ewp.ptr, ewp.entity.name, value_str));
-        } else {
-            // No filter: mem address, entity name, type, value
-            string_array.push(format!("{:#x} | {} | {:?} | {}", ewp.ptr, ewp.entity.name, ewp.entity.class, value_str));
+        if filter.is_none() {
+            parts.push(format!("{:?}", ewp.entity.class));
         }
+
+        // Read each offset
+        for read in &offset_reads {
+            let value_str = match read.type_str.as_str() {
+                "ptr" => format!("{:#x}", get_from_memory::<u32>(ewp.ptr + read.offset)),
+                "u32" => format!("{}", get_from_memory::<u32>(ewp.ptr + read.offset)),
+                "i32" => format!("{}", get_from_memory::<i32>(ewp.ptr + read.offset)),
+                "u16" => format!("{}", get_from_memory::<u16>(ewp.ptr + read.offset)),
+                "i16" => format!("{}", get_from_memory::<i16>(ewp.ptr + read.offset)),
+                "u8" => format!("{}", get_from_memory::<u8>(ewp.ptr + read.offset)),
+                "i8" => format!("{}", get_from_memory::<i8>(ewp.ptr + read.offset)),
+                "f32" => format!("{}", get_from_memory::<f32>(ewp.ptr + read.offset)),
+                "bool" => format!("{}", get_from_memory::<bool>(ewp.ptr + read.offset)),
+                _ => unreachable!(),
+            };
+            parts.push(format!("{}", value_str));
+        }
+
+        string_array.push(parts.join(" | "));
     }
     Ok(string_array.join("\n"))
 }
 
 fn command_read_entity_type_offset(args: Vec<&str>) -> Result<String, CommandError> {
-    if args.len() < 1 || args.len() > 3 {
-        return Err(CommandError::new("Usage: read_entity_type_offset(offset [, type] [, entity_type_class])".to_string()));
-    }
-
-    // Parse offset
-    let offset = match args[0].strip_prefix("0x") {
-        Some(hex_str) => u32::from_str_radix(hex_str, 16).map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
-        None => args[0].parse::<u32>().map_err(|e| CommandError::new(format!("Invalid offset: {}", e)))?,
-    };
-
-    // Valid types
     let valid_types = ["ptr", "u32", "i32", "u16", "i16", "u8", "i8", "f32", "bool"];
 
-    // Parse optional type and entity type class filter
-    let (type_str, filter) = match args.len() {
-        1 => ("u32", None), // default
-        2 => {
-            // Check if args[1] is a valid type
-            if valid_types.contains(&args[1]) {
-                (args[1], None)
-            } else {
-                // args[1] is entity_type_class
-                ("u32", Some(args[1].parse::<ZTEntityTypeClass>().map_err(|e| CommandError::new(e))?))
-            }
-        }
-        3 => {
-            // args[1] is type, args[2] is entity_type_class
-            if !valid_types.contains(&args[1]) {
-                return Err(CommandError::new(format!("Invalid type: {}. Valid types: {}", args[1], valid_types.join(", "))));
-            }
-            (args[1], Some(args[2].parse::<ZTEntityTypeClass>().map_err(|e| CommandError::new(e))?))
-        }
-        _ => unreachable!(),
+    // Parse: offsets..., [types...], [entity_type_class]
+    let (offset_strs, type_strs, filter) = parse_offset_type_filter_args(&args, &valid_types)?;
+
+    let offset_reads = parse_offset_reads(&offset_strs, &type_strs, &valid_types)?;
+
+    // Parse entity type class filter
+    let filter = if let Some(filter_str) = filter {
+        Some(filter_str.parse::<ZTEntityTypeClass>().map_err(|e| CommandError::new(e))?)
+    } else {
+        None
     };
 
     let zt_world_mgr = globals().ztworldmgr();
@@ -952,26 +1058,34 @@ fn command_read_entity_type_offset(args: Vec<&str>) -> Result<String, CommandErr
 
     let mut string_array = Vec::new();
     for etwp in filtered {
-        let value_str = match type_str {
-            "ptr" => format!("{:#x}", get_from_memory::<u32>(etwp.ptr + offset)),
-            "u32" => format!("{}", get_from_memory::<u32>(etwp.ptr + offset)),
-            "i32" => format!("{}", get_from_memory::<i32>(etwp.ptr + offset)),
-            "u16" => format!("{}", get_from_memory::<u16>(etwp.ptr + offset)),
-            "i16" => format!("{}", get_from_memory::<i16>(etwp.ptr + offset)),
-            "u8" => format!("{}", get_from_memory::<u8>(etwp.ptr + offset)),
-            "i8" => format!("{}", get_from_memory::<i8>(etwp.ptr + offset)),
-            "f32" => format!("{}", get_from_memory::<f32>(etwp.ptr + offset)),
-            "bool" => format!("{}", get_from_memory::<bool>(etwp.ptr + offset)),
-            _ => unreachable!(),
-        };
+        let mut parts = vec![
+            format!("{:#x}", etwp.ptr),
+            etwp.entity_type.zt_type.clone(),
+            etwp.entity_type.zt_sub_type.clone()
+        ];
 
-        if filter.is_some() {
-            // Filtered: addr, type, subtype, value only
-            string_array.push(format!("{:#x} | {} | {} | {}", etwp.ptr, etwp.entity_type.zt_type, etwp.entity_type.zt_sub_type, value_str));
-        } else {
-            // No filter: mem address, type, subtype, class, value
-            string_array.push(format!("{:#x} | {} | {} | {:?} | {}", etwp.ptr, etwp.entity_type.zt_type, etwp.entity_type.zt_sub_type, etwp.entity_type.class, value_str));
+        if filter.is_none() {
+            parts.push(format!("{:?}", etwp.entity_type.class));
         }
+
+        // Read each offset
+        for read in &offset_reads {
+            let value_str = match read.type_str.as_str() {
+                "ptr" => format!("{:#x}", get_from_memory::<u32>(etwp.ptr + read.offset)),
+                "u32" => format!("{}", get_from_memory::<u32>(etwp.ptr + read.offset)),
+                "i32" => format!("{}", get_from_memory::<i32>(etwp.ptr + read.offset)),
+                "u16" => format!("{}", get_from_memory::<u16>(etwp.ptr + read.offset)),
+                "i16" => format!("{}", get_from_memory::<i16>(etwp.ptr + read.offset)),
+                "u8" => format!("{}", get_from_memory::<u8>(etwp.ptr + read.offset)),
+                "i8" => format!("{}", get_from_memory::<i8>(etwp.ptr + read.offset)),
+                "f32" => format!("{}", get_from_memory::<f32>(etwp.ptr + read.offset)),
+                "bool" => format!("{}", get_from_memory::<bool>(etwp.ptr + read.offset)),
+                _ => unreachable!(),
+            };
+            parts.push(format!("offset{:#x}={}", read.offset, value_str));
+        }
+
+        string_array.push(parts.join(" | "));
     }
     Ok(string_array.join("\n"))
 }
