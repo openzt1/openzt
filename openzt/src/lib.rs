@@ -93,6 +93,9 @@ mod shortcuts;
 /// Patches in the current OpenZT build version into the game's version string.
 mod version;
 
+#[cfg(all(target_os = "windows", feature = "experimental", feature = "egui-overlay"))]
+mod ui;
+
 // TODO: Move this to resource_manager/openzt_mods
 /// OpenZT mod structs
 mod mods;
@@ -186,6 +189,8 @@ mod zoo_init {
         bfentitytype::init();
         settings::init();
         scripting::init();
+        #[cfg(all(target_os = "windows", feature = "experimental", feature = "egui-overlay"))]
+        ui::init();
         shortcuts::init();
         roofs::init();
 
