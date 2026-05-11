@@ -1892,6 +1892,8 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "crossterm",
+ "egui",
+ "egui-tiny-skia",
  "enable-ansi-support",
  "encoding_rs",
  "field_accessor_as_string",
@@ -1913,6 +1915,7 @@ dependencies = [
  "regex",
  "retour",
  "serde",
+ "tiny-skia",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-appender",
