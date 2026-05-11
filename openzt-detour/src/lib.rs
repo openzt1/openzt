@@ -4,6 +4,8 @@ use retour::GenericDetour;
 
 pub mod generated;
 
+// pub mod structs;
+
 pub struct FunctionDef<T> {
     pub address: u32,
     pub function_type: PhantomData<T>,

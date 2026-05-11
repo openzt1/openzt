@@ -78,6 +78,9 @@ mod experimental;
 /// Roof tag extension for scenery entities
 mod roofs;
 
+/// Save/load logging detours for understanding savefile format
+mod save_logging;
+
 /// DLL dependency validation for Zoo Tycoon game DLLs
 mod dll_dependencies;
 
@@ -199,6 +202,7 @@ mod zoo_init {
             experimental::init();
             ztmapview::init();
             zthabitatmgr::init();
+            save_logging::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }
     }
