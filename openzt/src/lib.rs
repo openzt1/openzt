@@ -189,7 +189,7 @@ mod zoo_init {
         bfentitytype::init();
         settings::init();
         scripting::init();
-        #[cfg(all(target_os = "windows", feature = "experimental", feature = "egui-overlay"))]
+        #[cfg(all(target_os = "windows", feature = "egui-overlay"))]
         ui::init();
         shortcuts::init();
         roofs::init();

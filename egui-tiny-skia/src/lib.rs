@@ -52,7 +52,7 @@ impl TinySkiaBackend {
     }
 
     pub fn paint(&mut self, output: FullOutput) -> &Pixmap {
-        self.pixmap.fill(Color::from_rgba8(255, 0, 255, 255));
+        self.pixmap.fill(Color::from_rgba8(0, 0, 0, 0));
 
         self.textures.apply_delta(output.textures_delta).expect("failed to apply egui texture delta");
 
