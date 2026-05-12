@@ -54,6 +54,12 @@ OpenZT is a DLL injection framework for Zoo Tycoon (2001) written in Rust. It pr
 ./openzt.bat run                             # Debug with command-console
 ./openzt.bat run --release                   # Release with command-console
 
+# Extra Cargo args/features go after `--`
+./openzt.bat build -- --features egui-overlay
+./openzt.bat check -- --features egui-overlay
+./openzt.bat run -- --features egui-overlay
+./openzt.bat build -- --features egui-overlay --features debug-blit
+
 # Build and run with --wait flag (waits for game to exit before returning)
 ./openzt.bat run --wait                      # Debug, wait for exit
 ./openzt.bat run --release --wait            # Release, wait for exit
@@ -63,6 +69,7 @@ OpenZT is a DLL injection framework for Zoo Tycoon (2001) written in Rust. It pr
 
 # Code quality checks
 ./openzt.bat check                           # Run cargo check on openzt
+./openzt.bat check -- --features egui-overlay # Required when touching egui overlay code
 ./openzt.bat clippy                          # Run cargo clippy on openzt
 ./openzt.bat test                            # Run cargo test on openzt
 
@@ -289,6 +296,15 @@ resource_manager::add_handler("bfb", Box::new(BfbHandler));
 - **Feature flags**: `default = ["experimental", "ini"]`, `release = []`
 - **Conditional compilation**: Most features behind flags for testing
 - **Hot-swappable**: DLL can be reloaded during development
+
+### egui Overlay
+
+- Enabled with `egui-overlay` and gated by `experimental`; run with `./openzt.bat run -- --features egui-overlay`
+- When changing `openzt/src/ui/**` or egui overlay behavior, ALWAYS verify with `./openzt.bat check -- --features egui-overlay` or `./openzt.bat build -- --features egui-overlay`; a plain `./openzt.bat check` does not compile this code.
+- UI code lives in `openzt/src/ui/mod.rs`; add/update egui widgets inside the `backend.run_frame(...)` closure.
+- Rendering uses `egui-tiny-skia` into a `tiny_skia::Pixmap`, then `openzt/src/ui/blit.rs` uploads it to a click-through layered overlay window with per-pixel alpha.
+- Frame timing hooks are in `openzt/src/ui/render_hook.rs`; mouse events come from the subclassed game WndProc in `openzt/src/ui/wndproc.rs`; keyboard events are forwarded from `shortcuts.rs`.
+- Use `--features egui-overlay --features debug-blit` only to test the overlay/window upload path with a solid red image.
 
 ## Testing
 

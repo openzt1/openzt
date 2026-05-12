@@ -80,9 +80,19 @@ pub fn render_and_blit(hwnd: HWND) {
         };
 
         let output = backend.run_frame(raw_input, |ctx| {
-            egui::Window::new("OpenZT").show(ctx, |ui| {
-                ui.label("Hello from OpenZT");
+            ctx.style_mut(|style| {
+                style.visuals.window_shadow = egui::epaint::Shadow::NONE;
+                style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
             });
+
+            egui::Window::new("OpenZT")
+                .default_size(egui::vec2(320.0, 180.0))
+                .min_size(egui::vec2(180.0, 80.0))
+                .resizable(true)
+                .show(ctx, |ui| {
+                    ui.label("Hello from OpenZT");
+                    ui.allocate_space(ui.available_size());
+                });
         });
 
         {
@@ -98,6 +108,10 @@ pub fn render_and_blit(hwnd: HWND) {
         let pixmap = backend.paint(output);
         blit::blit_to_hwnd(hwnd, pixmap);
     }
+}
+
+pub fn sync_overlay_position(hwnd: HWND) {
+    blit::sync_overlay_position(hwnd);
 }
 
 pub fn push_event(event: Event) {

@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExA, DefWindowProcA, HWND_TOPMOST, RegisterClassA, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExA, DefWindowProcA, RegisterClassA, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos,
     ShowWindow, ULW_ALPHA, UpdateLayeredWindow, WNDCLASSA, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::PCSTR;
@@ -53,6 +53,29 @@ pub fn blit_to_hwnd(hwnd: HWND, pixmap: &Pixmap) {
 
     if let Err(err) = update_overlay_window(overlay_hwnd, rect, pixmap) {
         warn!("egui overlay: UpdateLayeredWindow failed: {err}");
+    }
+}
+
+pub fn sync_overlay_position(owner: HWND) {
+    let Some(rect) = client_screen_rect(owner) else {
+        return;
+    };
+
+    let overlay = OVERLAY.get_or_init(|| Mutex::new(LayeredOverlay::default()));
+    let mut overlay = match overlay.lock() {
+        Ok(overlay) => overlay,
+        Err(err) => {
+            warn!("egui overlay: layered overlay lock poisoned: {err}");
+            return;
+        }
+    };
+
+    let Some(overlay_hwnd) = overlay.ensure(owner) else {
+        return;
+    };
+
+    if let Err(err) = position_overlay_window(overlay_hwnd, rect) {
+        warn!("egui overlay: SetWindowPos failed while syncing position: {err}");
     }
 }
 
@@ -166,7 +189,7 @@ fn update_overlay_window(hwnd: HWND, rect: RECT, pixmap: &Pixmap) -> windows::co
     let height = rect.bottom - rect.top;
 
     unsafe {
-        SetWindowPos(hwnd, Some(HWND_TOPMOST), rect.left, rect.top, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW)?;
+        position_overlay_window(hwnd, rect)?;
 
         let screen_dc = GetDC(None);
         if screen_dc.is_invalid() {
@@ -248,6 +271,12 @@ fn update_overlay_window(hwnd: HWND, rect: RECT, pixmap: &Pixmap) -> windows::co
     }
 
     Ok(())
+}
+
+fn position_overlay_window(hwnd: HWND, rect: RECT) -> windows::core::Result<()> {
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    unsafe { SetWindowPos(hwnd, None, rect.left, rect.top, width, height, SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW) }
 }
 
 fn copy_pixmap_to_layered_dib(pixmap: &Pixmap, dib_bits: *mut u8) {

@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use egui::{Event, Modifiers, PointerButton, Pos2, Vec2};
@@ -6,11 +7,14 @@ use openzt_detour::generated::bfwindow::ATTACH;
 use openzt_detour_macro::detour_mod;
 use tracing::{error, info, warn};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcA, GWLP_WNDPROC, SetWindowLongPtrA, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDPROC,
+    CallWindowProcA, GWLP_WNDPROC, SetWindowLongPtrA, WM_CAPTURECHANGED, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_MOVE, WM_MOVING, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE, WM_WINDOWPOSCHANGED, WNDPROC,
 };
 
 static ORIGINAL_WNDPROC: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
+static POINTER_CAPTURED: AtomicBool = AtomicBool::new(false);
 
 #[detour_mod]
 mod window_hooks {
@@ -58,36 +62,58 @@ pub fn subclass(hwnd: HWND) {
 }
 
 unsafe extern "system" fn overlay_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let sync_position_after_original = matches!(msg, WM_MOVE | WM_MOVING | WM_SIZE | WM_WINDOWPOSCHANGED);
+
     match msg {
         WM_MOUSEMOVE => {
             crate::ui::push_event(Event::PointerMoved(pointer_pos(lparam)));
-            if crate::ui::wants_pointer_input() {
+            if should_consume_pointer_event() {
                 return LRESULT(0);
             }
         }
         WM_LBUTTONDOWN => {
             push_pointer_button(lparam, PointerButton::Primary, true);
-            if crate::ui::wants_pointer_input() {
+            if should_consume_pointer_event() {
+                capture_pointer(hwnd);
+                return LRESULT(0);
+            }
+        }
+        WM_LBUTTONDBLCLK => {
+            push_pointer_button(lparam, PointerButton::Primary, true);
+            if should_consume_pointer_event() {
+                capture_pointer(hwnd);
                 return LRESULT(0);
             }
         }
         WM_LBUTTONUP => {
             push_pointer_button(lparam, PointerButton::Primary, false);
-            if crate::ui::wants_pointer_input() {
+            if should_consume_pointer_event() {
+                release_pointer_capture();
                 return LRESULT(0);
             }
+            release_pointer_capture();
         }
         WM_RBUTTONDOWN => {
             push_pointer_button(lparam, PointerButton::Secondary, true);
-            if crate::ui::wants_pointer_input() {
+            if should_consume_pointer_event() {
+                capture_pointer(hwnd);
+                return LRESULT(0);
+            }
+        }
+        WM_RBUTTONDBLCLK => {
+            push_pointer_button(lparam, PointerButton::Secondary, true);
+            if should_consume_pointer_event() {
+                capture_pointer(hwnd);
                 return LRESULT(0);
             }
         }
         WM_RBUTTONUP => {
             push_pointer_button(lparam, PointerButton::Secondary, false);
-            if crate::ui::wants_pointer_input() {
+            if should_consume_pointer_event() {
+                release_pointer_capture();
                 return LRESULT(0);
             }
+            release_pointer_capture();
         }
         WM_MOUSEWHEEL => {
             let delta = wheel_delta(wparam);
@@ -96,14 +122,40 @@ unsafe extern "system" fn overlay_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, 
                 delta: Vec2::new(0.0, delta),
                 modifiers: Modifiers::default(),
             });
-            if crate::ui::wants_pointer_input() {
+            if should_consume_pointer_event() {
                 return LRESULT(0);
             }
+        }
+        WM_CAPTURECHANGED => {
+            POINTER_CAPTURED.store(false, Ordering::Relaxed);
         }
         _ => {}
     }
 
-    call_original(hwnd, msg, wparam, lparam)
+    let result = call_original(hwnd, msg, wparam, lparam);
+    if sync_position_after_original {
+        crate::ui::sync_overlay_position(hwnd);
+    }
+    result
+}
+
+fn should_consume_pointer_event() -> bool {
+    POINTER_CAPTURED.load(Ordering::Relaxed) || crate::ui::wants_pointer_input()
+}
+
+fn capture_pointer(hwnd: HWND) {
+    unsafe {
+        SetCapture(hwnd);
+    }
+    POINTER_CAPTURED.store(true, Ordering::Relaxed);
+}
+
+fn release_pointer_capture() {
+    if POINTER_CAPTURED.swap(false, Ordering::Relaxed) {
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+    }
 }
 
 fn push_pointer_button(lparam: LPARAM, button: PointerButton, pressed: bool) {
