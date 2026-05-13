@@ -93,6 +93,9 @@ mod shortcuts;
 /// Patches in the current OpenZT build version into the game's version string.
 mod version;
 
+#[cfg(all(target_os = "windows", feature = "experimental"))]
+mod cursors;
+
 #[cfg(all(target_os = "windows", feature = "experimental", feature = "egui-overlay"))]
 mod ui;
 
@@ -189,6 +192,8 @@ mod zoo_init {
         bfentitytype::init();
         settings::init();
         scripting::init();
+        #[cfg(all(target_os = "windows", feature = "experimental"))]
+        cursors::init();
         #[cfg(all(target_os = "windows", feature = "egui-overlay"))]
         ui::init();
         shortcuts::init();

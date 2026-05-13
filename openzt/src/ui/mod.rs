@@ -1,4 +1,6 @@
+mod cursor;
 mod blit;
+mod input_block;
 mod render_hook;
 mod wndproc;
 
@@ -6,7 +8,7 @@ use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use egui::Event;
+use egui::{CursorIcon, Event};
 use egui_tiny_skia::TinySkiaBackend;
 use tracing::{error, info, warn};
 use windows::Win32::Foundation::{HWND, RECT};
@@ -18,9 +20,12 @@ static INPUT_EVENTS: OnceLock<Mutex<Vec<Event>>> = OnceLock::new();
 static HWND_RAW: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 static CAPTURE_STATE: OnceLock<Mutex<InputCaptureState>> = OnceLock::new();
 static START_TIME: OnceLock<Instant> = OnceLock::new();
+const OPENZT_WINDOW_RESIZABLE: bool = true;
 
 #[derive(Default)]
 struct InputCaptureState {
+    pointer_over_area: bool,
+    pointer_over_resize_bounds: bool,
     wants_pointer_input: bool,
     wants_keyboard_input: bool,
     platform_output_warned: bool,
@@ -35,6 +40,8 @@ pub fn init() {
         info!("egui overlay: Zoo Tycoon HWND not available yet; waiting for window capture");
     }
 
+    cursor::init();
+    input_block::init();
     wndproc::init();
     render_hook::init();
 }
@@ -93,13 +100,29 @@ pub fn render_and_blit(hwnd: HWND) {
                     ui.label("Hello from OpenZT");
                     ui.allocate_space(ui.available_size());
                 });
+
+            egui::Window::new("OpenZT Fixed")
+                .default_pos(egui::pos2(360.0, 80.0))
+                .default_size(egui::vec2(220.0, 120.0))
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("Fixed test window");
+                    ui.allocate_space(ui.available_size());
+                });
         });
 
         {
             let mut state = capture_state();
+            let pointer_over_resize_bounds = OPENZT_WINDOW_RESIZABLE && is_resize_cursor(output.platform_output.cursor_icon);
+            state.pointer_over_area = backend.context().is_pointer_over_area();
+            state.pointer_over_resize_bounds = pointer_over_resize_bounds;
             state.wants_pointer_input = backend.context().wants_pointer_input();
             state.wants_keyboard_input = backend.context().wants_keyboard_input();
-            if !state.platform_output_warned && (!output.platform_output.commands.is_empty() || output.platform_output.cursor_icon != egui::CursorIcon::Default) {
+            cursor::apply_egui_cursor(
+                output.platform_output.cursor_icon,
+                state.pointer_over_area || state.pointer_over_resize_bounds || state.wants_pointer_input,
+            );
+            if !state.platform_output_warned && !output.platform_output.commands.is_empty() {
                 warn!("egui overlay: platform output requested but not implemented");
                 state.platform_output_warned = true;
             }
@@ -124,6 +147,11 @@ pub fn push_event(event: Event) {
 
 pub fn wants_pointer_input() -> bool {
     capture_state().wants_pointer_input
+}
+
+pub fn blocks_pointer_input() -> bool {
+    let state = capture_state();
+    state.pointer_over_area || state.pointer_over_resize_bounds || state.wants_pointer_input
 }
 
 pub fn wants_keyboard_input() -> bool {
@@ -198,4 +226,24 @@ fn client_size(hwnd: HWND) -> Option<(u32, u32)> {
 
 fn find_zoo_window() -> Option<HWND> {
     unsafe { FindWindowA(PCSTR::null(), windows::core::s!("Zoo Tycoon")).ok().filter(|hwnd| !hwnd.0.is_null()) }
+}
+
+fn is_resize_cursor(cursor_icon: CursorIcon) -> bool {
+    matches!(
+        cursor_icon,
+        CursorIcon::ResizeHorizontal
+            | CursorIcon::ResizeNeSw
+            | CursorIcon::ResizeNwSe
+            | CursorIcon::ResizeVertical
+            | CursorIcon::ResizeEast
+            | CursorIcon::ResizeSouthEast
+            | CursorIcon::ResizeSouth
+            | CursorIcon::ResizeSouthWest
+            | CursorIcon::ResizeWest
+            | CursorIcon::ResizeNorthWest
+            | CursorIcon::ResizeNorth
+            | CursorIcon::ResizeNorthEast
+            | CursorIcon::ResizeColumn
+            | CursorIcon::ResizeRow
+    )
 }

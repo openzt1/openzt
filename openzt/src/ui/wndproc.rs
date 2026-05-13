@@ -140,7 +140,7 @@ unsafe extern "system" fn overlay_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, 
 }
 
 fn should_consume_pointer_event() -> bool {
-    POINTER_CAPTURED.load(Ordering::Relaxed) || crate::ui::wants_pointer_input()
+    POINTER_CAPTURED.load(Ordering::Relaxed) || crate::ui::blocks_pointer_input()
 }
 
 fn capture_pointer(hwnd: HWND) {
