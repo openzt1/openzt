@@ -155,6 +155,9 @@ echo Building !DLL_NAME! (!BUILD_TYPE!)...
 IF DEFINED FEATURE_FLAGS (
     echo Features: !FEATURE_FLAGS!
 )
+IF DEFINED CARGO_ARGS (
+    echo Cargo args: !CARGO_ARGS!
+)
 
 REM Execute cargo build for DLL
 cargo build --manifest-path !MANIFEST_PATH! --lib --target=i686-pc-windows-msvc !BUILD_FLAGS! !FEATURE_FLAGS! !CARGO_ARGS!
@@ -338,6 +341,7 @@ REM ============================================================
 
 :check
 echo Running cargo check on openzt...
+echo openzt.bat arguments: %*
 cargo check --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
 
 IF !errorlevel! NEQ 0 (
@@ -357,6 +361,7 @@ REM ============================================================
 
 :clippy
 echo Running cargo clippy on openzt...
+echo openzt.bat arguments: %*
 cargo clippy --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
 
 IF !errorlevel! NEQ 0 (
@@ -376,6 +381,7 @@ REM ============================================================
 
 :test
 echo Running cargo test on openzt...
+echo openzt.bat arguments: %*
 cargo test --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
 
 IF !errorlevel! NEQ 0 (

@@ -18,3 +18,9 @@ pub fn apply_egui_cursor(cursor_icon: CursorIcon, wants_pointer_input: bool) {
         crate::cursors::reset_global_element_cursor();
     }
 }
+
+pub fn clear_egui_cursor() {
+    if OVERLAY_CURSOR_ACTIVE.swap(false, Ordering::Relaxed) {
+        crate::cursors::reset_global_element_cursor();
+    }
+}

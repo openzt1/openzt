@@ -416,6 +416,7 @@ fn get_temp_config_path() -> PathBuf {
 mod tests {
     use super::*;
     use crate::logging::LogLevel;
+    use tracing_subscriber::filter::LevelFilter;
 
     #[test]
     fn test_default_config() {
@@ -450,6 +451,7 @@ mod tests {
         let mut config = LoggingConfig {
             log_to_file: true,
             level: LogLevel::Trace,
+            log_command_output: false,
         };
 
         assert!(toml::to_string(&config).unwrap().contains("level = \"trace\""));

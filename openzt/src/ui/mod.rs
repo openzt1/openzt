@@ -1,10 +1,15 @@
 mod cursor;
 mod blit;
 mod input_block;
+mod live_game;
 mod render_hook;
+mod tga;
+mod vanilla_main;
 mod wndproc;
+mod zt_image;
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -20,6 +25,8 @@ static INPUT_EVENTS: OnceLock<Mutex<Vec<Event>>> = OnceLock::new();
 static HWND_RAW: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 static CAPTURE_STATE: OnceLock<Mutex<InputCaptureState>> = OnceLock::new();
 static START_TIME: OnceLock<Instant> = OnceLock::new();
+static LIVE_GAME_ACTIVE: AtomicBool = AtomicBool::new(false);
+static SHOW_VANILLA_UI: AtomicBool = AtomicBool::new(true);
 const OPENZT_WINDOW_RESIZABLE: bool = true;
 
 #[derive(Default)]
@@ -42,11 +49,17 @@ pub fn init() {
 
     cursor::init();
     input_block::init();
+    live_game::init();
     wndproc::init();
     render_hook::init();
 }
 
 pub fn render_and_blit(hwnd: HWND) {
+    if !is_live_game_active() {
+        blit::hide_overlay();
+        return;
+    }
+
     let Some((width, height)) = client_size(hwnd) else {
         return;
     };
@@ -92,21 +105,19 @@ pub fn render_and_blit(hwnd: HWND) {
                 style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
             });
 
+            if SHOW_VANILLA_UI.load(Ordering::Acquire) {
+                vanilla_main::show(ctx, egui::vec2(width as f32, height as f32));
+            }
+
             egui::Window::new("OpenZT")
-                .default_size(egui::vec2(320.0, 180.0))
-                .min_size(egui::vec2(180.0, 80.0))
+                .default_size(egui::vec2(240.0, 80.0))
+                .min_size(egui::vec2(180.0, 60.0))
                 .resizable(true)
                 .show(ctx, |ui| {
-                    ui.label("Hello from OpenZT");
-                    ui.allocate_space(ui.available_size());
-                });
-
-            egui::Window::new("OpenZT Fixed")
-                .default_pos(egui::pos2(360.0, 80.0))
-                .default_size(egui::vec2(220.0, 120.0))
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label("Fixed test window");
+                    let mut show_vanilla_ui = SHOW_VANILLA_UI.load(Ordering::Acquire);
+                    if ui.checkbox(&mut show_vanilla_ui, "Show vanilla UI").changed() {
+                        SHOW_VANILLA_UI.store(show_vanilla_ui, Ordering::Release);
+                    }
                     ui.allocate_space(ui.available_size());
                 });
         });
@@ -134,10 +145,18 @@ pub fn render_and_blit(hwnd: HWND) {
 }
 
 pub fn sync_overlay_position(hwnd: HWND) {
+    if !is_live_game_active() {
+        return;
+    }
+
     blit::sync_overlay_position(hwnd);
 }
 
 pub fn push_event(event: Event) {
+    if !is_live_game_active() {
+        return;
+    }
+
     let events = INPUT_EVENTS.get_or_init(|| Mutex::new(Vec::new()));
     match events.lock() {
         Ok(mut events) => events.push(event),
@@ -146,15 +165,27 @@ pub fn push_event(event: Event) {
 }
 
 pub fn wants_pointer_input() -> bool {
+    if !is_live_game_active() {
+        return false;
+    }
+
     capture_state().wants_pointer_input
 }
 
 pub fn blocks_pointer_input() -> bool {
+    if !is_live_game_active() {
+        return false;
+    }
+
     let state = capture_state();
     state.pointer_over_area || state.pointer_over_resize_bounds || state.wants_pointer_input
 }
 
 pub fn wants_keyboard_input() -> bool {
+    if !is_live_game_active() {
+        return false;
+    }
+
     capture_state().wants_keyboard_input
 }
 
@@ -190,6 +221,26 @@ pub fn captured_hwnd() -> Option<HWND> {
     hwnd_raw.map(|raw| HWND(raw as *mut c_void))
 }
 
+pub fn set_live_game_active(active: bool) {
+    if LIVE_GAME_ACTIVE.swap(active, Ordering::AcqRel) == active {
+        return;
+    }
+
+    if active {
+        info!("egui overlay: live game started");
+    } else {
+        info!("egui overlay: live game stopped");
+        drain_input_events();
+        reset_capture_state();
+        blit::hide_overlay();
+        cursor::clear_egui_cursor();
+    }
+}
+
+pub fn is_live_game_active() -> bool {
+    LIVE_GAME_ACTIVE.load(Ordering::Acquire)
+}
+
 fn drain_input_events() -> Vec<Event> {
     let events = INPUT_EVENTS.get_or_init(|| Mutex::new(Vec::new()));
     match events.lock() {
@@ -206,6 +257,10 @@ fn capture_state() -> std::sync::MutexGuard<'static, InputCaptureState> {
         .get_or_init(|| Mutex::new(InputCaptureState::default()))
         .lock()
         .expect("egui overlay capture state lock poisoned")
+}
+
+fn reset_capture_state() {
+    *capture_state() = InputCaptureState::default();
 }
 
 fn client_size(hwnd: HWND) -> Option<(u32, u32)> {

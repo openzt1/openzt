@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExA, DefWindowProcA, RegisterClassA, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExA, DefWindowProcA, RegisterClassA, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos,
     ShowWindow, ULW_ALPHA, UpdateLayeredWindow, WNDCLASSA, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::PCSTR;
@@ -76,6 +76,26 @@ pub fn sync_overlay_position(owner: HWND) {
 
     if let Err(err) = position_overlay_window(overlay_hwnd, rect) {
         warn!("egui overlay: SetWindowPos failed while syncing position: {err}");
+    }
+}
+
+pub fn hide_overlay() {
+    let Some(overlay) = OVERLAY.get() else {
+        return;
+    };
+
+    let overlay = match overlay.lock() {
+        Ok(overlay) => overlay,
+        Err(err) => {
+            warn!("egui overlay: layered overlay lock poisoned: {err}");
+            return;
+        }
+    };
+
+    if let Some(hwnd_raw) = overlay.hwnd {
+        unsafe {
+            let _ = ShowWindow(HWND(hwnd_raw as *mut c_void), SW_HIDE);
+        }
     }
 }
 
