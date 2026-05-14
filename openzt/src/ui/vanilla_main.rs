@@ -1,17 +1,22 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
-use egui::{Align2, Color32, Context, FontId, Painter, Pos2, Rect, TextureHandle, Vec2, pos2, vec2};
+use egui::{Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, Pos2, Rect, TextureHandle, Vec2, pos2, vec2};
 use openzt_configparser::ini::Ini;
 use tracing::{info, warn};
 
 use super::zt_image;
 
 static TEXTURES: OnceLock<Mutex<TextureCache>> = OnceLock::new();
+static BOLD_FONT_REGISTERED: AtomicBool = AtomicBool::new(false);
+static BOLD_FONT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-const GOLD_TEXT: Color32 = Color32::from_rgb(255, 212, 60);
+const BOLD_FONT_FAMILY: &str = "zt-bold";
+const BOLD_FONT_NAME: &str = "arial-bold";
+const BOLD_FONT_PATH: &str = r"C:\Windows\Fonts\arialbd.ttf";
 const GREEN_TEXT: Color32 = Color32::from_rgb(83, 219, 83);
-const PANEL_BROWN: Color32 = Color32::from_rgb(68, 36, 20);
 
 struct TextureCache {
     animations: HashMap<&'static str, CachedTexture>,
@@ -74,6 +79,8 @@ struct DrawnRect {
 }
 
 pub fn show(ctx: &Context, screen_size: Vec2) {
+    prepare_bold_font(ctx);
+
     egui::Area::new("openzt_vanilla_main_ui".into())
         .order(egui::Order::Background)
         .fixed_pos(Pos2::ZERO)
@@ -95,12 +102,13 @@ pub fn show(ctx: &Context, screen_size: Vec2) {
 }
 
 fn draw_main_ui(ctx: &Context, painter: &Painter, cache: &mut TextureCache, screen_size: Vec2) {
-    let bg1 = draw_anim(ctx, painter, cache, "ui/main/backgnd1/backgnd1", pos2(0.0, 0.0), vec2(64.0, 248.0));
+    let bg1_size = texture_size(ctx, cache, "ui/main/backgnd1/backgnd1").unwrap_or(vec2(64.0, 248.0));
     let bg2_size = texture_size(ctx, cache, "ui/main/backgnd2/backgnd2").unwrap_or(vec2(170.0, 128.0));
     let bg3_size = texture_size(ctx, cache, "ui/main/backgnd3/backgnd3").unwrap_or(vec2(200.0, 112.0));
     let bg4_size = texture_size(ctx, cache, "ui/main/backgnd4/backgnd4").unwrap_or(vec2(330.0, 38.0));
     let bg5_size = texture_size(ctx, cache, "ui/main/backgnd5/backgnd5").unwrap_or(vec2(256.0, 38.0));
 
+    let bg1_rect = rect_from_pos_size(pos2(0.0, 0.0), bg1_size);
     let bg2_pos = pos2(0.0, (screen_size.y - bg2_size.y).max(0.0));
     let bg3_pos = pos2(0.0, (screen_size.y - bg3_size.y).max(0.0));
     let bg4_pos = pos2(((screen_size.x - bg4_size.x) * 0.5).max(0.0), (screen_size.y - bg4_size.y).max(0.0));
@@ -111,25 +119,27 @@ fn draw_main_ui(ctx: &Context, painter: &Painter, cache: &mut TextureCache, scre
     let bg4 = rect_from_pos_size(bg4_pos, bg4_size);
     let bg5 = rect_from_pos_size(bg5_pos, bg5_size);
 
-    if bg2.top() > bg1.rect.bottom() {
-        draw_tiled(
+    if bg2.top() > bg1_rect.bottom() {
+        draw_tiled_y(
             ctx,
             painter,
             cache,
             "ui/main/bg2/bg2",
-            Rect::from_min_max(pos2(0.0, bg1.rect.bottom()), pos2(bg2_size.x, bg2.top())),
+            pos2(0.0, bg1_rect.bottom()),
+            bg2.top() - bg1_rect.bottom(),
         );
     }
     if bg4.left() > bg3.right() {
-        draw_tiled(ctx, painter, cache, "ui/main/bg3/bg3", Rect::from_min_max(pos2(bg3.right(), bg3.top()), pos2(bg4.left(), screen_size.y)));
+        draw_tiled_x_bottom(ctx, painter, cache, "ui/main/bg3/bg3", bg3.right(), screen_size.y, bg4.left() - bg3.right());
     }
     if bg5.left() > bg4.right() {
-        draw_tiled(ctx, painter, cache, "ui/main/bg4/bg4", Rect::from_min_max(pos2(bg4.right(), bg4.top()), pos2(bg5.left(), screen_size.y)));
+        draw_tiled_x_bottom(ctx, painter, cache, "ui/main/bg4/bg4", bg4.right(), screen_size.y, bg5.left() - bg4.right());
     }
 
+    draw_anim(ctx, painter, cache, "ui/main/backgnd4/backgnd4", bg4_pos, bg4_size);
+    let bg1 = draw_anim(ctx, painter, cache, "ui/main/backgnd1/backgnd1", pos2(0.0, 0.0), bg1_size);
     draw_anim(ctx, painter, cache, "ui/main/backgnd2/backgnd2", bg2_pos, bg2_size);
     draw_anim(ctx, painter, cache, "ui/main/backgnd3/backgnd3", bg3_pos, bg3_size);
-    draw_anim(ctx, painter, cache, "ui/main/backgnd4/backgnd4", bg4_pos, bg4_size);
     draw_anim(ctx, painter, cache, "ui/main/backgnd5/backgnd5", bg5_pos, bg5_size);
 
     draw_left_buttons(ctx, painter, cache, bg1.rect);
@@ -144,6 +154,7 @@ fn draw_left_buttons(ctx: &Context, painter: &Painter, cache: &mut TextureCache,
         ("ui/main/buyanim/buyanim", 4.0, 60.0),
         ("ui/main/buyobj/buyobj", 4.0, 108.0),
         ("ui/main/person/person", 4.0, 154.0),
+        ("ui/main/undo/undo", 1.0, 258.0),
         ("ui/main/bdoz/bdoz", 1.0, 293.0),
         ("ui/main/msgs/msgs", 1.0, 328.0),
         ("ui/main/resr/resr", 1.0, 363.0),
@@ -159,26 +170,23 @@ fn draw_left_buttons(ctx: &Context, painter: &Painter, cache: &mut TextureCache,
 fn draw_minimap_cluster(ctx: &Context, painter: &Painter, cache: &mut TextureCache, bg2: Rect) {
     draw_anim(ctx, painter, cache, "ui/sharedui/snap/snap", bg2.min + vec2(5.0, 86.0), vec2(34.0, 34.0));
     draw_anim(ctx, painter, cache, "ui/main/zoomin/zoomin", bg2.min + vec2(14.0, 17.0), vec2(28.0, 28.0));
+    draw_anim(ctx, painter, cache, "ui/main/zoomout/zoomout", bg2.min + vec2(5.0, 24.0), vec2(28.0, 28.0));
     draw_anim(ctx, painter, cache, "ui/main/rotr/rotr", bg2.min + vec2(6.0, 40.0), vec2(28.0, 28.0));
     draw_anim(ctx, painter, cache, "ui/main/rotl/rotl", bg2.min + vec2(26.0, 27.0), vec2(28.0, 28.0));
     draw_anim(ctx, painter, cache, "ui/main/trees/trees", bg2.min + vec2(147.0, 81.0), vec2(28.0, 28.0));
     draw_anim(ctx, painter, cache, "ui/main/guests/guests", bg2.min + vec2(127.0, 90.0), vec2(28.0, 28.0));
     draw_anim(ctx, painter, cache, "ui/main/builds/builds", bg2.min + vec2(106.0, 100.0), vec2(28.0, 28.0));
 
-    let minimap = Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0));
-    painter.rect_filled(minimap, 0.0, Color32::from_rgb(31, 74, 53));
-    painter.rect_stroke(minimap, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(13, 32, 23)), egui::StrokeKind::Inside);
+    let _minimap = Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0));
 }
 
 fn draw_time_and_money(ctx: &Context, painter: &Painter, cache: &mut TextureCache, bg3: Rect, bg4: Rect) {
     let pause = draw_anim(ctx, painter, cache, "ui/main/pause/pause", bg3.min + vec2(170.0, 80.0), vec2(34.0, 34.0));
     let date_rect = Rect::from_min_size(pause.rect.min + vec2(25.0, 7.0), vec2(108.0, 18.0));
-    painter.rect_filled(date_rect, 0.0, PANEL_BROWN.gamma_multiply(0.55));
-    painter.text(date_rect.center(), Align2::CENTER_CENTER, "Jan 1, Year 1", FontId::proportional(14.0), GREEN_TEXT);
+    painter.text(date_rect.center(), Align2::CENTER_CENTER, "Jan 1, Year 1", bold_font(14.0), GREEN_TEXT);
 
     let money_rect = Rect::from_min_size(bg4.min + vec2(90.0, 9.0), vec2(125.0, 18.0));
-    painter.rect_filled(money_rect, 0.0, PANEL_BROWN.gamma_multiply(0.55));
-    painter.text(money_rect.center(), Align2::CENTER_CENTER, "$50,000", FontId::proportional(14.0), GOLD_TEXT);
+    painter.text(money_rect.center(), Align2::CENTER_CENTER, "$50,000", bold_font(14.0), GREEN_TEXT);
 }
 
 fn draw_status_cluster(ctx: &Context, painter: &Painter, cache: &mut TextureCache, bg4: Rect, bg5: Rect) {
@@ -190,15 +198,13 @@ fn draw_status_cluster(ctx: &Context, painter: &Painter, cache: &mut TextureCach
 }
 
 fn draw_status(ctx: &Context, painter: &Painter, cache: &mut TextureCache, button: &'static str, pos: Pos2, with_meter: bool) {
-    let button_rect = draw_anim(ctx, painter, cache, button, pos, vec2(34.0, 34.0)).rect;
-    if !with_meter {
-        return;
+    if with_meter {
+        draw_anim(ctx, painter, cache, "ui/main/progbck/progbck", pos + vec2(26.0, 5.0), vec2(56.0, 22.0));
+        let meter = Rect::from_min_size(pos + vec2(32.0, 9.0), vec2(45.0, 9.0));
+        painter.rect_filled(meter, 0.0, Color32::from_rgb(48, 88, 31));
+        painter.rect_filled(Rect::from_min_size(meter.min, vec2(34.0, meter.height())), 0.0, Color32::from_rgb(66, 196, 59));
     }
-
-    draw_anim(ctx, painter, cache, "ui/main/progbck/progbck", button_rect.min + vec2(26.0, 5.0), vec2(56.0, 22.0));
-    let meter = Rect::from_min_size(button_rect.min + vec2(32.0, 9.0), vec2(45.0, 9.0));
-    painter.rect_filled(meter, 0.0, Color32::from_rgb(48, 88, 31));
-    painter.rect_filled(Rect::from_min_size(meter.min, vec2(34.0, meter.height())), 0.0, Color32::from_rgb(66, 196, 59));
+    draw_anim(ctx, painter, cache, button, pos, vec2(34.0, 34.0));
 }
 
 fn draw_anim(
@@ -223,8 +229,8 @@ fn draw_anim(
     }
 }
 
-fn draw_tiled(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, rect: Rect) {
-    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+fn draw_tiled_y(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, pos: Pos2, height: f32) {
+    if height <= 0.0 {
         return;
     }
 
@@ -236,18 +242,39 @@ fn draw_tiled(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resour
         return;
     }
 
-    let mut y = rect.top();
-    while y < rect.bottom() {
-        let mut x = rect.left();
-        let height = tile_size.y.min(rect.bottom() - y);
-        while x < rect.right() {
-            let width = tile_size.x.min(rect.right() - x);
-            let dest = Rect::from_min_size(pos2(x, y), vec2(width, height));
-            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(width / tile_size.x, height / tile_size.y));
-            painter.image(texture.texture.id(), dest, uv, Color32::WHITE);
-            x += tile_size.x;
-        }
+    let bottom = pos.y + height;
+    let mut y = pos.y;
+    while y < bottom {
+        let tile_height = tile_size.y.min(bottom - y);
+        let dest = Rect::from_min_size(pos2(pos.x, y), vec2(tile_size.x, tile_height));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, tile_height / tile_size.y));
+        painter.image(texture.texture.id(), dest, uv, Color32::WHITE);
         y += tile_size.y;
+    }
+}
+
+fn draw_tiled_x_bottom(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, left: f32, bottom: f32, width: f32) {
+    if width <= 0.0 {
+        return;
+    }
+
+    let Some(texture) = cache.animation(ctx, resource) else {
+        return;
+    };
+    let tile_size = texture.size;
+    if tile_size.x <= 0.0 || tile_size.y <= 0.0 {
+        return;
+    }
+
+    let top = bottom - tile_size.y;
+    let right = left + width;
+    let mut x = left;
+    while x < right {
+        let tile_width = tile_size.x.min(right - x);
+        let dest = Rect::from_min_size(pos2(x, top), vec2(tile_width, tile_size.y));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(tile_width / tile_size.x, 1.0));
+        painter.image(texture.texture.id(), dest, uv, Color32::WHITE);
+        x += tile_size.x;
     }
 }
 
@@ -340,4 +367,50 @@ fn rect_from_pos_size(pos: Pos2, size: Vec2) -> Rect {
 
 fn unit_uv() -> Rect {
     Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
+}
+
+fn bold_font(size: f32) -> FontId {
+    if BOLD_FONT_ACTIVE.load(Ordering::Acquire) {
+        FontId::new(size, FontFamily::Name(BOLD_FONT_FAMILY.into()))
+    } else {
+        FontId::proportional(size)
+    }
+}
+
+fn prepare_bold_font(ctx: &Context) {
+    if BOLD_FONT_ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+
+    if BOLD_FONT_REGISTERED.load(Ordering::Acquire) {
+        BOLD_FONT_ACTIVE.store(true, Ordering::Release);
+        return;
+    }
+
+    if register_bold_font(ctx) {
+        BOLD_FONT_REGISTERED.store(true, Ordering::Release);
+        ctx.request_repaint();
+    }
+}
+
+fn register_bold_font(ctx: &Context) -> bool {
+    let font_bytes = match std::fs::read(BOLD_FONT_PATH) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!("egui overlay: failed to read bold UI font {BOLD_FONT_PATH}: {err}");
+            return false;
+        }
+    };
+
+    let mut fonts = FontDefinitions::default();
+    fonts
+        .font_data
+        .insert(BOLD_FONT_NAME.to_string(), Arc::new(FontData::from_owned(font_bytes)));
+    fonts
+        .families
+        .insert(FontFamily::Name(BOLD_FONT_FAMILY.into()), vec![BOLD_FONT_NAME.to_string()]);
+
+    ctx.set_fonts(fonts);
+    info!("egui overlay: registered bold UI font from {BOLD_FONT_PATH}");
+    true
 }
