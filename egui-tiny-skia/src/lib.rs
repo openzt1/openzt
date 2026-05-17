@@ -1,7 +1,7 @@
 mod painter;
 mod texture;
 
-pub use texture::{TextureStore, TextureStoreError};
+pub use texture::{AlphaKind, TextureStore, TextureStoreError};
 
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Context, FullOutput, RawInput};
@@ -53,9 +53,7 @@ impl TinySkiaBackend {
 
     pub fn paint(&mut self, output: FullOutput) -> &Pixmap {
         self.pixmap.fill(Color::from_rgba8(0, 0, 0, 0));
-
         self.textures.apply_delta(output.textures_delta).expect("failed to apply egui texture delta");
-
         let primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
         painter::paint_primitives(&mut self.pixmap, &primitives, &self.textures);
 

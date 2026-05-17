@@ -19,6 +19,7 @@ IF "%~1"=="console" GOTO console
 IF "%~1"=="check" GOTO check
 IF "%~1"=="clippy" GOTO clippy
 IF "%~1"=="test" GOTO test
+IF "%~1"=="test-egui-tiny-skia" GOTO test_egui_tiny_skia
 IF "%~1"=="integration-tests" GOTO integration_tests
 IF "%~1"=="validate-detours" GOTO validate_detours
 
@@ -342,7 +343,30 @@ REM ============================================================
 :check
 echo Running cargo check on openzt...
 echo openzt.bat arguments: %*
-cargo check --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
+SHIFT
+SET CHECK_CARGO_ARGS=
+SET CHECK_PARSING_CARGO_ARGS=
+
+:check_parse_loop
+IF "%~1"=="" GOTO check_run
+IF "%~1"=="--" (
+    SET CHECK_PARSING_CARGO_ARGS=1
+    SHIFT
+    GOTO check_parse_loop
+)
+IF DEFINED CHECK_PARSING_CARGO_ARGS (
+    SET CHECK_CARGO_ARGS=!CHECK_CARGO_ARGS! %~1
+    SHIFT
+    GOTO check_parse_loop
+)
+echo Error: Unknown check flag "%~1"
+exit /b 1
+
+:check_run
+IF DEFINED CHECK_CARGO_ARGS (
+    echo Cargo args: !CHECK_CARGO_ARGS!
+)
+cargo check --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc !CHECK_CARGO_ARGS!
 
 IF !errorlevel! NEQ 0 (
     echo.
@@ -382,7 +406,30 @@ REM ============================================================
 :test
 echo Running cargo test on openzt...
 echo openzt.bat arguments: %*
-cargo test --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
+SHIFT
+SET TEST_CARGO_ARGS=
+SET TEST_PARSING_CARGO_ARGS=
+
+:test_parse_loop
+IF "%~1"=="" GOTO test_run
+IF "%~1"=="--" (
+    SET TEST_PARSING_CARGO_ARGS=1
+    SHIFT
+    GOTO test_parse_loop
+)
+IF DEFINED TEST_PARSING_CARGO_ARGS (
+    SET TEST_CARGO_ARGS=!TEST_CARGO_ARGS! %~1
+    SHIFT
+    GOTO test_parse_loop
+)
+echo Error: Unknown test flag "%~1"
+exit /b 1
+
+:test_run
+IF DEFINED TEST_CARGO_ARGS (
+    echo Cargo args: !TEST_CARGO_ARGS!
+)
+cargo test --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc !TEST_CARGO_ARGS!
 
 IF !errorlevel! NEQ 0 (
     echo.
@@ -393,6 +440,26 @@ IF !errorlevel! NEQ 0 (
 
 echo.
 echo Tests passed
+GOTO :EOF
+
+REM ============================================================
+REM egui-tiny-skia Test Function
+REM ============================================================
+
+:test_egui_tiny_skia
+echo Running cargo test on egui-tiny-skia...
+echo openzt.bat arguments: %*
+cargo test --manifest-path egui-tiny-skia/Cargo.toml
+
+IF !errorlevel! NEQ 0 (
+    echo.
+    echo egui-tiny-skia tests failed
+    pause
+    exit /b !errorlevel!
+)
+
+echo.
+echo egui-tiny-skia tests passed
 GOTO :EOF
 
 REM ============================================================
@@ -410,6 +477,7 @@ echo   run                Build the DLL and launch the game
 echo   check              Run cargo check on openzt crate
 echo   clippy             Run cargo clippy on openzt crate
 echo   test               Run cargo test on openzt crate
+echo   test-egui-tiny-skia Run cargo test on egui-tiny-skia crate
 echo   integration-tests  Run integration tests (builds release, launches game, displays results)
 echo   validate-detours   Validate detour addresses (builds release, launches game, shows calls)
 echo   docs               Generate and open documentation
@@ -433,6 +501,7 @@ echo   openzt.bat run --test                Build test DLL and launch game
 echo   openzt.bat check                     Run cargo check on openzt
 echo   openzt.bat clippy                    Run cargo clippy on openzt
 echo   openzt.bat test                      Run cargo test on openzt
+echo   openzt.bat test-egui-tiny-skia       Run cargo test on egui-tiny-skia
 echo   openzt.bat integration-tests         Run integration tests (builds release, displays results)
 echo   openzt.bat validate-detours          Validate all annotated detours
 echo   openzt.bat validate-detours bfanimcache/update    Validate specific detour

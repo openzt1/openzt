@@ -4,6 +4,7 @@ mod input_block;
 mod live_game;
 mod render_hook;
 mod tga;
+mod tooltip;
 mod vanilla_main;
 mod wndproc;
 mod zt_image;
@@ -13,20 +14,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use egui::{CursorIcon, Event};
+use crate::shortcuts::{Ctrl, Shift, U, V};
+use egui::{CursorIcon, Event, Pos2, Sense, Stroke, StrokeKind, Vec2};
 use egui_tiny_skia::TinySkiaBackend;
 use tracing::{error, info, warn};
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{FindWindowA, GetClientRect};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::UI::WindowsAndMessaging::{FindWindowA, GetClientRect, GetCursorPos};
 use windows::core::PCSTR;
 
 static BACKEND: OnceLock<Mutex<TinySkiaBackend>> = OnceLock::new();
 static INPUT_EVENTS: OnceLock<Mutex<Vec<Event>>> = OnceLock::new();
+static LAST_POINTER_POS: OnceLock<Mutex<Option<Pos2>>> = OnceLock::new();
 static HWND_RAW: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 static CAPTURE_STATE: OnceLock<Mutex<InputCaptureState>> = OnceLock::new();
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 static LIVE_GAME_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SHOW_VANILLA_UI: AtomicBool = AtomicBool::new(true);
+static SHOW_DEBUG_WINDOW: AtomicBool = AtomicBool::new(true);
 const OPENZT_WINDOW_RESIZABLE: bool = true;
 
 #[derive(Default)]
@@ -50,6 +55,8 @@ pub fn init() {
     cursor::init();
     input_block::init();
     live_game::init();
+    tooltip::init();
+    register_shortcuts();
     wndproc::init();
     render_hook::init();
 }
@@ -79,6 +86,7 @@ pub fn render_and_blit(hwnd: HWND) {
     #[cfg(not(feature = "debug-blit"))]
     {
         let events = drain_input_events();
+
         let backend_lock = BACKEND.get_or_init(|| Mutex::new(TinySkiaBackend::new(width, height)));
         let mut backend = match backend_lock.lock() {
             Ok(backend) => backend,
@@ -108,18 +116,11 @@ pub fn render_and_blit(hwnd: HWND) {
             if SHOW_VANILLA_UI.load(Ordering::Acquire) {
                 vanilla_main::show(ctx, egui::vec2(width as f32, height as f32));
             }
+            tooltip::show(ctx, egui::vec2(width as f32, height as f32));
 
-            egui::Window::new("OpenZT")
-                .default_size(egui::vec2(240.0, 80.0))
-                .min_size(egui::vec2(180.0, 60.0))
-                .resizable(true)
-                .show(ctx, |ui| {
-                    let mut show_vanilla_ui = SHOW_VANILLA_UI.load(Ordering::Acquire);
-                    if ui.checkbox(&mut show_vanilla_ui, "Show vanilla UI").changed() {
-                        SHOW_VANILLA_UI.store(show_vanilla_ui, Ordering::Release);
-                    }
-                    ui.allocate_space(ui.available_size());
-                });
+            if SHOW_DEBUG_WINDOW.load(Ordering::Acquire) {
+                show_debug_panel(ctx);
+            }
         });
 
         {
@@ -157,11 +158,32 @@ pub fn push_event(event: Event) {
         return;
     }
 
+    remember_pointer_pos(&event);
+
     let events = INPUT_EVENTS.get_or_init(|| Mutex::new(Vec::new()));
     match events.lock() {
         Ok(mut events) => events.push(event),
         Err(err) => error!("egui overlay: input event lock poisoned: {err}"),
     }
+}
+
+pub fn last_pointer_pos() -> Option<Pos2> {
+    *LAST_POINTER_POS.get_or_init(|| Mutex::new(None)).lock().ok()?
+}
+
+pub fn current_pointer_pos() -> Option<Pos2> {
+    let Some(hwnd) = captured_hwnd() else {
+        return None;
+    };
+    let mut point = POINT::default();
+    if unsafe { GetCursorPos(&mut point) }.is_err() {
+        return None;
+    }
+    if !unsafe { ScreenToClient(hwnd, &mut point) }.as_bool() {
+        return None;
+    }
+
+    Some(Pos2::new(point.x as f32, point.y as f32))
 }
 
 pub fn wants_pointer_input() -> bool {
@@ -263,6 +285,20 @@ fn reset_capture_state() {
     *capture_state() = InputCaptureState::default();
 }
 
+fn remember_pointer_pos(event: &Event) {
+    let pos = match event {
+        Event::PointerMoved(pos) => Some(*pos),
+        Event::PointerButton { pos, .. } => Some(*pos),
+        _ => None,
+    };
+
+    if let Some(pos) = pos {
+        if let Ok(mut stored) = LAST_POINTER_POS.get_or_init(|| Mutex::new(None)).lock() {
+            *stored = Some(pos);
+        }
+    }
+}
+
 fn client_size(hwnd: HWND) -> Option<(u32, u32)> {
     let mut rect = RECT::default();
     if let Err(err) = unsafe { GetClientRect(hwnd, &mut rect) } {
@@ -301,4 +337,40 @@ fn is_resize_cursor(cursor_icon: CursorIcon) -> bool {
             | CursorIcon::ResizeColumn
             | CursorIcon::ResizeRow
     )
+}
+
+fn register_shortcuts() {
+    crate::shortcut!("egui-overlay", "Toggle egui debug window", U + Ctrl + Shift, false, || {
+        let visible = !SHOW_DEBUG_WINDOW.load(Ordering::Acquire);
+        SHOW_DEBUG_WINDOW.store(visible, Ordering::Release);
+        info!("egui overlay: debug window {}", if visible { "shown" } else { "hidden" });
+    });
+
+    crate::shortcut!("egui-overlay", "Toggle vanilla UI overlay", V + Ctrl + Shift, false, || {
+        let visible = !SHOW_VANILLA_UI.load(Ordering::Acquire);
+        SHOW_VANILLA_UI.store(visible, Ordering::Release);
+        info!("egui overlay: vanilla UI overlay {}", if visible { "shown" } else { "hidden" });
+    });
+}
+
+fn show_debug_panel(ctx: &egui::Context) {
+    egui::Area::new("openzt_debug_panel".into())
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 72.0))
+        .interactable(true)
+        .show(ctx, |ui| {
+            let panel_size = Vec2::new(180.0, 38.0);
+            let (rect, _) = ui.allocate_exact_size(panel_size, Sense::hover());
+            let visuals = ui.visuals();
+            ui.painter().rect_filled(rect, 0.0, visuals.panel_fill);
+            ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, visuals.window_stroke.color), StrokeKind::Inside);
+
+            let inner_rect = rect.shrink(8.0);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(inner_rect), |ui| {
+                let mut show_vanilla_ui = SHOW_VANILLA_UI.load(Ordering::Acquire);
+                if ui.checkbox(&mut show_vanilla_ui, "Show vanilla UI").changed() {
+                    SHOW_VANILLA_UI.store(show_vanilla_ui, Ordering::Release);
+                }
+            });
+        });
 }

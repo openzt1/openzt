@@ -13,6 +13,22 @@ pub struct CpuTexture {
     width: usize,
     height: usize,
     pixels: Vec<Color32>,
+    alpha_profile: AlphaProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlphaKind {
+    FullyOpaque,
+    BinaryAlpha,
+    MixedAlpha,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlphaProfile {
+    kind: AlphaKind,
+    transparent_count: usize,
+    opaque_count: usize,
+    mixed_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +119,8 @@ impl CpuTexture {
             });
         }
 
-        Ok(Self { width, height, pixels })
+        let alpha_profile = classify_alpha(&pixels);
+        Ok(Self { width, height, pixels, alpha_profile })
     }
 
     fn update_region(&mut self, texture_id: TextureId, x: usize, y: usize, update: &CpuTexture) -> Result<(), TextureStoreError> {
@@ -127,12 +144,102 @@ impl CpuTexture {
             destination.copy_from_slice(source);
         }
 
+        self.alpha_profile = classify_alpha(&self.pixels);
         Ok(())
+    }
+
+    pub fn alpha_kind(&self) -> AlphaKind {
+        self.alpha_profile.kind
+    }
+
+    pub fn alpha_profile(&self) -> AlphaProfile {
+        self.alpha_profile
+    }
+
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    pub fn sample_pixel(&self, x: usize, y: usize) -> Color32 {
+        self.pixels[y.min(self.height.saturating_sub(1)) * self.width + x.min(self.width.saturating_sub(1))]
     }
 
     pub fn sample(&self, u: f32, v: f32) -> Color32 {
         let x = (u.clamp(0.0, 1.0) * (self.width.saturating_sub(1) as f32)).round() as usize;
         let y = (v.clamp(0.0, 1.0) * (self.height.saturating_sub(1) as f32)).round() as usize;
-        self.pixels[y * self.width + x]
+        self.sample_pixel(x, y)
+    }
+}
+
+fn classify_alpha(pixels: &[Color32]) -> AlphaProfile {
+    let mut transparent_count = 0;
+    let mut opaque_count = 0;
+    let mut mixed_count = 0;
+
+    for pixel in pixels {
+        match pixel.a() {
+            0 => transparent_count += 1,
+            255 => opaque_count += 1,
+            _ => mixed_count += 1,
+        }
+    }
+
+    let kind = if mixed_count > 0 {
+        AlphaKind::MixedAlpha
+    } else if transparent_count > 0 {
+        AlphaKind::BinaryAlpha
+    } else {
+        AlphaKind::FullyOpaque
+    };
+
+    AlphaProfile {
+        kind,
+        transparent_count,
+        opaque_count,
+        mixed_count,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn color_image(pixels: Vec<Color32>) -> egui::ImageData {
+        egui::ImageData::Color(egui::ColorImage::new([pixels.len(), 1], pixels).into())
+    }
+
+    #[test]
+    fn classifies_fully_opaque_textures() {
+        let texture = CpuTexture::from_image_data(&color_image(vec![Color32::RED, Color32::GREEN])).unwrap();
+
+        assert_eq!(texture.alpha_kind(), AlphaKind::FullyOpaque);
+    }
+
+    #[test]
+    fn classifies_binary_alpha_textures() {
+        let texture = CpuTexture::from_image_data(&color_image(vec![Color32::TRANSPARENT, Color32::RED])).unwrap();
+
+        assert_eq!(texture.alpha_kind(), AlphaKind::BinaryAlpha);
+    }
+
+    #[test]
+    fn classifies_mixed_alpha_textures() {
+        let texture = CpuTexture::from_image_data(&color_image(vec![Color32::from_rgba_unmultiplied(10, 20, 30, 128)])).unwrap();
+
+        assert_eq!(texture.alpha_kind(), AlphaKind::MixedAlpha);
+    }
+
+    #[test]
+    fn partial_update_recomputes_alpha_classification() {
+        let mut texture = CpuTexture::from_image_data(&color_image(vec![Color32::RED, Color32::GREEN])).unwrap();
+        let update = CpuTexture::from_image_data(&color_image(vec![Color32::TRANSPARENT])).unwrap();
+
+        texture.update_region(TextureId::Managed(0), 1, 0, &update).unwrap();
+
+        assert_eq!(texture.alpha_kind(), AlphaKind::BinaryAlpha);
     }
 }

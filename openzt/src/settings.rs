@@ -6,6 +6,31 @@ use tracing::error;
 mod ai;
 mod debug;
 mod util;
+mod zoo_ini;
+
+pub(crate) fn reload_zoo_ini_settings() -> Result<(), String> {
+    zoo_ini::reload_zoo_ini_settings()
+}
+
+pub(crate) fn get_zoo_setting(section: &str, key: &str) -> Option<String> {
+    zoo_ini::get_zoo_setting(section, key)
+}
+
+pub(crate) fn get_zoo_setting_vec(section: &str, key: &str) -> Option<Vec<String>> {
+    zoo_ini::get_zoo_setting_vec(section, key)
+}
+
+pub(crate) fn get_zoo_setting_bool(section: &str, key: &str) -> Result<Option<bool>, String> {
+    zoo_ini::get_zoo_setting_bool(section, key)
+}
+
+pub(crate) fn get_zoo_setting_i32(section: &str, key: &str) -> Result<Option<i32>, String> {
+    zoo_ini::get_zoo_setting_i32(section, key)
+}
+
+pub(crate) fn zoo_setting_sections() -> Vec<String> {
+    zoo_ini::zoo_setting_sections()
+}
 
 fn command_get_setting(args: Vec<&str>) -> Result<String, CommandError> {
     if args.len() != 2 {
@@ -69,6 +94,10 @@ mod zoo_ini_loading {
 }
 
 pub fn init() {
+    if let Err(e) = reload_zoo_ini_settings() {
+        error!("Error loading zoo.ini settings: {}", e);
+    }
+
     // get_setting(section, key) - two string args
     lua_fn!("get_setting", "Gets a setting value", "get_setting(section, key)", |section: String, key: String| {
         match command_get_setting(vec![&section, &key]) {
