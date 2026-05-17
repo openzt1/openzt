@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
-use egui::{Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, Pos2, Rect, TextureHandle, Vec2, pos2, vec2};
+use egui::{pos2, vec2, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, PointerButton, Pos2, Rect, Sense, TextureHandle, Ui, Vec2};
 use openzt_configparser::ini::Ini;
 use tracing::{info, warn};
 
 use super::zt_image;
 
 static TEXTURES: OnceLock<Mutex<TextureCache>> = OnceLock::new();
+static BUTTONS: OnceLock<Mutex<ButtonState>> = OnceLock::new();
 static BOLD_FONT_REGISTERED: AtomicBool = AtomicBool::new(false);
 static BOLD_FONT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -19,20 +20,53 @@ const BOLD_FONT_PATH: &str = r"C:\Windows\Fonts\arialbd.ttf";
 const GREEN_TEXT: Color32 = Color32::from_rgb(83, 219, 83);
 
 struct TextureCache {
-    animations: HashMap<&'static str, CachedTexture>,
+    animations: HashMap<TextureKey, CachedTexture>,
 }
 
 impl TextureCache {
     fn new() -> Self {
-        Self {
-            animations: HashMap::new(),
-        }
+        Self { animations: HashMap::new() }
     }
 
-    fn animation(&mut self, ctx: &Context, base: &'static str) -> Option<LoadedTexture> {
-        let entry = self.animations.entry(base).or_default();
-        entry.texture(ctx, base)
+    fn animation(&mut self, ctx: &Context, base: &'static str, visual_state: VisualState) -> Option<LoadedTexture> {
+        let key = TextureKey { base, visual_state };
+        let entry = self.animations.entry(key).or_default();
+        entry.texture(ctx, base, visual_state)
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TextureKey {
+    base: &'static str,
+    visual_state: VisualState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum VisualState {
+    Normal,
+    Hover,
+    Selected,
+}
+
+impl VisualState {
+    fn animation_name(self) -> &'static str {
+        match self {
+            Self::Normal => "N",
+            Self::Hover => "H",
+            Self::Selected => "S",
+        }
+    }
+}
+
+#[derive(Default)]
+struct ButtonState {
+    selected: HashSet<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+enum ButtonMode {
+    Momentary,
+    Selected,
 }
 
 #[derive(Default)]
@@ -44,7 +78,7 @@ struct CachedTexture {
 }
 
 impl CachedTexture {
-    fn texture(&mut self, ctx: &Context, base: &'static str) -> Option<LoadedTexture> {
+    fn texture(&mut self, ctx: &Context, base: &'static str, visual_state: VisualState) -> Option<LoadedTexture> {
         if let Some(texture) = &self.texture {
             return Some(LoadedTexture {
                 texture: texture.clone(),
@@ -56,7 +90,7 @@ impl CachedTexture {
             return None;
         }
 
-        let Some(texture) = load_animation_texture(ctx, base, &mut self.missing_logged) else {
+        let Some(texture) = load_animation_texture(ctx, base, visual_state, &mut self.missing_logged) else {
             return None;
         };
 
@@ -84,7 +118,7 @@ pub fn show(ctx: &Context, screen_size: Vec2) {
     egui::Area::new("openzt_vanilla_main_ui".into())
         .order(egui::Order::Background)
         .fixed_pos(Pos2::ZERO)
-        .interactable(false)
+        .interactable(true)
         .show(ctx, |ui| {
             ui.set_min_size(screen_size);
             let painter = ui.painter().clone();
@@ -97,16 +131,25 @@ pub fn show(ctx: &Context, screen_size: Vec2) {
                 }
             };
 
-            draw_main_ui(ctx, &painter, &mut cache, screen_size);
+            let buttons = BUTTONS.get_or_init(|| Mutex::new(ButtonState::default()));
+            let mut buttons = match buttons.lock() {
+                Ok(buttons) => buttons,
+                Err(err) => {
+                    warn!("egui overlay: vanilla UI button state lock poisoned: {err}");
+                    return;
+                }
+            };
+
+            draw_main_ui(ctx, ui, &painter, &mut cache, &mut buttons, screen_size);
         });
 }
 
-fn draw_main_ui(ctx: &Context, painter: &Painter, cache: &mut TextureCache, screen_size: Vec2) {
-    let bg1_size = texture_size(ctx, cache, "ui/main/backgnd1/backgnd1").unwrap_or(vec2(64.0, 248.0));
-    let bg2_size = texture_size(ctx, cache, "ui/main/backgnd2/backgnd2").unwrap_or(vec2(170.0, 128.0));
-    let bg3_size = texture_size(ctx, cache, "ui/main/backgnd3/backgnd3").unwrap_or(vec2(200.0, 112.0));
-    let bg4_size = texture_size(ctx, cache, "ui/main/backgnd4/backgnd4").unwrap_or(vec2(330.0, 38.0));
-    let bg5_size = texture_size(ctx, cache, "ui/main/backgnd5/backgnd5").unwrap_or(vec2(256.0, 38.0));
+fn draw_main_ui(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, screen_size: Vec2) {
+    let bg1_size = texture_size(ctx, cache, "ui/main/backgnd1/backgnd1", VisualState::Normal).unwrap_or(vec2(64.0, 248.0));
+    let bg2_size = texture_size(ctx, cache, "ui/main/backgnd2/backgnd2", VisualState::Normal).unwrap_or(vec2(170.0, 128.0));
+    let bg3_size = texture_size(ctx, cache, "ui/main/backgnd3/backgnd3", VisualState::Normal).unwrap_or(vec2(200.0, 112.0));
+    let bg4_size = texture_size(ctx, cache, "ui/main/backgnd4/backgnd4", VisualState::Normal).unwrap_or(vec2(330.0, 38.0));
+    let bg5_size = texture_size(ctx, cache, "ui/main/backgnd5/backgnd5", VisualState::Normal).unwrap_or(vec2(256.0, 38.0));
 
     let bg1_rect = rect_from_pos_size(pos2(0.0, 0.0), bg1_size);
     let bg2_pos = pos2(0.0, (screen_size.y - bg2_size.y).max(0.0));
@@ -120,14 +163,7 @@ fn draw_main_ui(ctx: &Context, painter: &Painter, cache: &mut TextureCache, scre
     let bg5 = rect_from_pos_size(bg5_pos, bg5_size);
 
     if bg2.top() > bg1_rect.bottom() {
-        draw_tiled_y(
-            ctx,
-            painter,
-            cache,
-            "ui/main/bg2/bg2",
-            pos2(0.0, bg1_rect.bottom()),
-            bg2.top() - bg1_rect.bottom(),
-        );
+        draw_tiled_y(ctx, painter, cache, "ui/main/bg2/bg2", pos2(0.0, bg1_rect.bottom()), bg2.top() - bg1_rect.bottom());
     }
     if bg4.left() > bg3.right() {
         draw_tiled_x_bottom(ctx, painter, cache, "ui/main/bg3/bg3", bg3.right(), screen_size.y, bg4.left() - bg3.right());
@@ -142,13 +178,13 @@ fn draw_main_ui(ctx: &Context, painter: &Painter, cache: &mut TextureCache, scre
     draw_anim(ctx, painter, cache, "ui/main/backgnd3/backgnd3", bg3_pos, bg3_size);
     draw_anim(ctx, painter, cache, "ui/main/backgnd5/backgnd5", bg5_pos, bg5_size);
 
-    draw_left_buttons(ctx, painter, cache, bg1.rect);
-    draw_minimap_cluster(ctx, painter, cache, bg2);
-    draw_time_and_money(ctx, painter, cache, bg3, bg4);
-    draw_status_cluster(ctx, painter, cache, bg4, bg5);
+    draw_left_buttons(ctx, ui, painter, cache, buttons, bg1.rect);
+    draw_minimap_cluster(ctx, ui, painter, cache, buttons, bg2);
+    draw_time_and_money(ctx, ui, painter, cache, buttons, bg3, bg4);
+    draw_status_cluster(ctx, ui, painter, cache, buttons, bg4, bg5);
 }
 
-fn draw_left_buttons(ctx: &Context, painter: &Painter, cache: &mut TextureCache, bg1: Rect) {
+fn draw_left_buttons(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons_state: &mut ButtonState, bg1: Rect) {
     let buttons = [
         ("ui/main/habitat/habitat", 4.0, 13.0),
         ("ui/main/buyanim/buyanim", 4.0, 60.0),
@@ -163,25 +199,125 @@ fn draw_left_buttons(ctx: &Context, painter: &Painter, cache: &mut TextureCache,
     ];
 
     for (resource, x, y) in buttons {
-        draw_anim(ctx, painter, cache, resource, bg1.min + vec2(x, y), vec2(40.0, 40.0));
+        draw_button(
+            ctx,
+            ui,
+            painter,
+            cache,
+            buttons_state,
+            resource,
+            bg1.min + vec2(x, y),
+            vec2(40.0, 40.0),
+            ButtonMode::Selected,
+        );
     }
 }
 
-fn draw_minimap_cluster(ctx: &Context, painter: &Painter, cache: &mut TextureCache, bg2: Rect) {
-    draw_anim(ctx, painter, cache, "ui/sharedui/snap/snap", bg2.min + vec2(5.0, 86.0), vec2(34.0, 34.0));
-    draw_anim(ctx, painter, cache, "ui/main/zoomin/zoomin", bg2.min + vec2(14.0, 17.0), vec2(28.0, 28.0));
-    draw_anim(ctx, painter, cache, "ui/main/zoomout/zoomout", bg2.min + vec2(5.0, 24.0), vec2(28.0, 28.0));
-    draw_anim(ctx, painter, cache, "ui/main/rotr/rotr", bg2.min + vec2(6.0, 40.0), vec2(28.0, 28.0));
-    draw_anim(ctx, painter, cache, "ui/main/rotl/rotl", bg2.min + vec2(26.0, 27.0), vec2(28.0, 28.0));
-    draw_anim(ctx, painter, cache, "ui/main/trees/trees", bg2.min + vec2(147.0, 81.0), vec2(28.0, 28.0));
-    draw_anim(ctx, painter, cache, "ui/main/guests/guests", bg2.min + vec2(127.0, 90.0), vec2(28.0, 28.0));
-    draw_anim(ctx, painter, cache, "ui/main/builds/builds", bg2.min + vec2(106.0, 100.0), vec2(28.0, 28.0));
+fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, bg2: Rect) {
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/sharedui/snap/snap",
+        bg2.min + vec2(5.0, 86.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Momentary,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/zoomin/zoomin",
+        bg2.min + vec2(14.0, 17.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/zoomout/zoomout",
+        bg2.min + vec2(5.0, 24.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/rotr/rotr",
+        bg2.min + vec2(6.0, 40.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/rotl/rotl",
+        bg2.min + vec2(26.0, 27.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/trees/trees",
+        bg2.min + vec2(147.0, 81.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Selected,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/guests/guests",
+        bg2.min + vec2(127.0, 90.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Selected,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/builds/builds",
+        bg2.min + vec2(106.0, 100.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Selected,
+    );
 
     let _minimap = Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0));
 }
 
-fn draw_time_and_money(ctx: &Context, painter: &Painter, cache: &mut TextureCache, bg3: Rect, bg4: Rect) {
-    let pause = draw_anim(ctx, painter, cache, "ui/main/pause/pause", bg3.min + vec2(170.0, 80.0), vec2(34.0, 34.0));
+fn draw_time_and_money(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, bg3: Rect, bg4: Rect) {
+    let pause = draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/pause/pause",
+        bg3.min + vec2(170.0, 80.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Selected,
+    );
     let date_rect = Rect::from_min_size(pause.rect.min + vec2(25.0, 7.0), vec2(108.0, 18.0));
     painter.text(date_rect.center(), Align2::CENTER_CENTER, "Jan 1, Year 1", bold_font(14.0), GREEN_TEXT);
 
@@ -189,33 +325,93 @@ fn draw_time_and_money(ctx: &Context, painter: &Painter, cache: &mut TextureCach
     painter.text(money_rect.center(), Align2::CENTER_CENTER, "$50,000", bold_font(14.0), GREEN_TEXT);
 }
 
-fn draw_status_cluster(ctx: &Context, painter: &Painter, cache: &mut TextureCache, bg4: Rect, bg5: Rect) {
-    draw_status(ctx, painter, cache, "ui/main/zstat/zstat", bg4.min + vec2(231.0, 3.0), true);
-    draw_status(ctx, painter, cache, "ui/main/astat/astat", bg5.min + vec2(0.0, 3.0), true);
-    draw_status(ctx, painter, cache, "ui/main/gstat/gstat", bg5.min + vec2(85.0, 3.0), true);
-    draw_anim(ctx, painter, cache, "ui/main/hstat/hstat", bg5.min + vec2(170.0, 3.0), vec2(34.0, 34.0));
-    draw_anim(ctx, painter, cache, "ui/main/staff/staff", bg5.min + vec2(206.0, 3.0), vec2(34.0, 34.0));
+fn draw_status_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, bg4: Rect, bg5: Rect) {
+    draw_status(ctx, ui, painter, cache, buttons, "ui/main/zstat/zstat", bg4.min + vec2(231.0, 3.0), true);
+    draw_status(ctx, ui, painter, cache, buttons, "ui/main/astat/astat", bg5.min + vec2(0.0, 3.0), true);
+    draw_status(ctx, ui, painter, cache, buttons, "ui/main/gstat/gstat", bg5.min + vec2(85.0, 3.0), true);
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/hstat/hstat",
+        bg5.min + vec2(170.0, 3.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Selected,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        "ui/main/staff/staff",
+        bg5.min + vec2(206.0, 3.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Selected,
+    );
 }
 
-fn draw_status(ctx: &Context, painter: &Painter, cache: &mut TextureCache, button: &'static str, pos: Pos2, with_meter: bool) {
+fn draw_status(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, button: &'static str, pos: Pos2, with_meter: bool) {
     if with_meter {
         draw_anim(ctx, painter, cache, "ui/main/progbck/progbck", pos + vec2(26.0, 5.0), vec2(56.0, 22.0));
         let meter = Rect::from_min_size(pos + vec2(32.0, 9.0), vec2(45.0, 9.0));
         painter.rect_filled(meter, 0.0, Color32::from_rgb(48, 88, 31));
         painter.rect_filled(Rect::from_min_size(meter.min, vec2(34.0, meter.height())), 0.0, Color32::from_rgb(66, 196, 59));
     }
-    draw_anim(ctx, painter, cache, button, pos, vec2(34.0, 34.0));
+    draw_button(ctx, ui, painter, cache, buttons, button, pos, vec2(34.0, 34.0), ButtonMode::Selected);
 }
 
-fn draw_anim(
+fn draw_button(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+) -> DrawnRect {
+    let size = texture_size(ctx, cache, resource, VisualState::Normal).unwrap_or(fallback_size);
+    let rect = rect_from_pos_size(pos, size);
+    let response = ui.interact(rect, ui.make_persistent_id(resource), Sense::click());
+
+    if matches!(mode, ButtonMode::Selected) && response.clicked_by(PointerButton::Primary) {
+        buttons.selected.insert(resource);
+    }
+
+    let selected = buttons.selected.contains(resource);
+    let visual_state = if matches!(mode, ButtonMode::Momentary) && response.is_pointer_button_down_on() {
+        VisualState::Selected
+    } else if selected {
+        VisualState::Selected
+    } else if response.hovered() {
+        VisualState::Hover
+    } else {
+        VisualState::Normal
+    };
+
+    draw_anim_state(ctx, painter, cache, resource, pos, size, visual_state)
+}
+
+fn draw_anim(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, pos: Pos2, fallback_size: Vec2) -> DrawnRect {
+    draw_anim_state(ctx, painter, cache, resource, pos, fallback_size, VisualState::Normal)
+}
+
+fn draw_anim_state(
     ctx: &Context,
     painter: &Painter,
     cache: &mut TextureCache,
     resource: &'static str,
     pos: Pos2,
     fallback_size: Vec2,
+    visual_state: VisualState,
 ) -> DrawnRect {
-    let loaded = cache.animation(ctx, resource);
+    let loaded = cache
+        .animation(ctx, resource, visual_state)
+        .or_else(|| cache.animation(ctx, resource, VisualState::Normal));
     let size = loaded.as_ref().map(|texture| texture.size).unwrap_or(fallback_size);
     let rect = rect_from_pos_size(pos, size);
     let loaded_image = loaded.is_some();
@@ -223,10 +419,7 @@ fn draw_anim(
         painter.image(texture.texture.id(), rect, unit_uv(), Color32::WHITE);
     }
 
-    DrawnRect {
-        rect,
-        loaded: loaded_image,
-    }
+    DrawnRect { rect, loaded: loaded_image }
 }
 
 fn draw_tiled_y(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, pos: Pos2, height: f32) {
@@ -234,7 +427,7 @@ fn draw_tiled_y(ctx: &Context, painter: &Painter, cache: &mut TextureCache, reso
         return;
     }
 
-    let Some(texture) = cache.animation(ctx, resource) else {
+    let Some(texture) = cache.animation(ctx, resource, VisualState::Normal) else {
         return;
     };
     let tile_size = texture.size;
@@ -258,7 +451,7 @@ fn draw_tiled_x_bottom(ctx: &Context, painter: &Painter, cache: &mut TextureCach
         return;
     }
 
-    let Some(texture) = cache.animation(ctx, resource) else {
+    let Some(texture) = cache.animation(ctx, resource, VisualState::Normal) else {
         return;
     };
     let tile_size = texture.size;
@@ -278,11 +471,11 @@ fn draw_tiled_x_bottom(ctx: &Context, painter: &Painter, cache: &mut TextureCach
     }
 }
 
-fn texture_size(ctx: &Context, cache: &mut TextureCache, resource: &'static str) -> Option<Vec2> {
-    cache.animation(ctx, resource).map(|texture| texture.size)
+fn texture_size(ctx: &Context, cache: &mut TextureCache, resource: &'static str, visual_state: VisualState) -> Option<Vec2> {
+    cache.animation(ctx, resource, visual_state).map(|texture| texture.size)
 }
 
-fn load_animation_texture(ctx: &Context, base: &'static str, missing_logged: &mut bool) -> Option<LoadedTexture> {
+fn load_animation_texture(ctx: &Context, base: &'static str, visual_state: VisualState, missing_logged: &mut bool) -> Option<LoadedTexture> {
     let descriptor_name = format!("{base}.ani");
     let Some((descriptor_source, descriptor_data)) = crate::resource_manager::lazyresourcemap::get_file(&descriptor_name) else {
         log_missing(missing_logged, &descriptor_name);
@@ -296,7 +489,7 @@ fn load_animation_texture(ctx: &Context, base: &'static str, missing_logged: &mu
         return None;
     }
 
-    let resource_name = match animation_resource_name(&ini) {
+    let resource_name = match animation_resource_name(&ini, visual_state) {
         Some(resource_name) => resource_name,
         None => {
             warn!("egui overlay: animation descriptor {descriptor_name} has no animation entries");
@@ -321,7 +514,7 @@ fn load_animation_texture(ctx: &Context, base: &'static str, missing_logged: &mu
                 return None;
             };
             let size = vec2(image.size[0] as f32, image.size[1] as f32);
-            let texture = ctx.load_texture(format!("vanilla-main:{base}"), image, egui::TextureOptions::NEAREST);
+            let texture = ctx.load_texture(format!("vanilla-main:{base}:{}", visual_state.animation_name()), image, egui::TextureOptions::NEAREST);
             info!(
                 "egui overlay: loaded vanilla UI asset {base} using {descriptor_source}, {animation_source}, {palette_source} as {}x{}",
                 size.x, size.y
@@ -335,7 +528,7 @@ fn load_animation_texture(ctx: &Context, base: &'static str, missing_logged: &mu
     }
 }
 
-fn animation_resource_name(ini: &Ini) -> Option<String> {
+fn animation_resource_name(ini: &Ini, visual_state: VisualState) -> Option<String> {
     let mut dirs = Vec::new();
     for index in 0.. {
         let Some(dir) = ini.get("animation", &format!("dir{index}")) else {
@@ -347,7 +540,8 @@ fn animation_resource_name(ini: &Ini) -> Option<String> {
     let animations = ini.get_vec("animation", "animation")?;
     let animation = animations
         .iter()
-        .find(|animation| animation.eq_ignore_ascii_case("N"))
+        .find(|animation| animation.eq_ignore_ascii_case(visual_state.animation_name()))
+        .or_else(|| animations.iter().find(|animation| animation.eq_ignore_ascii_case("N")))
         .or_else(|| animations.first())?;
 
     dirs.push(animation.clone());
@@ -403,12 +597,8 @@ fn register_bold_font(ctx: &Context) -> bool {
     };
 
     let mut fonts = FontDefinitions::default();
-    fonts
-        .font_data
-        .insert(BOLD_FONT_NAME.to_string(), Arc::new(FontData::from_owned(font_bytes)));
-    fonts
-        .families
-        .insert(FontFamily::Name(BOLD_FONT_FAMILY.into()), vec![BOLD_FONT_NAME.to_string()]);
+    fonts.font_data.insert(BOLD_FONT_NAME.to_string(), Arc::new(FontData::from_owned(font_bytes)));
+    fonts.families.insert(FontFamily::Name(BOLD_FONT_FAMILY.into()), vec![BOLD_FONT_NAME.to_string()]);
 
     ctx.set_fonts(fonts);
     info!("egui overlay: registered bold UI font from {BOLD_FONT_PATH}");

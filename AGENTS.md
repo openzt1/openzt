@@ -306,6 +306,14 @@ resource_manager::add_handler("bfb", Box::new(BfbHandler));
 - Frame timing hooks are in `openzt/src/ui/render_hook.rs`; mouse events come from the subclassed game WndProc in `openzt/src/ui/wndproc.rs`; keyboard events are forwarded from `shortcuts.rs`.
 - Use `--features egui-overlay --features debug-blit` only to test the overlay/window upload path with a solid red image.
 
+### Vanilla UI Layout Notes
+
+- Vanilla `.lyt` files are INI-like and may repeat keys (`state=`, `button=`, `image=`, `backcolor=`); use `openzt-configparser` vector access (`get_vec`) when order or all values matter.
+- `.lyt` `animation=ui/main/pause/pause` points to descriptor `ui/main/pause/pause.ani`, not directly to the binary animation frame.
+- In `.ani`, join all `dir*` entries with each `animation` value to get binary animation resources: `dir0=ui`, `dir1=main`, `dir2=pause`, `animation=N` => `ui/main/pause/N`. The matching palette is usually beside the descriptor, e.g. `ui/main/pause/pause.pal`.
+- Common button animation states are `N` normal, `H` hover, `S` selected/pressed, and `G` disabled/greyed. Static visual passes usually use `N`; toggle buttons (`state=2048`) may need `S` once real UI state is implemented.
+- Respect `layer` ordering and anchors. `x/y` are relative to `anchor` when present; `x=left|center|right` and `y=top|bottom` anchor to the screen/layout. `dynamicheight=1` fillers repeat/extend vertically only; `dynamicwidth=1` fillers repeat/extend horizontally only.
+
 ## Testing
 
 ### Integration Tests
