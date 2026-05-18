@@ -349,8 +349,10 @@ fn command_call_ui_callback(args: Vec<&str>) -> Result<String, CommandError> {
     }
     let callback_function = match args[0] {
         "click_continue" => unsafe { openzt_detour::generated::ztui::CLICK_CONTINUE.original() },
+        "click_rotate_ccw" => unsafe { openzt_detour::generated::standalone::CLICK_ROTATE_CCW.original() },
+        "click_rotate_cw" => unsafe { openzt_detour::generated::standalone::CLICK_ROTATE_CW.original() },
         "list" => {
-            return Ok("click_continue".to_string());
+            return Ok("click_continue, click_rotate_ccw, click_rotate_cw".to_string());
         }
         _ => return Err(Into::into("Unknown UI callback")),
     };
@@ -358,6 +360,18 @@ fn command_call_ui_callback(args: Vec<&str>) -> Result<String, CommandError> {
         callback_function();
     }
     Ok("Success".to_string())
+}
+
+pub(crate) fn click_rotate_ccw() {
+    unsafe {
+        openzt_detour::generated::standalone::CLICK_ROTATE_CCW.original()();
+    }
+}
+
+pub(crate) fn click_rotate_cw() {
+    unsafe {
+        openzt_detour::generated::standalone::CLICK_ROTATE_CW.original()();
+    }
 }
 
 fn click_ui_element(_id: UIElementId) {

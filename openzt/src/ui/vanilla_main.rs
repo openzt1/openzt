@@ -386,7 +386,7 @@ fn draw_minimap_cluster(
         vec2(28.0, 28.0),
         ButtonMode::Momentary,
     );
-    draw_button(
+    draw_action_button(
         ctx,
         ui,
         painter,
@@ -397,8 +397,9 @@ fn draw_minimap_cluster(
         bg2.min + vec2(6.0, 40.0),
         vec2(28.0, 28.0),
         ButtonMode::Momentary,
+        crate::ztui::click_rotate_ccw,
     );
-    draw_button(
+    draw_action_button(
         ctx,
         ui,
         painter,
@@ -409,6 +410,7 @@ fn draw_minimap_cluster(
         bg2.min + vec2(26.0, 27.0),
         vec2(28.0, 28.0),
         ButtonMode::Momentary,
+        crate::ztui::click_rotate_cw,
     );
     draw_button(
         ctx,
@@ -550,12 +552,49 @@ fn draw_button(
     fallback_size: Vec2,
     mode: ButtonMode,
 ) -> DrawnRect {
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, None)
+}
+
+fn draw_action_button(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+    action: fn(),
+) -> DrawnRect {
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, Some(action))
+}
+
+fn draw_button_impl(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+    action: Option<fn()>,
+) -> DrawnRect {
     let size = texture_size(ctx, cache, resource, VisualState::Normal).unwrap_or(fallback_size);
     let rect = rect_from_pos_size(pos, size);
     let response = ui.interact(rect, ui.make_persistent_id(resource), Sense::click());
 
-    if matches!(mode, ButtonMode::Selected) && response.clicked_by(PointerButton::Primary) {
-        buttons.selected.insert(resource);
+    if response.clicked_by(PointerButton::Primary) {
+        if let Some(action) = action {
+            action();
+        }
+        if matches!(mode, ButtonMode::Selected) {
+            buttons.selected.insert(resource);
+        }
     }
 
     let selected = buttons.selected.contains(resource);
