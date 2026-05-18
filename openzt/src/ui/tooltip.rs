@@ -41,6 +41,11 @@ mod tooltip_hooks {
             return;
         }
 
+        if crate::ui::blocks_pointer_input() {
+            clear_tooltip();
+            return;
+        }
+
         match tooltip_text(help_text) {
             Some(text) => {
                 set_tooltip(text);
@@ -55,6 +60,11 @@ mod tooltip_hooks {
     unsafe extern "thiscall" fn bfuimgr_display_help_0(this: *const u32, help_id: i32, has_long_tooltip: i8) {
         if !crate::ui::is_live_game_active() {
             unsafe { DISPLAY_HELP_0_DETOUR.call(this, help_id, has_long_tooltip) };
+            return;
+        }
+
+        if crate::ui::blocks_pointer_input() {
+            clear_tooltip();
             return;
         }
 
@@ -103,6 +113,12 @@ fn active_tooltip(ctx: &Context, now: Instant) -> Option<(String, Pos2)> {
     let cached_pointer = crate::ui::last_pointer_pos();
     let pointer = egui_pointer.or(hwnd_pointer).or(cached_pointer);
     let mut state = tooltip_state().lock().ok()?;
+
+    if pointer.is_some_and(crate::ui::blocks_pointer_input_at) {
+        state.current = None;
+        return None;
+    }
+
     let request = state.current.as_mut()?;
 
     if let Some(pointer) = pointer {

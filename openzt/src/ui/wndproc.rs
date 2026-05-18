@@ -66,50 +66,57 @@ unsafe extern "system" fn overlay_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, 
 
     match msg {
         WM_MOUSEMOVE => {
-            crate::ui::push_event(Event::PointerMoved(pointer_pos(lparam)));
-            if should_consume_pointer_event() {
+            let pos = pointer_pos(lparam);
+            crate::ui::push_event(Event::PointerMoved(pos));
+            if should_consume_pointer_event_at(pos) {
                 return LRESULT(0);
             }
         }
         WM_LBUTTONDOWN => {
-            push_pointer_button(lparam, PointerButton::Primary, true);
-            if should_consume_pointer_event() {
+            let pos = pointer_pos(lparam);
+            push_pointer_button(pos, PointerButton::Primary, true);
+            if should_consume_pointer_event_at(pos) {
                 capture_pointer(hwnd);
                 return LRESULT(0);
             }
         }
         WM_LBUTTONDBLCLK => {
-            push_pointer_button(lparam, PointerButton::Primary, true);
-            if should_consume_pointer_event() {
+            let pos = pointer_pos(lparam);
+            push_pointer_button(pos, PointerButton::Primary, true);
+            if should_consume_pointer_event_at(pos) {
                 capture_pointer(hwnd);
                 return LRESULT(0);
             }
         }
         WM_LBUTTONUP => {
-            push_pointer_button(lparam, PointerButton::Primary, false);
-            if should_consume_pointer_event() {
+            let pos = pointer_pos(lparam);
+            push_pointer_button(pos, PointerButton::Primary, false);
+            if should_consume_pointer_event_at(pos) {
                 release_pointer_capture();
                 return LRESULT(0);
             }
             release_pointer_capture();
         }
         WM_RBUTTONDOWN => {
-            push_pointer_button(lparam, PointerButton::Secondary, true);
-            if should_consume_pointer_event() {
+            let pos = pointer_pos(lparam);
+            push_pointer_button(pos, PointerButton::Secondary, true);
+            if should_consume_pointer_event_at(pos) {
                 capture_pointer(hwnd);
                 return LRESULT(0);
             }
         }
         WM_RBUTTONDBLCLK => {
-            push_pointer_button(lparam, PointerButton::Secondary, true);
-            if should_consume_pointer_event() {
+            let pos = pointer_pos(lparam);
+            push_pointer_button(pos, PointerButton::Secondary, true);
+            if should_consume_pointer_event_at(pos) {
                 capture_pointer(hwnd);
                 return LRESULT(0);
             }
         }
         WM_RBUTTONUP => {
-            push_pointer_button(lparam, PointerButton::Secondary, false);
-            if should_consume_pointer_event() {
+            let pos = pointer_pos(lparam);
+            push_pointer_button(pos, PointerButton::Secondary, false);
+            if should_consume_pointer_event_at(pos) {
                 release_pointer_capture();
                 return LRESULT(0);
             }
@@ -117,12 +124,13 @@ unsafe extern "system" fn overlay_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, 
         }
         WM_MOUSEWHEEL => {
             let delta = wheel_delta(wparam);
+            let pos = crate::ui::current_pointer_pos().or_else(crate::ui::last_pointer_pos);
             crate::ui::push_event(Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
                 delta: Vec2::new(0.0, delta),
                 modifiers: Modifiers::default(),
             });
-            if should_consume_pointer_event() {
+            if pos.map_or_else(should_consume_pointer_event, should_consume_pointer_event_at) {
                 return LRESULT(0);
             }
         }
@@ -143,6 +151,10 @@ fn should_consume_pointer_event() -> bool {
     POINTER_CAPTURED.load(Ordering::Relaxed) || crate::ui::blocks_pointer_input()
 }
 
+fn should_consume_pointer_event_at(pos: Pos2) -> bool {
+    POINTER_CAPTURED.load(Ordering::Relaxed) || crate::ui::blocks_pointer_input_at(pos)
+}
+
 fn capture_pointer(hwnd: HWND) {
     unsafe {
         SetCapture(hwnd);
@@ -158,9 +170,9 @@ fn release_pointer_capture() {
     }
 }
 
-fn push_pointer_button(lparam: LPARAM, button: PointerButton, pressed: bool) {
+fn push_pointer_button(pos: Pos2, button: PointerButton, pressed: bool) {
     crate::ui::push_event(Event::PointerButton {
-        pos: pointer_pos(lparam),
+        pos,
         button,
         pressed,
         modifiers: Modifiers::default(),

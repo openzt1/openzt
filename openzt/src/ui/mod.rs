@@ -26,6 +26,7 @@ use windows::core::PCSTR;
 static BACKEND: OnceLock<Mutex<TinySkiaBackend>> = OnceLock::new();
 static INPUT_EVENTS: OnceLock<Mutex<Vec<Event>>> = OnceLock::new();
 static LAST_POINTER_POS: OnceLock<Mutex<Option<Pos2>>> = OnceLock::new();
+static LAST_CLIENT_SIZE: OnceLock<Mutex<Option<Vec2>>> = OnceLock::new();
 static HWND_RAW: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 static CAPTURE_STATE: OnceLock<Mutex<InputCaptureState>> = OnceLock::new();
 static START_TIME: OnceLock<Instant> = OnceLock::new();
@@ -36,7 +37,6 @@ const OPENZT_WINDOW_RESIZABLE: bool = true;
 
 #[derive(Default)]
 struct InputCaptureState {
-    pointer_over_area: bool,
     pointer_over_resize_bounds: bool,
     wants_pointer_input: bool,
     wants_keyboard_input: bool,
@@ -70,6 +70,7 @@ pub fn render_and_blit(hwnd: HWND) {
     let Some((width, height)) = client_size(hwnd) else {
         return;
     };
+    remember_client_size(width, height);
 
     #[cfg(feature = "debug-blit")]
     {
@@ -126,13 +127,13 @@ pub fn render_and_blit(hwnd: HWND) {
         {
             let mut state = capture_state();
             let pointer_over_resize_bounds = OPENZT_WINDOW_RESIZABLE && is_resize_cursor(output.platform_output.cursor_icon);
-            state.pointer_over_area = backend.context().is_pointer_over_area();
+            let pointer_over_blocking_overlay = current_pointer_pos().is_some_and(blocks_pointer_overlay_at);
             state.pointer_over_resize_bounds = pointer_over_resize_bounds;
             state.wants_pointer_input = backend.context().wants_pointer_input();
             state.wants_keyboard_input = backend.context().wants_keyboard_input();
             cursor::apply_egui_cursor(
                 output.platform_output.cursor_icon,
-                state.pointer_over_area || state.pointer_over_resize_bounds || state.wants_pointer_input,
+                state.pointer_over_resize_bounds || state.wants_pointer_input || pointer_over_blocking_overlay,
             );
             if !state.platform_output_warned && !output.platform_output.commands.is_empty() {
                 warn!("egui overlay: platform output requested but not implemented");
@@ -199,8 +200,35 @@ pub fn blocks_pointer_input() -> bool {
         return false;
     }
 
+    frame_blocks_pointer_input()
+        || current_pointer_pos()
+            .or_else(last_pointer_pos)
+            .is_some_and(blocks_pointer_overlay_at)
+}
+
+pub fn blocks_pointer_input_at(pos: Pos2) -> bool {
+    if !is_live_game_active() {
+        return false;
+    }
+
+    frame_blocks_pointer_input() || blocks_pointer_overlay_at(pos)
+}
+
+fn frame_blocks_pointer_input() -> bool {
     let state = capture_state();
-    state.pointer_over_area || state.pointer_over_resize_bounds || state.wants_pointer_input
+    state.pointer_over_resize_bounds || state.wants_pointer_input
+}
+
+fn blocks_pointer_overlay_at(pos: Pos2) -> bool {
+    let Some(screen_size) = last_client_size() else {
+        return false;
+    };
+
+    if SHOW_VANILLA_UI.load(Ordering::Acquire) && vanilla_main::blocks_pointer_at(pos, screen_size) {
+        return true;
+    }
+
+    SHOW_DEBUG_WINDOW.load(Ordering::Acquire) && debug_panel_rect(screen_size).contains(pos)
 }
 
 pub fn wants_keyboard_input() -> bool {
@@ -283,6 +311,16 @@ fn capture_state() -> std::sync::MutexGuard<'static, InputCaptureState> {
 
 fn reset_capture_state() {
     *capture_state() = InputCaptureState::default();
+}
+
+fn remember_client_size(width: u32, height: u32) {
+    if let Ok(mut stored) = LAST_CLIENT_SIZE.get_or_init(|| Mutex::new(None)).lock() {
+        *stored = Some(Vec2::new(width as f32, height as f32));
+    }
+}
+
+fn last_client_size() -> Option<Vec2> {
+    *LAST_CLIENT_SIZE.get_or_init(|| Mutex::new(None)).lock().ok()?
 }
 
 fn remember_pointer_pos(event: &Event) {
@@ -373,4 +411,8 @@ fn show_debug_panel(ctx: &egui::Context) {
                 }
             });
         });
+}
+
+fn debug_panel_rect(screen_size: Vec2) -> egui::Rect {
+    egui::Rect::from_min_size(Pos2::new((screen_size.x - 196.0).max(0.0), 72.0), Vec2::new(180.0, 38.0))
 }

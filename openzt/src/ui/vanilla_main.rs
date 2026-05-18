@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
-use egui::{pos2, vec2, Align2, Color32, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, PointerButton, Pos2, Rect, Sense, TextureHandle, Ui, Vec2};
+use egui::{
+    pos2, vec2, Align2, Color32, ColorImage, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, PointerButton, Pos2, Rect, Sense, TextureHandle,
+    Ui, Vec2,
+};
 use openzt_configparser::ini::Ini;
 use tracing::{info, warn};
 
@@ -11,6 +14,7 @@ use super::zt_image;
 
 static TEXTURES: OnceLock<Mutex<TextureCache>> = OnceLock::new();
 static BUTTONS: OnceLock<Mutex<ButtonState>> = OnceLock::new();
+static HIT_REGIONS: OnceLock<Mutex<Vec<HitRegion>>> = OnceLock::new();
 static BOLD_FONT_REGISTERED: AtomicBool = AtomicBool::new(false);
 static BOLD_FONT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -18,6 +22,16 @@ const BOLD_FONT_FAMILY: &str = "zt-bold";
 const BOLD_FONT_NAME: &str = "arial-bold";
 const BOLD_FONT_PATH: &str = r"C:\Windows\Fonts\arialbd.ttf";
 const GREEN_TEXT: Color32 = Color32::from_rgb(83, 219, 83);
+
+pub fn blocks_pointer_at(pos: Pos2, screen_size: Vec2) -> bool {
+    if let Ok(regions) = HIT_REGIONS.get_or_init(|| Mutex::new(Vec::new())).lock()
+        && !regions.is_empty()
+    {
+        return regions.iter().rev().any(|region| region.blocks(pos));
+    }
+
+    fallback_main_ui_block_rects(screen_size, |rect| rect.contains(pos))
+}
 
 struct TextureCache {
     animations: HashMap<TextureKey, CachedTexture>,
@@ -73,6 +87,7 @@ enum ButtonMode {
 struct CachedTexture {
     texture: Option<TextureHandle>,
     size: Vec2,
+    mask: Option<Arc<HitMask>>,
     failed: bool,
     missing_logged: bool,
 }
@@ -83,6 +98,7 @@ impl CachedTexture {
             return Some(LoadedTexture {
                 texture: texture.clone(),
                 size: self.size,
+                mask: self.mask.clone()?,
             });
         }
 
@@ -96,6 +112,7 @@ impl CachedTexture {
 
         self.size = texture.size;
         self.texture = Some(texture.texture.clone());
+        self.mask = Some(texture.mask.clone());
         Some(texture)
     }
 }
@@ -104,12 +121,63 @@ impl CachedTexture {
 struct LoadedTexture {
     texture: TextureHandle,
     size: Vec2,
+    mask: Arc<HitMask>,
 }
 
 #[derive(Clone, Copy)]
 struct DrawnRect {
     rect: Rect,
     loaded: bool,
+}
+
+#[derive(Clone)]
+struct HitRegion {
+    rect: Rect,
+    uv: Rect,
+    mask: Arc<HitMask>,
+}
+
+impl HitRegion {
+    fn blocks(&self, pos: Pos2) -> bool {
+        if !self.rect.contains(pos) || self.rect.width() <= 0.0 || self.rect.height() <= 0.0 {
+            return false;
+        }
+
+        let local_x = (pos.x - self.rect.left()) / self.rect.width();
+        let local_y = (pos.y - self.rect.top()) / self.rect.height();
+        let u = self.uv.left() + local_x * self.uv.width();
+        let v = self.uv.top() + local_y * self.uv.height();
+        self.mask.blocks_uv(u, v)
+    }
+}
+
+#[derive(Clone)]
+struct HitMask {
+    width: usize,
+    height: usize,
+    alpha: Vec<bool>,
+}
+
+impl HitMask {
+    fn from_image(image: &ColorImage) -> Self {
+        Self {
+            width: image.size[0],
+            height: image.size[1],
+            alpha: image.pixels.iter().map(|pixel| pixel.a() > 0).collect(),
+        }
+    }
+
+    fn blocks_uv(&self, u: f32, v: f32) -> bool {
+        if self.width == 0 || self.height == 0 || !u.is_finite() || !v.is_finite() {
+            return false;
+        }
+
+        let x = (u.clamp(0.0, 1.0) * self.width as f32).floor() as usize;
+        let y = (v.clamp(0.0, 1.0) * self.height as f32).floor() as usize;
+        let x = x.min(self.width - 1);
+        let y = y.min(self.height - 1);
+        self.alpha.get(y * self.width + x).copied().unwrap_or(false)
+    }
 }
 
 pub fn show(ctx: &Context, screen_size: Vec2) {
@@ -140,11 +208,21 @@ pub fn show(ctx: &Context, screen_size: Vec2) {
                 }
             };
 
-            draw_main_ui(ctx, ui, &painter, &mut cache, &mut buttons, screen_size);
+            let mut hit_regions = Vec::new();
+            draw_main_ui(ctx, ui, &painter, &mut cache, &mut buttons, &mut hit_regions, screen_size);
+            remember_hit_regions(hit_regions);
         });
 }
 
-fn draw_main_ui(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, screen_size: Vec2) {
+fn draw_main_ui(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    screen_size: Vec2,
+) {
     let bg1_size = texture_size(ctx, cache, "ui/main/backgnd1/backgnd1", VisualState::Normal).unwrap_or(vec2(64.0, 248.0));
     let bg2_size = texture_size(ctx, cache, "ui/main/backgnd2/backgnd2", VisualState::Normal).unwrap_or(vec2(170.0, 128.0));
     let bg3_size = texture_size(ctx, cache, "ui/main/backgnd3/backgnd3", VisualState::Normal).unwrap_or(vec2(200.0, 112.0));
@@ -163,28 +241,77 @@ fn draw_main_ui(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut Textu
     let bg5 = rect_from_pos_size(bg5_pos, bg5_size);
 
     if bg2.top() > bg1_rect.bottom() {
-        draw_tiled_y(ctx, painter, cache, "ui/main/bg2/bg2", pos2(0.0, bg1_rect.bottom()), bg2.top() - bg1_rect.bottom());
+        draw_tiled_y(ctx, painter, cache, hit_regions, "ui/main/bg2/bg2", pos2(0.0, bg1_rect.bottom()), bg2.top() - bg1_rect.bottom());
     }
     if bg4.left() > bg3.right() {
-        draw_tiled_x_bottom(ctx, painter, cache, "ui/main/bg3/bg3", bg3.right(), screen_size.y, bg4.left() - bg3.right());
+        draw_tiled_x_bottom(ctx, painter, cache, hit_regions, "ui/main/bg3/bg3", bg3.right(), screen_size.y, bg4.left() - bg3.right());
     }
     if bg5.left() > bg4.right() {
-        draw_tiled_x_bottom(ctx, painter, cache, "ui/main/bg4/bg4", bg4.right(), screen_size.y, bg5.left() - bg4.right());
+        draw_tiled_x_bottom(ctx, painter, cache, hit_regions, "ui/main/bg4/bg4", bg4.right(), screen_size.y, bg5.left() - bg4.right());
     }
 
-    draw_anim(ctx, painter, cache, "ui/main/backgnd4/backgnd4", bg4_pos, bg4_size);
-    let bg1 = draw_anim(ctx, painter, cache, "ui/main/backgnd1/backgnd1", pos2(0.0, 0.0), bg1_size);
-    draw_anim(ctx, painter, cache, "ui/main/backgnd2/backgnd2", bg2_pos, bg2_size);
-    draw_anim(ctx, painter, cache, "ui/main/backgnd3/backgnd3", bg3_pos, bg3_size);
-    draw_anim(ctx, painter, cache, "ui/main/backgnd5/backgnd5", bg5_pos, bg5_size);
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd4/backgnd4", bg4_pos, bg4_size);
+    let bg1 = draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd1/backgnd1", pos2(0.0, 0.0), bg1_size);
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd2/backgnd2", bg2_pos, bg2_size);
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd3/backgnd3", bg3_pos, bg3_size);
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd5/backgnd5", bg5_pos, bg5_size);
 
-    draw_left_buttons(ctx, ui, painter, cache, buttons, bg1.rect);
-    draw_minimap_cluster(ctx, ui, painter, cache, buttons, bg2);
-    draw_time_and_money(ctx, ui, painter, cache, buttons, bg3, bg4);
-    draw_status_cluster(ctx, ui, painter, cache, buttons, bg4, bg5);
+    draw_left_buttons(ctx, ui, painter, cache, buttons, hit_regions, bg1.rect);
+    draw_minimap_cluster(ctx, ui, painter, cache, buttons, hit_regions, bg2);
+    draw_time_and_money(ctx, ui, painter, cache, buttons, hit_regions, bg3, bg4);
+    draw_status_cluster(ctx, ui, painter, cache, buttons, hit_regions, bg4, bg5);
 }
 
-fn draw_left_buttons(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons_state: &mut ButtonState, bg1: Rect) {
+fn remember_hit_regions(hit_regions: Vec<HitRegion>) {
+    if let Ok(mut stored) = HIT_REGIONS.get_or_init(|| Mutex::new(Vec::new())).lock() {
+        *stored = hit_regions;
+    }
+}
+
+fn fallback_main_ui_block_rects(screen_size: Vec2, mut visit: impl FnMut(Rect) -> bool) -> bool {
+    let bg1 = Rect::from_min_size(pos2(0.0, 0.0), vec2(64.0, 248.0));
+    let bg2 = Rect::from_min_size(pos2(0.0, (screen_size.y - 128.0).max(0.0)), vec2(170.0, 128.0));
+    let bg3 = Rect::from_min_size(pos2(0.0, (screen_size.y - 112.0).max(0.0)), vec2(200.0, 112.0));
+    let bg4 = Rect::from_min_size(pos2(((screen_size.x - 330.0) * 0.5).max(0.0), (screen_size.y - 38.0).max(0.0)), vec2(330.0, 38.0));
+    let bg5 = Rect::from_min_size(pos2((screen_size.x - 256.0).max(0.0), (screen_size.y - 38.0).max(0.0)), vec2(256.0, 38.0));
+
+    if [bg1, bg2, bg3, bg4, bg5].into_iter().any(&mut visit) {
+        return true;
+    }
+    if bg2.top() > bg1.bottom() {
+        if visit(Rect::from_min_max(pos2(0.0, bg1.bottom()), pos2(64.0, bg2.top()))) {
+            return true;
+        }
+    }
+    if bg4.left() > bg3.right() {
+        if visit(Rect::from_min_max(
+            pos2(bg3.right(), (screen_size.y - 112.0).max(0.0)),
+            pos2(bg4.left(), screen_size.y),
+        )) {
+            return true;
+        }
+    }
+    if bg5.left() > bg4.right() {
+        if visit(Rect::from_min_max(
+            pos2(bg4.right(), (screen_size.y - 38.0).max(0.0)),
+            pos2(bg5.left(), screen_size.y),
+        )) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn draw_left_buttons(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons_state: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg1: Rect,
+) {
     let buttons = [
         ("ui/main/habitat/habitat", 4.0, 13.0),
         ("ui/main/buyanim/buyanim", 4.0, 60.0),
@@ -205,6 +332,7 @@ fn draw_left_buttons(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut 
             painter,
             cache,
             buttons_state,
+            hit_regions,
             resource,
             bg1.min + vec2(x, y),
             vec2(40.0, 40.0),
@@ -213,13 +341,22 @@ fn draw_left_buttons(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut 
     }
 }
 
-fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, bg2: Rect) {
+fn draw_minimap_cluster(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg2: Rect,
+) {
     draw_button(
         ctx,
         ui,
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/sharedui/snap/snap",
         bg2.min + vec2(5.0, 86.0),
         vec2(34.0, 34.0),
@@ -231,6 +368,7 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/zoomin/zoomin",
         bg2.min + vec2(14.0, 17.0),
         vec2(28.0, 28.0),
@@ -242,6 +380,7 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/zoomout/zoomout",
         bg2.min + vec2(5.0, 24.0),
         vec2(28.0, 28.0),
@@ -253,6 +392,7 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/rotr/rotr",
         bg2.min + vec2(6.0, 40.0),
         vec2(28.0, 28.0),
@@ -264,6 +404,7 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/rotl/rotl",
         bg2.min + vec2(26.0, 27.0),
         vec2(28.0, 28.0),
@@ -275,6 +416,7 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/trees/trees",
         bg2.min + vec2(147.0, 81.0),
         vec2(28.0, 28.0),
@@ -286,6 +428,7 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/guests/guests",
         bg2.min + vec2(127.0, 90.0),
         vec2(28.0, 28.0),
@@ -297,6 +440,7 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/builds/builds",
         bg2.min + vec2(106.0, 100.0),
         vec2(28.0, 28.0),
@@ -306,13 +450,23 @@ fn draw_minimap_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &m
     let _minimap = Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0));
 }
 
-fn draw_time_and_money(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, bg3: Rect, bg4: Rect) {
+fn draw_time_and_money(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg3: Rect,
+    bg4: Rect,
+) {
     let pause = draw_button(
         ctx,
         ui,
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/pause/pause",
         bg3.min + vec2(170.0, 80.0),
         vec2(34.0, 34.0),
@@ -325,16 +479,26 @@ fn draw_time_and_money(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mu
     painter.text(money_rect.center(), Align2::CENTER_CENTER, "$50,000", bold_font(14.0), GREEN_TEXT);
 }
 
-fn draw_status_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, bg4: Rect, bg5: Rect) {
-    draw_status(ctx, ui, painter, cache, buttons, "ui/main/zstat/zstat", bg4.min + vec2(231.0, 3.0), true);
-    draw_status(ctx, ui, painter, cache, buttons, "ui/main/astat/astat", bg5.min + vec2(0.0, 3.0), true);
-    draw_status(ctx, ui, painter, cache, buttons, "ui/main/gstat/gstat", bg5.min + vec2(85.0, 3.0), true);
+fn draw_status_cluster(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg4: Rect,
+    bg5: Rect,
+) {
+    draw_status(ctx, ui, painter, cache, buttons, hit_regions, "ui/main/zstat/zstat", bg4.min + vec2(231.0, 3.0), true);
+    draw_status(ctx, ui, painter, cache, buttons, hit_regions, "ui/main/astat/astat", bg5.min + vec2(0.0, 3.0), true);
+    draw_status(ctx, ui, painter, cache, buttons, hit_regions, "ui/main/gstat/gstat", bg5.min + vec2(85.0, 3.0), true);
     draw_button(
         ctx,
         ui,
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/hstat/hstat",
         bg5.min + vec2(170.0, 3.0),
         vec2(34.0, 34.0),
@@ -346,6 +510,7 @@ fn draw_status_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mu
         painter,
         cache,
         buttons,
+        hit_regions,
         "ui/main/staff/staff",
         bg5.min + vec2(206.0, 3.0),
         vec2(34.0, 34.0),
@@ -353,14 +518,24 @@ fn draw_status_cluster(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mu
     );
 }
 
-fn draw_status(ctx: &Context, ui: &mut Ui, painter: &Painter, cache: &mut TextureCache, buttons: &mut ButtonState, button: &'static str, pos: Pos2, with_meter: bool) {
+fn draw_status(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    button: &'static str,
+    pos: Pos2,
+    with_meter: bool,
+) {
     if with_meter {
-        draw_anim(ctx, painter, cache, "ui/main/progbck/progbck", pos + vec2(26.0, 5.0), vec2(56.0, 22.0));
+        draw_anim(ctx, painter, cache, hit_regions, "ui/main/progbck/progbck", pos + vec2(26.0, 5.0), vec2(56.0, 22.0));
         let meter = Rect::from_min_size(pos + vec2(32.0, 9.0), vec2(45.0, 9.0));
         painter.rect_filled(meter, 0.0, Color32::from_rgb(48, 88, 31));
         painter.rect_filled(Rect::from_min_size(meter.min, vec2(34.0, meter.height())), 0.0, Color32::from_rgb(66, 196, 59));
     }
-    draw_button(ctx, ui, painter, cache, buttons, button, pos, vec2(34.0, 34.0), ButtonMode::Selected);
+    draw_button(ctx, ui, painter, cache, buttons, hit_regions, button, pos, vec2(34.0, 34.0), ButtonMode::Selected);
 }
 
 fn draw_button(
@@ -369,6 +544,7 @@ fn draw_button(
     painter: &Painter,
     cache: &mut TextureCache,
     buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
     resource: &'static str,
     pos: Pos2,
     fallback_size: Vec2,
@@ -393,17 +569,26 @@ fn draw_button(
         VisualState::Normal
     };
 
-    draw_anim_state(ctx, painter, cache, resource, pos, size, visual_state)
+    draw_anim_state(ctx, painter, cache, hit_regions, resource, pos, size, visual_state)
 }
 
-fn draw_anim(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, pos: Pos2, fallback_size: Vec2) -> DrawnRect {
-    draw_anim_state(ctx, painter, cache, resource, pos, fallback_size, VisualState::Normal)
+fn draw_anim(
+    ctx: &Context,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+) -> DrawnRect {
+    draw_anim_state(ctx, painter, cache, hit_regions, resource, pos, fallback_size, VisualState::Normal)
 }
 
 fn draw_anim_state(
     ctx: &Context,
     painter: &Painter,
     cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
     resource: &'static str,
     pos: Pos2,
     fallback_size: Vec2,
@@ -416,13 +601,27 @@ fn draw_anim_state(
     let rect = rect_from_pos_size(pos, size);
     let loaded_image = loaded.is_some();
     if let Some(texture) = loaded {
-        painter.image(texture.texture.id(), rect, unit_uv(), Color32::WHITE);
+        let uv = unit_uv();
+        painter.image(texture.texture.id(), rect, uv, Color32::WHITE);
+        hit_regions.push(HitRegion {
+            rect,
+            uv,
+            mask: texture.mask.clone(),
+        });
     }
 
     DrawnRect { rect, loaded: loaded_image }
 }
 
-fn draw_tiled_y(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, pos: Pos2, height: f32) {
+fn draw_tiled_y(
+    ctx: &Context,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    height: f32,
+) {
     if height <= 0.0 {
         return;
     }
@@ -442,11 +641,25 @@ fn draw_tiled_y(ctx: &Context, painter: &Painter, cache: &mut TextureCache, reso
         let dest = Rect::from_min_size(pos2(pos.x, y), vec2(tile_size.x, tile_height));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, tile_height / tile_size.y));
         painter.image(texture.texture.id(), dest, uv, Color32::WHITE);
+        hit_regions.push(HitRegion {
+            rect: dest,
+            uv,
+            mask: texture.mask.clone(),
+        });
         y += tile_size.y;
     }
 }
 
-fn draw_tiled_x_bottom(ctx: &Context, painter: &Painter, cache: &mut TextureCache, resource: &'static str, left: f32, bottom: f32, width: f32) {
+fn draw_tiled_x_bottom(
+    ctx: &Context,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    left: f32,
+    bottom: f32,
+    width: f32,
+) {
     if width <= 0.0 {
         return;
     }
@@ -467,6 +680,11 @@ fn draw_tiled_x_bottom(ctx: &Context, painter: &Painter, cache: &mut TextureCach
         let dest = Rect::from_min_size(pos2(x, top), vec2(tile_width, tile_size.y));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(tile_width / tile_size.x, 1.0));
         painter.image(texture.texture.id(), dest, uv, Color32::WHITE);
+        hit_regions.push(HitRegion {
+            rect: dest,
+            uv,
+            mask: texture.mask.clone(),
+        });
         x += tile_size.x;
     }
 }
@@ -514,12 +732,13 @@ fn load_animation_texture(ctx: &Context, base: &'static str, visual_state: Visua
                 return None;
             };
             let size = vec2(image.size[0] as f32, image.size[1] as f32);
+            let mask = Arc::new(HitMask::from_image(&image));
             let texture = ctx.load_texture(format!("vanilla-main:{base}:{}", visual_state.animation_name()), image, egui::TextureOptions::NEAREST);
             info!(
                 "egui overlay: loaded vanilla UI asset {base} using {descriptor_source}, {animation_source}, {palette_source} as {}x{}",
                 size.x, size.y
             );
-            Some(LoadedTexture { texture, size })
+            Some(LoadedTexture { texture, size, mask })
         }
         Err(err) => {
             warn!("egui overlay: failed to decode vanilla UI asset {base}: {err}");
@@ -603,4 +822,49 @@ fn register_bold_font(ctx: &Context) -> bool {
     ctx.set_fonts(fonts);
     info!("egui overlay: registered bold UI font from {BOLD_FONT_PATH}");
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(width: usize, height: usize, pixels: Vec<Color32>) -> ColorImage {
+        ColorImage::new([width, height], pixels)
+    }
+
+    #[test]
+    fn hit_mask_blocks_opaque_pixels() {
+        let mask = HitMask::from_image(&image(2, 1, vec![Color32::TRANSPARENT, Color32::WHITE]));
+
+        assert!(!mask.blocks_uv(0.25, 0.5));
+        assert!(mask.blocks_uv(0.75, 0.5));
+    }
+
+    #[test]
+    fn hit_region_rejects_out_of_bounds_positions() {
+        let region = HitRegion {
+            rect: Rect::from_min_size(pos2(10.0, 20.0), vec2(5.0, 5.0)),
+            uv: unit_uv(),
+            mask: Arc::new(HitMask::from_image(&image(1, 1, vec![Color32::WHITE]))),
+        };
+
+        assert!(!region.blocks(pos2(9.0, 22.0)));
+        assert!(!region.blocks(pos2(12.0, 26.0)));
+    }
+
+    #[test]
+    fn hit_region_maps_cropped_uv_to_source_pixels() {
+        let region = HitRegion {
+            rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(20.0, 10.0)),
+            uv: Rect::from_min_max(pos2(0.5, 0.0), pos2(1.0, 1.0)),
+            mask: Arc::new(HitMask::from_image(&image(
+                4,
+                1,
+                vec![Color32::TRANSPARENT, Color32::TRANSPARENT, Color32::WHITE, Color32::TRANSPARENT],
+            ))),
+        };
+
+        assert!(region.blocks(pos2(1.0, 5.0)));
+        assert!(!region.blocks(pos2(19.0, 5.0)));
+    }
 }
