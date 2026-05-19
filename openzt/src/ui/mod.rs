@@ -1,13 +1,17 @@
 mod cursor;
 mod blit;
+mod date_display;
 mod input_block;
 mod live_game;
+mod money_display;
 mod render_hook;
+mod status_display;
 mod tga;
 mod tooltip;
 mod vanilla_main;
 mod wndproc;
 mod zt_image;
+mod zoom_block;
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,9 +57,13 @@ pub fn init() {
     }
 
     cursor::init();
+    date_display::init();
     input_block::init();
     live_game::init();
+    money_display::init();
+    status_display::init();
     tooltip::init();
+    zoom_block::init();
     register_shortcuts();
     wndproc::init();
     render_hook::init();
@@ -289,6 +297,10 @@ pub fn set_live_game_active(active: bool) {
 
 pub fn is_live_game_active() -> bool {
     LIVE_GAME_ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn is_vanilla_ui_visible() -> bool {
+    is_live_game_active() && SHOW_VANILLA_UI.load(Ordering::Acquire)
 }
 
 fn drain_input_events() -> Vec<Event> {

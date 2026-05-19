@@ -4,24 +4,36 @@ use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 use egui::{
-    pos2, vec2, Align2, Color32, ColorImage, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, PointerButton, Pos2, Rect, Sense, TextureHandle,
-    Ui, Vec2,
+    pos2, vec2, Align2, Color32, ColorImage, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, PointerButton, Pos2, Rect, TextureHandle, Ui,
+    Vec2,
 };
 use openzt_configparser::ini::Ini;
 use tracing::{info, warn};
 
-use super::zt_image;
+use super::{tga, zt_image};
 
 static TEXTURES: OnceLock<Mutex<TextureCache>> = OnceLock::new();
 static BUTTONS: OnceLock<Mutex<ButtonState>> = OnceLock::new();
 static HIT_REGIONS: OnceLock<Mutex<Vec<HitRegion>>> = OnceLock::new();
 static BOLD_FONT_REGISTERED: AtomicBool = AtomicBool::new(false);
 static BOLD_FONT_ACTIVE: AtomicBool = AtomicBool::new(false);
+static HELP_HOVERED_THIS_FRAME: AtomicBool = AtomicBool::new(false);
+static HELP_HOVERED_LAST_FRAME: AtomicBool = AtomicBool::new(false);
 
 const BOLD_FONT_FAMILY: &str = "zt-bold";
 const BOLD_FONT_NAME: &str = "arial-bold";
 const BOLD_FONT_PATH: &str = r"C:\Windows\Fonts\arialbd.ttf";
 const GREEN_TEXT: Color32 = Color32::from_rgb(83, 219, 83);
+const ZERO_MONEY_TEXT: Color32 = Color32::from_rgb(0xf6, 0xd2, 0x5b);
+const NEGATIVE_MONEY_TEXT: Color32 = Color32::from_rgb(0xac, 0x4d, 0x2d);
+
+pub fn set_money_value(value: f32) {
+    super::money_display::set_value(value);
+}
+
+pub fn set_date_value(value: nt_time::time::UtcDateTime) {
+    super::date_display::set_value(value);
+}
 
 pub fn blocks_pointer_at(pos: Pos2, screen_size: Vec2) -> bool {
     if let Ok(regions) = HIT_REGIONS.get_or_init(|| Mutex::new(Vec::new())).lock()
@@ -35,17 +47,26 @@ pub fn blocks_pointer_at(pos: Pos2, screen_size: Vec2) -> bool {
 
 struct TextureCache {
     animations: HashMap<TextureKey, CachedTexture>,
+    tgas: HashMap<&'static str, CachedTgaTexture>,
 }
 
 impl TextureCache {
     fn new() -> Self {
-        Self { animations: HashMap::new() }
+        Self {
+            animations: HashMap::new(),
+            tgas: HashMap::new(),
+        }
     }
 
     fn animation(&mut self, ctx: &Context, base: &'static str, visual_state: VisualState) -> Option<LoadedTexture> {
         let key = TextureKey { base, visual_state };
         let entry = self.animations.entry(key).or_default();
         entry.texture(ctx, base, visual_state)
+    }
+
+    fn tga(&mut self, ctx: &Context, resource: &'static str) -> Option<LoadedTgaTexture> {
+        let entry = self.tgas.entry(resource).or_default();
+        entry.texture(ctx, resource)
     }
 }
 
@@ -60,6 +81,7 @@ enum VisualState {
     Normal,
     Hover,
     Selected,
+    Disabled,
 }
 
 impl VisualState {
@@ -68,6 +90,7 @@ impl VisualState {
             Self::Normal => "N",
             Self::Hover => "H",
             Self::Selected => "S",
+            Self::Disabled => "G",
         }
     }
 }
@@ -75,6 +98,7 @@ impl VisualState {
 #[derive(Default)]
 struct ButtonState {
     selected: HashSet<&'static str>,
+    pressed: HashSet<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -89,6 +113,13 @@ struct CachedTexture {
     size: Vec2,
     mask: Option<Arc<HitMask>>,
     failed: bool,
+    missing_logged: bool,
+}
+
+#[derive(Default)]
+struct CachedTgaTexture {
+    texture: Option<TextureHandle>,
+    size: Vec2,
     missing_logged: bool,
 }
 
@@ -117,11 +148,36 @@ impl CachedTexture {
     }
 }
 
+impl CachedTgaTexture {
+    fn texture(&mut self, ctx: &Context, resource: &'static str) -> Option<LoadedTgaTexture> {
+        if let Some(texture) = &self.texture {
+            return Some(LoadedTgaTexture {
+                texture: texture.clone(),
+                size: self.size,
+            });
+        }
+
+        let Some(texture) = load_tga_texture(ctx, resource, &mut self.missing_logged) else {
+            return None;
+        };
+
+        self.size = texture.size;
+        self.texture = Some(texture.texture.clone());
+        Some(texture)
+    }
+}
+
 #[derive(Clone)]
 struct LoadedTexture {
     texture: TextureHandle,
     size: Vec2,
     mask: Arc<HitMask>,
+}
+
+#[derive(Clone)]
+struct LoadedTgaTexture {
+    texture: TextureHandle,
+    size: Vec2,
 }
 
 #[derive(Clone, Copy)]
@@ -223,6 +279,8 @@ fn draw_main_ui(
     hit_regions: &mut Vec<HitRegion>,
     screen_size: Vec2,
 ) {
+    HELP_HOVERED_THIS_FRAME.store(false, Ordering::Release);
+
     let bg1_size = texture_size(ctx, cache, "ui/main/backgnd1/backgnd1", VisualState::Normal).unwrap_or(vec2(64.0, 248.0));
     let bg2_size = texture_size(ctx, cache, "ui/main/backgnd2/backgnd2", VisualState::Normal).unwrap_or(vec2(170.0, 128.0));
     let bg3_size = texture_size(ctx, cache, "ui/main/backgnd3/backgnd3", VisualState::Normal).unwrap_or(vec2(200.0, 112.0));
@@ -260,6 +318,8 @@ fn draw_main_ui(
     draw_minimap_cluster(ctx, ui, painter, cache, buttons, hit_regions, bg2);
     draw_time_and_money(ctx, ui, painter, cache, buttons, hit_regions, bg3, bg4);
     draw_status_cluster(ctx, ui, painter, cache, buttons, hit_regions, bg4, bg5);
+
+    finish_help_tooltip_frame();
 }
 
 fn remember_hit_regions(hit_regions: Vec<HitRegion>) {
@@ -350,6 +410,8 @@ fn draw_minimap_cluster(
     hit_regions: &mut Vec<HitRegion>,
     bg2: Rect,
 ) {
+    let zoom_level = crate::globals::globals().ztworldmgr().zoom_level();
+
     draw_button(
         ctx,
         ui,
@@ -362,7 +424,7 @@ fn draw_minimap_cluster(
         vec2(34.0, 34.0),
         ButtonMode::Momentary,
     );
-    draw_button(
+    draw_enabled_action_button(
         ctx,
         ui,
         painter,
@@ -373,8 +435,10 @@ fn draw_minimap_cluster(
         bg2.min + vec2(14.0, 17.0),
         vec2(28.0, 28.0),
         ButtonMode::Momentary,
+        zoom_level < 2,
+        crate::ztui::click_zoom_in,
     );
-    draw_button(
+    draw_enabled_action_button(
         ctx,
         ui,
         painter,
@@ -385,6 +449,8 @@ fn draw_minimap_cluster(
         bg2.min + vec2(5.0, 24.0),
         vec2(28.0, 28.0),
         ButtonMode::Momentary,
+        zoom_level > -2,
+        crate::ztui::click_zoom_out,
     );
     draw_action_button(
         ctx,
@@ -397,7 +463,7 @@ fn draw_minimap_cluster(
         bg2.min + vec2(6.0, 40.0),
         vec2(28.0, 28.0),
         ButtonMode::Momentary,
-        crate::ztui::click_rotate_ccw,
+        crate::ztui::click_rotate_cw,
     );
     draw_action_button(
         ctx,
@@ -410,7 +476,7 @@ fn draw_minimap_cluster(
         bg2.min + vec2(26.0, 27.0),
         vec2(28.0, 28.0),
         ButtonMode::Momentary,
-        crate::ztui::click_rotate_cw,
+        crate::ztui::click_rotate_ccw,
     );
     draw_button(
         ctx,
@@ -450,6 +516,7 @@ fn draw_minimap_cluster(
     );
 
     let _minimap = Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0));
+    request_help_tooltip_for_rect(ctx, Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0)), 1026);
 }
 
 fn draw_time_and_money(
@@ -475,10 +542,24 @@ fn draw_time_and_money(
         ButtonMode::Selected,
     );
     let date_rect = Rect::from_min_size(pause.rect.min + vec2(25.0, 7.0), vec2(108.0, 18.0));
-    painter.text(date_rect.center(), Align2::CENTER_CENTER, "Jan 1, Year 1", bold_font(14.0), GREEN_TEXT);
+    painter.text(date_rect.center(), Align2::CENTER_CENTER, super::date_display::current(), bold_font(14.0), GREEN_TEXT);
+    if rect_contains_pointer(ctx, date_rect)
+        && let Some(text) = super::date_display::tooltip_text()
+    {
+        request_help_tooltip(text);
+    }
 
     let money_rect = Rect::from_min_size(bg4.min + vec2(90.0, 9.0), vec2(125.0, 18.0));
-    painter.text(money_rect.center(), Align2::CENTER_CENTER, "$50,000", bold_font(14.0), GREEN_TEXT);
+    let money = super::money_display::current();
+    let money_color = if money.negative {
+        NEGATIVE_MONEY_TEXT
+    } else if money.zero {
+        ZERO_MONEY_TEXT
+    } else {
+        GREEN_TEXT
+    };
+    painter.text(money_rect.center(), Align2::CENTER_CENTER, money.text, bold_font(14.0), money_color);
+    request_help_tooltip_for_rect(ctx, money_rect, 1016);
 }
 
 fn draw_status_cluster(
@@ -533,11 +614,57 @@ fn draw_status(
 ) {
     if with_meter {
         draw_anim(ctx, painter, cache, hit_regions, "ui/main/progbck/progbck", pos + vec2(26.0, 5.0), vec2(56.0, 22.0));
-        let meter = Rect::from_min_size(pos + vec2(32.0, 9.0), vec2(45.0, 9.0));
-        painter.rect_filled(meter, 0.0, Color32::from_rgb(48, 88, 31));
-        painter.rect_filled(Rect::from_min_size(meter.min, vec2(34.0, meter.height())), 0.0, Color32::from_rgb(66, 196, 59));
+        let meter = Rect::from_min_size(pos + vec2(32.0, 9.0), vec2(45.0, 13.0));
+        draw_status_meter(ctx, painter, cache, meter, status_meter_value(button));
+        if rect_contains_pointer(ctx, meter)
+            && let Some(text) = status_meter_tooltip(button)
+        {
+            request_help_tooltip(text);
+        }
     }
     draw_button(ctx, ui, painter, cache, buttons, hit_regions, button, pos, vec2(34.0, 34.0), ButtonMode::Selected);
+}
+
+fn draw_status_meter(ctx: &Context, painter: &Painter, cache: &mut TextureCache, meter: Rect, value: u8) {
+    let value = value.min(100);
+    let fill_width = (meter.width() * value as f32 / 100.0).round();
+    if fill_width <= 0.0 {
+        return;
+    }
+
+    let resource = status_meter_texture(value);
+    let fill = Rect::from_min_size(meter.min, vec2(fill_width, meter.height()));
+    if let Some(texture) = cache.tga(ctx, resource) {
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((fill_width / texture.size.x).min(1.0), (meter.height() / texture.size.y).min(1.0)));
+        painter.image(texture.texture.id(), fill, uv, Color32::WHITE);
+    } else {
+        painter.rect_filled(fill, 0.0, status_meter_fallback_color(value));
+    }
+}
+
+fn status_meter_texture(value: u8) -> &'static str {
+    match value {
+        0..=24 => "ui/sharedui/statr.tga",
+        25..=49 => "ui/sharedui/staty.tga",
+        _ => "ui/sharedui/statg.tga",
+    }
+}
+
+fn status_meter_fallback_color(value: u8) -> Color32 {
+    match value {
+        0..=24 => Color32::from_rgb(0xac, 0x4d, 0x2d),
+        25..=49 => Color32::from_rgb(0xf6, 0xd2, 0x5b),
+        _ => Color32::from_rgb(66, 196, 59),
+    }
+}
+
+fn status_meter_value(resource: &str) -> u8 {
+    match resource {
+        "ui/main/zstat/zstat" => super::status_display::zoo_rating(),
+        "ui/main/astat/astat" => super::status_display::animal_rating(),
+        "ui/main/gstat/gstat" => super::status_display::guest_rating(),
+        _ => 75,
+    }
 }
 
 fn draw_button(
@@ -552,7 +679,7 @@ fn draw_button(
     fallback_size: Vec2,
     mode: ButtonMode,
 ) -> DrawnRect {
-    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, None)
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, true, None)
 }
 
 fn draw_action_button(
@@ -568,10 +695,10 @@ fn draw_action_button(
     mode: ButtonMode,
     action: fn(),
 ) -> DrawnRect {
-    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, Some(action))
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, true, Some(action))
 }
 
-fn draw_button_impl(
+fn draw_enabled_action_button(
     ctx: &Context,
     ui: &mut Ui,
     painter: &Painter,
@@ -582,33 +709,187 @@ fn draw_button_impl(
     pos: Pos2,
     fallback_size: Vec2,
     mode: ButtonMode,
+    enabled: bool,
+    action: fn(),
+) -> DrawnRect {
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, enabled, Some(action))
+}
+
+fn draw_button_impl(
+    ctx: &Context,
+    _ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+    enabled: bool,
     action: Option<fn()>,
 ) -> DrawnRect {
-    let size = texture_size(ctx, cache, resource, VisualState::Normal).unwrap_or(fallback_size);
+    let normal_texture = cache.animation(ctx, resource, VisualState::Normal);
+    let size = normal_texture.as_ref().map(|texture| texture.size).unwrap_or(fallback_size);
     let rect = rect_from_pos_size(pos, size);
-    let response = ui.interact(rect, ui.make_persistent_id(resource), Sense::click());
+    let hovered = enabled && button_contains_pointer(ctx, rect, normal_texture.as_ref());
+    if hovered
+        && let Some(help_id) = button_help_id(resource)
+    {
+        request_help_tooltip_for_id(help_id);
+    }
+    let primary_pressed = ctx.input(|input| input.pointer.button_pressed(PointerButton::Primary));
+    let primary_down = ctx.input(|input| input.pointer.button_down(PointerButton::Primary));
+    let primary_released = ctx.input(|input| input.pointer.button_released(PointerButton::Primary));
 
-    if response.clicked_by(PointerButton::Primary) {
-        if let Some(action) = action {
-            action();
+    if enabled && hovered && primary_pressed {
+        buttons.pressed.insert(resource);
+    }
+
+    if !primary_down && !primary_released {
+        buttons.pressed.remove(resource);
+    }
+
+    let pressed_on_button = buttons.pressed.contains(resource);
+    if primary_released {
+        if enabled && hovered && pressed_on_button {
+            if let Some(action) = action {
+                action();
+            }
+            if matches!(mode, ButtonMode::Selected) {
+                buttons.selected.insert(resource);
+            }
         }
-        if matches!(mode, ButtonMode::Selected) {
-            buttons.selected.insert(resource);
-        }
+        buttons.pressed.remove(resource);
     }
 
     let selected = buttons.selected.contains(resource);
-    let visual_state = if matches!(mode, ButtonMode::Momentary) && response.is_pointer_button_down_on() {
+    let visual_state = if !enabled {
+        VisualState::Disabled
+    } else if matches!(mode, ButtonMode::Momentary) && pressed_on_button && primary_down {
         VisualState::Selected
     } else if selected {
         VisualState::Selected
-    } else if response.hovered() {
+    } else if hovered {
         VisualState::Hover
     } else {
         VisualState::Normal
     };
 
     draw_anim_state(ctx, painter, cache, hit_regions, resource, pos, size, visual_state)
+}
+
+fn button_help_id(resource: &str) -> Option<i32> {
+    match resource {
+        "ui/main/buyanim/buyanim" => Some(1000),
+        "ui/main/habitat/habitat" => Some(1002),
+        "ui/main/buyobj/buyobj" => Some(1001),
+        "ui/main/person/person" => Some(1005),
+        "ui/main/undo/undo" => Some(1075),
+        "ui/main/bdoz/bdoz" => Some(1025),
+        "ui/main/msgs/msgs" => Some(1006),
+        "ui/main/resr/resr" => Some(1019),
+        "ui/scenario/scenbut/scenbut" => Some(4107),
+        "ui/main/gameopt/gameopt" => Some(1004),
+        "ui/main/pause/pause" => Some(1071),
+        "ui/main/play/play" => Some(1072),
+        "ui/main/zoomin/zoomin" => Some(1007),
+        "ui/main/zoomout/zoomout" => Some(1023),
+        "ui/main/trees/trees" => Some(1066),
+        "ui/main/guests/guests" => Some(1068),
+        "ui/main/builds/builds" => Some(1067),
+        "ui/main/rotr/rotr" => Some(1008),
+        "ui/main/rotl/rotl" => Some(1009),
+        "ui/main/zstat/zstat" => Some(1014),
+        "ui/main/astat/astat" => Some(1010),
+        "ui/main/gstat/gstat" => Some(1012),
+        "ui/main/hstat/hstat" => Some(1050),
+        "ui/main/staff/staff" => Some(1051),
+        _ => None,
+    }
+}
+
+fn status_meter_help_id(resource: &str) -> Option<i32> {
+    match resource {
+        "ui/main/zstat/zstat" => Some(1015),
+        "ui/main/astat/astat" => Some(1011),
+        "ui/main/gstat/gstat" => Some(1013),
+        _ => None,
+    }
+}
+
+fn status_meter_tooltip(resource: &str) -> Option<String> {
+    let help_id = status_meter_help_id(resource)?;
+    let value = status_meter_tooltip_value(resource)?;
+    let template = super::tooltip::tooltip_text_from_id(help_id, 1)?;
+    Some(format_numeric_help_text(&template, value))
+}
+
+fn status_meter_tooltip_value(resource: &str) -> Option<u32> {
+    let ztgamemgr = crate::globals::globals().ztgamemgr();
+    match resource {
+        "ui/main/zstat/zstat" => Some(ztgamemgr.zoo_rating()),
+        "ui/main/astat/astat" => Some(ztgamemgr.animal_rating_percent()),
+        "ui/main/gstat/gstat" => Some(ztgamemgr.guest_rating_percent()),
+        _ => None,
+    }
+}
+
+fn format_numeric_help_text(template: &str, value: u32) -> String {
+    if template.contains("%d") {
+        template.replace("%d", &value.to_string())
+    } else {
+        format!("{}{}", template, value)
+    }
+}
+
+fn request_help_tooltip_for_rect(ctx: &Context, rect: Rect, help_id: i32) {
+    if rect_contains_pointer(ctx, rect) {
+        request_help_tooltip_for_id(help_id);
+    }
+}
+
+fn request_help_tooltip_for_id(help_id: i32) {
+    HELP_HOVERED_THIS_FRAME.store(true, Ordering::Release);
+    super::tooltip::set_overlay_help_tooltip(help_id);
+}
+
+fn request_help_tooltip(text: String) {
+    HELP_HOVERED_THIS_FRAME.store(true, Ordering::Release);
+    super::tooltip::set_overlay_tooltip(text);
+}
+
+fn finish_help_tooltip_frame() {
+    let hovered = HELP_HOVERED_THIS_FRAME.load(Ordering::Acquire);
+    let was_hovered = HELP_HOVERED_LAST_FRAME.swap(hovered, Ordering::AcqRel);
+    if was_hovered && !hovered {
+        super::tooltip::clear_tooltip();
+    }
+}
+
+fn rect_contains_pointer(ctx: &Context, rect: Rect) -> bool {
+    let Some(pos) = ctx.pointer_hover_pos().or_else(crate::ui::current_pointer_pos).or_else(crate::ui::last_pointer_pos) else {
+        return false;
+    };
+
+    rect.contains(pos)
+}
+
+fn button_contains_pointer(ctx: &Context, rect: Rect, texture: Option<&LoadedTexture>) -> bool {
+    let Some(pos) = ctx.pointer_hover_pos().or_else(crate::ui::current_pointer_pos).or_else(crate::ui::last_pointer_pos) else {
+        return false;
+    };
+
+    if let Some(texture) = texture {
+        return HitRegion {
+            rect,
+            uv: unit_uv(),
+            mask: texture.mask.clone(),
+        }
+        .blocks(pos);
+    }
+
+    rect.contains(pos)
 }
 
 fn draw_anim(
@@ -635,13 +916,19 @@ fn draw_anim_state(
 ) -> DrawnRect {
     let loaded = cache
         .animation(ctx, resource, visual_state)
-        .or_else(|| cache.animation(ctx, resource, VisualState::Normal));
-    let size = loaded.as_ref().map(|texture| texture.size).unwrap_or(fallback_size);
+        .map(|texture| (texture, visual_state))
+        .or_else(|| cache.animation(ctx, resource, VisualState::Normal).map(|texture| (texture, VisualState::Normal)));
+    let size = loaded.as_ref().map(|(texture, _)| texture.size).unwrap_or(fallback_size);
     let rect = rect_from_pos_size(pos, size);
     let loaded_image = loaded.is_some();
-    if let Some(texture) = loaded {
+    if let Some((texture, loaded_visual_state)) = loaded {
         let uv = unit_uv();
-        painter.image(texture.texture.id(), rect, uv, Color32::WHITE);
+        let tint = if matches!(visual_state, VisualState::Disabled) && !matches!(loaded_visual_state, VisualState::Disabled) {
+            Color32::from_white_alpha(128)
+        } else {
+            Color32::WHITE
+        };
+        painter.image(texture.texture.id(), rect, uv, tint);
         hit_regions.push(HitRegion {
             rect,
             uv,
@@ -781,6 +1068,26 @@ fn load_animation_texture(ctx: &Context, base: &'static str, visual_state: Visua
         }
         Err(err) => {
             warn!("egui overlay: failed to decode vanilla UI asset {base}: {err}");
+            None
+        }
+    }
+}
+
+fn load_tga_texture(ctx: &Context, resource: &'static str, missing_logged: &mut bool) -> Option<LoadedTgaTexture> {
+    let Some((source, data)) = crate::resource_manager::lazyresourcemap::get_file(resource) else {
+        log_missing(missing_logged, resource);
+        return None;
+    };
+
+    match tga::decode_tga(&data) {
+        Ok(image) => {
+            let size = vec2(image.size[0] as f32, image.size[1] as f32);
+            let texture = ctx.load_texture(format!("vanilla-main:{resource}"), image, egui::TextureOptions::NEAREST);
+            info!("egui overlay: loaded vanilla UI TGA {resource} using {source} as {}x{}", size.x, size.y);
+            Some(LoadedTgaTexture { texture, size })
+        }
+        Err(err) => {
+            warn!("egui overlay: failed to decode vanilla UI TGA {resource}: {err}");
             None
         }
     }

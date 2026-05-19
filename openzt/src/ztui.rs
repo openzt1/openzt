@@ -1,11 +1,14 @@
 use std::fmt;
 
 use openzt_detour::generated::bfuimgr::GET_ELEMENT_0;
+use openzt_detour::generated::ztmapview::ZOOM_MAP;
+use openzt_detour::generated::ztui_general::GET_MAPVIEW;
 use openzt_detour::generated::ztui_general::GET_SELECTED_ENTITY;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     command_console::CommandError,
+    globals::globals,
     lua_fn,
     util::{get_from_memory, get_string_from_memory_bounded, ZTBufferString, Addr},
     ztworldmgr::read_zt_entity_from_memory,
@@ -347,17 +350,16 @@ fn command_call_ui_callback(args: Vec<&str>) -> Result<String, CommandError> {
     if args.len() != 1 {
         return Err(Into::into("Expected 1 argument"));
     }
-    let callback_function = match args[0] {
-        "click_continue" => unsafe { openzt_detour::generated::ztui::CLICK_CONTINUE.original() },
-        "click_rotate_ccw" => unsafe { openzt_detour::generated::standalone::CLICK_ROTATE_CCW.original() },
-        "click_rotate_cw" => unsafe { openzt_detour::generated::standalone::CLICK_ROTATE_CW.original() },
+    match args[0] {
+        "click_continue" => unsafe { openzt_detour::generated::ztui::CLICK_CONTINUE.original()() },
+        "click_rotate_ccw" => click_rotate_ccw(),
+        "click_rotate_cw" => click_rotate_cw(),
+        "click_zoom_in" => click_zoom_in(),
+        "click_zoom_out" => click_zoom_out(),
         "list" => {
-            return Ok("click_continue, click_rotate_ccw, click_rotate_cw".to_string());
+            return Ok("click_continue, click_rotate_ccw, click_rotate_cw, click_zoom_in, click_zoom_out".to_string());
         }
         _ => return Err(Into::into("Unknown UI callback")),
-    };
-    unsafe {
-        callback_function();
     }
     Ok("Success".to_string())
 }
@@ -372,6 +374,36 @@ pub(crate) fn click_rotate_cw() {
     unsafe {
         openzt_detour::generated::standalone::CLICK_ROTATE_CW.original()();
     }
+}
+
+pub(crate) fn click_zoom_in() {
+    click_zoom_by(2);
+}
+
+pub(crate) fn click_zoom_out() {
+    click_zoom_by(-2);
+}
+
+fn click_zoom_by(delta: i32) {
+    let current_zoom = globals().ztworldmgr().zoom_level();
+    let new_zoom = (current_zoom + delta).clamp(-2, 2);
+    if new_zoom == current_zoom {
+        return;
+    }
+
+    let map_view = unsafe { GET_MAPVIEW.original()() };
+    if map_view.is_null() {
+        warn!("egui overlay: cannot zoom map because ZTUI::general::getMapview returned null");
+        return;
+    }
+
+    unsafe {
+        ZOOM_MAP.original()(map_view, new_zoom);
+    }
+    
+    let world_mgr = unsafe { &mut *globals().ztworldmgr_ptr() };
+    world_mgr.set_zoom_level(new_zoom);
+
 }
 
 fn click_ui_element(_id: UIElementId) {

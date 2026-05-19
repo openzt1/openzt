@@ -28,6 +28,7 @@ struct TooltipRequest {
     anchor: Option<Pos2>,
     delay: Duration,
     duration: Duration,
+    allow_blocked_pointer: bool,
 }
 
 #[detour_mod]
@@ -48,7 +49,7 @@ mod tooltip_hooks {
 
         match tooltip_text(help_text) {
             Some(text) => {
-                set_tooltip(text);
+                set_tooltip(text, false);
             }
             None => {
                 clear_tooltip();
@@ -69,7 +70,7 @@ mod tooltip_hooks {
         }
 
         match tooltip_text_from_id(help_id, has_long_tooltip) {
-            Some(text) => set_tooltip(text),
+            Some(text) => set_tooltip(text, false),
             None => clear_tooltip(),
         }
     }
@@ -114,12 +115,12 @@ fn active_tooltip(ctx: &Context, now: Instant) -> Option<(String, Pos2)> {
     let pointer = egui_pointer.or(hwnd_pointer).or(cached_pointer);
     let mut state = tooltip_state().lock().ok()?;
 
-    if pointer.is_some_and(crate::ui::blocks_pointer_input_at) {
+    let request = state.current.as_mut()?;
+
+    if pointer.is_some_and(crate::ui::blocks_pointer_input_at) && !request.allow_blocked_pointer {
         state.current = None;
         return None;
     }
-
-    let request = state.current.as_mut()?;
 
     if let Some(pointer) = pointer {
         request.anchor = Some(pointer);
@@ -142,7 +143,18 @@ fn active_tooltip(ctx: &Context, now: Instant) -> Option<(String, Pos2)> {
     Some((request.text.clone(), anchor))
 }
 
-fn set_tooltip(text: String) {
+pub(crate) fn set_overlay_help_tooltip(help_id: i32) {
+    match tooltip_text_from_id(help_id, 1) {
+        Some(text) => set_tooltip(text, true),
+        None => clear_tooltip(),
+    }
+}
+
+pub(crate) fn set_overlay_tooltip(text: String) {
+    set_tooltip(text, true);
+}
+
+fn set_tooltip(text: String, allow_blocked_pointer: bool) {
     let text = text.trim();
     if text.is_empty() {
         clear_tooltip();
@@ -172,10 +184,11 @@ fn set_tooltip(text: String) {
         anchor: crate::ui::current_pointer_pos().or_else(crate::ui::last_pointer_pos),
         delay: tooltip_delay(),
         duration: tooltip_duration(),
+        allow_blocked_pointer,
     });
 }
 
-fn clear_tooltip() {
+pub(crate) fn clear_tooltip() {
     if let Ok(mut state) = tooltip_state().lock() {
         state.current = None;
     }
@@ -218,7 +231,7 @@ fn read_tooltip_setting(key: &str, default_ms: u64) -> u64 {
     default_ms
 }
 
-fn long_tooltips_enabled() -> bool {
+pub(crate) fn long_tooltips_enabled() -> bool {
     match crate::settings::get_zoo_setting_i32("UI", "helpType") {
         Ok(Some(1)) => true,
         Ok(Some(_)) | Ok(None) => false,
@@ -229,7 +242,7 @@ fn long_tooltips_enabled() -> bool {
     }
 }
 
-fn tooltip_text_from_id(help_id: i32, has_long_tooltip: i8) -> Option<String> {
+pub(crate) fn tooltip_text_from_id(help_id: i32, has_long_tooltip: i8) -> Option<String> {
     let string_id = tooltip_string_id(help_id, has_long_tooltip, long_tooltips_enabled())?;
     crate::string_registry::load_string_by_id(string_id).and_then(|text| {
         let text = text.trim().to_string();

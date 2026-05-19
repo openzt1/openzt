@@ -1,11 +1,10 @@
 use std::{path::Path, sync::Mutex};
 
 use openzt_detour_macro::detour_mod;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::LazyLock;
 use tracing::{info, warn};
 
-use crate::command_console::CommandError;
 use crate::lua_fn;
 
 const STRING_REGISTRY_ID_OFFSET: u32 = 100_000;
@@ -79,6 +78,37 @@ pub(crate) fn load_string_by_id(string_id: u32) -> Option<String> {
     }
 
     load_string_from_game(string_id)
+}
+
+fn find_strings_containing(substring: &str) -> Vec<(u32, String)> {
+    let needle = substring.to_lowercase();
+    let mut string_ids = BTreeSet::new();
+
+    {
+        let language_strings = LANGUAGE_STRINGS.lock().unwrap();
+        string_ids.extend(
+            language_strings
+                .iter()
+                .enumerate()
+                .filter_map(|(id, string)| string.as_ref().map(|_| id as u32)),
+        );
+    }
+
+    {
+        let overrides = STRING_OVERRIDES.lock().unwrap();
+        string_ids.extend(overrides.keys().copied());
+    }
+
+    {
+        let registry = STRING_REGISTRY.lock().unwrap();
+        string_ids.extend((0..registry.len()).map(|index| STRING_REGISTRY_ID_OFFSET + index as u32));
+    }
+
+    string_ids
+        .into_iter()
+        .filter_map(|id| load_string_by_id(id).map(|string| (id, string)))
+        .filter(|(_, string)| string.to_lowercase().contains(&needle))
+        .collect()
 }
 
 pub fn add_string_to_registry(string_val: String) -> u32 {
@@ -316,23 +346,6 @@ fn is_user_type_id(param_1: u32) -> bool {
     (19000..=21999).contains(&param_1) || (49000..=51999).contains(&param_1) || (74000..=76999).contains(&param_1)
 }
 
-fn command_get_string(args: Vec<&str>) -> Result<String, CommandError> {
-    if args.is_empty() {
-        return Err(Into::into("Usage: make_sel <id>"));
-    }
-    let string_id = args[0].parse::<u32>()?;
-
-    if string_id >= STRING_REGISTRY_ID_OFFSET
-        && let Ok(string) = get_string_from_registry(string_id)
-    {
-        Ok(format!("OpenZT: {}", string))
-    } else if let Some(string) = load_string_by_id(string_id) {
-        Ok(string)
-    } else {
-        Err(Into::into("String not found"))
-    }
-}
-
 fn load_string_from_game(string_id: u32) -> Option<String> {
     let bfapp_load_string: extern "thiscall" fn(u32, u32, u32) -> u32 = unsafe { std::mem::transmute(0x00404e0a) };
     let mut buffer = [0u8; LOAD_STRING_BUFFER_SIZE];
@@ -418,17 +431,40 @@ pub fn init() {
         info!("Failed to initialize string_registry detours");
     }
 
-    // get_string(id) - single u32 arg
     lua_fn!(
         "get_string",
-        "Retrieves game string by ID (from OpenZT registry or game)",
+        "Look up a game string by ID",
         "get_string(id)",
         |id: u32| {
-            let id_str = id.to_string();
-            match command_get_string(vec![&id_str]) {
-                Ok(result) => Ok((Some(result), None::<String>)),
-                Err(e) => Ok((None::<String>, Some(e.to_string()))),
+            match load_string_by_id(id) {
+                Some(string) => Ok((Some(string), None::<String>)),
+                None => Ok((None::<String>, Some(format!("String {} not found", id)))),
             }
+        }
+    );
+
+    lua_fn!(
+        "find_strings",
+        "Find loaded game strings containing a substring",
+        "find_strings(substring)",
+        |substring: String| {
+            let substring = substring.trim();
+            if substring.is_empty() {
+                return Ok((None::<String>, Some("Search substring cannot be empty".to_string())));
+            }
+
+            let matches = find_strings_containing(substring);
+            if matches.is_empty() {
+                return Ok((Some(format!("No strings found containing '{}'", substring)), None::<String>));
+            }
+
+            let result = matches
+                .into_iter()
+                .map(|(id, string)| format!("{}: {}", id, string))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            Ok((Some(result), None::<String>))
         }
     );
 }

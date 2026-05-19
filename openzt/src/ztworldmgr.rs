@@ -443,7 +443,9 @@ impl fmt::Display for ZTEntity {
 #[derive(Debug)]
 #[repr(C)]
 pub struct ZTWorldMgr {
-    padding_1: [u8; 0x34],
+    paddin_0: [u8; 0x14], // 0x10?
+    zoom_level: i32,
+    padding_1: [u8; 0x1c], // Tentative
     pub map_x_size: u32,
     pub map_y_size: u32,
     padding_2: [u8; 0x4],
@@ -462,7 +464,8 @@ impl fmt::Display for ZTWorldMgr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "ZTWorldMgr {{ map_x_size: {}, map_y_size: {}, tile_array: {:#x}, entity_array_start: {:#x}, entity_array_end: {:#x}, entity_type_array_start: {:#x}, entity_type_array_end: {:#x} }}",
+            "ZTWorldMgr {{ zoom_level: {}, map_x_size: {}, map_y_size: {}, tile_array: {:#x}, entity_array_start: {:#x}, entity_array_end: {:#x}, entity_type_array_start: {:#x}, entity_type_array_end: {:#x} }}",
+            self.zoom_level,
             self.map_x_size,
             self.map_y_size,
             self.tile_array,
@@ -493,6 +496,14 @@ const TILE_SIZE: i32 = 0x40;
 const ELEVATION_SCALE: i32 = 0x10; // 16 units per elevation level
 
 impl ZTWorldMgr {
+    pub fn zoom_level(&self) -> i32 {
+        self.zoom_level
+    }
+
+    pub fn set_zoom_level(&mut self, zoom_level: i32) {
+        self.zoom_level = zoom_level;
+    }
+
     /// Get the start of the entity array in memory
     pub fn entity_array_start(&self) -> u32 {
         self.entity_array_start
