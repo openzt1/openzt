@@ -10,21 +10,49 @@ use tracing::info;
 
 #[detour_mod]
 pub mod zoo_experimental {
-    use openzt_detour::generated::bfuimgr::DISPLAY_MESSAGE_0;
-    use tracing::info;
+    use std::marker::PhantomData;
 
-    // use crate::{
-    //     bfregistry::{add_to_registry, get_from_registry},
-    //     util::{get_from_memory, get_string_from_memory},
-    // };
+    use openzt_detour::{FunctionDef, generated::bfuimgr::DISPLAY_MESSAGE_0, generated::ztscenerytype::GET_HELP_ID};
+    use tracing::info;
+    use crate::util::{Addr, get_from_memory};
+
+
+    // uint __thiscall FUN_0061c95c(void *this,char **param_1)
+    const ZTSHOWSCRIPTSTATE_SAVE: FunctionDef<unsafe extern "thiscall" fn(u32, u32) -> u8> = FunctionDef{address: 0x0061c95c, function_type: PhantomData};
+
+    #[detour(ZTSHOWSCRIPTSTATE_SAVE)]
+    unsafe extern "thiscall" fn zt_show_script_state(_this_ptr: u32, param_1: u32) -> u8 {
+        info!("FUN_0061c95c called with params: {:#x}, {:#x}", _this_ptr, param_1);
+        let result = unsafe { ZTSHOWSCRIPTSTATE_SAVE_DETOUR.call(_this_ptr, param_1) };
+        info!("FUN_0061c95c called with params: {:#x}, {:#x} -> {}", _this_ptr, param_1, result);
+        result
+    }
 
     #[detour(DISPLAY_MESSAGE_0)]
-    unsafe extern "thiscall" fn prt_get(_this_prt: u32, param_1: u32, param_2: i32, param_3: u32, param_4: u32, param_5: bool, param_6: bool) {
+    unsafe extern "thiscall" fn prt_get(_this_prt: *const u32, param_1: u32, param_2: i32, param_3: *const u32, param_4: *const u32, param_5: bool, param_6: bool) {
         info!(
             "BFUIMgr::displayMessage called with params: {}, {}, {}, {}, {}, {}",
-            param_1, param_2, param_3, param_4, param_5, param_6
+            param_1, param_2, Addr::of(param_3), Addr::of(param_4), param_5, param_6
         );
         unsafe { DISPLAY_MESSAGE_0_DETOUR.call(_this_prt, param_1, param_2, param_3, param_4, param_5, param_6) };
+    }
+
+    #[detour(GET_HELP_ID)]
+    unsafe extern "thiscall" fn get_help_id(_this_ptr: *const u32) -> u32 {
+        // Log this pointer in hex
+        info!("GET_HELP_ID called, this: {:#x}", _this_ptr as u32);
+
+        // Read what this pointer points to (first u32 value at that address)
+        let this_value = get_from_memory::<u32>(_this_ptr);
+        info!("  this points to: {:#x}", this_value);
+
+        // Call original function
+        let result = unsafe { GET_HELP_ID_DETOUR.call(_this_ptr) };
+
+        // Log return value in both hex and decimal
+        info!("  returned: {:#x} ({})", result, result);
+
+        result
     }
 
     // // 0x431c3e : void __thiscall FUN_00431c3e(void *this,int *param_1,int *param_2,char param_3,int **param_4)
@@ -52,7 +80,7 @@ pub mod zoo_experimental {
 }
 
 pub fn init() {
-    if let Err(e) = unsafe { zoo_experimental::init_detours() } {
-        info!("Error initialising experimental detours: {}", e);
-    };
+    // if let Err(e) = unsafe { zoo_experimental::init_detours() } {
+    //     info!("Error initialising experimental detours: {}", e);
+    // };
 }

@@ -96,7 +96,8 @@ pub fn init() {
     #[cfg(target_os = "windows")]
     {
         if let Err(e) = crate::logging::init_with_console(
-            &crate::logging::LoggingConfig::default()
+            &crate::logging::LoggingConfig::default(),
+            #[cfg(feature = "tui")] None,
         ) {
             eprintln!("Failed to initialize logging: {}", e);
         }
@@ -157,7 +158,7 @@ mod detour_zoo_main {
     use std::io::Write as IoWrite;
 
     #[detour(LOAD_LANG_DLLS)]
-    unsafe extern "thiscall" fn detour_target(_this: u32) -> u32 {
+    unsafe extern "thiscall" fn detour_target(_this: *const u32) -> u32 {
         info!("Integration tests starting...");
 
         // Clear load order tracker

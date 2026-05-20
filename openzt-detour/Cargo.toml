@@ -8,3 +8,9 @@ repository.workspace = true
 
 [dependencies]
 retour = {path = "../vendor/retour-rs", version = "0.3.1"}
+inventory = { version = "0.3", optional = true }
+tracing = { version = "0.1", optional = true }
+openzt-detour-macro = { path = "../openzt-detour-macro", version = "0.1.0", optional = true }
+
+[features]
+detour-validation = ["dep:inventory", "dep:tracing", "dep:openzt-detour-macro"]

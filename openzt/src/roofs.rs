@@ -29,24 +29,25 @@ pub mod roof_detours {
     /// After placing an entity, checks if it's a roof and hides it if needed.
     /// The second parameter (entity_ptr) is the BFEntity that was just placed.
     #[detour(PLACE_ENTITY_ON_MAP_1)]
-    unsafe extern "thiscall" fn place_entity_on_map_detour(_this: u32, entity_ptr: u32, _pos: f32, _rotation: i32) -> u32 {
+    unsafe extern "thiscall" fn place_entity_on_map_detour(_this: *const u32, entity_ptr: *const u32, _pos: f32, _rotation: i32) -> *const i32 {
         // Call the original function first to place the entity
         let result = unsafe { PLACE_ENTITY_ON_MAP_1_DETOUR.call(_this, entity_ptr, _pos, _rotation) };
 
         // Only proceed if placement succeeded and we have a valid entity pointer
-        if result != 0 && entity_ptr != 0 {
+        if !result.is_null() && !entity_ptr.is_null() {
+            let entity_ptr_u32 = entity_ptr as u32;
             // Check if roofs are currently hidden
             if runtime_state::get_bool("roofs_hidden") {
                 // Check if this entity has the "roof" tag
-                if let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr) {
+                if let Some(base) = crate::resource_manager::openzt_mods::extensions::get_entity_base(entity_ptr_u32) {
                     let roof_extensions = list_extensions_with_tag("roof");
                     for ext_key in &roof_extensions {
                         if let Some(record) = get_extension(ext_key)
                             && record.base == base {
                                 // This is a roof entity, hide it
-                                let visible_ptr = (entity_ptr + 0x13f) as *mut u8;
+                                let visible_ptr = (entity_ptr_u32 + 0x13f) as *mut u8;
                                 unsafe { *visible_ptr = 0 };
-                                info!("Auto-hid newly placed roof entity: {} (ptr: 0x{:x})", base, entity_ptr);
+                                info!("Auto-hid newly placed roof entity: {} (ptr: 0x{:x})", base, entity_ptr_u32);
                                 break;
                             }
                     }

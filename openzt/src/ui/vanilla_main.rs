@@ -1,0 +1,1223 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
+
+use egui::{
+    pos2, vec2, Align2, Color32, ColorImage, Context, FontData, FontDefinitions, FontFamily, FontId, Painter, PointerButton, Pos2, Rect, TextureHandle, Ui,
+    Vec2,
+};
+use openzt_configparser::ini::Ini;
+use tracing::{info, warn};
+
+use super::{tga, zt_image};
+
+static TEXTURES: OnceLock<Mutex<TextureCache>> = OnceLock::new();
+static BUTTONS: OnceLock<Mutex<ButtonState>> = OnceLock::new();
+static HIT_REGIONS: OnceLock<Mutex<Vec<HitRegion>>> = OnceLock::new();
+static BOLD_FONT_REGISTERED: AtomicBool = AtomicBool::new(false);
+static BOLD_FONT_ACTIVE: AtomicBool = AtomicBool::new(false);
+static HELP_HOVERED_THIS_FRAME: AtomicBool = AtomicBool::new(false);
+static HELP_HOVERED_LAST_FRAME: AtomicBool = AtomicBool::new(false);
+
+const BOLD_FONT_FAMILY: &str = "zt-bold";
+const BOLD_FONT_NAME: &str = "arial-bold";
+const BOLD_FONT_PATH: &str = r"C:\Windows\Fonts\arialbd.ttf";
+const GREEN_TEXT: Color32 = Color32::from_rgb(83, 219, 83);
+const ZERO_MONEY_TEXT: Color32 = Color32::from_rgb(0xf6, 0xd2, 0x5b);
+const NEGATIVE_MONEY_TEXT: Color32 = Color32::from_rgb(0xac, 0x4d, 0x2d);
+
+pub fn set_money_value(value: f32) {
+    super::money_display::set_value(value);
+}
+
+pub fn set_date_value(value: nt_time::time::UtcDateTime) {
+    super::date_display::set_value(value);
+}
+
+pub fn blocks_pointer_at(pos: Pos2, screen_size: Vec2) -> bool {
+    if let Ok(regions) = HIT_REGIONS.get_or_init(|| Mutex::new(Vec::new())).lock()
+        && !regions.is_empty()
+    {
+        return regions.iter().rev().any(|region| region.blocks(pos));
+    }
+
+    fallback_main_ui_block_rects(screen_size, |rect| rect.contains(pos))
+}
+
+struct TextureCache {
+    animations: HashMap<TextureKey, CachedTexture>,
+    tgas: HashMap<&'static str, CachedTgaTexture>,
+}
+
+impl TextureCache {
+    fn new() -> Self {
+        Self {
+            animations: HashMap::new(),
+            tgas: HashMap::new(),
+        }
+    }
+
+    fn animation(&mut self, ctx: &Context, base: &'static str, visual_state: VisualState) -> Option<LoadedTexture> {
+        let key = TextureKey { base, visual_state };
+        let entry = self.animations.entry(key).or_default();
+        entry.texture(ctx, base, visual_state)
+    }
+
+    fn tga(&mut self, ctx: &Context, resource: &'static str) -> Option<LoadedTgaTexture> {
+        let entry = self.tgas.entry(resource).or_default();
+        entry.texture(ctx, resource)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TextureKey {
+    base: &'static str,
+    visual_state: VisualState,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum VisualState {
+    Normal,
+    Hover,
+    Selected,
+    Disabled,
+}
+
+impl VisualState {
+    fn animation_name(self) -> &'static str {
+        match self {
+            Self::Normal => "N",
+            Self::Hover => "H",
+            Self::Selected => "S",
+            Self::Disabled => "G",
+        }
+    }
+}
+
+#[derive(Default)]
+struct ButtonState {
+    selected: HashSet<&'static str>,
+    pressed: HashSet<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+enum ButtonMode {
+    Momentary,
+    Selected,
+}
+
+#[derive(Default)]
+struct CachedTexture {
+    texture: Option<TextureHandle>,
+    size: Vec2,
+    mask: Option<Arc<HitMask>>,
+    failed: bool,
+    missing_logged: bool,
+}
+
+#[derive(Default)]
+struct CachedTgaTexture {
+    texture: Option<TextureHandle>,
+    size: Vec2,
+    missing_logged: bool,
+}
+
+impl CachedTexture {
+    fn texture(&mut self, ctx: &Context, base: &'static str, visual_state: VisualState) -> Option<LoadedTexture> {
+        if let Some(texture) = &self.texture {
+            return Some(LoadedTexture {
+                texture: texture.clone(),
+                size: self.size,
+                mask: self.mask.clone()?,
+            });
+        }
+
+        if self.failed {
+            return None;
+        }
+
+        let Some(texture) = load_animation_texture(ctx, base, visual_state, &mut self.missing_logged) else {
+            return None;
+        };
+
+        self.size = texture.size;
+        self.texture = Some(texture.texture.clone());
+        self.mask = Some(texture.mask.clone());
+        Some(texture)
+    }
+}
+
+impl CachedTgaTexture {
+    fn texture(&mut self, ctx: &Context, resource: &'static str) -> Option<LoadedTgaTexture> {
+        if let Some(texture) = &self.texture {
+            return Some(LoadedTgaTexture {
+                texture: texture.clone(),
+                size: self.size,
+            });
+        }
+
+        let Some(texture) = load_tga_texture(ctx, resource, &mut self.missing_logged) else {
+            return None;
+        };
+
+        self.size = texture.size;
+        self.texture = Some(texture.texture.clone());
+        Some(texture)
+    }
+}
+
+#[derive(Clone)]
+struct LoadedTexture {
+    texture: TextureHandle,
+    size: Vec2,
+    mask: Arc<HitMask>,
+}
+
+#[derive(Clone)]
+struct LoadedTgaTexture {
+    texture: TextureHandle,
+    size: Vec2,
+}
+
+#[derive(Clone, Copy)]
+struct DrawnRect {
+    rect: Rect,
+    loaded: bool,
+}
+
+#[derive(Clone)]
+struct HitRegion {
+    rect: Rect,
+    uv: Rect,
+    mask: Arc<HitMask>,
+}
+
+impl HitRegion {
+    fn blocks(&self, pos: Pos2) -> bool {
+        if !self.rect.contains(pos) || self.rect.width() <= 0.0 || self.rect.height() <= 0.0 {
+            return false;
+        }
+
+        let local_x = (pos.x - self.rect.left()) / self.rect.width();
+        let local_y = (pos.y - self.rect.top()) / self.rect.height();
+        let u = self.uv.left() + local_x * self.uv.width();
+        let v = self.uv.top() + local_y * self.uv.height();
+        self.mask.blocks_uv(u, v)
+    }
+}
+
+#[derive(Clone)]
+struct HitMask {
+    width: usize,
+    height: usize,
+    alpha: Vec<bool>,
+}
+
+impl HitMask {
+    fn from_image(image: &ColorImage) -> Self {
+        Self {
+            width: image.size[0],
+            height: image.size[1],
+            alpha: image.pixels.iter().map(|pixel| pixel.a() > 0).collect(),
+        }
+    }
+
+    fn blocks_uv(&self, u: f32, v: f32) -> bool {
+        if self.width == 0 || self.height == 0 || !u.is_finite() || !v.is_finite() {
+            return false;
+        }
+
+        let x = (u.clamp(0.0, 1.0) * self.width as f32).floor() as usize;
+        let y = (v.clamp(0.0, 1.0) * self.height as f32).floor() as usize;
+        let x = x.min(self.width - 1);
+        let y = y.min(self.height - 1);
+        self.alpha.get(y * self.width + x).copied().unwrap_or(false)
+    }
+}
+
+pub fn show(ctx: &Context, screen_size: Vec2) {
+    prepare_bold_font(ctx);
+
+    egui::Area::new("openzt_vanilla_main_ui".into())
+        .order(egui::Order::Background)
+        .fixed_pos(Pos2::ZERO)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen_size);
+            let painter = ui.painter().clone();
+            let cache = TEXTURES.get_or_init(|| Mutex::new(TextureCache::new()));
+            let mut cache = match cache.lock() {
+                Ok(cache) => cache,
+                Err(err) => {
+                    warn!("egui overlay: vanilla UI texture cache lock poisoned: {err}");
+                    return;
+                }
+            };
+
+            let buttons = BUTTONS.get_or_init(|| Mutex::new(ButtonState::default()));
+            let mut buttons = match buttons.lock() {
+                Ok(buttons) => buttons,
+                Err(err) => {
+                    warn!("egui overlay: vanilla UI button state lock poisoned: {err}");
+                    return;
+                }
+            };
+
+            let mut hit_regions = Vec::new();
+            draw_main_ui(ctx, ui, &painter, &mut cache, &mut buttons, &mut hit_regions, screen_size);
+            remember_hit_regions(hit_regions);
+        });
+}
+
+fn draw_main_ui(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    screen_size: Vec2,
+) {
+    HELP_HOVERED_THIS_FRAME.store(false, Ordering::Release);
+
+    let bg1_size = texture_size(ctx, cache, "ui/main/backgnd1/backgnd1", VisualState::Normal).unwrap_or(vec2(64.0, 248.0));
+    let bg2_size = texture_size(ctx, cache, "ui/main/backgnd2/backgnd2", VisualState::Normal).unwrap_or(vec2(170.0, 128.0));
+    let bg3_size = texture_size(ctx, cache, "ui/main/backgnd3/backgnd3", VisualState::Normal).unwrap_or(vec2(200.0, 112.0));
+    let bg4_size = texture_size(ctx, cache, "ui/main/backgnd4/backgnd4", VisualState::Normal).unwrap_or(vec2(330.0, 38.0));
+    let bg5_size = texture_size(ctx, cache, "ui/main/backgnd5/backgnd5", VisualState::Normal).unwrap_or(vec2(256.0, 38.0));
+
+    let bg1_rect = rect_from_pos_size(pos2(0.0, 0.0), bg1_size);
+    let bg2_pos = pos2(0.0, (screen_size.y - bg2_size.y).max(0.0));
+    let bg3_pos = pos2(0.0, (screen_size.y - bg3_size.y).max(0.0));
+    let bg4_pos = pos2(((screen_size.x - bg4_size.x) * 0.5).max(0.0), (screen_size.y - bg4_size.y).max(0.0));
+    let bg5_pos = pos2((screen_size.x - bg5_size.x).max(0.0), (screen_size.y - bg5_size.y).max(0.0));
+
+    let bg2 = rect_from_pos_size(bg2_pos, bg2_size);
+    let bg3 = rect_from_pos_size(bg3_pos, bg3_size);
+    let bg4 = rect_from_pos_size(bg4_pos, bg4_size);
+    let bg5 = rect_from_pos_size(bg5_pos, bg5_size);
+
+    if bg2.top() > bg1_rect.bottom() {
+        draw_tiled_y(ctx, painter, cache, hit_regions, "ui/main/bg2/bg2", pos2(0.0, bg1_rect.bottom()), bg2.top() - bg1_rect.bottom());
+    }
+    if bg4.left() > bg3.right() {
+        draw_tiled_x_bottom(ctx, painter, cache, hit_regions, "ui/main/bg3/bg3", bg3.right(), screen_size.y, bg4.left() - bg3.right());
+    }
+    if bg5.left() > bg4.right() {
+        draw_tiled_x_bottom(ctx, painter, cache, hit_regions, "ui/main/bg4/bg4", bg4.right(), screen_size.y, bg5.left() - bg4.right());
+    }
+
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd4/backgnd4", bg4_pos, bg4_size);
+    let bg1 = draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd1/backgnd1", pos2(0.0, 0.0), bg1_size);
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd2/backgnd2", bg2_pos, bg2_size);
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd3/backgnd3", bg3_pos, bg3_size);
+    draw_anim(ctx, painter, cache, hit_regions, "ui/main/backgnd5/backgnd5", bg5_pos, bg5_size);
+
+    draw_left_buttons(ctx, ui, painter, cache, buttons, hit_regions, bg1.rect);
+    draw_minimap_cluster(ctx, ui, painter, cache, buttons, hit_regions, bg2);
+    draw_time_and_money(ctx, ui, painter, cache, buttons, hit_regions, bg3, bg4);
+    draw_status_cluster(ctx, ui, painter, cache, buttons, hit_regions, bg4, bg5);
+
+    finish_help_tooltip_frame();
+}
+
+fn remember_hit_regions(hit_regions: Vec<HitRegion>) {
+    if let Ok(mut stored) = HIT_REGIONS.get_or_init(|| Mutex::new(Vec::new())).lock() {
+        *stored = hit_regions;
+    }
+}
+
+fn fallback_main_ui_block_rects(screen_size: Vec2, mut visit: impl FnMut(Rect) -> bool) -> bool {
+    let bg1 = Rect::from_min_size(pos2(0.0, 0.0), vec2(64.0, 248.0));
+    let bg2 = Rect::from_min_size(pos2(0.0, (screen_size.y - 128.0).max(0.0)), vec2(170.0, 128.0));
+    let bg3 = Rect::from_min_size(pos2(0.0, (screen_size.y - 112.0).max(0.0)), vec2(200.0, 112.0));
+    let bg4 = Rect::from_min_size(pos2(((screen_size.x - 330.0) * 0.5).max(0.0), (screen_size.y - 38.0).max(0.0)), vec2(330.0, 38.0));
+    let bg5 = Rect::from_min_size(pos2((screen_size.x - 256.0).max(0.0), (screen_size.y - 38.0).max(0.0)), vec2(256.0, 38.0));
+
+    if [bg1, bg2, bg3, bg4, bg5].into_iter().any(&mut visit) {
+        return true;
+    }
+    if bg2.top() > bg1.bottom() {
+        if visit(Rect::from_min_max(pos2(0.0, bg1.bottom()), pos2(64.0, bg2.top()))) {
+            return true;
+        }
+    }
+    if bg4.left() > bg3.right() {
+        if visit(Rect::from_min_max(
+            pos2(bg3.right(), (screen_size.y - 112.0).max(0.0)),
+            pos2(bg4.left(), screen_size.y),
+        )) {
+            return true;
+        }
+    }
+    if bg5.left() > bg4.right() {
+        if visit(Rect::from_min_max(
+            pos2(bg4.right(), (screen_size.y - 38.0).max(0.0)),
+            pos2(bg5.left(), screen_size.y),
+        )) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn draw_left_buttons(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons_state: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg1: Rect,
+) {
+    let buttons = [
+        ("ui/main/habitat/habitat", 4.0, 13.0),
+        ("ui/main/buyanim/buyanim", 4.0, 60.0),
+        ("ui/main/buyobj/buyobj", 4.0, 108.0),
+        ("ui/main/person/person", 4.0, 154.0),
+        ("ui/main/undo/undo", 1.0, 258.0),
+        ("ui/main/bdoz/bdoz", 1.0, 293.0),
+        ("ui/main/msgs/msgs", 1.0, 328.0),
+        ("ui/main/resr/resr", 1.0, 363.0),
+        ("ui/scenario/scenbut/scenbut", 1.0, 398.0),
+        ("ui/main/gameopt/gameopt", 1.0, 433.0),
+    ];
+
+    for (resource, x, y) in buttons {
+        draw_button(
+            ctx,
+            ui,
+            painter,
+            cache,
+            buttons_state,
+            hit_regions,
+            resource,
+            bg1.min + vec2(x, y),
+            vec2(40.0, 40.0),
+            ButtonMode::Selected,
+        );
+    }
+}
+
+fn draw_minimap_cluster(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg2: Rect,
+) {
+    let zoom_level = crate::globals::globals().ztworldmgr().zoom_level();
+
+    draw_action_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/sharedui/snap/snap",
+        bg2.min + vec2(5.0, 86.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Momentary,
+        crate::ztui::click_snapshot,
+    );
+    draw_enabled_action_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/zoomin/zoomin",
+        bg2.min + vec2(14.0, 17.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+        zoom_level < 2,
+        crate::ztui::click_zoom_in,
+    );
+    draw_enabled_action_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/zoomout/zoomout",
+        bg2.min + vec2(5.0, 24.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+        zoom_level > -2,
+        crate::ztui::click_zoom_out,
+    );
+    draw_action_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/rotr/rotr",
+        bg2.min + vec2(6.0, 40.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+        crate::ztui::click_rotate_cw,
+    );
+    draw_action_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/rotl/rotl",
+        bg2.min + vec2(26.0, 27.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Momentary,
+        crate::ztui::click_rotate_ccw,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/trees/trees",
+        bg2.min + vec2(147.0, 81.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Selected,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/guests/guests",
+        bg2.min + vec2(127.0, 90.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Selected,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/builds/builds",
+        bg2.min + vec2(106.0, 100.0),
+        vec2(28.0, 28.0),
+        ButtonMode::Selected,
+    );
+
+    let _minimap = Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0));
+    request_help_tooltip_for_rect(ctx, Rect::from_min_size(bg2.min + vec2(10.0, 44.0), vec2(139.0, 69.0)), 1026);
+}
+
+fn draw_time_and_money(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg3: Rect,
+    bg4: Rect,
+) {
+    let pause_resource = if super::pause::is_paused() {
+        "ui/main/play/play"
+    } else {
+        "ui/main/pause/pause"
+    };
+    let pause = draw_action_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        pause_resource,
+        bg3.min + vec2(170.0, 80.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Momentary,
+        super::pause::click_toggle_pause,
+    );
+    let date_rect = Rect::from_min_size(pause.rect.min + vec2(25.0, 7.0), vec2(108.0, 18.0));
+    painter.text(date_rect.center(), Align2::CENTER_CENTER, super::date_display::current(), bold_font(14.0), GREEN_TEXT);
+    if rect_contains_pointer(ctx, date_rect)
+        && let Some(text) = super::date_display::tooltip_text()
+    {
+        request_help_tooltip(text);
+    }
+
+    let money_rect = Rect::from_min_size(bg4.min + vec2(90.0, 9.0), vec2(125.0, 18.0));
+    let money = super::money_display::current();
+    let money_color = if money.negative {
+        NEGATIVE_MONEY_TEXT
+    } else if money.zero {
+        ZERO_MONEY_TEXT
+    } else {
+        GREEN_TEXT
+    };
+    painter.text(money_rect.center(), Align2::CENTER_CENTER, money.text, bold_font(14.0), money_color);
+    request_help_tooltip_for_rect(ctx, money_rect, 1016);
+}
+
+fn draw_status_cluster(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    bg4: Rect,
+    bg5: Rect,
+) {
+    draw_status(ctx, ui, painter, cache, buttons, hit_regions, "ui/main/zstat/zstat", bg4.min + vec2(231.0, 3.0), true);
+    draw_status(ctx, ui, painter, cache, buttons, hit_regions, "ui/main/astat/astat", bg5.min + vec2(0.0, 3.0), true);
+    draw_status(ctx, ui, painter, cache, buttons, hit_regions, "ui/main/gstat/gstat", bg5.min + vec2(85.0, 3.0), true);
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/hstat/hstat",
+        bg5.min + vec2(170.0, 3.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Selected,
+    );
+    draw_button(
+        ctx,
+        ui,
+        painter,
+        cache,
+        buttons,
+        hit_regions,
+        "ui/main/staff/staff",
+        bg5.min + vec2(206.0, 3.0),
+        vec2(34.0, 34.0),
+        ButtonMode::Selected,
+    );
+}
+
+fn draw_status(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    button: &'static str,
+    pos: Pos2,
+    with_meter: bool,
+) {
+    if with_meter {
+        draw_anim(ctx, painter, cache, hit_regions, "ui/main/progbck/progbck", pos + vec2(26.0, 5.0), vec2(56.0, 22.0));
+        let meter = Rect::from_min_size(pos + vec2(32.0, 9.0), vec2(45.0, 13.0));
+        draw_status_meter(ctx, painter, cache, meter, status_meter_value(button));
+        if rect_contains_pointer(ctx, meter)
+            && let Some(text) = status_meter_tooltip(button)
+        {
+            request_help_tooltip(text);
+        }
+    }
+    draw_button(ctx, ui, painter, cache, buttons, hit_regions, button, pos, vec2(34.0, 34.0), ButtonMode::Selected);
+}
+
+fn draw_status_meter(ctx: &Context, painter: &Painter, cache: &mut TextureCache, meter: Rect, value: u8) {
+    let value = value.min(100);
+    let fill_width = (meter.width() * value as f32 / 100.0).round();
+    if fill_width <= 0.0 {
+        return;
+    }
+
+    let resource = status_meter_texture(value);
+    let fill = Rect::from_min_size(meter.min, vec2(fill_width, meter.height()));
+    if let Some(texture) = cache.tga(ctx, resource) {
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((fill_width / texture.size.x).min(1.0), (meter.height() / texture.size.y).min(1.0)));
+        painter.image(texture.texture.id(), fill, uv, Color32::WHITE);
+    } else {
+        painter.rect_filled(fill, 0.0, status_meter_fallback_color(value));
+    }
+}
+
+fn status_meter_texture(value: u8) -> &'static str {
+    match value {
+        0..=24 => "ui/sharedui/statr.tga",
+        25..=49 => "ui/sharedui/staty.tga",
+        _ => "ui/sharedui/statg.tga",
+    }
+}
+
+fn status_meter_fallback_color(value: u8) -> Color32 {
+    match value {
+        0..=24 => Color32::from_rgb(0xac, 0x4d, 0x2d),
+        25..=49 => Color32::from_rgb(0xf6, 0xd2, 0x5b),
+        _ => Color32::from_rgb(66, 196, 59),
+    }
+}
+
+fn status_meter_value(resource: &str) -> u8 {
+    match resource {
+        "ui/main/zstat/zstat" => super::status_display::zoo_rating(),
+        "ui/main/astat/astat" => super::status_display::animal_rating(),
+        "ui/main/gstat/gstat" => super::status_display::guest_rating(),
+        _ => 75,
+    }
+}
+
+fn draw_button(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+) -> DrawnRect {
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, true, None)
+}
+
+fn draw_action_button(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+    action: fn(),
+) -> DrawnRect {
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, true, Some(action))
+}
+
+fn draw_enabled_action_button(
+    ctx: &Context,
+    ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+    enabled: bool,
+    action: fn(),
+) -> DrawnRect {
+    draw_button_impl(ctx, ui, painter, cache, buttons, hit_regions, resource, pos, fallback_size, mode, enabled, Some(action))
+}
+
+fn draw_button_impl(
+    ctx: &Context,
+    _ui: &mut Ui,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    buttons: &mut ButtonState,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    mode: ButtonMode,
+    enabled: bool,
+    action: Option<fn()>,
+) -> DrawnRect {
+    let normal_texture = cache.animation(ctx, resource, VisualState::Normal);
+    let size = normal_texture.as_ref().map(|texture| texture.size).unwrap_or(fallback_size);
+    let rect = rect_from_pos_size(pos, size);
+    let hovered = enabled && button_contains_pointer(ctx, rect, normal_texture.as_ref());
+    if hovered
+        && let Some(help_id) = button_help_id(resource)
+    {
+        request_help_tooltip_for_id(help_id);
+    }
+    let primary_pressed = ctx.input(|input| input.pointer.button_pressed(PointerButton::Primary));
+    let primary_down = ctx.input(|input| input.pointer.button_down(PointerButton::Primary));
+    let primary_released = ctx.input(|input| input.pointer.button_released(PointerButton::Primary));
+
+    if enabled && hovered && primary_pressed {
+        buttons.pressed.insert(resource);
+    }
+
+    if !primary_down && !primary_released {
+        buttons.pressed.remove(resource);
+    }
+
+    let pressed_on_button = buttons.pressed.contains(resource);
+    if primary_released {
+        if enabled && hovered && pressed_on_button {
+            if let Some(action) = action {
+                action();
+            }
+            if matches!(mode, ButtonMode::Selected) {
+                buttons.selected.insert(resource);
+            }
+        }
+        buttons.pressed.remove(resource);
+    }
+
+    let selected = buttons.selected.contains(resource);
+    let visual_state = if !enabled {
+        VisualState::Disabled
+    } else if matches!(mode, ButtonMode::Momentary) && pressed_on_button && primary_down {
+        VisualState::Selected
+    } else if selected {
+        VisualState::Selected
+    } else if hovered {
+        VisualState::Hover
+    } else {
+        VisualState::Normal
+    };
+
+    draw_anim_state(ctx, painter, cache, hit_regions, resource, pos, size, visual_state)
+}
+
+fn button_help_id(resource: &str) -> Option<i32> {
+    match resource {
+        "ui/main/buyanim/buyanim" => Some(1000),
+        "ui/main/habitat/habitat" => Some(1002),
+        "ui/main/buyobj/buyobj" => Some(1001),
+        "ui/main/person/person" => Some(1005),
+        "ui/main/undo/undo" => Some(1075),
+        "ui/main/bdoz/bdoz" => Some(1025),
+        "ui/main/msgs/msgs" => Some(1006),
+        "ui/main/resr/resr" => Some(1019),
+        "ui/scenario/scenbut/scenbut" => Some(4107),
+        "ui/main/gameopt/gameopt" => Some(1004),
+        "ui/main/pause/pause" => Some(1071),
+        "ui/main/play/play" => Some(1072),
+        "ui/main/zoomin/zoomin" => Some(1007),
+        "ui/main/zoomout/zoomout" => Some(1023),
+        "ui/main/trees/trees" => Some(1066),
+        "ui/main/guests/guests" => Some(1068),
+        "ui/main/builds/builds" => Some(1067),
+        "ui/main/rotr/rotr" => Some(1008),
+        "ui/main/rotl/rotl" => Some(1009),
+        "ui/main/zstat/zstat" => Some(1014),
+        "ui/main/astat/astat" => Some(1010),
+        "ui/main/gstat/gstat" => Some(1012),
+        "ui/main/hstat/hstat" => Some(1050),
+        "ui/main/staff/staff" => Some(1051),
+        _ => None,
+    }
+}
+
+fn status_meter_help_id(resource: &str) -> Option<i32> {
+    match resource {
+        "ui/main/zstat/zstat" => Some(1015),
+        "ui/main/astat/astat" => Some(1011),
+        "ui/main/gstat/gstat" => Some(1013),
+        _ => None,
+    }
+}
+
+fn status_meter_tooltip(resource: &str) -> Option<String> {
+    let help_id = status_meter_help_id(resource)?;
+    let value = status_meter_tooltip_value(resource)?;
+    let template = super::tooltip::tooltip_text_from_id(help_id, 1)?;
+    Some(format_numeric_help_text(&template, value))
+}
+
+fn status_meter_tooltip_value(resource: &str) -> Option<u32> {
+    let ztgamemgr = crate::globals::globals().ztgamemgr();
+    match resource {
+        "ui/main/zstat/zstat" => Some(ztgamemgr.zoo_rating()),
+        "ui/main/astat/astat" => Some(ztgamemgr.animal_rating_percent()),
+        "ui/main/gstat/gstat" => Some(ztgamemgr.guest_rating_percent()),
+        _ => None,
+    }
+}
+
+fn format_numeric_help_text(template: &str, value: u32) -> String {
+    if template.contains("%d") {
+        template.replace("%d", &value.to_string())
+    } else {
+        format!("{}{}", template, value)
+    }
+}
+
+fn request_help_tooltip_for_rect(ctx: &Context, rect: Rect, help_id: i32) {
+    if rect_contains_pointer(ctx, rect) {
+        request_help_tooltip_for_id(help_id);
+    }
+}
+
+fn request_help_tooltip_for_id(help_id: i32) {
+    HELP_HOVERED_THIS_FRAME.store(true, Ordering::Release);
+    super::tooltip::set_overlay_help_tooltip(help_id);
+}
+
+fn request_help_tooltip(text: String) {
+    HELP_HOVERED_THIS_FRAME.store(true, Ordering::Release);
+    super::tooltip::set_overlay_tooltip(text);
+}
+
+fn finish_help_tooltip_frame() {
+    let hovered = HELP_HOVERED_THIS_FRAME.load(Ordering::Acquire);
+    let was_hovered = HELP_HOVERED_LAST_FRAME.swap(hovered, Ordering::AcqRel);
+    if was_hovered && !hovered {
+        super::tooltip::clear_tooltip();
+    }
+}
+
+fn rect_contains_pointer(ctx: &Context, rect: Rect) -> bool {
+    let Some(pos) = ctx.pointer_hover_pos().or_else(crate::ui::current_pointer_pos).or_else(crate::ui::last_pointer_pos) else {
+        return false;
+    };
+
+    rect.contains(pos)
+}
+
+fn button_contains_pointer(ctx: &Context, rect: Rect, texture: Option<&LoadedTexture>) -> bool {
+    let Some(pos) = ctx.pointer_hover_pos().or_else(crate::ui::current_pointer_pos).or_else(crate::ui::last_pointer_pos) else {
+        return false;
+    };
+
+    if let Some(texture) = texture {
+        return HitRegion {
+            rect,
+            uv: unit_uv(),
+            mask: texture.mask.clone(),
+        }
+        .blocks(pos);
+    }
+
+    rect.contains(pos)
+}
+
+fn draw_anim(
+    ctx: &Context,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+) -> DrawnRect {
+    draw_anim_state(ctx, painter, cache, hit_regions, resource, pos, fallback_size, VisualState::Normal)
+}
+
+fn draw_anim_state(
+    ctx: &Context,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    fallback_size: Vec2,
+    visual_state: VisualState,
+) -> DrawnRect {
+    let loaded = cache
+        .animation(ctx, resource, visual_state)
+        .map(|texture| (texture, visual_state))
+        .or_else(|| cache.animation(ctx, resource, VisualState::Normal).map(|texture| (texture, VisualState::Normal)));
+    let size = loaded.as_ref().map(|(texture, _)| texture.size).unwrap_or(fallback_size);
+    let rect = rect_from_pos_size(pos, size);
+    let loaded_image = loaded.is_some();
+    if let Some((texture, loaded_visual_state)) = loaded {
+        let uv = unit_uv();
+        let tint = if matches!(visual_state, VisualState::Disabled) && !matches!(loaded_visual_state, VisualState::Disabled) {
+            Color32::from_white_alpha(128)
+        } else {
+            Color32::WHITE
+        };
+        painter.image(texture.texture.id(), rect, uv, tint);
+        hit_regions.push(HitRegion {
+            rect,
+            uv,
+            mask: texture.mask.clone(),
+        });
+    }
+
+    DrawnRect { rect, loaded: loaded_image }
+}
+
+fn draw_tiled_y(
+    ctx: &Context,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    pos: Pos2,
+    height: f32,
+) {
+    if height <= 0.0 {
+        return;
+    }
+
+    let Some(texture) = cache.animation(ctx, resource, VisualState::Normal) else {
+        return;
+    };
+    let tile_size = texture.size;
+    if tile_size.x <= 0.0 || tile_size.y <= 0.0 {
+        return;
+    }
+
+    let bottom = pos.y + height;
+    let mut y = pos.y;
+    while y < bottom {
+        let tile_height = tile_size.y.min(bottom - y);
+        let dest = Rect::from_min_size(pos2(pos.x, y), vec2(tile_size.x, tile_height));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, tile_height / tile_size.y));
+        painter.image(texture.texture.id(), dest, uv, Color32::WHITE);
+        hit_regions.push(HitRegion {
+            rect: dest,
+            uv,
+            mask: texture.mask.clone(),
+        });
+        y += tile_size.y;
+    }
+}
+
+fn draw_tiled_x_bottom(
+    ctx: &Context,
+    painter: &Painter,
+    cache: &mut TextureCache,
+    hit_regions: &mut Vec<HitRegion>,
+    resource: &'static str,
+    left: f32,
+    bottom: f32,
+    width: f32,
+) {
+    if width <= 0.0 {
+        return;
+    }
+
+    let Some(texture) = cache.animation(ctx, resource, VisualState::Normal) else {
+        return;
+    };
+    let tile_size = texture.size;
+    if tile_size.x <= 0.0 || tile_size.y <= 0.0 {
+        return;
+    }
+
+    let top = bottom - tile_size.y;
+    let right = left + width;
+    let mut x = left;
+    while x < right {
+        let tile_width = tile_size.x.min(right - x);
+        let dest = Rect::from_min_size(pos2(x, top), vec2(tile_width, tile_size.y));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(tile_width / tile_size.x, 1.0));
+        painter.image(texture.texture.id(), dest, uv, Color32::WHITE);
+        hit_regions.push(HitRegion {
+            rect: dest,
+            uv,
+            mask: texture.mask.clone(),
+        });
+        x += tile_size.x;
+    }
+}
+
+fn texture_size(ctx: &Context, cache: &mut TextureCache, resource: &'static str, visual_state: VisualState) -> Option<Vec2> {
+    cache.animation(ctx, resource, visual_state).map(|texture| texture.size)
+}
+
+fn load_animation_texture(ctx: &Context, base: &'static str, visual_state: VisualState, missing_logged: &mut bool) -> Option<LoadedTexture> {
+    let descriptor_name = format!("{base}.ani");
+    let Some((descriptor_source, descriptor_data)) = crate::resource_manager::lazyresourcemap::get_file(&descriptor_name) else {
+        log_missing(missing_logged, &descriptor_name);
+        return None;
+    };
+
+    let descriptor = String::from_utf8_lossy(&descriptor_data).into_owned();
+    let mut ini = Ini::new_cs();
+    if let Err(err) = ini.read(descriptor) {
+        warn!("egui overlay: failed to parse animation descriptor {descriptor_name}: {err}");
+        return None;
+    }
+
+    let resource_name = match animation_resource_name(&ini, visual_state) {
+        Some(resource_name) => resource_name,
+        None => {
+            warn!("egui overlay: animation descriptor {descriptor_name} has no animation entries");
+            return None;
+        }
+    };
+    let palette_name = format!("{base}.pal");
+
+    let Some((animation_source, animation_data)) = crate::resource_manager::lazyresourcemap::get_file(&resource_name) else {
+        log_missing(missing_logged, &resource_name);
+        return None;
+    };
+    let Some((palette_source, palette_data)) = crate::resource_manager::lazyresourcemap::get_file(&palette_name) else {
+        log_missing(missing_logged, &palette_name);
+        return None;
+    };
+
+    match zt_image::decode_animation_frames(&animation_data, &palette_data) {
+        Ok((_animation, frames)) => {
+            let Some(image) = frames.into_iter().next() else {
+                warn!("egui overlay: animation {resource_name} decoded with no frames");
+                return None;
+            };
+            let size = vec2(image.size[0] as f32, image.size[1] as f32);
+            let mask = Arc::new(HitMask::from_image(&image));
+            let texture = ctx.load_texture(format!("vanilla-main:{base}:{}", visual_state.animation_name()), image, egui::TextureOptions::NEAREST);
+            info!(
+                "egui overlay: loaded vanilla UI asset {base} using {descriptor_source}, {animation_source}, {palette_source} as {}x{}",
+                size.x, size.y
+            );
+            Some(LoadedTexture { texture, size, mask })
+        }
+        Err(err) => {
+            warn!("egui overlay: failed to decode vanilla UI asset {base}: {err}");
+            None
+        }
+    }
+}
+
+fn load_tga_texture(ctx: &Context, resource: &'static str, missing_logged: &mut bool) -> Option<LoadedTgaTexture> {
+    let Some((source, data)) = crate::resource_manager::lazyresourcemap::get_file(resource) else {
+        log_missing(missing_logged, resource);
+        return None;
+    };
+
+    match tga::decode_tga(&data) {
+        Ok(image) => {
+            let size = vec2(image.size[0] as f32, image.size[1] as f32);
+            let texture = ctx.load_texture(format!("vanilla-main:{resource}"), image, egui::TextureOptions::NEAREST);
+            info!("egui overlay: loaded vanilla UI TGA {resource} using {source} as {}x{}", size.x, size.y);
+            Some(LoadedTgaTexture { texture, size })
+        }
+        Err(err) => {
+            warn!("egui overlay: failed to decode vanilla UI TGA {resource}: {err}");
+            None
+        }
+    }
+}
+
+fn animation_resource_name(ini: &Ini, visual_state: VisualState) -> Option<String> {
+    let mut dirs = Vec::new();
+    for index in 0.. {
+        let Some(dir) = ini.get("animation", &format!("dir{index}")) else {
+            break;
+        };
+        dirs.push(dir);
+    }
+
+    let animations = ini.get_vec("animation", "animation")?;
+    let animation = animations
+        .iter()
+        .find(|animation| animation.eq_ignore_ascii_case(visual_state.animation_name()))
+        .or_else(|| animations.iter().find(|animation| animation.eq_ignore_ascii_case("N")))
+        .or_else(|| animations.first())?;
+
+    dirs.push(animation.clone());
+    Some(dirs.join("/"))
+}
+
+fn log_missing(missing_logged: &mut bool, resource: &str) {
+    if !*missing_logged {
+        info!("egui overlay: vanilla UI resource not available yet: {resource}");
+        *missing_logged = true;
+    }
+}
+
+fn rect_from_pos_size(pos: Pos2, size: Vec2) -> Rect {
+    Rect::from_min_size(pos, vec2(size.x.max(0.0), size.y.max(0.0)))
+}
+
+fn unit_uv() -> Rect {
+    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))
+}
+
+fn bold_font(size: f32) -> FontId {
+    if BOLD_FONT_ACTIVE.load(Ordering::Acquire) {
+        FontId::new(size, FontFamily::Name(BOLD_FONT_FAMILY.into()))
+    } else {
+        FontId::proportional(size)
+    }
+}
+
+fn prepare_bold_font(ctx: &Context) {
+    if BOLD_FONT_ACTIVE.load(Ordering::Acquire) {
+        return;
+    }
+
+    if BOLD_FONT_REGISTERED.load(Ordering::Acquire) {
+        BOLD_FONT_ACTIVE.store(true, Ordering::Release);
+        return;
+    }
+
+    if register_bold_font(ctx) {
+        BOLD_FONT_REGISTERED.store(true, Ordering::Release);
+        ctx.request_repaint();
+    }
+}
+
+fn register_bold_font(ctx: &Context) -> bool {
+    let font_bytes = match std::fs::read(BOLD_FONT_PATH) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!("egui overlay: failed to read bold UI font {BOLD_FONT_PATH}: {err}");
+            return false;
+        }
+    };
+
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(BOLD_FONT_NAME.to_string(), Arc::new(FontData::from_owned(font_bytes)));
+    fonts.families.insert(FontFamily::Name(BOLD_FONT_FAMILY.into()), vec![BOLD_FONT_NAME.to_string()]);
+
+    ctx.set_fonts(fonts);
+    info!("egui overlay: registered bold UI font from {BOLD_FONT_PATH}");
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image(width: usize, height: usize, pixels: Vec<Color32>) -> ColorImage {
+        ColorImage::new([width, height], pixels)
+    }
+
+    #[test]
+    fn hit_mask_blocks_opaque_pixels() {
+        let mask = HitMask::from_image(&image(2, 1, vec![Color32::TRANSPARENT, Color32::WHITE]));
+
+        assert!(!mask.blocks_uv(0.25, 0.5));
+        assert!(mask.blocks_uv(0.75, 0.5));
+    }
+
+    #[test]
+    fn hit_region_rejects_out_of_bounds_positions() {
+        let region = HitRegion {
+            rect: Rect::from_min_size(pos2(10.0, 20.0), vec2(5.0, 5.0)),
+            uv: unit_uv(),
+            mask: Arc::new(HitMask::from_image(&image(1, 1, vec![Color32::WHITE]))),
+        };
+
+        assert!(!region.blocks(pos2(9.0, 22.0)));
+        assert!(!region.blocks(pos2(12.0, 26.0)));
+    }
+
+    #[test]
+    fn hit_region_maps_cropped_uv_to_source_pixels() {
+        let region = HitRegion {
+            rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(20.0, 10.0)),
+            uv: Rect::from_min_max(pos2(0.5, 0.0), pos2(1.0, 1.0)),
+            mask: Arc::new(HitMask::from_image(&image(
+                4,
+                1,
+                vec![Color32::TRANSPARENT, Color32::TRANSPARENT, Color32::WHITE, Color32::TRANSPARENT],
+            ))),
+        };
+
+        assert!(region.blocks(pos2(1.0, 5.0)));
+        assert!(!region.blocks(pos2(19.0, 5.0)));
+    }
+}

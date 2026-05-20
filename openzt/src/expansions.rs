@@ -381,7 +381,7 @@ pub mod custom_expansion {
     use crate::{bfentitytype::read_zt_entity_type_from_memory, ztui::get_current_buy_tab};
 
     #[detour(ENTITY_TYPE_IS_DISPLAYED)]
-    pub unsafe extern "cdecl" fn ztui_general_entity_type_is_displayed(bf_entity: u32, param_1: u32, param_2: u32) -> bool {
+    pub unsafe extern "cdecl" fn ztui_general_entity_type_is_displayed(bf_entity: *const i32, param_1: *const i8, param_2: *const i8) -> bool {
         // TODO: Put this call and subsequent log behind OpenZT debug flag)
         let result = unsafe { ENTITY_TYPE_IS_DISPLAYED_DETOUR.call(bf_entity, param_1, param_2) };
 
@@ -389,7 +389,7 @@ pub mod custom_expansion {
             return false;
         };
 
-        let entity = read_zt_entity_type_from_memory(bf_entity);
+        let entity = read_zt_entity_type_from_memory(bf_entity as u32);
 
         let Some(current_buy_tab) = get_current_buy_tab() else {
             return false;

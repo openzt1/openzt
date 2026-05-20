@@ -23,7 +23,7 @@ pub mod output;
 // Re-export commonly used types for external consumers
 pub use instance::{
     CreateInstanceRequest, CreateInstanceResponse, Instance, InstanceConfig, InstanceDetails,
-    InstanceStatus, LogsResponse,
+    InstanceStatus, LogsResponse, ScriptFile, UploadScriptRequest, UploadScriptResponse,
 };
 pub use state::AppState;
 

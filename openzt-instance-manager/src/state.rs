@@ -76,6 +76,7 @@ impl AppState {
                         status: info.status,
                         created_at: info.created_at,
                         config: info.config,
+                        script_files: Vec::new(),  // Scripts don't persist across restarts
                     };
 
                     self.instances.insert(instance_id.to_string(), instance);

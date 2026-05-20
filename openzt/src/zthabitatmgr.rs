@@ -104,7 +104,7 @@ impl fmt::Display for ZTHabitatMgr {
 pub struct ZTHabitat {
     vtable: u32,                 // 0x000
     zt_show_info_ptr: u32,       // 0x004
-    pad1: [u8; 0x38],            // ----------------------- padding: 60 bytes
+    pad1: [u8; 0x38],            // ----------------------- padding: 56 bytes
     exhibit_tile_ptr: u32,       // 0x040 // Seems incorrect?
     pad2: [u8; 0x48],            // ----------------------- padding: 72 bytes
     entrance_tile_ptr: u32,      // 0x08c
@@ -124,10 +124,13 @@ pub struct ZTHabitat {
     created_timestamp: FileTime, // 0x120
     unknown_nt_time: FileTime,   // 0x128
     pad5: [u8; 0x24],            // ----------------------- padding: 36 bytes
-    exhibit_name: ZTBoundedString,
+    exhibit_name: ZTBoundedString, // 0x154
+    pad6: [u8; 0x28],            // ----------------------- padding: 40 bytes
+    tank_height: u32,            // 0x188
 }
 
 impl ZTHabitat {
+    const TANK_VTABLE_PTR: u32 = 0x006312bc;
     pub fn get_gate_tile_in(&self) -> Option<BFTile> {
         if self.entrance_tile_ptr == 0 {
             return None;
@@ -144,6 +147,14 @@ impl ZTHabitat {
             }
         let ztwm = globals().ztworldmgr();
         ztwm.get_neighbour(&tile, Direction::from(self.entrance_rotation))
+    }
+
+    pub fn is_tank(&self) -> bool {
+        self.vtable == Self::TANK_VTABLE_PTR
+    }
+
+    pub fn is_show_tank(&self) -> bool {
+        self.zt_show_info_ptr != 0
     }
 }
 
@@ -240,11 +251,11 @@ pub mod hooks_zthabitatmgr {
 
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
     #[detour(GET_GATE_TILE_IN)]
-    unsafe extern "thiscall" fn get_gate_tile_in(_this: u32) -> u32 {
+    unsafe extern "thiscall" fn get_gate_tile_in(_this: *const u32) -> *const u32 {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(_this) };
         match habitat.get_gate_tile_in() {
-            Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile),
-            None => 0,
+            Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile) as *const u32,
+            None => std::ptr::null(),
         }
     }
 }

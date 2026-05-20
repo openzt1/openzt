@@ -78,7 +78,7 @@ pub mod zoo_console {
     use super::call_next_command;
 
     #[detour(UPDATE_SIM)]
-    unsafe extern "thiscall" fn zoo_zt_app_update_game(_this_ptr: u32, param_2: i32) {
+    unsafe extern "thiscall" fn zoo_zt_app_update_game(_this_ptr: *const u32, param_2: i32) {
         call_next_command();
         unsafe { UPDATE_SIM_DETOUR.call(_this_ptr, param_2) }
     }
@@ -124,6 +124,13 @@ pub fn call_next_command() {
 
     #[cfg(feature = "tui")]
     tui_console::add_command_output(result.clone());
+
+    // Log command output if enabled in config or when detour-validation is active
+    let config = crate::resource_manager::mod_config::get_openzt_config();
+    let should_log = cfg!(feature = "detour-validation") || config.logging.log_command_output;
+    if should_log {
+        info!("Command result: {}", result);
+    }
 
     let mut result_mutex = COMMAND_RESULTS.lock().unwrap();
     result_mutex.push(result);
@@ -188,6 +195,15 @@ pub fn start_server() {
     };
 
     info!("Listening on {}...", listen_addr);
+
+    // Auto-load detour test script if detour-validation is enabled
+    #[cfg(all(feature = "detour-validation", feature = "command-console"))]
+    {
+        match crate::scripting::load_lua_file("scripts/detour.lua") {
+            Ok(msg) => info!("Detour script loaded: {}", msg),
+            Err(e) => info!("Detour script loading failed: {}", e),
+        }
+    }
 
     for stream in listener.incoming() {
         match stream {

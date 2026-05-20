@@ -1,11 +1,13 @@
 use regex::Regex;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use tracing::{info, warn};
 
 /// Set of available language DLL files in the game directory
 static AVAILABLE_DLLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static LANGUAGE_DLL_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 
 /// Initialize DLL dependency checking by scanning the game directory
 ///
@@ -31,6 +33,7 @@ pub fn init() {
     let lang_dll_regex = Regex::new(r"^lang.*\.dll$").unwrap();
 
     let mut found_dlls = HashSet::new();
+    let mut lang_dll_paths = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if let Some(file_name) = path.file_name()
@@ -39,15 +42,27 @@ pub fn init() {
                 // Only include DLLs matching the lang*.dll pattern
                 if lang_dll_regex.is_match(&name_lower) {
                     found_dlls.insert(name_lower);
+                    lang_dll_paths.push(path);
                 }
             }
     }
+    lang_dll_paths.sort_by_key(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_lowercase())
+            .unwrap_or_default()
+    });
 
     // Initialize the OnceLock with our found DLLs
     let _ = AVAILABLE_DLLS.set(Mutex::new(found_dlls));
+    let _ = LANGUAGE_DLL_PATHS.set(lang_dll_paths);
 
     let available = AVAILABLE_DLLS.get().unwrap();
     info!("Found {} language DLL files for dependency validation", available.lock().unwrap().len());
+}
+
+pub fn language_dll_paths() -> &'static [PathBuf] {
+    LANGUAGE_DLL_PATHS.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// Check if a DLL dependency is satisfied

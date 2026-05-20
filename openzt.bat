@@ -19,7 +19,9 @@ IF "%~1"=="console" GOTO console
 IF "%~1"=="check" GOTO check
 IF "%~1"=="clippy" GOTO clippy
 IF "%~1"=="test" GOTO test
+IF "%~1"=="test-egui-tiny-skia" GOTO test_egui_tiny_skia
 IF "%~1"=="integration-tests" GOTO integration_tests
+IF "%~1"=="validate-detours" GOTO validate_detours
 
 echo Error: Unknown subcommand "%~1"
 echo.
@@ -50,6 +52,34 @@ SET WAIT_FLAG=1
 SET CARGO_ARGS=--features integration-tests
 SET INTEGRATION_TESTS_MODE=1
 SHIFT
+GOTO build
+
+REM ============================================================
+REM Validate Detours Command
+REM ============================================================
+
+:validate_detours
+SHIFT
+SET VALIDATE_DETOUR_NAMES=
+:validate_collect_args
+IF "%~1"=="" GOTO validate_build
+IF DEFINED VALIDATE_DETOUR_NAMES (
+    SET VALIDATE_DETOUR_NAMES=!VALIDATE_DETOUR_NAMES!,%~1
+) ELSE (
+    SET VALIDATE_DETOUR_NAMES=%~1
+)
+SHIFT
+GOTO validate_collect_args
+
+:validate_build
+IF "!VALIDATE_DETOUR_NAMES!"=="" SET VALIDATE_DETOUR_NAMES=all
+SET OPENZT_VALIDATE_DETOURS=!VALIDATE_DETOUR_NAMES!
+SET VALIDATE_DETOURS_MODE=1
+SET RUN_AFTER_BUILD=1
+SET RELEASE_FLAG=1
+SET WAIT_FLAG=1
+SET CARGO_ARGS=--features "detour-validation,command-console"
+echo Validate-detours: [!VALIDATE_DETOUR_NAMES!]
 GOTO build
 
 :parse_flags
@@ -125,6 +155,9 @@ REM Display build info
 echo Building !DLL_NAME! (!BUILD_TYPE!)...
 IF DEFINED FEATURE_FLAGS (
     echo Features: !FEATURE_FLAGS!
+)
+IF DEFINED CARGO_ARGS (
+    echo Cargo args: !CARGO_ARGS!
 )
 
 REM Execute cargo build for DLL
@@ -232,6 +265,22 @@ IF DEFINED WAIT_FLAG (
         echo ============================================================
         echo.
     )
+
+    REM Display detour validation results if in validate-detours mode
+    IF DEFINED VALIDATE_DETOURS_MODE (
+        echo.
+        echo ============================================================
+        echo Detour Validation Results  [!OPENZT_VALIDATE_DETOURS!]
+        echo ============================================================
+        powershell -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Select-String -Path 'C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt.log' -Pattern 'DETOUR_CALLED|[Vv]alidation detour' | Select-Object -ExpandProperty Line | Out-Host"
+        echo.
+        powershell -Command "if (Select-String -Path 'C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt.log' -Pattern 'OPENZT_CLEAN_SHUTDOWN' -Quiet) { Write-Host 'Exit status: clean' } else { Write-Host 'Exit status: CRASHED (no clean shutdown marker in log)' }"
+        echo.
+        echo Full logs:
+        echo   "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\openzt.log"
+        echo ============================================================
+        echo.
+    )
 ) ELSE (
     echo Launching Zoo Tycoon...
     start "Zoo Tycoon" "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\zoo.exe"
@@ -293,7 +342,31 @@ REM ============================================================
 
 :check
 echo Running cargo check on openzt...
-cargo check --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
+echo openzt.bat arguments: %*
+SHIFT
+SET CHECK_CARGO_ARGS=
+SET CHECK_PARSING_CARGO_ARGS=
+
+:check_parse_loop
+IF "%~1"=="" GOTO check_run
+IF "%~1"=="--" (
+    SET CHECK_PARSING_CARGO_ARGS=1
+    SHIFT
+    GOTO check_parse_loop
+)
+IF DEFINED CHECK_PARSING_CARGO_ARGS (
+    SET CHECK_CARGO_ARGS=!CHECK_CARGO_ARGS! %~1
+    SHIFT
+    GOTO check_parse_loop
+)
+echo Error: Unknown check flag "%~1"
+exit /b 1
+
+:check_run
+IF DEFINED CHECK_CARGO_ARGS (
+    echo Cargo args: !CHECK_CARGO_ARGS!
+)
+cargo check --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc !CHECK_CARGO_ARGS!
 
 IF !errorlevel! NEQ 0 (
     echo.
@@ -312,6 +385,7 @@ REM ============================================================
 
 :clippy
 echo Running cargo clippy on openzt...
+echo openzt.bat arguments: %*
 cargo clippy --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
 
 IF !errorlevel! NEQ 0 (
@@ -331,7 +405,31 @@ REM ============================================================
 
 :test
 echo Running cargo test on openzt...
-cargo test --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc
+echo openzt.bat arguments: %*
+SHIFT
+SET TEST_CARGO_ARGS=
+SET TEST_PARSING_CARGO_ARGS=
+
+:test_parse_loop
+IF "%~1"=="" GOTO test_run
+IF "%~1"=="--" (
+    SET TEST_PARSING_CARGO_ARGS=1
+    SHIFT
+    GOTO test_parse_loop
+)
+IF DEFINED TEST_PARSING_CARGO_ARGS (
+    SET TEST_CARGO_ARGS=!TEST_CARGO_ARGS! %~1
+    SHIFT
+    GOTO test_parse_loop
+)
+echo Error: Unknown test flag "%~1"
+exit /b 1
+
+:test_run
+IF DEFINED TEST_CARGO_ARGS (
+    echo Cargo args: !TEST_CARGO_ARGS!
+)
+cargo test --manifest-path openzt/Cargo.toml --target i686-pc-windows-msvc !TEST_CARGO_ARGS!
 
 IF !errorlevel! NEQ 0 (
     echo.
@@ -342,6 +440,26 @@ IF !errorlevel! NEQ 0 (
 
 echo.
 echo Tests passed
+GOTO :EOF
+
+REM ============================================================
+REM egui-tiny-skia Test Function
+REM ============================================================
+
+:test_egui_tiny_skia
+echo Running cargo test on egui-tiny-skia...
+echo openzt.bat arguments: %*
+cargo test --manifest-path egui-tiny-skia/Cargo.toml
+
+IF !errorlevel! NEQ 0 (
+    echo.
+    echo egui-tiny-skia tests failed
+    pause
+    exit /b !errorlevel!
+)
+
+echo.
+echo egui-tiny-skia tests passed
 GOTO :EOF
 
 REM ============================================================
@@ -359,7 +477,9 @@ echo   run                Build the DLL and launch the game
 echo   check              Run cargo check on openzt crate
 echo   clippy             Run cargo clippy on openzt crate
 echo   test               Run cargo test on openzt crate
+echo   test-egui-tiny-skia Run cargo test on egui-tiny-skia crate
 echo   integration-tests  Run integration tests (builds release, launches game, displays results)
+echo   validate-detours   Validate detour addresses (builds release, launches game, shows calls)
 echo   docs               Generate and open documentation
 echo   console            Open interactive Lua console or run oneshot command
 echo   help               Show this help message
@@ -381,7 +501,10 @@ echo   openzt.bat run --test                Build test DLL and launch game
 echo   openzt.bat check                     Run cargo check on openzt
 echo   openzt.bat clippy                    Run cargo clippy on openzt
 echo   openzt.bat test                      Run cargo test on openzt
+echo   openzt.bat test-egui-tiny-skia       Run cargo test on egui-tiny-skia
 echo   openzt.bat integration-tests         Run integration tests (builds release, displays results)
+echo   openzt.bat validate-detours          Validate all annotated detours
+echo   openzt.bat validate-detours bfanimcache/update    Validate specific detour
 echo   openzt.bat docs                      Generate and open docs
 echo   openzt.bat console                   Open interactive Lua console
 echo   openzt.bat console --oneshot "help()"          Run single Lua command and exit

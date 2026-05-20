@@ -102,6 +102,20 @@ pub fn execute_lua(code: &str) -> Result<String, String> {
     }
 }
 
+/// Loads and executes a Lua file from disk
+/// File path is relative to the game's base directory
+pub fn load_lua_file(relative_path: &str) -> Result<String, String> {
+    let full_path = crate::util::get_base_path().join(relative_path);
+
+    if !full_path.exists() {
+        return Ok(format!("Script file not found: {}", relative_path));
+    }
+
+    std::fs::read_to_string(&full_path)
+        .map_err(|e| format!("Failed to read file: {}", e))
+        .and_then(|contents| execute_lua(&contents))
+}
+
 /// Converts a Lua value to a string representation
 fn lua_value_to_string(value: &mlua::Value) -> String {
     match value {
@@ -564,4 +578,14 @@ pub fn init() {
     lua_fn!("ping", "Test console connectivity", "ping()", || {
         Ok("pong".to_string())
     });
+
+    // Register the dofile() function
+    lua_fn!(
+        "dofile",
+        "Load and execute a Lua file from disk (relative to game directory)",
+        "dofile(path)",
+        |path: String| {
+            load_lua_file(&path).map_err(|e| mlua::Error::external(e))
+        }
+    );
 }

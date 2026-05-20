@@ -8,7 +8,7 @@ console_start = 18081
 console_end = 18181
 
 [docker]
-image = "finn/winezt:latest"
+image = "finn/wine32-zoo:latest"
 container_prefix = "openzt-"
 
 [instances]

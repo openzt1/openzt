@@ -60,14 +60,6 @@ impl PortPool {
         self.release_console(console_port);
     }
 
-    pub fn vnc_available(&self) -> usize {
-        self.vnc_range.clone().count() - self.allocated_vnc.len()
-    }
-
-    pub fn console_available(&self) -> usize {
-        self.console_range.clone().count() - self.allocated_console.len()
-    }
-
     /// Add an existing VNC port allocation (for recovery)
     pub fn add_existing_vnc(&mut self, port: u16) -> anyhow::Result<()> {
         if !self.vnc_range.contains(&port) {

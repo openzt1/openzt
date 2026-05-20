@@ -26,21 +26,25 @@ maplit = "1.0.2"
 field_accessor_as_string = { path = "../field_accessor_as_string" }
 field_accessor_as_string_trait = { path = "../field_accessor_as_string_trait" }
 serde = {version = "1.0.228", features = ["derive"]}
-toml = { version = "0.9.11", features = ["preserve_order"] }
+toml = { version = "1.1.2", features = ["preserve_order"] }
 regex = "1.12.2"
 indexmap = { version = "2", features = ["serde"] }
 public = "0.2.2"
 enable-ansi-support = "0.3.1"
 itertools = "0.14.0"
-nt-time = "0.14.0"
+nt-time = "0.15.0"
 proptest = { version = "1.9.0", optional = true}
 mlua = { version = "0.11.5", features = ["luajit52", "vendored", "send"] }
+inventory = { version = "0.3", optional = true }
 encoding_rs = "0.8"
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
+egui = { version = "0.33", default-features = false, features = ["default_fonts"], optional = true }
+egui-tiny-skia = { path = "../egui-tiny-skia", version = "0.1.0", optional = true }
+tiny-skia = { version = "0.11", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.2", features = ["Win32", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.62.2", features = ["Win32", "Win32_Foundation", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 
@@ -59,3 +63,6 @@ integration-tests = []
 command-console = []
 tui = ["dep:ratatui", "dep:crossterm"]
 proptest = ["dep:proptest"]
+detour-validation = ["openzt-detour/detour-validation", "dep:inventory"]
+egui-overlay = ["dep:egui", "dep:egui-tiny-skia", "dep:tiny-skia"]
+debug-blit = ["egui-overlay"]
