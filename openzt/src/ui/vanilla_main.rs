@@ -412,7 +412,7 @@ fn draw_minimap_cluster(
 ) {
     let zoom_level = crate::globals::globals().ztworldmgr().zoom_level();
 
-    draw_button(
+    draw_action_button(
         ctx,
         ui,
         painter,
@@ -423,6 +423,7 @@ fn draw_minimap_cluster(
         bg2.min + vec2(5.0, 86.0),
         vec2(34.0, 34.0),
         ButtonMode::Momentary,
+        crate::ztui::click_snapshot,
     );
     draw_enabled_action_button(
         ctx,

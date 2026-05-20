@@ -1,7 +1,7 @@
 use std::fmt;
 
 use openzt_detour::generated::bfuimgr::GET_ELEMENT_0;
-use openzt_detour::generated::ztmapview::ZOOM_MAP;
+use openzt_detour::generated::ztmapview::{TAKE_SNAPSHOT, ZOOM_MAP};
 use openzt_detour::generated::ztui_general::GET_MAPVIEW;
 use openzt_detour::generated::ztui_general::GET_SELECTED_ENTITY;
 use tracing::{info, warn};
@@ -356,8 +356,9 @@ fn command_call_ui_callback(args: Vec<&str>) -> Result<String, CommandError> {
         "click_rotate_cw" => click_rotate_cw(),
         "click_zoom_in" => click_zoom_in(),
         "click_zoom_out" => click_zoom_out(),
+        "click_snapshot" => click_snapshot(),
         "list" => {
-            return Ok("click_continue, click_rotate_ccw, click_rotate_cw, click_zoom_in, click_zoom_out".to_string());
+            return Ok("click_continue, click_rotate_ccw, click_rotate_cw, click_zoom_in, click_zoom_out, click_snapshot".to_string());
         }
         _ => return Err(Into::into("Unknown UI callback")),
     }
@@ -382,6 +383,18 @@ pub(crate) fn click_zoom_in() {
 
 pub(crate) fn click_zoom_out() {
     click_zoom_by(-2);
+}
+
+pub(crate) fn click_snapshot() {
+    let map_view = unsafe { GET_MAPVIEW.original()() };
+    if map_view.is_null() {
+        warn!("egui overlay: cannot take snapshot because ZTUI::general::getMapview returned null");
+        return;
+    }
+
+    unsafe {
+        TAKE_SNAPSHOT.original()(map_view as *const i32);
+    }
 }
 
 fn click_zoom_by(delta: i32) {
