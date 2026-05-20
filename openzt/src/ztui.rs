@@ -4,6 +4,7 @@ use openzt_detour::generated::bfuimgr::GET_ELEMENT_0;
 use openzt_detour::generated::ztmapview::{TAKE_SNAPSHOT, ZOOM_MAP};
 use openzt_detour::generated::ztui_general::GET_MAPVIEW;
 use openzt_detour::generated::ztui_general::GET_SELECTED_ENTITY;
+use openzt_detour::generated::ztui_main::{PAUSE_GAME, UNPAUSE_GAME};
 use tracing::{info, warn};
 
 use crate::{
@@ -357,8 +358,10 @@ fn command_call_ui_callback(args: Vec<&str>) -> Result<String, CommandError> {
         "click_zoom_in" => click_zoom_in(),
         "click_zoom_out" => click_zoom_out(),
         "click_snapshot" => click_snapshot(),
+        "click_pause" => click_pause(),
+        "click_unpause" => click_unpause(),
         "list" => {
-            return Ok("click_continue, click_rotate_ccw, click_rotate_cw, click_zoom_in, click_zoom_out, click_snapshot".to_string());
+            return Ok("click_continue, click_rotate_ccw, click_rotate_cw, click_zoom_in, click_zoom_out, click_snapshot, click_pause, click_unpause".to_string());
         }
         _ => return Err(Into::into("Unknown UI callback")),
     }
@@ -394,6 +397,18 @@ pub(crate) fn click_snapshot() {
 
     unsafe {
         TAKE_SNAPSHOT.original()(map_view as *const i32);
+    }
+}
+
+pub(crate) fn click_pause() {
+    unsafe {
+        PAUSE_GAME.original()();
+    }
+}
+
+pub(crate) fn click_unpause() {
+    unsafe {
+        UNPAUSE_GAME.original()();
     }
 }
 

@@ -4,6 +4,7 @@ mod date_display;
 mod input_block;
 mod live_game;
 mod money_display;
+mod pause;
 mod render_hook;
 mod status_display;
 mod tga;
@@ -61,6 +62,7 @@ pub fn init() {
     input_block::init();
     live_game::init();
     money_display::init();
+    pause::init();
     status_display::init();
     tooltip::init();
     zoom_block::init();
@@ -286,6 +288,7 @@ pub fn set_live_game_active(active: bool) {
 
     if active {
         info!("egui overlay: live game started");
+        pause::set_paused(false);
     } else {
         info!("egui overlay: live game stopped");
         drain_input_events();

@@ -530,17 +530,23 @@ fn draw_time_and_money(
     bg3: Rect,
     bg4: Rect,
 ) {
-    let pause = draw_button(
+    let pause_resource = if super::pause::is_paused() {
+        "ui/main/play/play"
+    } else {
+        "ui/main/pause/pause"
+    };
+    let pause = draw_action_button(
         ctx,
         ui,
         painter,
         cache,
         buttons,
         hit_regions,
-        "ui/main/pause/pause",
+        pause_resource,
         bg3.min + vec2(170.0, 80.0),
         vec2(34.0, 34.0),
-        ButtonMode::Selected,
+        ButtonMode::Momentary,
+        super::pause::click_toggle_pause,
     );
     let date_rect = Rect::from_min_size(pause.rect.min + vec2(25.0, 7.0), vec2(108.0, 18.0));
     painter.text(date_rect.center(), Align2::CENTER_CENTER, super::date_display::current(), bold_font(14.0), GREEN_TEXT);
