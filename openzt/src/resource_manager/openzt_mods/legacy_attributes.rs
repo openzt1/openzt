@@ -7,7 +7,7 @@ use std::{collections::HashMap, str::FromStr, sync::Mutex};
 
 use openzt_configparser::ini::Ini;
 use std::sync::LazyLock;
-use tracing::trace;
+use tracing::{info, trace};
 
 // Import LegacyCfgType from legacy_loading for conversion
 use crate::resource_manager::legacy_loading::LegacyCfgType;
@@ -381,6 +381,20 @@ pub fn get_legacy_attribute_with_subtype(entity_type: LegacyEntityType, entity_n
 pub fn legacy_entity_exists(entity_type: LegacyEntityType, entity_name: &str) -> bool {
     let map = LEGACY_ATTRIBUTES_MAP.lock().unwrap();
     map.get(&entity_type).and_then(|m| m.get(entity_name)).is_some()
+}
+
+/// Log summary statistics about all loaded legacy entities
+pub fn log_legacy_entity_summary() {
+    let map = LEGACY_ATTRIBUTES_MAP.lock().unwrap();
+
+    let mut total_entities = 0;
+    for (entity_type, entities) in map.iter() {
+        let count = entities.len();
+        total_entities += count;
+        info!("Legacy entities loaded for {:?}: {} entities", entity_type, count);
+    }
+
+    info!("Total legacy entities loaded: {}", total_entities);
 }
 
 #[cfg(test)]
