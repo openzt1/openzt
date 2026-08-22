@@ -39,6 +39,11 @@ pub fn init() {
         // `ztresearch::init()` production init chain, which this harness never calls.
         crate::ztresearch::research_save_reimplementation::init();
 
+        // Installs `marketing_save_reimplementation`'s `SAVE`/`LOAD` detour, for the same reason as
+        // the research one above - so the ZTMARKETINGMGR_SAVE/ZTMARKETINGMGR_LOAD tests' `mgr.save()`/
+        // `mgr.load()` calls exercise the actual promoted live path.
+        crate::ztmarketing::marketing_save_reimplementation::init();
+
         unsafe { detour_zoo_main::init_detours() }.is_err().then(|| {
             error!("Error initialising zoo_main detours");
         });
@@ -92,6 +97,8 @@ mod detour_zoo_main {
     use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
     use openzt_detour::generated::ztanimal::GET_FOOTPRINT as ZTANIMAL_GET_FOOTPRINT;
     use openzt_detour::generated::ztapp::UPDATE_SIM;
+    use openzt_detour::generated::ztmarketing;
+    use openzt_detour::generated::ztmarketingmgr::UPDATE as ZTMARKETINGMGR_UPDATE;
     use openzt_detour::generated::ztresearchbranch;
     use openzt_detour::generated::ztresearchbranch::GET_FUNDING_TEXT as ZTRESEARCHBRANCH_GET_FUNDING_TEXT;
     use openzt_detour::generated::ztresearchbranch::UPDATE as ZTRESEARCHBRANCH_UPDATE;
@@ -109,6 +116,7 @@ mod detour_zoo_main {
         globals::globals,
         util::{get_from_memory, ZTBufferString, ZTString},
         ztmapview::BFTile,
+        ztmarketing::{live_support as marketing_live_support, marketing_save_reimplementation, ZTMarketingMgr},
         ztresearch::research_save_reimplementation::{self, live_support, SaveRecord},
         ztresearch::{ZTResearchBranch, ZTResearchEffectKind, ZTResearchMgr},
         ztworldmgr::{BFEntity, IVec3, ZTAnimal, ZTUnit},
@@ -590,6 +598,12 @@ mod detour_zoo_main {
         fail_flag |= run_ztanimal_get_footprint_tests(&mut failure_log);
         fail_flag |= run_research_branch_funding_test(&mut failure_log);
         fail_flag |= run_research_branch_pct_days_remaining_test(&mut failure_log);
+        fail_flag |= run_marketing_increase_funding_test(&mut failure_log);
+        fail_flag |= run_marketing_decrease_funding_test(&mut failure_log);
+        fail_flag |= run_marketing_set_funding_level_test(&mut failure_log);
+        fail_flag |= run_marketingmgr_update_test(&mut failure_log);
+        fail_flag |= run_marketingmgr_save_test(&mut failure_log);
+        fail_flag |= run_marketingmgr_load_test(&mut failure_log);
 
         // ZTRESEARCHMGR_SAVE: compares the real ZTResearchMgr::save's captured output against
         // research_save_reimplementation::serialize(&snapshot_mgr(mgr)) for generated synthetic trees.
@@ -1109,6 +1123,8 @@ mod detour_zoo_main {
         fail_flag |= run_funding_text_test(&mut failure_log);
         fail_flag |= run_branch_update_test(&mut failure_log);
         fail_flag |= run_research_mgr_update_branches_test(&mut failure_log);
+        fail_flag |= run_marketing_update_test(&mut failure_log);
+        fail_flag |= run_marketing_funding_text_test(&mut failure_log);
 
         if fail_flag {
             error!("Proptest failed for some cases, check the failure log at: {}", failure_log_path);
@@ -1619,6 +1635,501 @@ mod detour_zoo_main {
             );
             Ok(())
         }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETING_INCREASE_FUNDING: compares the real `ZTMarketing::increaseFunding` against the
+    /// reimplemented `increase_funding`, for two independently-constructed but structurally identical
+    /// standalone `ZTMarketing`s (built via `marketing_live_support::build_standalone_marketing` - not
+    /// spliced into any `ZTMarketingMgr`, since `increaseFunding` only ever reads/writes `this`).
+    /// `current_funding_level` spans `0..6` to cover in-range/top-of-range/one-past-the-end starting
+    /// values against funding tables spanning empty (`0`) through a few entries. Compares both the
+    /// resulting index and vanilla's masked low-byte return value (`increase_funding`'s own doc comment
+    /// on `ztmarketing.rs` explains why that byte is exactly what a standalone `isFundingMaxed()` call
+    /// would report after the operation).
+    fn run_marketing_increase_funding_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETING_INCREASE_FUNDING";
+        let mut fail_flag = false;
+
+        match runner.run(&(0u32..6, 0usize..5), |(current_funding_level, level_count)| {
+            let real_ptr = marketing_live_support::build_standalone_marketing(current_funding_level, level_count);
+            let real_ret = unsafe { ztmarketing::INCREASE_FUNDING.original()(real_ptr as *const u32) };
+            let real_index = unsafe { &*real_ptr }.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing(real_ptr);
+
+            let reimpl_ptr = marketing_live_support::build_standalone_marketing(current_funding_level, level_count);
+            let reimpl_marketing = unsafe { &mut *reimpl_ptr };
+            let reimpl_ret = reimpl_marketing.increase_funding();
+            let reimpl_index = reimpl_marketing.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing(reimpl_ptr);
+
+            prop_assert_eq!(
+                real_index,
+                reimpl_index,
+                "current_funding_level mismatch for start={}, level_count={}",
+                current_funding_level,
+                level_count
+            );
+            prop_assert_eq!(
+                (real_ret & 0xff) != 0,
+                reimpl_ret,
+                "return-flag mismatch for start={}, level_count={}",
+                current_funding_level,
+                level_count
+            );
+            Ok(())
+        }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETING_DECREASE_FUNDING: same shape as `run_marketing_increase_funding_test`, comparing
+    /// `ZTMarketing::decreaseFunding` against `decrease_funding`.
+    fn run_marketing_decrease_funding_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETING_DECREASE_FUNDING";
+        let mut fail_flag = false;
+
+        match runner.run(&(0u32..6, 0usize..5), |(current_funding_level, level_count)| {
+            let real_ptr = marketing_live_support::build_standalone_marketing(current_funding_level, level_count);
+            let real_ret = unsafe { ztmarketing::DECREASE_FUNDING.original()(real_ptr as *const u32) };
+            let real_index = unsafe { &*real_ptr }.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing(real_ptr);
+
+            let reimpl_ptr = marketing_live_support::build_standalone_marketing(current_funding_level, level_count);
+            let reimpl_marketing = unsafe { &mut *reimpl_ptr };
+            let reimpl_ret = reimpl_marketing.decrease_funding();
+            let reimpl_index = reimpl_marketing.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing(reimpl_ptr);
+
+            prop_assert_eq!(
+                real_index,
+                reimpl_index,
+                "current_funding_level mismatch for start={}, level_count={}",
+                current_funding_level,
+                level_count
+            );
+            prop_assert_eq!(
+                (real_ret & 0xff) != 0,
+                reimpl_ret,
+                "return-flag mismatch for start={}, level_count={}",
+                current_funding_level,
+                level_count
+            );
+            Ok(())
+        }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETING_SET_FUNDING_LEVEL: compares the real `ZTMarketing::setFundingLevel` against the
+    /// reimplemented `set_funding_level`. `level` spans `0..6` (in-range through one/several past the
+    /// end) against funding tables spanning empty (`0`) through a few entries, to cover
+    /// `setFundingLevel`'s "reset to `0`" out-of-range behavior - deliberately different from
+    /// `increaseFunding`'s saturating behavior, see `set_funding_level`'s own doc comment.
+    fn run_marketing_set_funding_level_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETING_SET_FUNDING_LEVEL";
+        let mut fail_flag = false;
+
+        match runner.run(&(0u32..2, 0usize..5, 0u32..6), |(current_funding_level, level_count, level)| {
+            let real_ptr = marketing_live_support::build_standalone_marketing(current_funding_level, level_count);
+            unsafe { ztmarketing::SET_FUNDING_LEVEL.original()(real_ptr as *const u32, level) };
+            let real_index = unsafe { &*real_ptr }.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing(real_ptr);
+
+            let reimpl_ptr = marketing_live_support::build_standalone_marketing(current_funding_level, level_count);
+            let reimpl_marketing = unsafe { &mut *reimpl_ptr };
+            reimpl_marketing.set_funding_level(level);
+            let reimpl_index = reimpl_marketing.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing(reimpl_ptr);
+
+            prop_assert_eq!(
+                real_index,
+                reimpl_index,
+                "current_funding_level mismatch for start={}, level_count={}, level={}",
+                current_funding_level,
+                level_count,
+                level
+            );
+            Ok(())
+        }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETINGMGR_UPDATE: compares the real `ZTMarketingMgr::update`'s effect on
+    /// `tick_accumulator` against the reimplemented `update`, for a synthetic manager with no owned
+    /// `ZTMarketing` (`marketing_ptr = null`) - so `ZTMarketing::update` (which needs a live
+    /// `GLOBAL_ZTGameMgr` - see `run_marketing_update_test` below) never actually runs on either side,
+    /// matching vanilla's own null-pointer guard exactly. Mirrors `ZTRESEARCHMGR_UPDATE`'s own
+    /// zero-branches version.
+    fn run_marketingmgr_update_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETINGMGR_UPDATE";
+        let mut fail_flag = false;
+
+        match runner.run(&(any::<u32>(), any::<u32>()), |(tick_accumulator_before, delta_ticks)| {
+            let real_ptr = marketing_live_support::build_standalone_marketing_mgr(tick_accumulator_before, std::ptr::null_mut());
+            unsafe { ZTMARKETINGMGR_UPDATE.original()((real_ptr as *mut ZTMarketingMgr) as *const u32, delta_ticks) };
+            let real_tick_accumulator = unsafe { &*real_ptr }.tick_accumulator();
+            marketing_live_support::destroy_standalone_marketing_mgr(real_ptr);
+
+            let reimpl_ptr = marketing_live_support::build_standalone_marketing_mgr(tick_accumulator_before, std::ptr::null_mut());
+            unsafe { &mut *reimpl_ptr }.update(delta_ticks);
+            let reimpl_tick_accumulator = unsafe { &*reimpl_ptr }.tick_accumulator();
+            marketing_live_support::destroy_standalone_marketing_mgr(reimpl_ptr);
+
+            prop_assert_eq!(
+                real_tick_accumulator,
+                reimpl_tick_accumulator,
+                "tick_accumulator mismatch for tick_accumulator_before={}, delta_ticks={}",
+                tick_accumulator_before,
+                delta_ticks
+            );
+            Ok(())
+        }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETING_UPDATE: compares the real `ZTMarketingMgr::update`'s effect on a *wired-in*
+    /// `ZTMarketing` (a one-entry funding table at index `0`, so `ZTMarketing::update`'s unchecked
+    /// `funding_level(current_funding_level)` read is always safe) against the reimplemented `update`,
+    /// with `tick_accumulator` fixed so a threshold crossing always happens (`delta_ticks` generated
+    /// `3000..10000`, always `> 359` days' worth per `predict_mgr_update`) - so `ZTMarketing::update`
+    /// genuinely runs on both sides, not just the accumulator bookkeeping already covered by
+    /// `ZTMARKETINGMGR_UPDATE` above. Run from `run_on_completion_reset_test_and_exit`'s `updateSim`
+    /// injection point rather than the earlier `LOAD_LANG_DLLS` battery, same as
+    /// `ZTRESEARCHBRANCH_UPDATE`/`ZTRESEARCHMGR_UPDATE_BRANCHES` - `GLOBAL_ZTGameMgr` isn't constructed
+    /// yet at `LOAD_LANG_DLLS` (confirmed live: this test reported "skipped" there before moving here).
+    ///
+    /// Restricted to the *insufficient-cash* case exactly like `ZTRESEARCHBRANCH_UPDATE`
+    /// (`AVAILABLE_CASH = 0.0`, `funding_cost` generated strictly positive) - see that test's own doc
+    /// comment in `ztresearch.rs`'s harness for why: `ZTGameMgr::subtractCash` also calls
+    /// `ZTUI::main::setMoneyText`, a real UI refresh not safely touchable from this injection point.
+    /// What this test *does* cover live: that `ZTMarketing::update` reads the right funding level, the
+    /// right day count, and leaves the budget/index untouched when unaffordable - on both sides
+    /// identically.
+    fn run_marketing_update_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETING_UPDATE";
+        let mut fail_flag = false;
+
+        if marketing_live_support::ztgamemgr_ptr_is_null() {
+            info!("Skipping {}: GLOBAL_ZTGameMgr not initialized at this injection point", test_name);
+            write_success_line(failure_log, &format!("{} (skipped: ZTGameMgr not initialized)", test_name));
+            return fail_flag;
+        }
+
+        const AVAILABLE_CASH: f32 = 0.0;
+
+        match runner.run(&(3000u32..10000, 1f32..1000f32), |(delta_ticks, funding_cost)| {
+            let real_marketing_ptr = marketing_live_support::build_standalone_marketing_with_cost(funding_cost);
+            let real_mgr_ptr = marketing_live_support::build_standalone_marketing_mgr(0, real_marketing_ptr);
+            marketing_live_support::with_ztgamemgr_cash(AVAILABLE_CASH, || unsafe {
+                ZTMARKETINGMGR_UPDATE.original()((real_mgr_ptr as *mut ZTMarketingMgr) as *const u32, delta_ticks);
+            });
+            let real_tick_accumulator = unsafe { &*real_mgr_ptr }.tick_accumulator();
+            let real_index = unsafe { &*real_marketing_ptr }.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing_mgr(real_mgr_ptr);
+            marketing_live_support::destroy_standalone_marketing(real_marketing_ptr);
+
+            let reimpl_marketing_ptr = marketing_live_support::build_standalone_marketing_with_cost(funding_cost);
+            let reimpl_mgr_ptr = marketing_live_support::build_standalone_marketing_mgr(0, reimpl_marketing_ptr);
+            marketing_live_support::with_ztgamemgr_cash(AVAILABLE_CASH, || unsafe { &mut *reimpl_mgr_ptr }.update(delta_ticks));
+            let reimpl_tick_accumulator = unsafe { &*reimpl_mgr_ptr }.tick_accumulator();
+            let reimpl_index = unsafe { &*reimpl_marketing_ptr }.current_funding_level();
+            marketing_live_support::destroy_standalone_marketing_mgr(reimpl_mgr_ptr);
+            marketing_live_support::destroy_standalone_marketing(reimpl_marketing_ptr);
+
+            prop_assert_eq!(
+                real_tick_accumulator,
+                reimpl_tick_accumulator,
+                "tick_accumulator mismatch for delta_ticks={}, funding_cost={}",
+                delta_ticks,
+                funding_cost
+            );
+            prop_assert_eq!(
+                real_index,
+                reimpl_index,
+                "current_funding_level mismatch for delta_ticks={}, funding_cost={}",
+                delta_ticks,
+                funding_cost
+            );
+            Ok(())
+        }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETING_GET_FUNDING_TEXT: compares the real `ZTMarketing::getFundingText`'s output against
+    /// the reimplemented `ZTMarketing::funding_text`, for a standalone marketing (not spliced into any
+    /// `ZTMarketingMgr` - see `marketing_live_support::build_standalone_marketing_with_levels`'s doc
+    /// comment) with a generated funding table and `current_funding_level` spanning negative/in-range/
+    /// out-of-range relative to the table's length. Same shape as `run_funding_text_test` above,
+    /// reusing its `funding_level_case_strategy` for the (name_id, cost) generation - per the
+    /// implementation plan's item 3, `ZTMarketing::getFundingText` goes through the exact same
+    /// `bfinternat::getMoneyText`/string-table machinery research's own `funding_text` already
+    /// confirmed, just without the `1.0/30.0` day-scale pre-multiply (see `ZTMarketing::funding_text`'s
+    /// own doc comment in `ztmarketing.rs`), so a resolvable-or-not name id is comparably meaningful to
+    /// either side regardless of which class "owns" that string id in vanilla's own data.
+    fn run_marketing_funding_text_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETING_GET_FUNDING_TEXT";
+        let mut fail_flag = false;
+
+        match runner.run(&(-2i32..4i32, prop::collection::vec(funding_level_case_strategy(), 0..3)), |(current_funding_level, levels)| {
+            let current_funding_level = current_funding_level as u32;
+            let marketing_ptr = marketing_live_support::build_standalone_marketing_with_levels(current_funding_level, &levels);
+
+            let mut buffer = [0u32; 3];
+            unsafe {
+                ztmarketing::GET_FUNDING_TEXT.original()(marketing_ptr as *const u32, buffer.as_mut_ptr() as *const u32);
+            }
+            let real_text = get_from_memory::<ZTBufferString>(buffer.as_ptr() as u32).copy_to_string();
+            let reimpl_text = unsafe { &*marketing_ptr }.funding_text();
+
+            marketing_live_support::destroy_standalone_marketing(marketing_ptr);
+
+            prop_assert_eq!(
+                real_text,
+                reimpl_text,
+                "funding_text mismatch for current_funding_level={}, levels={:?}",
+                current_funding_level,
+                levels
+            );
+            Ok(())
+        }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETINGMGR_SAVE: compares the real `ZTMarketingMgr::save`'s captured output (via
+    /// `io_redirect`, the same `WRITE_BYTES_TO_FILE` redirect `ZTRESEARCHMGR_SAVE` uses) against the
+    /// single little-endian `u32` funding-level index vanilla is expected to write - `0` when no
+    /// `ZTMarketing` is owned, per `ZTMarketingMgr_save.c`.
+    fn run_marketingmgr_save_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETINGMGR_SAVE";
+        let mut fail_flag = false;
+
+        match runner.run(&(any::<bool>(), 0u32..10), |(has_marketing, current_funding_level)| {
+            let marketing_ptr = if has_marketing {
+                marketing_live_support::build_standalone_marketing(current_funding_level, 0)
+            } else {
+                std::ptr::null_mut()
+            };
+            let mgr_ptr = marketing_live_support::build_standalone_marketing_mgr(0, marketing_ptr);
+            let mgr = unsafe { &mut *mgr_ptr };
+
+            let dummy_file: u32 = 0;
+            io_redirect::begin_capture();
+            let _ = mgr.save(&dummy_file as *const u32);
+            let captured_bytes = io_redirect::end_capture();
+
+            marketing_live_support::destroy_standalone_marketing_mgr(mgr_ptr);
+            marketing_live_support::destroy_standalone_marketing(marketing_ptr);
+
+            let expected_index: u32 = if has_marketing { current_funding_level } else { 0 };
+            let expected_bytes = expected_index.to_le_bytes().to_vec();
+
+            prop_assert_eq!(
+                captured_bytes,
+                expected_bytes,
+                "ZTMarketingMgr::save byte mismatch for has_marketing={}, current_funding_level={}",
+                has_marketing,
+                current_funding_level
+            );
+            Ok(())
+        }) {
+            Ok(_) => {
+                info!("Proptest passed for {}", test_name);
+                write_success_line(failure_log, test_name);
+            }
+            Err(e) => {
+                error!("Proptest failed: {:?}", e);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {:?}\n", test_name, e).as_bytes());
+                }
+                fail_flag = true;
+            }
+        }
+
+        fail_flag
+    }
+
+    /// ZTMARKETINGMGR_LOAD: compares the real `ZTMarketingMgr::load`'s effect on the owned
+    /// `ZTMarketing`'s funding-level index (and its own return value) against
+    /// `marketing_save_reimplementation::predict_load`, for a generated funding-level table size,
+    /// starting index, save-format version (spanning both sides of the `0x3a` threshold), and stream
+    /// content - `bytes_present = false` supplies an empty replay buffer, exercising `load`'s
+    /// read-failure abort path (`predict_load`'s `None` branch) when `version` is above the threshold.
+    fn run_marketingmgr_load_test(failure_log: &mut Option<std::fs::File>) -> bool {
+        let runner_config = ProptestConfig {
+            failure_persistence: Some(Box::new(super::NoopFailurePersistence)),
+            ..ProptestConfig::default()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(runner_config);
+        let test_name = "ZTMARKETINGMGR_LOAD";
+        let mut fail_flag = false;
+
+        match runner.run(
+            &(0u32..0x50, any::<u32>(), 0usize..6, 0u32..8, any::<bool>()),
+            |(version, saved_value, level_count, current_funding_level, bytes_present)| {
+                let marketing_ptr = marketing_live_support::build_standalone_marketing(current_funding_level, level_count);
+                let mgr_ptr = marketing_live_support::build_standalone_marketing_mgr(0, marketing_ptr);
+                let mgr = unsafe { &mut *mgr_ptr };
+
+                let bytes = if bytes_present { saved_value.to_le_bytes().to_vec() } else { Vec::new() };
+                let file_buffer = [0u32; 4];
+                io_redirect::begin_replay(bytes);
+                let load_ret = mgr.load(file_buffer.as_ptr(), version);
+                io_redirect::end_replay();
+
+                let real_index = unsafe { &*marketing_ptr }.current_funding_level();
+                marketing_live_support::destroy_standalone_marketing_mgr(mgr_ptr);
+                marketing_live_support::destroy_standalone_marketing(marketing_ptr);
+
+                let read_value = bytes_present.then_some(saved_value);
+                let (expected_ok, expected_index) = marketing_save_reimplementation::predict_load(version, read_value, level_count, current_funding_level);
+
+                prop_assert_eq!(
+                    load_ret,
+                    expected_ok,
+                    "return value mismatch for version={}, level_count={}, current_funding_level={}, bytes_present={}",
+                    version,
+                    level_count,
+                    current_funding_level,
+                    bytes_present
+                );
+                prop_assert_eq!(
+                    real_index,
+                    expected_index,
+                    "current_funding_level mismatch for version={}, saved_value={}, level_count={}, current_funding_level={}, bytes_present={}",
+                    version,
+                    saved_value,
+                    level_count,
+                    current_funding_level,
+                    bytes_present
+                );
+                Ok(())
+            },
+        ) {
             Ok(_) => {
                 info!("Proptest passed for {}", test_name);
                 write_success_line(failure_log, test_name);

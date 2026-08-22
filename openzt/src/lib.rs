@@ -81,6 +81,10 @@ mod zthabitatmgr;
 /// classes, which drive the zoo's research tree, funding levels and program completion effects.
 mod ztresearch;
 
+/// ztmarketing module has structs and methods for the vanilla ZTMarketingMgr/ZTMarketing/
+/// ZTMarketingFundingLevel classes, which drive the zoo's marketing spend and funding-level selection.
+mod ztmarketing;
+
 mod experimental;
 
 /// Roof tag extension for scenery entities
@@ -192,6 +196,7 @@ mod zoo_init {
             ztmapview::init();
             zthabitatmgr::init();
             ztresearch::init();
+            ztmarketing::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }
     }

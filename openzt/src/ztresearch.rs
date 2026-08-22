@@ -1493,7 +1493,13 @@ const MONTHLY_TO_DAILY_COST_SCALE: f32 = 1.0 / 30.0;
 /// the exact fixed globals vanilla itself reads/mutates around this same call site
 /// (`DAT_0063806c`/`lpFormat_0063b3a8`), rather than hardcoded from the static image, so this matches
 /// whatever the running game's own locale-init code has set them to.
-fn get_money_text(value: i32) -> String {
+///
+/// `pub(crate)`: reused verbatim by `ztmarketing::ZTMarketing::funding_text` - per the implementation
+/// plan's item 3, `ZTMarketing::getFundingText` calls this exact same `bfinternat::getMoneyText`
+/// overload (confirmed at the same `0x0040eca1` address), just with a different pre-scale on `cost`
+/// (none, vs. `MONTHLY_TO_DAILY_COST_SCALE` here) - no reason to duplicate the `CURRENCYFMTA`/live-global
+/// plumbing a second time.
+pub(crate) fn get_money_text(value: i32) -> String {
     let base = get_module_base("zoo.exe") as u32;
     let num_digits = get_from_memory::<u32>(base + 0x0023_b3a8);
     let leading_zero = get_from_memory::<u32>(base + 0x0023_b3ac);

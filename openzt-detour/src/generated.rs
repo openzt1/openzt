@@ -6721,6 +6721,22 @@ pub mod ztmarketing {
 
     #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/update"))]
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0041f2ae, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/ztmarketing"))]
+    pub const ZTMARKETING: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00501288, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/get_funding_text"))]
+    pub const GET_FUNDING_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x0052f586, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/increase_funding"))]
+    pub const INCREASE_FUNDING: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00589a66, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/load_configuration"))]
+    pub const LOAD_CONFIGURATION: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x005916ff, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/constructor"))]
+    pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00591978, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/set_funding_level"))]
+    pub const SET_FUNDING_LEVEL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00594f4f, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/clear_configuration"))]
+    pub const CLEAR_CONFIGURATION: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b0d0c, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketing/decrease_funding"))]
+    pub const DECREASE_FUNDING: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061a668, function_type: PhantomData};
 }
 
 // ZTMarketingMgr class functions
@@ -6735,8 +6751,14 @@ pub mod ztmarketingmgr {
     pub const ZTMARKETING_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504f73, function_type: PhantomData};
     #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketingmgr/ztmarketing_mgr_1"))]
     pub const ZTMARKETING_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504f89, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketingmgr/constructor"))]
+    pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0052580f, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketingmgr/load_configurations"))]
+    pub const LOAD_CONFIGURATIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x005915e3, function_type: PhantomData};
     #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketingmgr/load"))]
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> bool> = FunctionDef{address: 0x00594129, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("ztmarketingmgr/clear_configurations"))]
+    pub const CLEAR_CONFIGURATIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b0ceb, function_type: PhantomData};
 }
 
 // ZTMegatileMgr class functions
@@ -9455,6 +9477,8 @@ pub mod standalone {
     pub const EXIT: FunctionDef<unsafe extern "cdecl" fn(u32)> = FunctionDef{address: 0x0057e4b7, function_type: PhantomData};
     #[cfg_attr(feature = "detour-validation", validate_detour("standalone/init_global_bfregistry"))]
     pub const INIT_GLOBAL_BFREGISTRY: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x005886cd, function_type: PhantomData};
+    #[cfg_attr(feature = "detour-validation", validate_detour("standalone/change_marketing_funding"))]
+    pub const CHANGE_MARKETING_FUNDING: FunctionDef<unsafe extern "cdecl" fn(i32)> = FunctionDef{address: 0x00589a3e, function_type: PhantomData};
     #[cfg_attr(feature = "detour-validation", validate_detour("standalone/click_rotate_left_0"))]
     pub const CLICK_ROTATE_LEFT_0: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00589cf4, function_type: PhantomData};
     #[cfg_attr(feature = "detour-validation", validate_detour("standalone/set_toggle_entity_tooltips"))]

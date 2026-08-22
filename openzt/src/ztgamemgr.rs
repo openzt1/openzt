@@ -1,4 +1,7 @@
-use openzt_detour::generated::{zoostatus::SPEND_RESEARCH, ztgamemgr::SUBTRACT_CASH};
+use openzt_detour::generated::{
+    zoostatus::{SPEND_MARKETING, SPEND_RESEARCH},
+    ztgamemgr::SUBTRACT_CASH,
+};
 use tracing::info;
 
 use crate::{command_console::CommandError, globals::globals, lua_fn};
@@ -96,6 +99,16 @@ impl ZTGameMgr {
     pub fn spend_research(&mut self, amount: f32) {
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
         unsafe { SPEND_RESEARCH.original()(zoostatus_ptr, amount) }
+    }
+
+    /// Calls the vanilla `ZooStatus::spendMarketing` on the same embedded `ZooStatus` sub-object as
+    /// `spend_research` (see that method's doc comment - `ZTMarketing::update` confirms the identical
+    /// `&GameMgr->field_0x10` shape with its own call, per `resources/decompiles/ZTMarketing_update.c`).
+    /// Used by `ztmarketing::ZTMarketing::update`'s native reimplementation, called before
+    /// `subtract_cash` to match vanilla's own call order.
+    pub fn spend_marketing(&mut self, amount: f32) {
+        let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
+        unsafe { SPEND_MARKETING.original()(zoostatus_ptr, amount) }
     }
 }
 

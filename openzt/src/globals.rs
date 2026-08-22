@@ -47,6 +47,12 @@ pub struct ZTResearchMgr {
     _private: [u8; 0],
 }
 
+/// Opaque type for ZTMarketingMgr
+#[repr(C)]
+pub struct ZTMarketingMgr {
+    _private: [u8; 0],
+}
+
 /// Walks a pointer chain and returns the final address.
 ///
 /// # Arguments
@@ -137,6 +143,7 @@ pub struct Globals {
     ztgamemgr: CachedGlobalInstance<ZTGameMgr>,
     bfresourcemgr: CachedGlobalInstance<BFResourceMgr>,
     ztresearchmgr: CachedGlobalInstance<ZTResearchMgr>,
+    ztmarketingmgr: CachedGlobalInstance<ZTMarketingMgr>,
 }
 
 impl Globals {
@@ -223,6 +230,20 @@ impl Globals {
             self.ztresearchmgr.get() as *mut crate::ztresearch::ZTResearchMgr
         }
     }
+
+    /// Returns a shared reference to the ZTMarketingMgr (read-only).
+    pub fn ztmarketingmgr(&self) -> &crate::ztmarketing::ZTMarketingMgr {
+        unsafe {
+            &*(self.ztmarketingmgr.get() as *const crate::ztmarketing::ZTMarketingMgr)
+        }
+    }
+
+    /// Returns a raw mutable pointer to the ZTMarketingMgr for mutation.
+    pub fn ztmarketingmgr_ptr(&self) -> *mut crate::ztmarketing::ZTMarketingMgr {
+        unsafe {
+            self.ztmarketingmgr.get() as *mut crate::ztmarketing::ZTMarketingMgr
+        }
+    }
 }
 
 // SAFETY: Globals only contains CachedGlobalInstance values which are Send + Sync
@@ -269,6 +290,13 @@ fn ensure_globals() -> &'static Globals {
             bfresourcemgr: CachedGlobalInstance::new(base + 0x002380C0, &[]),
             // 0x639010 (Ghidra address, default base 0x400000) -> RVA 0x239010
             ztresearchmgr: CachedGlobalInstance::new(base + 0x00239010, &[0]),
+            // 0x639000 (Ghidra address, default base 0x400000) -> RVA 0x239000. Confirmed by
+            // querying the project's Ghidra database directly for the OOAnalyzer-assigned
+            // `GLOBAL_ZTMarketingMgr` symbol, and cross-checked against three already-known-good
+            // globals resolved the same way (GLOBAL_ZTResearchMgr -> 0x639010, GLOBAL_ZTGameMgr ->
+            // 0x638048, GLOBAL_ZTAdvTerrainMgr -> 0x638058 - all matching the addresses already
+            // hard-coded above).
+            ztmarketingmgr: CachedGlobalInstance::new(base + 0x00239000, &[0]),
         }
     })
 }
