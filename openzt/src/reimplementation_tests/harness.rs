@@ -5,7 +5,7 @@
 
 use std::io::Write;
 
-use tracing::info;
+use tracing::{error, info};
 
 /// A single named entry in a reimplementation-comparison battery's ordered test list. See
 /// `battery.rs`'s `early_tests`/`always_late_tests`/`live_zoo_tests` for how these lists are
@@ -48,5 +48,24 @@ pub(crate) fn write_success_line(failure_log: &mut Option<std::fs::File>, test_n
         && let Err(write_err) = log_file.write_all(success_line.as_bytes())
     {
         tracing::error!("Failed to write to failure log: {}", write_err);
+    }
+}
+
+/// Common tail for a `run_..._test` function that accumulates mismatch messages into a
+/// `Vec<String>` as it goes: logs and writes a pass line if `failures` is empty, otherwise logs
+/// each message via `error!` and writes one joined `Test Failed` line, matching every hand-written
+/// copy of this tail across `tests/*.rs`. Returns the same "did it fail" bool those copies do.
+pub(crate) fn finish_test(test_name: &str, failures: Vec<String>, failure_log: &mut Option<std::fs::File>) -> bool {
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
     }
 }

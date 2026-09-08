@@ -16,7 +16,7 @@ use openzt_detour::generated::ztshowinfo::GET_NUM_UNITS as ZTSHOWINFO_GET_NUM_UN
 use openzt_detour::generated::ztshowscriptstate::CONSTRUCTOR as CREATE_SHOW_SCRIPT_STATE;
 
 use crate::globals::globals;
-use crate::reimplementation_tests::harness::write_success_line;
+use crate::reimplementation_tests::harness::{finish_test, write_success_line};
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, save_to_memory};
 use crate::zthabitatmgr::ZTHabitat;
@@ -103,18 +103,7 @@ pub(crate) fn run_ztshow_get_show_script_state_test(failure_log: &mut Option<std
     check("3-node tree right hit", show3, 15, 0x3333, &mut failures);
     check("3-node tree in-between miss", show3, 7, 0, &mut failures);
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 /// ZTSHOWINFO_ADD_SCRIPT_CHECK_PENDING_SCRIPTS_LIVE: `ZTShowInfo::addScript`/`checkPendingScripts`
 /// (`ztshowinfo::ADD_SCRIPT`/`CHECK_PENDING_SCRIPTS`) are full-replacement detours over Stage 1's
@@ -474,11 +463,11 @@ pub(crate) fn run_ztshow_pending_script_tree_real_zoo_integrity_live_test(failur
 /// vanilla's own node constructor builds there) makes vanilla's real save/load disagree about how much
 /// data it wrote - not a defect in vanilla's own save/load pairing itself. Uses `version=106` (`0x6a`)
 /// - not an arbitrary/future value - to match the exact version boundary a real save actually uses
-/// (confirmed live via `DIAG LOAD_ENTER ZTShowMgr version=106` this session), since some of
-/// `ZTShowInfo::load`'s per-field reads are version-gated and a different version would exercise a
-/// different, non-representative code path. Mutates the live show-tank's `ZTShowInfo` in place (real
-/// `LOAD` writes directly into it) - acceptable since this is a one-shot test process that exits after
-/// the battery, matching the battery's own established precedent elsewhere.
+///   (confirmed live via `DIAG LOAD_ENTER ZTShowMgr version=106` this session), since some of
+///   `ZTShowInfo::load`'s per-field reads are version-gated and a different version would exercise a
+///   different, non-representative code path. Mutates the live show-tank's `ZTShowInfo` in place (real
+///   `LOAD` writes directly into it) - acceptable since this is a one-shot test process that exits after
+///   the battery, matching the battery's own established precedent elsewhere.
 pub(crate) fn run_ztshowinfo_real_save_load_byte_count_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTSHOWINFO_REAL_SAVE_LOAD_BYTE_COUNT_LIVE";
     let mut fail_flag = false;

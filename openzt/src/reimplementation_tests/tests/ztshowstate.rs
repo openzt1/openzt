@@ -10,7 +10,7 @@ use tracing::error;
 use openzt_detour::generated::standalone;
 use openzt_detour::generated::ztshowstate::{INIT as ZTSHOWSTATE_INIT, LOAD as ZTSHOWSTATE_LOAD, SAVE as ZTSHOWSTATE_SAVE};
 
-use crate::reimplementation_tests::harness::write_success_line;
+use crate::reimplementation_tests::harness::{finish_test, write_success_line};
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, save_to_memory};
 use crate::ztshow;
@@ -125,18 +125,7 @@ pub(crate) fn run_ztshowstate_init_test(failure_log: &mut Option<std::fs::File>)
     ztshowstate_live_support::destroy_standalone_show_state(rust_state);
     ztshowstate_live_support::destroy_standalone_show_state(real_state);
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 
 /// `ZTSHOWSTATE_SAVE_LOAD_ROUNDTRIP` - Stage 1: seeds a real, standalone `ZTShowState` (built via
@@ -267,16 +256,5 @@ pub(crate) fn run_ztshowstate_save_load_roundtrip_test(failure_log: &mut Option<
     ztshowstate_live_support::destroy_standalone_show_state(source);
     ztshowstate_live_support::destroy_standalone_show_state(target);
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }

@@ -7,7 +7,7 @@ use std::io::Write;
 use std::mem::size_of;
 use tracing::error;
 
-use crate::reimplementation_tests::harness::write_success_line;
+use crate::reimplementation_tests::harness::{finish_test, write_success_line};
 use crate::ztgamemgr_menumusichandler::{self, live_support as menumusichandler_live_support};
 
 /// `MENUMUSICHANDLER_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -96,20 +96,7 @@ pub(crate) fn run_menumusichandler_original_routes_to_trampoline_test(failure_lo
         failures.push(format!("{overflow} address(es) failed to register in the hook registry (capacity overflow - fail-open raw casts)"));
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(
-                format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes(),
-            );
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 
 /// `MENUMUSICHANDLER_STANDALONE_ROUNDTRIP` - `menumusichandler-implementation-plan.md` Stage 1: builds

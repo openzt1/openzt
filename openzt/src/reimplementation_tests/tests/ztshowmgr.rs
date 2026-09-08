@@ -24,7 +24,7 @@ use openzt_detour::generated::ztshowmgr::{
 use openzt_detour::generated::ztshowscript::CONSTRUCTOR as ZTSHOWSCRIPT_CONSTRUCTOR;
 
 use crate::globals::get_module_base;
-use crate::reimplementation_tests::harness::write_success_line;
+use crate::reimplementation_tests::harness::{finish_test, write_success_line};
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, save_to_memory};
 use crate::ztshow::live_support as ztshow_live_support;
@@ -156,18 +156,7 @@ pub(crate) fn run_ztshowmgr_standalone_roundtrip_test(failure_log: &mut Option<s
         ));
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 
 /// `ZTSHOWMGR_INIT_SHOW_PARAMS` - `ztshowmgr-implementation-plan.md` stage 2: builds two fresh
@@ -618,18 +607,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
         failures.push(format!("store should be empty after cleanup, has {} entries", remaining));
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 
 /// `ZTSHOWMGR_GET_SHOW_INFO_GET_SCRIPT_ID` - `ztshowmgr-implementation-plan.md` stage 4 (the
@@ -688,9 +666,9 @@ pub(crate) fn run_ztshowmgr_get_show_info_get_script_id_test(failure_log: &mut O
     /// Cross-pole agreement for every id the test has touched: the hooked reader must answer
     /// exactly what the store holds, and the real `getScriptID` must agree with the hooked one
     /// - through a 16-bit mask, because the real body's found path (`MOV %AX, word ptr
-    /// [EAX+0x8]`, no `movzx`) leaves the upper EAX holding the upper half of the `getShowInfo`
-    /// return (the show-info pointer's high bits), which the port's clean zero-extension
-    /// contract deliberately does not reproduce.
+    ///   [EAX+0x8]`, no `movzx`) leaves the upper EAX holding the upper half of the `getShowInfo`
+    ///   return (the show-info pointer's high bits), which the port's clean zero-extension
+    ///   contract deliberately does not reproduce.
     fn cross_check_poles(mgr_addr: u32, step: &str, touched_ids: &[u16], failures: &mut Vec<String>) {
         for id in touched_ids {
             let store = ztshowmgr::registered_show_for_id(*id).unwrap_or(0);
@@ -810,18 +788,7 @@ pub(crate) fn run_ztshowmgr_get_show_info_get_script_id_test(failure_log: &mut O
         failures.push(format!("store should be empty after cleanup, has {} entries", remaining));
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 
 /// `ZTSHOWMGR_ENTER_NEW_MONTH` - `ztshowmgr-implementation-plan.md` stage 5: the Rust walk must
@@ -1057,18 +1024,7 @@ pub(crate) fn run_ztshowmgr_enter_new_month_test(failure_log: &mut Option<std::f
         assert_untouched("empty-map poles", show, &pre_empty[i], &post_empty[i], &mut failures);
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 /// The `ZTSHOWMGR_UPDATE` sentinel's visit log - recorded `this` values in call order.
 /// Module-level so the sentinel fn can reach it; only that test touches it, and the battery is
@@ -1238,18 +1194,7 @@ pub(crate) fn run_ztshowmgr_update_test(failure_log: &mut Option<std::fs::File>)
         failures.push(format!("both poles on the emptied map must visit nothing, got {leftover_visits:#010x?}"));
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 /// `ZTSHOWMGR_SAVE_LOAD` - stage 6 (`ztshowmgr-implementation-plan.md`): `ZTShowMgr::save`/
 /// `load` wrap exactly two pieces - the embedded `ZTShowScriptMgr`'s own save/load (already
@@ -1288,6 +1233,7 @@ pub(crate) fn run_ztshowmgr_update_test(failure_log: &mut Option<std::fs::File>)
 ///   `ZTShowMgr`'s own counter read and return failure with the counter untouched - the
 ///   scriptmgr's own trailing counter inside that payload satisfies its loader, so the
 ///   failure is specifically the outer read.
+///
 /// Both counter copies are saved and restored around the whole test; the script store
 /// is reset before and after (successful replays also restore its own persisted counter -
 /// reset away again), and the registered-shows store must still be empty at the end.
@@ -1505,18 +1451,7 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
         failures.push(format!("registered-shows store should still be empty, has {remaining} entries"));
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 /// `ZTSHOWMGR_IS_DOING_SHOW` - stage 7 (`ztshowmgr-implementation-plan.md`): `ZTShowMgr::
 /// isDoingShow` composes the store-backed `getShowInfo` lookup (stage 4) with one real,
@@ -1641,18 +1576,7 @@ pub(crate) fn run_ztshowmgr_is_doing_show_test(failure_log: &mut Option<std::fs:
     }
     check("unregistered after cleanup", mgr, UNIT_A, PRESET_ID_A, 0, &mut failures);
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 /// `ZTSHOWMGR_IS_SHOW_SCRIPT_DONE` - stage 8 (`ztshowmgr-implementation-plan.md`): `ZTShowMgr::
 /// isShowScriptDone` is structurally stage 7's sibling - the same store-backed `getShowInfo`
@@ -1779,18 +1703,7 @@ pub(crate) fn run_ztshowmgr_is_show_script_done_test(failure_log: &mut Option<st
     }
     check("unregistered after cleanup", mgr, UNIT_A, PRESET_ID_A, 0, &mut failures);
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 /// `ZTSHOWMGR_REGISTER_UNREGISTER_GET_SCRIPT` - review follow-up, not part of the original
 /// `ztshowmgr-implementation-plan.md`: `ZTShowMgr::registerScript`/`unregisterScript`/`getScript`
@@ -1871,18 +1784,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_get_script_test(failure_log: &mu
         failures.push("double UNREGISTER_SCRIPT(mgr, script) should return 0".to_string());
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 /// ZTSHOWMGR_REAL_ZOO_STORE_CONSISTENCY_LIVE: diagnosing a real save-corruption report. Real vanilla
 /// `ZTShowInfo::updateFromLoad` (`private/resources/decompiles/ZTShowInfo_updateFromLoad.c`) calls

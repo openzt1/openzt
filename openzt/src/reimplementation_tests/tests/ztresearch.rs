@@ -594,21 +594,21 @@ fn days_approximately_eq(real: Option<f32>, reimpl: Option<f32>) -> bool {
 /// ZTRESEARCHBRANCH_PCT_DAYS_REMAINING: compares the real `ZTResearchBranch::pctRemainingOnProgram`/
 /// `daysRemainingOnProgram` (`ztresearchbranch::PCT_REMAINING_ON_PROGRAM`/`DAYS_REMAINING_ON_PROGRAM`
 /// - a Ghidra regen has since fixed these `FunctionDef`s' auto-detected signatures, which were
-/// originally wrong: `-> i64` and no return type at all, respectively. See `pct_remaining_on_program`'s
-/// own doc comment in `ztresearch.rs` for the disassembly evidence that drove that fix) against the
-/// reimplemented `pct_remaining_on_program`/`days_remaining_on_program`, on a single branch built via
-/// `live_support::build_update_test_branch`. Both real and reimplemented sides read the exact same
-/// branch instance - these methods are `&self`-only with no side effects, so unlike the funding-level
-/// tests above there's no need to build two independent trees. `target_cost` includes an explicit
-/// `0.0` case alongside a general range: dividing by zero, `pct`'s only real edge case (`days`
-/// divides by `rate`, never `target_cost` - see its own doc comment in `ztresearch.rs`), produces a
-/// NaN/±Infinity that has to survive `pct`'s float-to-int conversion - this is exactly the case that
-/// originally caught the reimplementation's `f32 as i32` saturating cast disagreeing with vanilla's
-/// `FISTP`-based one (see `pct_remaining_on_program`'s own doc comment). Whether there's a real
-/// "None" for a given case is derived from `current_funding_rate() > 0.0` (the same guard both real
-/// and reimplemented code apply) rather than trusting `pct`'s raw `-1` return as a sentinel - `-1` is
-/// also a legitimate in-range percentage (e.g. progress just past target_cost), so it can't be told
-/// apart from the guard-failure sentinel by value alone.
+///   originally wrong: `-> i64` and no return type at all, respectively. See `pct_remaining_on_program`'s
+///   own doc comment in `ztresearch.rs` for the disassembly evidence that drove that fix) against the
+///   reimplemented `pct_remaining_on_program`/`days_remaining_on_program`, on a single branch built via
+///   `live_support::build_update_test_branch`. Both real and reimplemented sides read the exact same
+///   branch instance - these methods are `&self`-only with no side effects, so unlike the funding-level
+///   tests above there's no need to build two independent trees. `target_cost` includes an explicit
+///   `0.0` case alongside a general range: dividing by zero, `pct`'s only real edge case (`days`
+///   divides by `rate`, never `target_cost` - see its own doc comment in `ztresearch.rs`), produces a
+///   NaN/±Infinity that has to survive `pct`'s float-to-int conversion - this is exactly the case that
+///   originally caught the reimplementation's `f32 as i32` saturating cast disagreeing with vanilla's
+///   `FISTP`-based one (see `pct_remaining_on_program`'s own doc comment). Whether there's a real
+///   "None" for a given case is derived from `current_funding_rate() > 0.0` (the same guard both real
+///   and reimplemented code apply) rather than trusting `pct`'s raw `-1` return as a sentinel - `-1` is
+///   also a legitimate in-range percentage (e.g. progress just past target_cost), so it can't be told
+///   apart from the guard-failure sentinel by value alone.
 pub(crate) fn run_research_branch_pct_days_remaining_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let runner_config = ProptestConfig {
         failure_persistence: Some(Box::new(NoopFailurePersistence)),

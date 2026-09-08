@@ -35,7 +35,7 @@ use openzt_detour::generated::zoostatus::{
 };
 
 use crate::globals::get_module_base;
-use crate::reimplementation_tests::harness::write_success_line;
+use crate::reimplementation_tests::harness::{finish_test, write_success_line};
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, save_to_memory};
 use crate::ztgamemgr::live_support as gamemgr_live_support;
@@ -162,20 +162,7 @@ pub(crate) fn run_zoostatus_original_routes_to_trampoline_test(failure_log: &mut
         failures.push(format!("{overflow} address(es) failed to register in the hook registry (capacity overflow - fail-open raw casts)"));
     }
 
-    if failures.is_empty() {
-        write_success_line(failure_log, test_name);
-        false
-    } else {
-        for msg in &failures {
-            error!("{}: {}", test_name, msg);
-        }
-        if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(
-                format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes(),
-            );
-        }
-        true
-    }
+    finish_test(test_name, failures, failure_log)
 }
 
 /// `ZOOSTATUS_INIT` - `zoostatus-implementation-plan.md` Stage 2's live comparison: builds two
