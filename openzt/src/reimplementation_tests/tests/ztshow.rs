@@ -745,7 +745,9 @@ pub(crate) fn run_ztshow_group3_trick_live_test(failure_log: &mut Option<std::fs
     // comment in `ztshow.rs`) - checked via GET_NUM_UNITS first rather than risking that dereference
     // speculatively.
     let show_unit_type_id = get_from_memory::<u32>(real_show + 0x8);
-    let assigned_unit_count = unsafe { ZTSHOWINFO_GET_NUM_UNITS.original()(real_show_info as *const u32, show_unit_type_id) };
+    // `.hooked()`: `GET_NUM_UNITS` is now detoured by `ztshowinfo.rs` (Stage 7) - see `ztshow.rs`'s own
+    // `validate_item` comment for the rule this follows.
+    let assigned_unit_count = unsafe { ZTSHOWINFO_GET_NUM_UNITS.hooked()(real_show_info as *const u32, show_unit_type_id) };
     if assigned_unit_count >= 1 {
         let validate_item_hooked = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(*const u32, u16) -> u32>(0x005a6d70u32) };
         let validate_result = validate_item_hooked(real_show as *const u32, 0);

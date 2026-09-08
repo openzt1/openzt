@@ -110,11 +110,15 @@
 //! `registerShow`'s increment, `save`'s write, `load`'s read) are all this module's detoured
 //! addresses now, and stage 6's save/load were repointed at the store's field in the same change
 //! so the persisted counter never has two owners at any buildable midpoint. The fresh-id write
-//! goes through a Rust reimplementation of `ZTShowInfo::setShowInfoID`
-//! ([`ZTShowMgr::set_show_info_id`]) - not a plain `field_0x70` store, because the real setter
-//! also keeps the embedded `ZTShow`'s `+0x10` back-pointer and `+0x6` id copy in sync. Behavior
-//! in-game is unchanged by any of this; the stage exists to retire the permanent store-tree sync
-//! obligation of the shadow phase.
+//! goes through a Rust reimplementation of `ZTShowInfo::setShowInfoID` - not a plain `field_0x70`
+//! store, because the real setter also keeps the embedded `ZTShow`'s `+0x10` back-pointer and
+//! `+0x6` id copy in sync. Behavior in-game is unchanged by any of this; the stage exists to
+//! retire the permanent store-tree sync obligation of the shadow phase.
+//!
+//! **Stage 10** (`ztshowinfo-implementation-plan.md`) moves that reimplementation into
+//! [`crate::ztshowinfo::set_show_info_id`] and detours the real `setShowInfoID` address too, so
+//! [`ZTShowMgr::register_show`] now calls the shared function directly rather than keeping its
+//! own private copy.
 
 use std::{
     collections::BTreeMap,
@@ -123,12 +127,11 @@ use std::{
 };
 
 use crate::globals::get_module_base;
-use crate::util::{get_from_memory, mut_from_memory, save_to_memory};
+use crate::util::{get_from_memory, mut_from_memory};
 use openzt_detour::generated::bfapp::GET_INSTALLED_EXPANSION;
 use openzt_detour::generated::bfconfigfile::{CONSTRUCTOR_0, GET_INT, RELEASE};
 use openzt_detour::generated::standalone::{DEALLOCATE, WRITE_BYTES_TO_FILE};
 use openzt_detour::generated::ztshow::CLEAR_SHOW_SCRIPT_STATES;
-use openzt_detour::generated::ztshowinfo::ENTER_NEW_MONTH as ZTSHOWINFO_ENTER_NEW_MONTH;
 use openzt_detour::generated::ztshowmgr::{
     ENTER_NEW_MONTH, GET_SCRIPT_ID, GET_SHOW_INFO, INIT_SHOW_PARAMS, IS_DOING_SHOW, IS_SHOW_SCRIPT_DONE, LOAD, REGISTER_SHOW, SAVE,
     UNREGISTER_SHOW, UPDATE,
@@ -441,8 +444,8 @@ impl ZTShowMgr {
     /// only then does the force flag **or** `field_0x70 == 0` assign a fresh id (`INC word ptr
     /// DAT_0063e480`, id = `(u16)counter % 0xffff` - so `0xffff` is never assigned, and the
     /// counter's `0xffff` and wrapped-to-`0` states both yield id `0`) written through the real
-    /// `ZTShowInfo::setShowInfoID`, reimplemented as [`ZTShowMgr::set_show_info_id`]; the final
-    /// tree write is insert-or-assign, so a force-assigned id colliding with a registered id
+    /// `ZTShowInfo::setShowInfoID`, reimplemented as [`crate::ztshowinfo::set_show_info_id`]; the
+    /// final tree write is insert-or-assign, so a force-assigned id colliding with a registered id
     /// steals that slot in place, which `BTreeMap::insert` reproduces exactly. The real body
     /// reports success in `AL` only (upper EAX bits are leftover register garbage there, its
     /// `MOV %AL,%BL` exit); this returns a clean `1`, which every caller observes through the
@@ -470,41 +473,13 @@ impl ZTShowMgr {
         };
         let id = match fresh_id {
             Some(id) => {
-                Self::set_show_info_id(show_addr, id);
+                crate::ztshowinfo::set_show_info_id(show_addr, id);
                 id
             }
             None => current_id,
         };
         SHOW_STORE.lock().unwrap().registered_shows.insert(id, show_addr);
         1
-    }
-
-    /// Rust reimplementation of `ZTShowInfo::setShowInfoID` (`0x005ab8c3`, per
-    /// `ZTShowInfo_setShowInfoID.asm`; macOS symbolizes the same address split across
-    /// `ZTShowInfo_setShowInfoID.c` + `ZTShow_setShowInfoID.c`), reached from
-    /// [`ZTShowMgr::register_show`]'s fresh-id branch. The real setter is not a trivial
-    /// `field_0x70` store: after `show->field_0x70 = id`, it re-points the embedded `ZTShow`'s
-    /// (`show+0x4`) `+0x10` back-pointer at `show` unless it already points at an object whose
-    /// own `field_0x70` equals the new id, and always refreshes the `ZTShow`'s `+0x6` u16 id
-    /// copy - all four writes reproduced here, in the real order, so a plain `field_0x70` store
-    /// could not leave the embedded mirror fields stale.
-    ///
-    /// Not reproduced: the real body's return-0 path ("outer show's `field_0x70` != the new id";
-    /// macOS's `ZTShow::setShowInfoID` returns 0 there explicitly) - the guard compares the field
-    /// this port's first write just set, so through [`ZTShowMgr::register_show`] it is
-    /// unreachable and the real body always exits `AL=1`; and the `.asm`'s null-`show` guard
-    /// (`TEST %EDX,%EDX; JZ`), which [`ZTShowMgr::register_show`]'s own null check already
-    /// excludes. Reading traps honored: the Windows `.c` renders the embedded-`ZTShow` half with
-    /// confusing flattened offsets - trust the `.asm`'s `ADD %ECX, 0x4` (the offsets here), not
-    /// the decompile's `this->field_0x14`/`this->field_0xa` renderings.
-    fn set_show_info_id(show: u32, id: u16) {
-        save_to_memory(show + 0x70, id);
-        let ztshow = show + 0x4;
-        let back_pointer: u32 = get_from_memory(ztshow + 0x10);
-        if back_pointer == 0 || get_from_memory::<u16>(back_pointer + 0x70) != id {
-            save_to_memory(ztshow + 0x10, show);
-        }
-        save_to_memory(ztshow + 0x6, id);
     }
 
     /// Stage 9 full port of `ZTShowMgr::unregisterShow` (`0x005aaa95`, per
@@ -585,23 +560,22 @@ impl ZTShowMgr {
     }
 
     /// Stage 5 port of `ZTShowMgr::enterNewMonth` (`0x004842a2`, per `ZTShowMgr_enterNewMonth.asm`/
-    /// `.c`): the monthly tick (`ZooStatus::financeChecks` is the corpus's one caller) running real,
-    /// untouched `ZTShowInfo::enterNewMonth` (`0x0048b57e`) on every registered, non-null show.
-    /// Vanilla traverses its `+0x28` tree with the standard `_Tree::_Inc` successor walk starting at
-    /// the leftmost node; iterating [`SHOW_STORE`]'s `BTreeMap` yields that same in-order sequence
+    /// `.c`): the monthly tick (`ZooStatus::financeChecks` is the corpus's one caller) running
+    /// `ZTShowInfo::enterNewMonth` (`0x0048b57e`) on every registered, non-null show. Vanilla
+    /// traverses its `+0x28` tree with the standard `_Tree::_Inc` successor walk starting at the
+    /// leftmost node; iterating [`SHOW_STORE`]'s `BTreeMap` yields that same in-order sequence
     /// (ascending unsigned `u16` key - the property that made it a stage-4 drop-in), with vanilla's
     /// `left == header` empty case covered by the empty vector.
     ///
-    /// The callee call reproduces vanilla's direct `CALL ZTShowInfo::enterNewMonth` via `.hooked()`
-    /// rather than `.original()`: a direct CALL executes whatever sits at the raw address, so this
-    /// walk must route like vanilla's own callers in every build profile - identical today (the
-    /// address is un-detoured; `.original()` is also a raw cast here in release), and correctly
-    /// re-routed through the detour everywhere if `ztshowinfo::ENTER_NEW_MONTH` is ever hooked
-    /// (`.original()`'s debug-build trampoline routing would silently diverge from vanilla callers).
+    /// **Stage 9 of `ztshowinfo-implementation-plan.md` ported `ZTShowInfo::enterNewMonth`
+    /// ([`crate::ztshowinfo::enter_new_month`]) - this now calls it directly** rather than through
+    /// `ztshowinfo::ENTER_NEW_MONTH.hooked()`: a same-module Rust call is both simpler and, unlike a
+    /// raw address cast, immune to the release-profile re-entry hazard `.hooked()`/`.original()`
+    /// have to route around for an address whose behavior lives in this crate now.
     pub fn enter_new_month() {
         for show in Self::registered_show_values() {
             if show != 0 {
-                unsafe { ZTSHOWINFO_ENTER_NEW_MONTH.hooked()(show as *const u32) };
+                crate::ztshowinfo::enter_new_month(show);
             }
         }
     }

@@ -4,24 +4,32 @@
 //! `always_late_tests`, while the groups needing a live, `run_load_live_zoo`-populated global
 //! (`GLOBAL_ZTWorldMgr` for the keeper predicates, `GLOBAL_ZTAIMgr` for the schedule/frequency pair)
 //! run in `live_zoo_tests` - see `ztshowinfo.rs`'s own module doc comment for the per-method reasons.
+//! `ZTSHOWINFO_STANDALONE_ROUNDTRIP` (Stage 12) is the one exception to the "real vs. rust" framing above -
+//! there is no rust pole for the constructors/destructor, so it instead pins the real ctor's own defaults
+//! and confirms the copy ctor's independent allocation; see that test's own doc comment.
 
 use std::io::Write;
 
 use tracing::error;
 
+use openzt_detour::generated::standalone::OPERATOR_NEW;
 use openzt_detour::generated::ztshowinfo::{
-    ADD_SHOW, CLEANUP_EVENTS, CREATE_DEFAULT_SCRIPT, GET_SCHEDULED_SHOW_KEEPER_TYPE, GET_SCHEDULED_SHOW_SCRIPT, HAS_KEEPER,
-    INCREMENT_ATTENDANCE, INCREMENT_RECEIPTS, IS_READY, IS_STARTED, IS_STOPPED, LISTEN, NEEDS_KEEPER, RECALCULATE_SCHEDULE,
-    REMOVE_SHOW, SEND_EVENT, SET_SHOW_FREQUENCY,
+    ADD_SHOW, CHECK_UNIT, CLEANUP_EVENTS, CREATE_DEFAULT_SCRIPT, ENTER_NEW_MONTH, GET_EVENTS, GET_NUM_UNITS,
+    GET_SCHEDULED_SHOW_KEEPER_TYPE, GET_SCHEDULED_SHOW_SCRIPT, GET_SHOW_UNIT_LIST, HAS_KEEPER, INCREMENT_ATTENDANCE, INCREMENT_RECEIPTS,
+    IS_READY, IS_STARTED, IS_STOPPED, LISTEN, LOAD, NEEDS_KEEPER, RECALCULATE_SCHEDULE, REMOVE_SHOW, REMOVE_UNIT, SAVE, SEND_EVENT,
+    SET_SHOW_FREQUENCY, SET_SHOW_INFO_ID, UPDATE,
 };
 
 use crate::globals::globals;
 use crate::reimplementation_tests::harness::{finish_test, write_success_line};
+use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, save_to_memory};
-use crate::ztshow::{self, live_support as ztshow_live_support};
-use crate::ztshowinfo::live_support as ztshowinfo_live_support;
+use crate::ztshow::{self, find_or_insert_pending_script_node, live_support as ztshow_live_support};
+use crate::ztshowinfo::{
+    add_show, increment_attendance, increment_receipts, live_support as ztshowinfo_live_support, remove_unit,
+};
 
-use super::ztshow::find_real_show_tank_habitat;
+use super::ztshow::{find_real_show_tank_habitat, find_real_trick_eligible_unit};
 
 /// `ZTSHOWINFO_DETOURS_ENABLED` - wiring check, same rationale as `ztshowstate`'s own
 /// `ZTSHOWSTATE_DETOURS_ENABLED` (see that test's own doc comment): catches `ztshowinfo::init()` going
@@ -649,8 +657,7 @@ pub(crate) fn run_ztshowinfo_add_remove_show_live_test(failure_log: &mut Option<
 /// fixture itself never sets this field, and `getEvents`/`listen` are the first Stage 1-6 port to read it
 /// live - see that helper's own doc comment) and `this+0x70` pinned to a sentinel target id
 /// (`SENTINEL_TARGET_ID`) that cannot match any real, already-queued `GLOBAL_ZTAIMgr` event: `.hooked()`
-/// on one, `.original()`/`GET_EVENTS_FIXED.original()` (debug trampoline to the pre-detour body) on the
-/// other.
+/// on one, `.original()`/`GET_EVENTS.original()` (debug trampoline to the pre-detour body) on the other.
 ///
 /// **The `listen` loop's own two vtable-dispatch branches (`0x2714`/`0x2716`) are deliberately never
 /// exercised** - same reasoning `ZTSHOWINFO_SCHEDULE_FREQUENCY_LIVE`'s own doc comment already gives for
@@ -726,8 +733,8 @@ pub(crate) fn run_ztshowinfo_event_system_live_test(failure_log: &mut Option<std
 
     // getEvents, called directly (the same call `listen` above already made indirectly) - confirms the
     // real, un-detoured `+0xc` vtable target (`bfunit::GET_EVENTS_3`) still runs correctly through
-    // `GET_EVENTS_FIXED.original()`'s corrected 2-arg signature.
-    unsafe { crate::ztshowinfo::GET_EVENTS_FIXED.original()(real_info as *const u32, (real_info + 0x5c) as *const u32) };
+    // `GET_EVENTS.original()`'s now-corrected (post-regeneration) 2-arg signature.
+    unsafe { GET_EVENTS.original()(real_info as *const u32, real_info + 0x5c) };
 
     // cleanupEvents: a non-empty, Rust-owned scratch range on both poles - see this test's own doc
     // comment for why this is the live half of the "compaction loop is dead code" determination.
@@ -812,6 +819,752 @@ pub(crate) fn run_ztshowinfo_create_default_script_live_test(failure_log: &mut O
             _ => {}
         }
     }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTSHOWINFO_UNIT_ROSTER_READ_LIVE` - `getNumUnits`/`getShowUnitList`, Stage 7. Two real, standalone
+/// `ZTShowInfo` instances (`ztshow_live_support::build_standalone_show_info`): `.hooked()` on one,
+/// `.original()` (debug trampoline to the pre-detour body) on the other - both only ever depend on the
+/// pending-scripts tree (`ZTShowInfo+0x44`), the same tree `ZTSHOWINFO_ACCUMULATORS_LIVE` already exercises
+/// live, so this runs from `always_late_tests` rather than `live_zoo_tests` (no `GLOBAL_ZTWorldMgr` needed -
+/// see the module doc comment's own Stage 7 section).
+///
+/// **Same "never let real vanilla's own insert run against this fixture" discipline as every other test in
+/// this file that touches the pending-scripts tree**: phase 1 pre-inserts on both poles via
+/// `ztshow::find_or_insert_pending_script_node` before either `GET_NUM_UNITS`/`GET_SHOW_UNIT_LIST` call, and
+/// phase 2 pre-inserts on the real pole only (letting the Rust pole's own detoured `GET_NUM_UNITS` take its
+/// own, already-stress-tested insert branch end-to-end) - matching `ZTSHOWINFO_ACCUMULATORS_LIVE`'s own
+/// two-phase shape exactly.
+///
+/// **Non-empty list coverage without Stage 8**: `ADD_UNIT`/`ADD_UNIT_TO_LIST` (the real insert path onto a
+/// node's own `+0x18` unit list) aren't ported yet, so this manually grafts a few `Box::leak`'d fake list
+/// entries directly onto each pole's own node - safe, since `getNumUnits`/`getShowUnitList` only ever read
+/// this list (never free or reallocate it; that's Stage 8's own scope), matching this file's own established
+/// `Box::leak` fixture-construction precedent (`leaked_u32`/`leaked_schedule` above).
+pub(crate) fn run_ztshowinfo_unit_roster_read_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_UNIT_ROSTER_READ_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+
+    let rust_info = ztshow_live_support::build_standalone_show_info();
+    let real_info = ztshow_live_support::build_standalone_show_info();
+
+    // Phase 1 - found path (pre-inserted on both poles).
+    const KEY_A: u32 = 0x3456;
+    let (rust_node_a, rust_a_new) = ztshow::find_or_insert_pending_script_node(rust_info, KEY_A);
+    let (real_node_a, real_a_new) = ztshow::find_or_insert_pending_script_node(real_info, KEY_A);
+    if !rust_a_new || !real_a_new {
+        failures.push("phase 1 pre-insert should have created one fresh node per pole".to_string());
+    }
+
+    // A freshly-inserted node's own unit list must be empty on both poles.
+    let rust_count = unsafe { GET_NUM_UNITS.hooked()(rust_info as *const u32, KEY_A) };
+    let real_count = unsafe { GET_NUM_UNITS.original()(real_info as *const u32, KEY_A) };
+    if rust_count != 0 || real_count != 0 {
+        failures.push(format!("phase 1 fresh-node count should be 0 on both poles: rust={rust_count} real={real_count}"));
+    }
+
+    let rust_list_ptr = unsafe { GET_SHOW_UNIT_LIST.hooked()(rust_info as *const u32, KEY_A) } as u32;
+    let real_list_ptr = unsafe { GET_SHOW_UNIT_LIST.original()(real_info as *const u32, KEY_A) } as u32;
+    if rust_list_ptr != rust_node_a + 0x18 {
+        failures.push(format!(
+            "rust getShowUnitList should return node+0x18 ({:#010x}), returned {:#010x}",
+            rust_node_a + 0x18,
+            rust_list_ptr
+        ));
+    }
+    if real_list_ptr != real_node_a + 0x18 {
+        failures.push(format!(
+            "real getShowUnitList should return node+0x18 ({:#010x}), returned {:#010x}",
+            real_node_a + 0x18,
+            real_list_ptr
+        ));
+    }
+
+    // Graft three fake unit-list entries onto each pole's own node's list and re-count.
+    fn graft_list_entries(sentinel: u32, count: usize) {
+        let mut prev = sentinel;
+        for _ in 0..count {
+            let entry: &'static mut [u32; 3] = Box::leak(Box::new([0u32; 3]));
+            let entry_addr = entry.as_mut_ptr() as u32;
+            save_to_memory(prev, entry_addr); // prev.next = entry
+            save_to_memory(entry_addr + 4, prev); // entry.prev = prev
+            prev = entry_addr;
+        }
+        save_to_memory(prev, sentinel); // close the circle: last.next = sentinel
+        save_to_memory(sentinel + 4, prev); // sentinel.prev = last
+    }
+    let rust_sentinel = get_from_memory::<u32>(rust_node_a + 0x18);
+    let real_sentinel = get_from_memory::<u32>(real_node_a + 0x18);
+    graft_list_entries(rust_sentinel, 3);
+    graft_list_entries(real_sentinel, 3);
+
+    let rust_count = unsafe { GET_NUM_UNITS.hooked()(rust_info as *const u32, KEY_A) };
+    let real_count = unsafe { GET_NUM_UNITS.original()(real_info as *const u32, KEY_A) };
+    if rust_count != 3 || real_count != 3 {
+        failures.push(format!("phase 1 populated-list count should be 3 on both poles: rust={rust_count} real={real_count}"));
+    }
+
+    // Phase 2 - the Rust pole's own insert-on-miss branch: key B pre-inserted on the real pole only, same
+    // reasoning as `ZTSHOWINFO_ACCUMULATORS_LIVE`'s own phase 2.
+    const KEY_B: u32 = 0x3457;
+    let (_real_node_b, real_b_new) = ztshow::find_or_insert_pending_script_node(real_info, KEY_B);
+    if !real_b_new {
+        failures.push("phase 2 real-pole pre-insert should have created a fresh node".to_string());
+    }
+    let rust_count_b = unsafe { GET_NUM_UNITS.hooked()(rust_info as *const u32, KEY_B) };
+    let real_count_b = unsafe { GET_NUM_UNITS.original()(real_info as *const u32, KEY_B) };
+    if rust_count_b != 0 || real_count_b != 0 {
+        failures.push(format!("phase 2 fresh-via-getNumUnits count should be 0 on both poles: rust={rust_count_b} real={real_count_b}"));
+    }
+    let (_rust_node_b, rust_b_new) = ztshow::find_or_insert_pending_script_node(rust_info, KEY_B);
+    if rust_b_new {
+        failures.push("phase 2 re-find after getNumUnits's own insert should find, not insert again".to_string());
+    }
+    let rust_node_count = ztshow::pending_script_node_count(rust_info);
+    let real_node_count = ztshow::pending_script_node_count(real_info);
+    if rust_node_count != 2 || real_node_count != 2 {
+        failures.push(format!("phase 2 expected exactly two pending-scripts nodes per pole: rust={rust_node_count} real={real_node_count}"));
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTSHOWINFO_REMOVE_UNIT_LIVE` - `removeUnit`, Stage 8 (erase-only - see `ztshowinfo.rs`'s own module doc
+/// comment for why the insert side stays un-ported). Two real, standalone `ZTShowInfo` instances, same as
+/// `ZTSHOWINFO_UNIT_ROSTER_READ_LIVE` above - no live zoo needed, so this runs from `always_late_tests` too.
+///
+/// **Real `0xc`-byte list entries, not `Box::leak`'d ones**: unlike `ZTSHOWINFO_UNIT_ROSTER_READ_LIVE`'s own
+/// fixture grafting (safe there because `getNumUnits`/`getShowUnitList` only ever read the list),
+/// `removeUnit` frees the entry it unlinks back to real vanilla's own shared freelist - pushing a
+/// Rust-heap/stack-backed pointer onto that freelist would be exactly the cross-allocator corruption
+/// `CLAUDE.md` warns about. Entries are allocated via the real `OPERATOR_NEW.original()(0xc)` instead,
+/// matching `ztshow.rs`'s own `allocate_pending_script_node` precedent for this class family's sentinels.
+///
+/// **Real `REMOVE_UNIT.original()`'s third argument is the raw `u32` value bit-reinterpreted into its
+/// pointer-typed slot, not an actual pointer** - see `ztshowinfo.rs`'s own module doc comment on why
+/// `generated.rs`'s `*const i32` typing here is a wart. Passing a genuine dereferenceable pointer would
+/// still "work" only by accident (the real body never dereferences it) - this test passes the value itself,
+/// matching both of real vanilla's own confirmed callers and this stage's own detour.
+pub(crate) fn run_ztshowinfo_remove_unit_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_REMOVE_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+
+    let rust_info = ztshow_live_support::build_standalone_show_info();
+    let real_info = ztshow_live_support::build_standalone_show_info();
+
+    const TYPE_ID: u32 = 0x3488;
+    const UNIT_A: u32 = 111;
+    const UNIT_B: u32 = 222;
+    const UNIT_MISSING: u32 = 9999;
+
+    /// Grafts one real, `OPERATOR_NEW`-allocated `{next, prev, payload}` entry onto `sentinel`'s own
+    /// circular list, at the tail (before the sentinel).
+    fn graft_real_entry(sentinel: u32, payload: u32) {
+        let entry = unsafe { OPERATOR_NEW.original()(0xc) } as u32;
+        let prev = get_from_memory::<u32>(sentinel + 4);
+        save_to_memory(entry, sentinel);
+        save_to_memory(entry + 4, prev);
+        save_to_memory(entry + 8, payload);
+        save_to_memory(prev, entry);
+        save_to_memory(sentinel + 4, entry);
+    }
+
+    let (rust_node, _) = ztshow::find_or_insert_pending_script_node(rust_info, TYPE_ID);
+    let (real_node, _) = ztshow::find_or_insert_pending_script_node(real_info, TYPE_ID);
+    let rust_sentinel = get_from_memory::<u32>(rust_node + 0x18);
+    let real_sentinel = get_from_memory::<u32>(real_node + 0x18);
+
+    for &unit in &[UNIT_A, UNIT_B] {
+        graft_real_entry(rust_sentinel, unit);
+        graft_real_entry(real_sentinel, unit);
+    }
+
+    // Removing an absent id must be a no-op (both poles still count 2).
+    remove_unit(rust_info, TYPE_ID, UNIT_MISSING);
+    unsafe { REMOVE_UNIT.original()(real_info as *const u32, TYPE_ID, UNIT_MISSING as usize as *const i32) };
+    let rust_count = unsafe { GET_NUM_UNITS.hooked()(rust_info as *const u32, TYPE_ID) };
+    let real_count = unsafe { GET_NUM_UNITS.original()(real_info as *const u32, TYPE_ID) };
+    if rust_count != 2 || real_count != 2 {
+        failures.push(format!("removing an absent id should be a no-op: rust={rust_count} real={real_count} (want 2, 2)"));
+    }
+
+    // Remove UNIT_A: one entry left (UNIT_B), on both poles.
+    remove_unit(rust_info, TYPE_ID, UNIT_A);
+    unsafe { REMOVE_UNIT.original()(real_info as *const u32, TYPE_ID, UNIT_A as usize as *const i32) };
+    let rust_count = unsafe { GET_NUM_UNITS.hooked()(rust_info as *const u32, TYPE_ID) };
+    let real_count = unsafe { GET_NUM_UNITS.original()(real_info as *const u32, TYPE_ID) };
+    if rust_count != 1 || real_count != 1 {
+        failures.push(format!("after removing UNIT_A: rust={rust_count} real={real_count} (want 1, 1)"));
+    }
+    let rust_list = unsafe { GET_SHOW_UNIT_LIST.hooked()(rust_info as *const u32, TYPE_ID) } as u32;
+    let remaining = get_from_memory::<u32>(get_from_memory::<u32>(rust_list));
+    let remaining_payload = get_from_memory::<u32>(remaining + 0x8);
+    if remaining_payload != UNIT_B {
+        failures.push(format!("remaining rust entry's payload should be UNIT_B ({UNIT_B}), was {remaining_payload}"));
+    }
+
+    // Remove UNIT_B: list empty again on both poles.
+    remove_unit(rust_info, TYPE_ID, UNIT_B);
+    unsafe { REMOVE_UNIT.original()(real_info as *const u32, TYPE_ID, UNIT_B as usize as *const i32) };
+    let rust_count = unsafe { GET_NUM_UNITS.hooked()(rust_info as *const u32, TYPE_ID) };
+    let real_count = unsafe { GET_NUM_UNITS.original()(real_info as *const u32, TYPE_ID) };
+    if rust_count != 0 || real_count != 0 {
+        failures.push(format!("after removing both units: rust={rust_count} real={real_count} (want 0, 0)"));
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTSHOWINFO_CHECK_UNIT_LIVE` - `checkUnit`, Stage 7. Needs a real unit resolvable through
+/// `BFWorldMgr::getUnit` against a live `GLOBAL_ZTWorldMgr`, hence `live_zoo_tests` (unlike
+/// `ZTSHOWINFO_UNIT_ROSTER_READ_LIVE` above, `checkUnit` is unrelated to the pending-scripts tree - see the
+/// module doc comment's own Stage 7 section). Reuses the same real, already-configured show-tank
+/// habitat/trick-eligible-unit discovery `ZTSHOWINFO_KEEPER_PREDICATES_LIVE`/`ZTSHOW_GROUP3_TRICK_LIVE`
+/// already use. `checkUnit` is read-only (forwards into [`crate::ztshow::check_unit_type`], itself a pure
+/// field read), so both poles can safely run against the exact same real `ZTShowInfo`/unit pair.
+pub(crate) fn run_ztshowinfo_check_unit_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_CHECK_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+
+    let Some((_, real_show_info_ptr)) = find_real_show_tank_habitat() else {
+        write_success_line(failure_log, &format!("{} (skipped: no qualifying real show-tank habitat found)", test_name));
+        return false;
+    };
+    let Some((_, unit_id)) = find_real_trick_eligible_unit() else {
+        write_success_line(failure_log, &format!("{} (skipped: no trick-eligible unit found in test zoo)", test_name));
+        return false;
+    };
+
+    let rust_result = unsafe { CHECK_UNIT.hooked()(real_show_info_ptr as *const u32, unit_id) };
+    let real_result = unsafe { CHECK_UNIT.original()(real_show_info_ptr as *const u32, unit_id) };
+    if rust_result != real_result {
+        failures.push(format!("checkUnit(eligible unit) mismatch: rust={rust_result:#010x} real={real_result:#010x}"));
+    }
+
+    // unit_id == 0 must short-circuit to 0 on both poles.
+    let rust_zero = unsafe { CHECK_UNIT.hooked()(real_show_info_ptr as *const u32, 0) };
+    let real_zero = unsafe { CHECK_UNIT.original()(real_show_info_ptr as *const u32, 0) };
+    if rust_zero != 0 || real_zero != 0 {
+        failures.push(format!("checkUnit(0) should be 0 on both poles: rust={rust_zero:#010x} real={real_zero:#010x}"));
+    }
+
+    // A bogus unit id (never resolves via BFWorldMgr::getUnit) must also be 0 on both poles.
+    let bogus_id = unit_id.wrapping_add(0x7fff_ffff);
+    let rust_bogus = unsafe { CHECK_UNIT.hooked()(real_show_info_ptr as *const u32, bogus_id) };
+    let real_bogus = unsafe { CHECK_UNIT.original()(real_show_info_ptr as *const u32, bogus_id) };
+    if rust_bogus != real_bogus {
+        failures.push(format!("checkUnit(bogus id) mismatch: rust={rust_bogus:#010x} real={real_bogus:#010x}"));
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTSHOWINFO_ENTER_NEW_MONTH_LIVE` - Stage 9's `enterNewMonth`. Two real, standalone `ZTShowInfo`
+/// instances (`ztshow_live_support::build_standalone_show_info`): `.hooked()` on one, `.original()` (debug
+/// trampoline to the pre-detour body) on the other. Unlike `update` below, `enterNewMonth` never touches
+/// either object's own vtable pointer (confirmed via `.asm` - no vtable read anywhere in its body), so this
+/// is a full, ordinary real-vs-rust field comparison, needing `live_zoo_tests` only for a populated
+/// `GLOBAL_ZTWorldMgr` behind the live [`crate::ztshowinfo`]-internal `FUN_0059E8F0` call (its own real
+/// internals were never investigated - see that constant's own doc comment - so this stays conservative
+/// about what "populated" it needs, matching `ZTSHOWINFO_KEEPER_PREDICATES_LIVE`'s own precedent for
+/// anything touching `GLOBAL_ZTWorldMgr`).
+///
+/// **Pre-inserts the pending-scripts node on both poles before either call**, same discipline as every
+/// other test in this file that touches this tree (see `ZTSHOWINFO_ACCUMULATORS_LIVE`'s own doc comment) -
+/// `enterNewMonth`'s own node loop never inserts (it only mutates existing nodes' value fields), but a
+/// *seeded* node is needed so the archive/reset behavior has something to observe.
+pub(crate) fn run_ztshowinfo_enter_new_month_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_ENTER_NEW_MONTH_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+
+    let rust_info = ztshow_live_support::build_standalone_show_info();
+    let real_info = ztshow_live_support::build_standalone_show_info();
+
+    const SENTINEL_TARGET_ID: u16 = 0xbee1;
+    save_to_memory(rust_info + 0x70, SENTINEL_TARGET_ID);
+    save_to_memory(real_info + 0x70, SENTINEL_TARGET_ID);
+
+    // Distinct nonzero seeds so a swapped/missing rollover shows up as a mismatch, not two matching zeros.
+    for base in [rust_info, real_info] {
+        save_to_memory(base + 0x7c, 100i32); // attendance current month
+        save_to_memory(base + 0x84, 900i32); // attendance all-time
+        save_to_memory(base + 0x94, 25.5f32); // receipts current month
+        save_to_memory(base + 0x9c, 400.25f32); // receipts all-time
+        save_to_memory(base + 0x88, 7.5f32); // engagement sample "current"
+        save_to_memory(base + 0x90, 2.0f32); // engagement running total
+    }
+
+    const KEY: u32 = 0x5678;
+    let (rust_node, rust_new) = ztshow::find_or_insert_pending_script_node(rust_info, KEY);
+    let (real_node, real_new) = ztshow::find_or_insert_pending_script_node(real_info, KEY);
+    if !rust_new || !real_new {
+        failures.push("pre-insert should have created one fresh node per pole".to_string());
+    }
+    for node in [rust_node, real_node] {
+        save_to_memory(node + 0x28, 3.5f32);
+        save_to_memory(node + 0x30, 40.0f32);
+        save_to_memory(node + 0x34, 5i32);
+        save_to_memory(node + 0x3c, 60i32);
+    }
+
+    unsafe { ENTER_NEW_MONTH.hooked()(rust_info as *const u32) };
+    unsafe { ENTER_NEW_MONTH.original()(real_info as *const u32) };
+
+    let float_fields = [
+        ("this+0x98", rust_info + 0x98, real_info + 0x98),
+        ("this+0x94", rust_info + 0x94, real_info + 0x94),
+        ("this+0x9c", rust_info + 0x9c, real_info + 0x9c),
+        ("this+0x8c", rust_info + 0x8c, real_info + 0x8c),
+        ("this+0x88", rust_info + 0x88, real_info + 0x88),
+        ("this+0x90", rust_info + 0x90, real_info + 0x90),
+        ("node+0x28", rust_node + 0x28, real_node + 0x28),
+        ("node+0x2c", rust_node + 0x2c, real_node + 0x2c),
+        ("node+0x30", rust_node + 0x30, real_node + 0x30),
+    ];
+    for (label, rust_addr, real_addr) in float_fields {
+        let rust_value = get_from_memory::<f32>(rust_addr);
+        let real_value = get_from_memory::<f32>(real_addr);
+        if rust_value.to_bits() != real_value.to_bits() {
+            failures.push(format!("{label} mismatch: rust={rust_value} real={real_value}"));
+        }
+    }
+    let int_fields = [
+        ("this+0x80", rust_info + 0x80, real_info + 0x80),
+        ("this+0x7c", rust_info + 0x7c, real_info + 0x7c),
+        ("this+0x84", rust_info + 0x84, real_info + 0x84),
+        ("node+0x34", rust_node + 0x34, real_node + 0x34),
+        ("node+0x38", rust_node + 0x38, real_node + 0x38),
+        ("node+0x3c", rust_node + 0x3c, real_node + 0x3c),
+    ];
+    for (label, rust_addr, real_addr) in int_fields {
+        let rust_value = get_from_memory::<i32>(rust_addr);
+        let real_value = get_from_memory::<i32>(real_addr);
+        if rust_value != real_value {
+            failures.push(format!("{label} mismatch: rust={rust_value} real={real_value}"));
+        }
+    }
+
+    // Absolute expectations on the rust pole (the pure half of this is already unit-tested, but pinning the
+    // archive values here too catches a shared wrong-field write both poles could otherwise agree on).
+    if get_from_memory::<f32>(rust_info + 0x98) != 25.5 {
+        failures.push(format!("rust this+0x98 should archive 25.5, holds {}", get_from_memory::<f32>(rust_info + 0x98)));
+    }
+    if get_from_memory::<i32>(rust_info + 0x80) != 100 {
+        failures.push(format!("rust this+0x80 should archive 100, holds {}", get_from_memory::<i32>(rust_info + 0x80)));
+    }
+    if get_from_memory::<i32>(rust_info + 0x7c) != 0 || get_from_memory::<f32>(rust_info + 0x94) != 0.0 {
+        failures.push("rust current-month accumulators should reset to 0".to_string());
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTSHOWINFO_UPDATE_LIVE` - Stage 9's `update()` (vtable slot `+0x20`). Two real, standalone `ZTShowInfo`
+/// instances, each with a real `ZTShowInfo` vtable pointer installed
+/// (`ztshowinfo_live_support::install_vtable_pointer` - the same precondition `ZTSHOWINFO_EVENT_SYSTEM_LIVE`
+/// already establishes safe for `listen`/`cleanupEvents` dispatch) and `this+0x70` pinned to a sentinel
+/// target id that can't match any real, already-queued `GLOBAL_ZTAIMgr` event.
+///
+/// **The embedded `ZTShow`'s own `+0xc` vtable slot is stubbed to a harmless no-op, not left real.** Real
+/// vanilla `ZTShow::update` (`0x0059e773`, `private/docs/vtables/ZTShow.md`) is itself un-ported and was
+/// never proven safe against anything but a genuinely-constructed `ZTShow` - the same hazard
+/// `ZTSHOWINFO_SCHEDULE_FREQUENCY_LIVE`'s own doc comment already flags for the sibling `abortShow`
+/// call-through, and this fixture's own embedded `ZTShow` is just as synthetic/zeroed. `update()`'s own
+/// body only ever reads this one slot off the embedded object (confirmed via `.asm`), so stubbing just it
+/// keeps every other real call this function makes (`listen`/`cleanupEvents` through `ZTShowInfo`'s own
+/// real vtable, the float sample through real `FUN_0059E8F0`/`GLOBAL_ZTWorldMgr`) genuinely live and
+/// comparable - matching the plan's own "accepting the same real-callee-call-through caveats
+/// `ZTAdvTerrainMgr`'s own tests document when a full byte-diff isn't safe to run twice against
+/// shared/live state" allowance, without giving up the comparison outright.
+///
+/// **Same real-pole caveat as `ZTSHOWINFO_STATUS_PREDICATES_LIVE`'s `IS_STOPPED` note**: real vanilla
+/// `update`'s own internal `listen`/`cleanupEvents` calls land on *this port's* detoured addresses
+/// (installed process-wide) even when reached via `UPDATE.original()` - the trampoline only bypasses
+/// `update`'s own detour, not the ones its body calls into. Both are already covered by their own direct
+/// comparisons in `ZTSHOWINFO_EVENT_SYSTEM_LIVE`; this test's own value is the call *order* and the
+/// float-decay tail.
+pub(crate) fn run_ztshowinfo_update_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_UPDATE_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+
+    const SENTINEL_TARGET_ID: u16 = 0xbee0;
+
+    unsafe extern "thiscall" fn noop_ztshow_update(_this: *const u32) {}
+
+    fn install_stub_ztshow_vtable(show_info: u32) {
+        let vtable: &'static mut [u32; 4] = Box::leak(Box::new([0u32; 4]));
+        vtable[3] = noop_ztshow_update as *const () as u32;
+        let vtable_addr = vtable.as_mut_ptr() as u32;
+        save_to_memory(show_info + 0x4, vtable_addr); // ZTShow's own vftptr, at ZTShowInfo+0x4+0x0.
+    }
+
+    let rust_info = ztshow_live_support::build_standalone_show_info();
+    let real_info = ztshow_live_support::build_standalone_show_info();
+    ztshowinfo_live_support::install_vtable_pointer(rust_info);
+    ztshowinfo_live_support::install_vtable_pointer(real_info);
+    install_stub_ztshow_vtable(rust_info);
+    install_stub_ztshow_vtable(real_info);
+    save_to_memory(rust_info + 0x70, SENTINEL_TARGET_ID);
+    save_to_memory(real_info + 0x70, SENTINEL_TARGET_ID);
+
+    for base in [rust_info, real_info] {
+        save_to_memory(base + 0x88, 12.5f32);
+        save_to_memory(base + 0x90, 3.0f32);
+    }
+
+    unsafe { UPDATE.hooked()(rust_info as *const u32) };
+    unsafe { UPDATE.original()(real_info as *const u32) };
+
+    for (label, offset) in [("this+0x88", 0x88u32), ("this+0x90", 0x90)] {
+        let rust_value = get_from_memory::<f32>(rust_info + offset);
+        let real_value = get_from_memory::<f32>(real_info + offset);
+        if rust_value.to_bits() != real_value.to_bits() {
+            failures.push(format!("{label} mismatch: rust={rust_value} real={real_value}"));
+        }
+    }
+
+    // cleanupEvents' own effect: end reset to begin, on both poles.
+    let rust_begin = get_from_memory::<u32>(rust_info + 0x5c);
+    let rust_end = get_from_memory::<u32>(rust_info + 0x60);
+    let real_begin = get_from_memory::<u32>(real_info + 0x5c);
+    let real_end = get_from_memory::<u32>(real_info + 0x60);
+    if rust_end != rust_begin {
+        failures.push("rust pole: update()'s own cleanupEvents call should leave end == begin".to_string());
+    }
+    if real_end != real_begin {
+        failures.push("real pole: update()'s own cleanupEvents call should leave end == begin".to_string());
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTSHOWINFO_SET_SHOW_INFO_ID_LIVE` - Stage 10's `setShowInfoID` reconciliation
+/// (`ztshowinfo-implementation-plan.md`'s Stage 10). Two real, standalone `ZTShowInfo` instances
+/// (`ztshow_live_support::build_standalone_show_info`): `.hooked()` on one, `.original()` (debug trampoline
+/// to the pre-detour body - see `generated.rs`'s own module doc comment) on the other, comparing `this+0x70`
+/// / the embedded `ZTShow`'s `+0x10` back-pointer / `+0x6` id copy after each call. Confirms the real,
+/// now-detoured address produces the same result as the shared [`crate::ztshowinfo::set_show_info_id`]
+/// `ZTShowMgr::register_show` already calls directly - no `GLOBAL_*` dependency, so this runs from
+/// `always_late_tests` like the other pending-scripts-tree-independent groups in this file.
+///
+/// Exercises all three back-pointer branches [`crate::ztshowinfo::set_show_info_id`]'s own doc comment
+/// describes: null (phase 1), stale (phase 2 - a distinct target whose own `field_0x70` disagrees with the
+/// new id), and already-agreeing (phase 3 - poisoned first, so a spurious overwrite would show up as a
+/// mismatch against the specific "agree" instance's own address, not just any non-null pointer).
+pub(crate) fn run_ztshowinfo_set_show_info_id_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_SET_SHOW_INFO_ID_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+
+    let rust_info = ztshow_live_support::build_standalone_show_info();
+    let real_info = ztshow_live_support::build_standalone_show_info();
+
+    // Phase 1 - null back-pointer: must be repointed at `this` itself on both poles.
+    unsafe { SET_SHOW_INFO_ID.hooked()(rust_info as *const u32, 0x42) };
+    unsafe { SET_SHOW_INFO_ID.original()(real_info as *const u32, 0x42) };
+    for (label, base) in [("rust", rust_info), ("real", real_info)] {
+        let id = get_from_memory::<u16>(base + 0x70);
+        if id != 0x42 {
+            failures.push(format!("phase 1 {label} this+0x70 should be 0x42, holds {id:#06x}"));
+        }
+        if get_from_memory::<u32>(base + 0x4 + 0x10) != base {
+            failures.push(format!("phase 1 {label} null back-pointer should be repointed at this"));
+        }
+        let ztshow_id = get_from_memory::<u16>(base + 0x4 + 0x6);
+        if ztshow_id != 0x42 {
+            failures.push(format!("phase 1 {label} embedded ZTShow id copy should be 0x42, holds {ztshow_id:#06x}"));
+        }
+    }
+
+    // Phase 2 - stale back-pointer (target's own field_0x70 disagrees with the new id): must be repointed
+    // at `this`.
+    let rust_other = ztshow_live_support::build_standalone_show_info();
+    let real_other = ztshow_live_support::build_standalone_show_info();
+    save_to_memory(rust_other + 0x70, 0x99u16);
+    save_to_memory(real_other + 0x70, 0x99u16);
+    save_to_memory(rust_info + 0x4 + 0x10, rust_other);
+    save_to_memory(real_info + 0x4 + 0x10, real_other);
+    unsafe { SET_SHOW_INFO_ID.hooked()(rust_info as *const u32, 0x43) };
+    unsafe { SET_SHOW_INFO_ID.original()(real_info as *const u32, 0x43) };
+    for (label, base) in [("rust", rust_info), ("real", real_info)] {
+        if get_from_memory::<u32>(base + 0x4 + 0x10) != base {
+            failures.push(format!("phase 2 {label} stale back-pointer should be repointed at this"));
+        }
+    }
+
+    // Phase 3 - back-pointer whose own target already agrees on the new id: must be left untouched.
+    let rust_agree = ztshow_live_support::build_standalone_show_info();
+    let real_agree = ztshow_live_support::build_standalone_show_info();
+    save_to_memory(rust_agree + 0x70, 0x44u16);
+    save_to_memory(real_agree + 0x70, 0x44u16);
+    save_to_memory(rust_info + 0x4 + 0x10, rust_agree);
+    save_to_memory(real_info + 0x4 + 0x10, real_agree);
+    unsafe { SET_SHOW_INFO_ID.hooked()(rust_info as *const u32, 0x44) };
+    unsafe { SET_SHOW_INFO_ID.original()(real_info as *const u32, 0x44) };
+    if get_from_memory::<u32>(rust_info + 0x4 + 0x10) != rust_agree {
+        failures.push("phase 3 rust: an already-agreeing back-pointer should be left untouched".to_string());
+    }
+    if get_from_memory::<u32>(real_info + 0x4 + 0x10) != real_agree {
+        failures.push("phase 3 real: an already-agreeing back-pointer should be left untouched".to_string());
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Installs a fresh, empty script-state tree header on a standalone `ZTShowInfo` fixture's embedded
+/// `ZTShowState` (`this+0x38`, i.e. `ZTShow+0x34`/`ZTShowState+0x1c` - see `ztshowstate.rs`'s own module
+/// doc comment for the field chain). `ztshow_live_support::build_standalone_show_info` only sets up the
+/// pending-scripts tree header at `+0x44`; the embedded `ZTShow`/`ZTShowState` sub-object is otherwise a
+/// plain zeroed buffer, so calling real, un-ported `ZTShow::save`/`load` against it (as
+/// `ZTSHOWINFO_SAVE_LOAD_ROUNDTRIP` below does, via the detoured `ZTShowInfo::save`/`load`'s own tail
+/// call-through) would dereference a null tree header inside Stage 1's own `ZTShowState::save`/`load` -
+/// exactly the crash class `ZTSHOWINFO_UPDATE_LIVE`'s own doc comment already flags for this same fixture's
+/// embedded `ZTShow`. Allocated via plain `OPERATOR_NEW`, matching `build_standalone_show_info`'s own
+/// established "doesn't need the real freelist allocator, nothing here frees it through the wrong one"
+/// precedent for a one-shot test fixture header.
+fn install_empty_show_state_tree_header(show_info: u32) {
+    let header = unsafe { OPERATOR_NEW.original()(0x18) } as u32;
+    unsafe { std::ptr::write_bytes(header as *mut u8, 0, 0x18) };
+    save_to_memory(header + 0x8, header);
+    save_to_memory(header + 0xc, header);
+    save_to_memory(show_info + 0x38, header);
+}
+
+/// `ZTSHOWINFO_SAVE_LOAD_ROUNDTRIP` - Stage 11's `save`/`load` (`ztshowinfo-implementation-plan.md`).
+/// Seeds a real, standalone `ZTShowInfo` (`ztshow_live_support::build_standalone_show_info`, plus
+/// [`install_empty_show_state_tree_header`] for the embedded `ZTShowState`'s own tree) with known values
+/// across every field group [`crate::ztshowinfo::show_info_save`]/`show_info_load` handle: the two scalar
+/// header fields, the registered-unit-types array (via [`add_show`], already its own live-tested port), one
+/// pending-scripts node's full value-field set (seeded directly via [`find_or_insert_pending_script_node`]
+/// for `current`/`pending`, then [`increment_attendance`]/[`increment_receipts`] for the accumulator pairs -
+/// both already independently live-tested), and the eleven trailing scalars. The `BFEvent` array is left at
+/// zero elements deliberately - `BFEvent` itself is not reimplemented anywhere in this codebase, so this
+/// test exercises the array's own count-gating/allocation-skip path (`ev_count == 0`) rather than real
+/// element content, which is outside this stage's own scope (see the module doc comment's own note on why
+/// `BFEvent`'s per-element content isn't ported). Captures [`SAVE`]'s `.hooked()` output via `io_redirect`,
+/// replays it into a second fresh fixture's `.hooked()` [`LOAD`], and compares every field plus the
+/// roundtripped array/node contents.
+pub(crate) fn run_ztshowinfo_save_load_roundtrip_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_SAVE_LOAD_ROUNDTRIP";
+    let mut failures: Vec<String> = Vec::new();
+    const CURRENT_VERSION: u32 = 0x100;
+
+    let source = ztshow_live_support::build_standalone_show_info();
+    install_empty_show_state_tree_header(source);
+
+    save_to_memory(source + 0x68, 30i32); // frequency
+    save_to_memory(source + 0xa4, 0i32); // schedule slot
+    save_to_memory(source + 0x6c, 0x1111_2222u32);
+    save_to_memory(source + 0x70, 0x3333u16);
+    save_to_memory(source + 0x88, 0x4444_5555u32);
+    save_to_memory(source + 0x8c, 0x6666_7777u32);
+    save_to_memory(source + 0x90, 1.5f32);
+    save_to_memory(source + 0x98, 0x8888_9999u32);
+    save_to_memory(source + 0x80, 0xaaaa_bbbbu32);
+
+    add_show(source, 501);
+    add_show(source, 502);
+
+    save_to_memory(source + 0xc, 777u32);
+    let (node, _) = find_or_insert_pending_script_node(source, 777);
+    save_to_memory(node + 0x1c, 42u16);
+    save_to_memory(node + 0x1e, 43u16);
+    increment_attendance(source, 3);
+    increment_receipts(source, 4.5);
+
+    let dummy_file: u32 = 0;
+
+    io_redirect::begin_capture();
+    let save_ret = unsafe { SAVE.hooked()(source as *const u32, &dummy_file as *const u32 as *const i8) };
+    let bytes = io_redirect::end_capture();
+    if save_ret & 0xff != 1 {
+        failures.push(format!("hooked save should report success in its low byte, got {save_ret:#010x}"));
+    }
+
+    let target = ztshow_live_support::build_standalone_show_info();
+    install_empty_show_state_tree_header(target);
+    io_redirect::begin_replay(bytes);
+    let load_ret = unsafe { LOAD.hooked()(target as *const u32, &dummy_file as *const u32, CURRENT_VERSION) };
+    io_redirect::end_replay();
+    if load_ret != 1 {
+        failures.push(format!("hooked load should return 1, got {load_ret}"));
+    }
+
+    for (offset, size, label) in [
+        (0x68u32, 4u32, "frequency (+0x68)"),
+        (0xa4, 4, "schedule slot (+0xa4)"),
+        (0x6c, 4, "+0x6c"),
+        (0x70, 2, "+0x70"),
+        (0x88, 4, "+0x88"),
+        (0x8c, 4, "+0x8c"),
+        (0x90, 4, "+0x90 (entrance rotation)"),
+        (0x98, 4, "+0x98"),
+        (0x80, 4, "+0x80"),
+        (0x7c, 4, "+0x7c (attendance current, from increment_attendance)"),
+        (0x84, 4, "+0x84 (attendance total, from increment_attendance)"),
+        (0x94, 4, "+0x94 (receipts current, from increment_receipts)"),
+        (0x9c, 4, "+0x9c (receipts total, from increment_receipts)"),
+    ] {
+        let src = match size {
+            2 => get_from_memory::<u16>(source + offset) as u32,
+            _ => get_from_memory::<u32>(source + offset),
+        };
+        let dst = match size {
+            2 => get_from_memory::<u16>(target + offset) as u32,
+            _ => get_from_memory::<u32>(target + offset),
+        };
+        if src != dst {
+            failures.push(format!("{label} did not round-trip: source={src:#010x}, target={dst:#010x}"));
+        }
+    }
+
+    let begin = get_from_memory::<u32>(target + 0x50);
+    let end = get_from_memory::<u32>(target + 0x54);
+    let ids: Vec<u32> = {
+        let mut v = Vec::new();
+        let mut cursor = begin;
+        while cursor != end {
+            v.push(get_from_memory::<u32>(cursor));
+            cursor += 4;
+        }
+        v
+    };
+    if ids != vec![501, 502] {
+        failures.push(format!("registered-unit-types array did not round-trip: got {ids:?}"));
+    }
+
+    let (target_node, was_inserted) = find_or_insert_pending_script_node(target, 777);
+    if was_inserted {
+        failures.push("pending-scripts node for key 777 should already exist after load, not be freshly inserted".to_string());
+    }
+    if get_from_memory::<u16>(target_node + 0x1c) != 42 {
+        failures.push("node +0x1c (current) did not round-trip".to_string());
+    }
+    if get_from_memory::<u16>(target_node + 0x1e) != 43 {
+        failures.push("node +0x1e (pending) did not round-trip".to_string());
+    }
+    if get_from_memory::<u32>(target_node + 0x28) != get_from_memory::<u32>(node + 0x28) {
+        failures.push("node +0x28 (receipts current) did not round-trip".to_string());
+    }
+    if get_from_memory::<u32>(target_node + 0x30) != get_from_memory::<u32>(node + 0x30) {
+        failures.push("node +0x30 (receipts total) did not round-trip".to_string());
+    }
+    if get_from_memory::<u32>(target_node + 0x34) != get_from_memory::<u32>(node + 0x34) {
+        failures.push("node +0x34 (attendance current) did not round-trip".to_string());
+    }
+    if get_from_memory::<u32>(target_node + 0x3c) != get_from_memory::<u32>(node + 0x3c) {
+        failures.push("node +0x3c (attendance total) did not round-trip".to_string());
+    }
+
+    let node_count = get_from_memory::<u32>(target + 0x48);
+    if node_count != 1 {
+        failures.push(format!("target's cached pending-scripts node count should be 1 after load, got {node_count}"));
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTSHOWINFO_STANDALONE_ROUNDTRIP` - Stage 12 (closing stage): both constructor overloads and the real
+/// destructor, run end-to-end against real vanilla `ZTShowInfo` allocations. See `ztshowinfo.rs`'s own
+/// module doc comment's Stage 12 section for why none of the four addresses involved
+/// (`CONSTRUCTOR_0`/`CONSTRUCTOR_1`/`ZTSHOW_INFO_0`/`ZTSHOW_INFO_1`) gets a Rust reimplementation or a
+/// detour - there is no owning Rust struct for this class family to redirect construction/destruction
+/// onto, and both the copy constructor and the destructor's own tree teardown touch opaque,
+/// allocator-shared helpers (`FUN_0040107f`/`FUN_00401118`/`AI_cls_0x404fd6::cls_0x404fd6` on the
+/// construction side, `FUN_00401b16`/`FUN_005aade2` on the teardown side) with no independently-resolved
+/// address anywhere in this corpus.
+///
+/// This is therefore not a real-vs-rust comparison (there is no rust pole) - it instead pins this
+/// module's own documented understanding of the real default constructor's field defaults, and confirms
+/// the copy constructor produces an independent tree/array allocation rather than aliasing the source's
+/// own. Every step is a real vanilla address call over real vanilla-allocated memory
+/// (`ztshowinfo_live_support::build_standalone_show_info_via_real_ctor`/
+/// `build_standalone_show_info_copy_via_real_ctor`/`destroy_standalone_show_info_via_real_dtor`, all
+/// `.original()`-backed) - no Rust allocator crossing anywhere, so unlike most of this class family's
+/// other standalone fixtures, teardown here is a genuine free, not a leak-only one.
+pub(crate) fn run_ztshowinfo_standalone_roundtrip_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_STANDALONE_ROUNDTRIP";
+    let mut failures: Vec<String> = Vec::new();
+
+    /// `ZTShowInfo`'s own real vtable RVA - see `ztshowinfo.rs`'s own `live_support::
+    /// ZTSHOWINFO_VTABLE_RVA` (same value, kept as a private local copy for this test's own locality).
+    const ZTSHOWINFO_VTABLE_RVA: u32 = 0x0023_53cc;
+    let expected_vtable = crate::globals::get_module_base("zoo.exe") as u32 + ZTSHOWINFO_VTABLE_RVA;
+
+    let cursor_before_default_ctor = get_from_memory::<i32>(globals().ztaimgr_ptr() as u32 + 0xec);
+    let default_built = ztshowinfo_live_support::build_standalone_show_info_via_real_ctor();
+
+    if get_from_memory::<u32>(default_built) != expected_vtable {
+        failures.push(format!(
+            "default ctor: vtable pointer {:#010x}, expected {:#010x}",
+            get_from_memory::<u32>(default_built),
+            expected_vtable
+        ));
+    }
+    if get_from_memory::<i32>(default_built + 0x68) != 0x5a {
+        failures.push(format!("default ctor: +0x68 (frequency) should be 0x5a, holds {}", get_from_memory::<i32>(default_built + 0x68)));
+    }
+    let expected_next_time = cursor_before_default_ctor + 0x5a;
+    if get_from_memory::<i32>(default_built + 0x6c) != expected_next_time {
+        failures.push(format!(
+            "default ctor: +0x6c should be cursor({cursor_before_default_ctor}) + 0x5a = {expected_next_time}, holds {}",
+            get_from_memory::<i32>(default_built + 0x6c)
+        ));
+    }
+    for offset in [0x50u32, 0x54, 0x58, 0x5c, 0x60, 0x64] {
+        let value = get_from_memory::<u32>(default_built + offset);
+        if value != 0 {
+            failures.push(format!("default ctor: +{offset:#x} should be zeroed, holds {value:#010x}"));
+        }
+    }
+    let default_tree_header = get_from_memory::<u32>(default_built + 0x44);
+    if default_tree_header == 0 {
+        failures.push("default ctor: +0x44 (pending-scripts tree wrapper) should be non-null".to_string());
+    }
+    if get_from_memory::<u32>(default_built + 0x48) != 0 {
+        failures.push(format!(
+            "default ctor: +0x48 (cached node count) should be 0, holds {}",
+            get_from_memory::<u32>(default_built + 0x48)
+        ));
+    }
+
+    let copy_built = ztshowinfo_live_support::build_standalone_show_info_copy_via_real_ctor(default_built);
+
+    if get_from_memory::<u32>(copy_built) != expected_vtable {
+        failures.push(format!(
+            "copy ctor: vtable pointer {:#010x}, expected {:#010x}",
+            get_from_memory::<u32>(copy_built),
+            expected_vtable
+        ));
+    }
+    for (label, offset) in [("+0x68 (frequency)", 0x68u32), ("+0x6c (next time)", 0x6c), ("+0x70 (show info id)", 0x70)] {
+        let source = get_from_memory::<u32>(default_built + offset);
+        let copy = get_from_memory::<u32>(copy_built + offset);
+        if source != copy {
+            failures.push(format!("copy ctor: {label} did not copy from source ({source:#010x}), holds {copy:#010x}"));
+        }
+    }
+    for offset in [0x50u32, 0x54, 0x58, 0x5c, 0x60, 0x64] {
+        let value = get_from_memory::<u32>(copy_built + offset);
+        if value != 0 {
+            failures.push(format!("copy ctor: +{offset:#x} should be zeroed (source's own array was empty), holds {value:#010x}"));
+        }
+    }
+    let copy_tree_header = get_from_memory::<u32>(copy_built + 0x44);
+    if copy_tree_header == 0 {
+        failures.push("copy ctor: +0x44 (pending-scripts tree wrapper) should be non-null".to_string());
+    } else if copy_tree_header == default_tree_header {
+        failures.push("copy ctor: +0x44 should be its own independent allocation, not aliasing the source's".to_string());
+    }
+    if get_from_memory::<u32>(copy_built + 0x48) != 0 {
+        failures.push(format!(
+            "copy ctor: +0x48 (cached node count) should be 0, holds {}",
+            get_from_memory::<u32>(copy_built + 0x48)
+        ));
+    }
+
+    ztshowinfo_live_support::destroy_standalone_show_info_via_real_dtor(copy_built);
+    ztshowinfo_live_support::destroy_standalone_show_info_via_real_dtor(default_built);
 
     finish_test(test_name, failures, failure_log)
 }

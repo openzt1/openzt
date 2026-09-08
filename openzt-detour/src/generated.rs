@@ -1067,7 +1067,7 @@ pub mod bfunit {
     pub const SET_MOVING: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8, i8)> = FunctionDef{address: 0x0043e5a5, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8, i8)> = FunctionDef{address: 0x0043e642, function_type: PhantomData};
     pub const GET_ONLY_UNDERWATER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043e6c0, function_type: PhantomData};
-    pub const GET_EVENTS_3: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043f40d, function_type: PhantomData};
+    pub const GET_EVENTS_3: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32, u32)> = FunctionDef{address: 0x0043f40d, function_type: PhantomData};
     pub const CLEANUP_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043f4a0, function_type: PhantomData};
     pub const IS_NON_PATH_STEEP: FunctionDef<unsafe extern "stdcall" fn(i32) -> u32> = FunctionDef{address: 0x0044045e, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x004547cc, function_type: PhantomData};

@@ -26,7 +26,7 @@ use openzt_detour::generated::{
     },
     ztshowinfo::{
         ADD_SCRIPT, ADD_SHOW, CHECK_PENDING_SCRIPTS, CHECK_UNIT, CHECK_UNIT_TYPE, GET_NUM_UNITS, GET_SHOW_UNIT_LIST, IS_STARTED,
-        RECALCULATE_SCHEDULE, REMOVE_SHOW, REMOVE_UNIT, SEND_EVENT,
+        RECALCULATE_SCHEDULE, REMOVE_SHOW, SEND_EVENT,
     },
     ztshowscriptstate::{CONSTRUCTOR as CREATE_SHOW_SCRIPT_STATE, GET_NUM_ITEMS},
     standalone::OPERATOR_NEW,
@@ -41,6 +41,7 @@ use crate::{
     globals::globals,
     util::{get_from_memory, save_to_memory},
     ztmegatilemgr::entity_type_matches,
+    ztshowinfo::remove_unit,
 };
 
 /// `DAT_006386b0`'s RVA - the same vtable-slot-`0x1c` "isKindOf"-style type-check argument used by
@@ -282,7 +283,10 @@ pub fn validate_item(this: u32, index: u16) -> i32 {
     }
     let show_info = get_from_memory::<u32>(this + 0x10);
     let unit_type_id = get_from_memory::<u32>(this + 0x8);
-    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.original()(show_info as *const u32, unit_type_id) } as u32;
+    // `.hooked()`: `GET_SHOW_UNIT_LIST` is now detoured by `ztshowinfo.rs` (Stage 7) - see `CLAUDE.md`'s
+    // "every stage that ports a call-through-only method must also switch its own `.original()` call
+    // sites to `.hooked()`" rule.
+    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.hooked()(show_info as *const u32, unit_type_id) } as u32;
     let sentinel = get_from_memory::<u32>(list_ptr);
     let first_node = get_from_memory::<u32>(sentinel);
     let unit_numeric_id = get_from_memory::<u32>(first_node + 0x8);
@@ -423,7 +427,9 @@ pub fn validate(this: u32, check_units: bool) -> i32 {
     if check_units {
         let show_info = get_from_memory::<u32>(this + 0x10);
         let unit_type_id = get_from_memory::<u32>(this + 0x8);
-        let list_ptr = unsafe { GET_SHOW_UNIT_LIST.original()(show_info as *const u32, unit_type_id) } as u32;
+        // `.hooked()`: both `GET_SHOW_UNIT_LIST` and `CHECK_UNIT` are now detoured by `ztshowinfo.rs`
+        // (Stage 7) - see `validate_item`'s own comment above for the rule this follows.
+        let list_ptr = unsafe { GET_SHOW_UNIT_LIST.hooked()(show_info as *const u32, unit_type_id) } as u32;
         let sentinel = get_from_memory::<u32>(list_ptr);
 
         let mut unit_count = 0;
@@ -439,7 +445,7 @@ pub fn validate(this: u32, check_units: bool) -> i32 {
         node = get_from_memory::<u32>(sentinel);
         while node != sentinel {
             let unit_id = get_from_memory::<u32>(node + 0x8);
-            if unsafe { CHECK_UNIT.original()(show_info as *const u32, unit_id) } == 0 {
+            if unsafe { CHECK_UNIT.hooked()(show_info as *const u32, unit_id) } == 0 {
                 return 4;
             }
             node = get_from_memory::<u32>(node);
@@ -580,7 +586,9 @@ pub fn start(this: u32) {
     }
 
     let show_info = get_from_memory::<u32>(this + 0x10);
-    let unit_count = unsafe { GET_NUM_UNITS.original()(show_info as *const u32, script_type) };
+    // `.hooked()`: `GET_NUM_UNITS` is now detoured by `ztshowinfo.rs` (Stage 7) - see `validate_item`'s
+    // own comment above for the rule this follows.
+    let unit_count = unsafe { GET_NUM_UNITS.hooked()(show_info as *const u32, script_type) };
     if unit_count < 1 {
         return;
     }
@@ -608,7 +616,8 @@ pub fn start(this: u32) {
     unsafe { CLEAR_SHOW_SCRIPT_STATES.original()(this as *const u32) };
 
     let unit_type_for_list = get_from_memory::<u32>(this + 0x8);
-    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.original()(show_info as *const u32, unit_type_for_list) } as u32;
+    // `.hooked()`: see the other `GET_SHOW_UNIT_LIST` call site's own comment above.
+    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.hooked()(show_info as *const u32, unit_type_for_list) } as u32;
     let sentinel = get_from_memory::<u32>(list_ptr);
     let mut node = get_from_memory::<u32>(sentinel);
     while node != sentinel {
@@ -617,7 +626,12 @@ pub fn start(this: u32) {
         let unit_ptr = globals().ztworldmgr().resolve_entity_by_id(unit_id) as u32;
         let eligible = unit_ptr != 0 && unsafe { entity_type_matches(unit_ptr, RVA_SHOW_TRICK_TYPE_CHECK) };
         if !eligible {
-            unsafe { REMOVE_UNIT.original()(show_info as *const u32, unit_type_for_list, &unit_id as *const u32 as *const i32) };
+            // Direct Rust call, not `.hooked()`/`.original()`: `ZTShowInfo::removeUnit` is now a real port
+            // (`ztshowinfo.rs` Stage 8) - see [`crate::ztshowinfo::remove_unit`]'s own doc comment for why
+            // this replaces a genuine bug this call site used to have (passing `&unit_id`, a *local's*
+            // address, where real vanilla's own un-dereferencing third-parameter comparison needed
+            // `unit_id` itself).
+            remove_unit(show_info, unit_type_for_list, unit_id);
         } else {
             let assigned_show_id = get_from_memory::<u16>(unit_ptr + 0x254);
             // `.hooked()`, not `.original()`: `ZTShowMgr::getShowInfo` is detoured onto the Rust
