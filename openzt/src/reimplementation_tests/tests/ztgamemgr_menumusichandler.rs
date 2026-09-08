@@ -43,8 +43,8 @@ pub(crate) fn run_menumusichandler_detours_enabled_test(failure_log: &mut Option
 /// has itself hooked, not silently re-enter our own Rust detours. For each of them, asserts the
 /// registry holds a trampoline, that `.original()` returns exactly that pointer value, and that
 /// it differs from the raw address (zoo.exe has no ASLR, so an un-routed raw cast would compare
-/// equal - pointer equality can't pass vacuously here the way the old `.original() == .original()`
-/// comparisons could). Also asserts zero registry overflows: a full slot array fails open into
+/// equal - pointer equality can't pass vacuously here the way an `.original() == .original()`
+/// self-comparison would). Also asserts zero registry overflows: a full slot array fails open into
 /// exactly the raw-cast behavior this test guards against. Release builds cfg this out (the raw
 /// cast is release's documented `.original()`); the release battery is still run once-off since
 /// its vanilla poles go through the `real_*` trampolines instead.
@@ -99,7 +99,7 @@ pub(crate) fn run_menumusichandler_original_routes_to_trampoline_test(failure_lo
     finish_test(test_name, failures, failure_log)
 }
 
-/// `MENUMUSICHANDLER_STANDALONE_ROUNDTRIP` - `menumusichandler-implementation-plan.md` Stage 1: builds
+/// `MENUMUSICHANDLER_STANDALONE_ROUNDTRIP` - builds
 /// two fresh `0x14`-byte standalone `MenuMusicHandler` blocks, runs the real vanilla constructor
 /// (via the `real_constructor` trampoline) on one and the Rust reimplementation
 /// (`MenuMusicHandler::construct`) directly on the other, then byte-diffs the full struct. Both sides
@@ -110,9 +110,8 @@ pub(crate) fn run_menumusichandler_original_routes_to_trampoline_test(failure_lo
 /// real disabled path instead of the marker-forced one). No exclusions needed for the fields the
 /// constructor actually touches. Both blocks are pre-zeroed before either constructor runs: neither
 /// the real constructor
-/// nor `MenuMusicHandler::construct` writes the `_pad1`/`_pad2` bytes (confirmed by the first live run
-/// of this test, which saw real-side offsets `5..8` come back as raw `operator_new` heap leftovers,
-/// `[175, 235, 3]`, against the Rust side's zeroed padding) - same "operator_new doesn't zero memory"
+/// nor `MenuMusicHandler::construct` writes the `_pad1`/`_pad2` bytes (the real side's padding comes
+/// back as raw `operator_new` heap leftovers, not zeros) - same "operator_new doesn't zero memory"
 /// caveat `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS` documents.
 pub(crate) fn run_menumusichandler_standalone_roundtrip_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "MENUMUSICHANDLER_STANDALONE_ROUNDTRIP";
@@ -162,11 +161,11 @@ pub(crate) fn run_menumusichandler_standalone_roundtrip_test(failure_log: &mut O
     failed
 }
 
-/// `MENUMUSICHANDLER_INIT` - `menumusichandler-implementation-plan.md` Stage 2: constructs two fresh
+/// `MENUMUSICHANDLER_INIT` - constructs two fresh
 /// standalone `MenuMusicHandler`s (real vanilla ctor / `MenuMusicHandler::construct`), then calls
 /// `init` on each (real vanilla via the `real_init` trampoline / `MenuMusicHandler::init` - see
 /// `run_menumusichandler_detours_enabled_test` for why `.original()` can't be used here) with a
-/// guaranteed-missing filename - per the plan's own caveat, this avoids the "plays audio during the
+/// guaranteed-missing filename - this avoids the "plays audio during the
 /// test battery" side effect a real `sounds/*.wav` path would have, at the cost of only exercising
 /// `init`'s allocation/attenuation-call shape, not `DX8SndMgr::attempt`'s success path. Compares the
 /// `bool` return and the fields in [`menumusichandler_field_mismatches`]; `sound_ptr` is compared
@@ -255,7 +254,7 @@ pub(crate) fn run_menumusichandler_init_test(failure_log: &mut Option<std::fs::F
     failed
 }
 
-/// Field-by-field comparison shared by the two Stage-3 `MenuMusicHandler` tests - same comparison set
+/// Field-by-field comparison shared by the `MenuMusicHandler` comparison tests - same comparison set
 /// as `MENUMUSICHANDLER_INIT` (`sound_ptr` by null-ness only, everything else exactly).
 fn menumusichandler_field_mismatches(
     real: &ztgamemgr_menumusichandler::MenuMusicHandler,
@@ -297,7 +296,7 @@ unsafe fn write_menumusichandler_markers(ptr: *mut ztgamemgr_menumusichandler::M
     }
 }
 
-/// `MENUMUSICHANDLER_START_PLAY` - `menumusichandler-implementation-plan.md` Stage 3: constructs and
+/// `MENUMUSICHANDLER_START_PLAY` - constructs and
 /// `init`s two fresh standalone `MenuMusicHandler`s (real vanilla / Rust reimplementation, same
 /// guaranteed-missing filename as `MENUMUSICHANDLER_INIT` - see that test's doc comment for why no
 /// real `.wav` path), then calls `startPlay` on each (real vanilla via the `real_start_play`
@@ -390,7 +389,7 @@ pub(crate) fn run_menumusichandler_start_play_test(failure_log: &mut Option<std:
     failed
 }
 
-/// `MENUMUSICHANDLER_START_FADE` - `menumusichandler-implementation-plan.md` Stage 3: calls
+/// `MENUMUSICHANDLER_START_FADE` - calls
 /// `startFade` (real vanilla via the `real_start_fade` trampoline / `MenuMusicHandler::start_fade`)
 /// on warm (already-`init`ed)
 /// standalone instances and compares `fading`/`fade_counter`. The positive branch (`IS_PLAYING` true
@@ -510,7 +509,7 @@ pub(crate) fn run_menumusichandler_start_fade_test(failure_log: &mut Option<std:
     failed
 }
 
-/// `MENUMUSICHANDLER_UPDATE` - `menumusichandler-implementation-plan.md` Stage 4: constructs and
+/// `MENUMUSICHANDLER_UPDATE` - constructs and
 /// `init`s two fresh standalone `MenuMusicHandler`s (real vanilla / Rust reimplementation, same
 /// guaranteed-missing filename as the other `MENUMUSICHANDLER_*` tests - see `MENUMUSICHANDLER_INIT`'s
 /// doc comment for why no real `.wav` path), marker-forces `fading` = 1 (the one thing `startFade`
@@ -529,8 +528,8 @@ pub(crate) fn run_menumusichandler_start_fade_test(failure_log: &mut Option<std:
 /// 4. **Completion branch, not-playing sound**: with `fade_counter` marker-forced to 2995, one
 ///    `update(100)` crosses the 3000 threshold (3045) - and because the failed-attempt sound reports
 ///    not playing, the decompile leaves *everything* untouched (`IS_PLAYING` gates the clears, not the
-///    other way round; see `MenuMusicHandler::update`'s doc comment on how the plan's "always clear"
-///    summary misread this). Survival-checked on `fading`/`fade_counter`/`sound_ptr`.
+///    other way round; see `MenuMusicHandler::update`'s doc comment). Survival-checked on
+///    `fading`/`fade_counter`/`sound_ptr`.
 ///
 /// The `IS_PLAYING`-**true** completion path (`STOP` + slot-0 release + `sound_ptr` = 0) needs genuinely
 /// playing audio to enter live, so it isn't exercised here - its teardown calls are the exact

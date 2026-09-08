@@ -100,11 +100,10 @@ pub(crate) fn run_ztsoundscape_original_routes_to_trampoline_test(failure_log: &
     finish_test(test_name, failures, failure_log)
 }
 
-/// `ZTSOUNDSCAPE_STANDALONE_ROUNDTRIP` - `ztsoundscape-implementation-plan.md` stage 1 (pulled
-/// forward from stage 5): builds two fresh `0x54`-byte standalone `ZTSoundscape` blocks, runs the
-/// real vanilla constructor on one and the Rust reimplementation (`ZTSoundscape::construct`) on the
-/// other, then byte-diffs the full struct. The constructor is pure constant writes, so the compare
-/// is meaningful with no exclusions.
+/// `ZTSOUNDSCAPE_STANDALONE_ROUNDTRIP` - builds two fresh `0x54`-byte standalone `ZTSoundscape`
+/// blocks, runs the real vanilla constructor on one and the Rust reimplementation
+/// (`ZTSoundscape::construct`) on the other, then byte-diffs the full struct. The constructor is
+/// pure constant writes, so the compare is meaningful with no exclusions.
 ///
 /// Both blocks are pre-zeroed before either constructor runs: the ctor writes only 32 of the `0x54`
 /// bytes (the three embedded slots' `{vtable, inner}` dwords and the two `Ambients` pointers) - the
@@ -114,9 +113,8 @@ pub(crate) fn run_ztsoundscape_original_routes_to_trampoline_test(failure_log: &
 /// `MENUMUSICHANDLER_STANDALONE_ROUNDTRIP` and `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS`).
 ///
 /// Pole note: the vanilla side goes through `soundscape_live_support::real_constructor` (a
-/// `CONSTRUCTOR_DETOUR.call` trampoline) - the stage-4 obligation this test used to document (a
-/// release build's raw-cast `.original()` would silently re-enter the Rust detour and degenerate
-/// the test into Rust-vs-Rust) is discharged now that the detours are installed.
+/// `CONSTRUCTOR_DETOUR.call` trampoline) - a release build's raw-cast `.original()` would re-enter
+/// the Rust detour and degenerate the test into Rust-vs-Rust.
 pub(crate) fn run_ztsoundscape_standalone_roundtrip_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTSOUNDSCAPE_STANDALONE_ROUNDTRIP";
 
@@ -166,23 +164,22 @@ pub(crate) fn run_ztsoundscape_standalone_roundtrip_test(failure_log: &mut Optio
 }
 
 /// re-declared here per the repo's no-shared-consts precedent (`ztsoundscape.rs` carries the
-/// originals it actually uses). Values confirmed once via a manual PE-section parse of zoo.exe's
-/// `.rdata` (see `ztsoundscape.rs`'s doc comment for the derivation and the `fade_atten_a`/
-/// `fade_atten_b` unit tests that bake them in as literals).
+/// originals it actually uses). Values match zoo.exe's `.rdata` (see `ztsoundscape.rs`'s doc
+/// comment for the derivation and the `fade_atten_a`/`fade_atten_b` unit tests that bake them in
+/// as literals).
 const FADE_DAT_0063542C_RVA: u32 = 0x0063542c - 0x400000;
 const FADE_DAT_00635428_RVA: u32 = 0x00635428 - 0x400000;
 const FADE_DAT_00635490_RVA: u32 = 0x00635490 - 0x400000;
 
-/// `ZTSOUNDSCAPE_FADE_CONSTANTS` - a review finding, not part of the original implementation plan:
-/// `ZTSoundscape::update`'s fade-attenuation math (`fade_atten_a`/`fade_atten_b`) reads three
-/// `.rdata` floats live via `get_module_base + RVA`, and the whole f64-truncation-parity argument
-/// for those functions rests on those constants holding the exact values a one-time manual PE
-/// parse confirmed (`DAT_0063542c` = f32 `0x38D1B717`, `DAT_00635428` = `4500.0`, `DAT_00635490` =
-/// `1.0`). Nothing else in the battery would catch drift here: `SET_FADE_ATTENUATION` is called on
-/// an opaque real `SNDSound` object, so `ZTSOUNDSCAPE_UPDATE`'s struct-only compare never observes
-/// the actual attenuation argument the port computes from these constants. This test closes that
-/// gap directly - no live zoo/game state needed, just the loaded module's `.rdata`, so it runs
-/// alongside the other standalone-only tests rather than after `run_load_live_zoo`.
+/// `ZTSOUNDSCAPE_FADE_CONSTANTS` - `ZTSoundscape::update`'s fade-attenuation math
+/// (`fade_atten_a`/`fade_atten_b`) reads three `.rdata` floats live via `get_module_base + RVA`, and
+/// the whole f64-truncation-parity argument for those functions rests on those constants holding the
+/// exact values confirmed by a PE-section parse (`DAT_0063542c` = f32 `0x38D1B717`, `DAT_00635428` =
+/// `4500.0`, `DAT_00635490` = `1.0`). Nothing else in the battery would catch drift here:
+/// `SET_FADE_ATTENUATION` is called on an opaque real `SNDSound` object, so `ZTSOUNDSCAPE_UPDATE`'s
+/// struct-only compare never observes the actual attenuation argument the port computes from these
+/// constants. This test closes that gap directly - no live zoo/game state needed, just the loaded
+/// module's `.rdata`, so it runs in `always_late_tests()` with the other standalone-only tests.
 pub(crate) fn run_ztsoundscape_fade_constants_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTSOUNDSCAPE_FADE_CONSTANTS";
 
@@ -223,9 +220,8 @@ pub(crate) fn run_ztsoundscape_fade_constants_test(failure_log: &mut Option<std:
 }
 
 /// `GLOBAL_ZTScenarioMgr`'s global-slot RVA (`ZTGameMgr_start.c`/`.asm` ground truth). Re-declared
-/// here per the repo's no-shared-consts precedent (each file declares its own copy -
-/// `ztgamemgr.rs` carries the original); that file's copy is left untouched so this stage's diff
-/// stays out of its staged call-site rewiring.
+/// here per the repo's no-shared-consts precedent (each file declares its own copy;
+/// `ztgamemgr.rs` carries the original).
 const GLOBAL_ZTSCENARIOMGR_RVA: u32 = 0x00638ff8 - 0x400000;
 
 /// The shared game RNG state's RVA (`DAT_00638060`) that `ZTSoundscape::update`'s position jitter
@@ -233,29 +229,24 @@ const GLOBAL_ZTSCENARIOMGR_RVA: u32 = 0x00638ff8 - 0x400000;
 /// (`ztsoundscape.rs` carries the original).
 const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
 
-/// `ZTSOUNDSCAPE_INIT` - `ztsoundscape-implementation-plan.md` stage 2 (pulled forward from stage
-/// 5; needs no detours of its own): builds two fresh standalone `ZTSoundscape` blocks (real
-/// vanilla ctor / [`ZTSoundscape::construct`]), **0xAA-fills both** before constructing, then
-/// calls `init` on each - real vanilla (via the `real_init` trampoline) vs. the Rust port - and
-/// compares.
+/// `ZTSOUNDSCAPE_INIT` - builds two fresh standalone `ZTSoundscape` blocks (real vanilla ctor /
+/// [`ZTSoundscape::construct`]), **0xAA-fills both** before constructing, then calls `init` on
+/// each - real vanilla (via the `real_init` trampoline) vs. the Rust port - and compares.
 ///
 /// Inputs come from the live `GLOBAL_ZTScenarioMgr` singleton via its four real getter
 /// call-throughs, captured **once** up front and handed to both poles, so the poles can't drift
-/// apart on getter results. Must run after `run_load_live_zoo` (registered last in the battery,
-/// right before `ZTGAMEMGR_START_STOP_SMOKE`): pre-zoo the scenario registry is non-null-but-
-/// uninitialized (the hazard class `ZTGAMEMGR_START_STOP_SMOKE`'s doc describes), both
-/// `BFConfigFile::attempt`s would fail, and the test would silently cover only the defaults/tail
-/// while looking green.
+/// apart on getter results. Runs in `live_zoo_tests()`, after `run_load_live_zoo`: pre-zoo the
+/// scenario registry is non-null-but-uninitialized (the hazard class
+/// `ZTGAMEMGR_START_STOP_SMOKE`'s doc describes), both `BFConfigFile::attempt`s would fail, and
+/// the test would silently cover only the defaults/tail while looking green.
 ///
 /// **Vanilla pole first, then a full snapshot of its block plus owned copies of every string its
 /// pointer fields reference, and only then the reimpl pole.** The snapshot is load-bearing: both
 /// poles' `init` calls reuse the same two *global* `BFConfigFile` instances, and the second
 /// pole's `release`+`attempt`+parse frees/reallocates the parsed storage the first pole's
-/// `crowd_filename`/`world_name` pointers point into (live-confirmed false-failure mode of this
-/// test's first draft, which compared both sides live: the vanilla side's slot 2 was left reading
-/// the new parse's `"sounds/quiet.wav"` buffer and slots 0/1 landed mid-string - vanilla's own
-/// values were correct at its init time). The reimpl side is compared while its own parse is
-/// still live.
+/// `crowd_filename`/`world_name` pointers point into - comparing both sides live would diff the
+/// vanilla side against the *second* parse's buffers, not the values its own `init` stored. The
+/// reimpl side is compared while its own parse is still live.
 ///
 /// Comparison set (snapshot vs. the live reimpl block; masked regions re-covered by replacements):
 /// - `+0x09` (`fade_step_in`, one of the two deliberately-uninitialized bytes): asserted still
@@ -264,10 +255,10 @@ const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
 /// - `+0x1c..=0x2b` (`crowd_filename`): per-slot CStr **content** compare - the pointers
 ///   legitimately differ across the two parses.
 /// - `+0x40..=0x43` (`world_snd.inner`): null-ness parity only. Per-attempt vanilla-owned
-///   resource object (live-confirmed: the same attempted name handed the two poles different
-///   handles), so a value compare is wrong by construction.
+///   resource object (the same attempted name hands the two poles different handles), so a value
+///   compare is wrong by construction.
 /// - `+0x44..=0x47` (`world_name`): null-ness parity, then content compare when the vanilla
-///   snapshot's is non-zero - its pointer also legitimately differs across parses (live-confirmed).
+///   snapshot's is non-zero - its pointer also legitimately differs across parses.
 /// - `+0x48..=0x4b` (`world_atten`, the second deliberately-uninitialized byte - untouched when
 ///   no world sound is configured): compared only when the vanilla snapshot's `world_name`
 ///   (`+0x44`) is non-zero.
@@ -278,11 +269,10 @@ const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
 ///
 /// Distinctness probe: the four vanilla-side `crowd_filename` pointers are checked for pairwise
 /// distinctness (all equal/overlapping would mean `getString` reuses a scratch buffer, parity
-/// still holds, and the content compare degenerates to trivial). Recorded in this test's own
-/// success line (direct file write - `info!` lines placed mid-test are lost to the battery's
-/// known tracing lossiness under `std::process::exit`): live run 2026-09-02 recorded **pairwise
-/// distinct**. Relevant to `update`'s later filename reads: parsed names live in per-key storage,
-/// not one scratch buffer.
+/// still holds, and the content compare degenerates to trivial). The result is recorded in this
+/// test's own success line (direct file write - `info!` lines placed mid-test are lost to the
+/// battery's tracing lossiness under `std::process::exit`). Relevant to `update`'s later filename
+/// reads: parsed names live in per-key storage, not one scratch buffer.
 ///
 /// Audible caveat: both poles run `init` for real, so the battery briefly plays the world sound
 /// **twice, overlapping** (each side loops one until teardown stops it) - documented, not a
@@ -293,9 +283,8 @@ const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
 /// stops each side's sound (see its doc comment for the cross-allocator reasoning).
 ///
 /// Pole note: the vanilla side goes through `soundscape_live_support::real_init` (an
-/// `INIT_DETOUR.call` trampoline) - the stage-4 obligation this test used to document (a release
-/// build's raw-cast `.original()` would re-enter the Rust detour and degenerate this test into
-/// Rust-vs-Rust) is discharged now that the detours are installed. The four `bfscenariomgr` getter
+/// `INIT_DETOUR.call` trampoline) - a release build's raw-cast `.original()` would re-enter the
+/// Rust detour and degenerate this test into Rust-vs-Rust. The four `bfscenariomgr` getter
 /// captures above stay `.original()` - none of those is detoured.
 ///
 /// Accepted gaps: `OPERATOR_NEW`'s failure paths (the store-`0` + skip-ctor propagation) can't be
@@ -467,12 +456,11 @@ pub(crate) fn run_ztsoundscape_init_test(failure_log: &mut Option<std::fs::File>
     !mismatches.is_empty()
 }
 
-/// `ZTSOUNDSCAPE_UPDATE` - `ztsoundscape-implementation-plan.md` stage 3 (pulled forward from
-/// stage 5 per the per-stage pattern stages 1-2 established): runs `ZTSoundscape::update` on
-/// **three** standalone twins - A = real vanilla (via the `real_update` trampoline), B = the Rust
-/// port, C = vanilla again (determinism control, so "port diverged" is distinguishable from
-/// "environment nondeterministic") - and compares. Needs the live zoo (scenario-registry config
-/// names + real crowd `.wav`s), so it registers right after [`run_ztsoundscape_init_test`].
+/// `ZTSOUNDSCAPE_UPDATE` - runs `ZTSoundscape::update` on **three** standalone twins - A = real
+/// vanilla (via the `real_update` trampoline), B = the Rust port, C = vanilla again (determinism
+/// control, so "port diverged" is distinguishable from "environment nondeterministic") - and
+/// compares. Needs the live zoo (scenario-registry config names + real crowd `.wav`s); runs in
+/// `live_zoo_tests()` right after [`run_ztsoundscape_init_test`].
 ///
 /// Twins are built exactly as `ZTSOUNDSCAPE_INIT` builds its two: `allocate_uninitialized` ->
 /// `0xAA` fill -> ctor (vanilla A/C / Rust B) -> `init` with the same four captured
@@ -488,7 +476,7 @@ pub(crate) fn run_ztsoundscape_init_test(failure_log: &mut Option<std::fs::File>
 /// own `world_snd.inner` is left alone (teardown still releases its own handle).
 ///
 /// **Guest-count override**: the hysteresis holds a track forever at a constant guest count, so
-/// the plan's phase script (mid-fade tick, then a clamp-to-endpoint tick with a same-tick
+/// the phase script (mid-fade tick, then a clamp-to-endpoint tick with a same-tick
 /// restart, then an endpoint tick that really stops the playing slot and restarts again) is only
 /// reachable in a guest band where every phase's selection lands on a *new* target: `>= 161`
 /// (`-1 -> 1` on the start tick, `1 -> 2` on phase 2's fall-through restart, `2 -> 3` on phase
@@ -498,24 +486,19 @@ pub(crate) fn run_ztsoundscape_init_test(failure_log: &mut Option<std::fs::File>
 /// **RNG discipline** (update jitters both `Ambients` blocks through the shared global game RNG):
 /// the state at VA `0x00638060` is snapshotted before phase 1; A runs the phase's ticks, the RNG
 /// is rewound, B runs the same ticks, rewound again, C runs them; the snapshot is restored at test
-/// end (no net stream shift for the vanilla consumers). The rewinds survive for that stream
-/// discipline, but the *position-equality* compare across poles they were meant to enable is
-/// retired - see the fallback note below. Phases 2-3 run A then B without rewinds.
+/// end (no net stream shift for the vanilla consumers). The rewinds preserve that stream
+/// discipline but do not make `Ambients` positions comparable across poles - see below. Phases
+/// 2-3 run A then B without rewinds.
 ///
-/// **Fallback applied (first live run)**: the plan's escape hatch ("if the rewind/compare proves
-/// flaky in practice, scope down to struct-only compare + an 'ambients positions changed' sanity
-/// assert", `ZTAdvTerrainMgr` precedent) fired on the very first run. The A-vs-C vanilla
-/// determinism control failed identically to A-vs-B, with **B == C bit-for-bit** (crowd
-/// (3111, 596, 0), world (3262, 702, 0) on both) and only A - the pole that ran first - holding
-/// different positions. That is vanilla nondeterminism under the rewind scheme, not a port
-/// divergence (a port jitter bug reads A == C != B): the real sound subsystem's asynchronous
-/// response to `Ambients::play` (itself a vanilla shared-RNG consumer) draws the global state from
-/// its own thread, so the first pole runs from the clean snapshot while every later pole runs from
-/// a state polluted after its rewind. Genuinely non-comparable, so: struct-only compare (the
-/// state machine never holds jitter values and passed byte-exact through all three phases) plus a
-/// per-pole "ambients positions changed" sanity assert; the jitter math itself stays pinned by the
-/// hand-computed seed vectors in `ztsoundscape.rs`'s unit tests, and this run's B == C is live
-/// evidence the port's jitter reproduces vanilla's bit-for-bit from an equal starting state.
+/// **Why `Ambients` positions aren't compared across poles**: rewinding the RNG between poles
+/// doesn't make positions deterministic - the real sound subsystem's asynchronous response to
+/// `Ambients::play` (itself a vanilla shared-RNG consumer) draws the global state from its own
+/// thread, so the first pole runs from the clean snapshot while every later pole runs from a
+/// state its rewind can't undo. A port jitter bug reads A == C != B, so the vanilla A-vs-C
+/// determinism control can't isolate one either. The compare is therefore struct-only (the state
+/// machine never holds jitter values) plus a per-pole "ambients positions changed" sanity assert;
+/// the jitter math itself is pinned by the hand-computed seed vectors in `ztsoundscape.rs`'s unit
+/// tests.
 ///
 /// Phase script (both fade ticks land mid-script by construction - the start tick sets
 /// `fade = 10000` with `fading = 1` and no fade block):
@@ -531,18 +514,16 @@ pub(crate) fn run_ztsoundscape_init_test(failure_log: &mut Option<std::fs::File>
 ///   stops the playing slot A** (`VALID` true -> `STOP` + `RELEASE`) and restarts on slot A
 ///   (target 3, `next_slot_is_b` back at 0).
 ///
-/// Masked compare regions (carry-over from `ZTSOUNDSCAPE_INIT`'s live-confirmed discoveries):
-/// per-attempt vanilla-owned inner handles - `+0x10..=0x13`, `+0x18..=0x1b` (crowd slots, both
-/// firing attempts from phase 1 on) and `+0x40..=0x43` (world) - null-ness parity only, plus
-/// `+0x4c..=0x53` (each twin's own `Ambients*`, real per-twin heap addresses - null-ness only;
-/// the plan's masked list omits these, but they can never be byte-equal across twins).
-/// Everything else is byte-compared, including `+0x09`.
+/// Masked compare regions (same rationale as `ZTSOUNDSCAPE_INIT`): per-attempt vanilla-owned
+/// inner handles - `+0x10..=0x13`, `+0x18..=0x1b` (crowd slots, both firing attempts from phase 1
+/// on) and `+0x40..=0x43` (world) - null-ness parity only, plus `+0x4c..=0x53` (each twin's own
+/// `Ambients*`, real per-twin heap addresses - null-ness only; they can never be byte-equal across
+/// twins). Everything else is byte-compared, including `+0x09`.
 ///
 /// Pole note: both vanilla poles go through `soundscape_live_support::real_update` (an
-/// `UPDATE_DETOUR.call` trampoline) - the stage-4 obligation this test used to document (a release
-/// build's raw-cast `.original()` would re-enter the Rust detour and degenerate them into
-/// Rust-vs-Rust, taking the A/C determinism control down with them) is discharged now that the
-/// detours are installed.
+/// `UPDATE_DETOUR.call` trampoline) - a release build's raw-cast `.original()` would re-enter the
+/// Rust detour and degenerate them into Rust-vs-Rust, taking the A/C determinism control down
+/// with them.
 ///
 /// Audible caveat: real crowd loops are started/stopped across the phases and several overlap
 /// (A/B/C each loop one world + crowd sound until teardown) - documented, not a failure.
@@ -647,9 +628,8 @@ pub(crate) fn run_ztsoundscape_update_test(failure_log: &mut Option<std::fs::Fil
     }
 
     // Masked struct compare (see this test's doc comment for the masked regions). The Ambients
-    // position triples are deliberately NOT compared across poles - retired per the applied
-    // fallback (see this test's doc comment); their only live check is the "positions changed"
-    // sanity below.
+    // position triples are deliberately not compared across poles (see this test's doc comment);
+    // their only live check is the "positions changed" sanity below.
     let compare = |label: &'static str,
                    a_ptr: *const ZTSoundscape,
                    b_ptr: *const ZTSoundscape,
@@ -767,8 +747,8 @@ pub(crate) fn run_ztsoundscape_update_test(failure_log: &mut Option<std::fs::Fil
     !mismatches.is_empty()
 }
 
-/// `ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE` - a review finding, not part of the original
-/// implementation plan: `ZTSOUNDSCAPE_UPDATE`'s phase script always plays real, present crowd
+/// `ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE` - `ZTSOUNDSCAPE_UPDATE`'s phase script always plays real,
+/// present crowd
 /// `.wav`s, so it never reaches `update`'s start block's `ATTEMPT`-fails branch. Per
 /// `ZTSoundscape::update`'s doc comment, `current_track` updates to the selected target even when
 /// the attempt to start that track's sound fails - only the `fading`/`fade_step_in`/`fade`/
@@ -793,18 +773,13 @@ pub(crate) fn run_ztsoundscape_update_test(failure_log: &mut Option<std::fs::Fil
 /// `SNDSound_attempt.asm` shows `attempt` never touches the filesystem or `DX8SndMgr` for a
 /// same-vtable check first: it reads the filename's **last character** and short-circuits to
 /// `false` with no allocation at all unless that character is `'v'`/`'V'` (a crude `.wav`-extension
-/// sniff, `CMP %CL, 0x76` / `0x56` at `.1ece9e`/`.1ecebc`) - only past that gate does it allocate a
-/// `DX8Sound` and call through to real `BFSndMgr`/DirectSound. A first draft of this test used a
-/// `__openzt_test_nonexistent_*.wav` name (mirroring `MENUMUSICHANDLER_INIT`'s own guaranteed-
-/// missing-file idiom) and it live-failed: both poles agreed the attempt **succeeded** (`fading = 1,
-/// fade = 10000, next_slot_is_b = 1` on both) - not a port divergence, since real and reimpl matched
-/// bit-for-bit, but proof the deeper `DX8Sound`/`BFSndMgr` path doesn't fail synchronously on a
-/// missing file either (the real load is presumably async/deferred). A second draft then tried
-/// `"...notawav"`, missing that "notawav" itself still ends in `'v'` - same live failure, same
-/// signature, root-caused by re-reading `.asm:14` (`MOV %CL, [ECX + EBX - 1]`, the string's *last*
-/// byte, not merely "looks like a `.wav` name" as a whole). The filename below ends in `.txt`
-/// instead, which fails deterministically at the string-shape gate alone - no dependency on any
-/// real sound-loading behavior, and no near-miss on the extension check either.
+/// sniff, `CMP %CL, 0x76` / `0x56` at `.1ece9e`/`.1ecebc`; `.asm:14`'s `MOV %CL, [ECX + EBX - 1]`
+/// loads the string's *last* byte, so a name like `"...notawav"` still passes). And a `.wav` name
+/// that passes the gate doesn't work either: attempting a missing file still reports success
+/// (`fading = 1, fade = 10000, next_slot_is_b = 1`) - the deeper `DX8Sound`/`BFSndMgr` load
+/// doesn't fail synchronously (presumably async/deferred). The filename below ends in `.txt`,
+/// which fails deterministically at the string-shape gate alone - no dependency on any real
+/// sound-loading behavior, and clear of the extension check.
 ///
 /// One `update` tick runs on each pole, then: a masked struct compare (same per-attempt inner-handle
 /// and `Ambients*` null-ness-only regions as `ZTSOUNDSCAPE_UPDATE` - no RNG rewind needed since
@@ -860,8 +835,7 @@ pub(crate) fn run_ztsoundscape_update_attempt_failure_test(failure_log: &mut Opt
     // Last byte before the nul is deliberately NOT 'v'/'V' - SNDSound::attempt (SNDSound_attempt.asm)
     // reads only that byte and short-circuits to false with no allocation and no BFSndMgr/DX8Sound
     // call at all otherwise (see this test's doc comment for why a "*.wav" name doesn't work here).
-    // NB: "notawav" itself still ends in 'v' - the live-confirmed failure mode of this constant's
-    // first fix attempt. ".txt" ends in 't', clear of the gate.
+    // ".txt" ends in 't', clear of the gate.
     const BOGUS_FILENAME: &[u8] = b"__openzt_test_forced_attempt_failure.txt\0";
 
     let mut mismatches: Vec<String> = Vec::new();

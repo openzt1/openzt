@@ -20,6 +20,7 @@ pub(crate) mod ztscenariosimplegoal;
 pub(crate) mod ztshow;
 pub(crate) mod ztshowmgr;
 pub(crate) mod ztshowscriptmgr;
+pub(crate) mod ztshowinfo;
 pub(crate) mod ztshowstate;
 pub(crate) mod ztshowui;
 pub(crate) mod ztsoundscape;

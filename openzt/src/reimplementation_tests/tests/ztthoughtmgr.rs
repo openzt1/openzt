@@ -20,11 +20,11 @@ use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal};
 use crate::bfentitytype::ZTAnimalType;
 
 // ============================================================================================
-// Live comparison battery for ZTThoughtMgr/ZTThought. `ZTTHOUGHTMGR_ADD_THOUGHT`/
-// `_REMOVE_THOUGHTS_BY_*`/`_GET_THOUGHTS_BY_*`/`_SAVE`/`_LOAD` are self-contained (no
-// `GLOBAL_ZTWorldMgr`/string-table dependency) and run from the early battery above;
-// `_POPULATE_THOUGHTS` and `ZTTHOUGHT_GET_STRING` need `GLOBAL_ZTWorldMgr`/language DLLs
-// respectively, so they run from `run_on_completion_reset_test_and_exit`'s later chain instead.
+// Live comparison battery for ZTThoughtMgr/ZTThought, registered in `battery.rs`. The
+// add/remove/get/save/load tests are self-contained (no `GLOBAL_ZTWorldMgr`/string-table dependency)
+// and run from `early_tests()`; `ZTTHOUGHTMGR_LOAD_MODERN`, `ZTTHOUGHTMGR_ADD_THOUGHT_ANIMAL_OVERRIDE`,
+// `ZTTHOUGHTMGR_POPULATE_THOUGHTS` and `ZTTHOUGHT_GET_STRING` need `GLOBAL_ZTWorldMgr`/language DLLs
+// respectively, so they run from `always_late_tests()`.
 // ============================================================================================
 
 /// Field tuple used to compare two `ZTThought`s structurally via their existing public getters -
@@ -556,8 +556,7 @@ pub(crate) fn run_thoughtmgr_load_test(failure_log: &mut Option<std::fs::File>) 
 /// reimplemented `load` for the `version >= 0x1e` branch - the branch `ZTTHOUGHTMGR_LOAD` above
 /// never exercises, since it drives inline `ZTWorldMgr::resolve_entity_by_id`/
 /// `ZTHabitatMgr::get_habitat_ptr` resolution that needs both globals initialized. Runs from
-/// `run_on_completion_reset_test_and_exit`'s later chain, like
-/// `ZTTHOUGHTMGR_POPULATE_THOUGHTS`/`ZTTHOUGHT_GET_STRING` below.
+/// `always_late_tests()`, like `ZTTHOUGHTMGR_POPULATE_THOUGHTS`/`ZTTHOUGHT_GET_STRING` below.
 ///
 /// `thinker_id`/`object_id` stay in the same small `0..5` range `ZTTHOUGHTMGR_POPULATE_THOUGHTS`
 /// already uses (real entity ids are never this low in a fresh test process, so
@@ -740,8 +739,8 @@ pub(crate) fn run_thoughtmgr_add_thought_animal_override_test(failure_log: &mut 
 /// every thought's resolved `thinker_ptr`/`object_ptr`/`habitat_ptr`/`tile_x`/`tile_y` against the
 /// reimplemented `populate_thoughts`, on two identically-seeded standalone managers. Needs
 /// `GLOBAL_ZTWorldMgr` initialized (`ZTThought::populate` calls `ZTWorldMgr::resolve_entity_by_id`
-/// unconditionally), so this runs from `run_on_completion_reset_test_and_exit`'s later chain, not
-/// the early battery. `thinker_id`/`object_id` are generated over a small `0..5` range: real
+/// unconditionally), so this runs from `always_late_tests()`, not `early_tests()`.
+/// `thinker_id`/`object_id` are generated over a small `0..5` range: real
 /// entities essentially never have ids this low, so `resolve_entity_by_id` returns null on both
 /// sides for the overwhelming majority of cases - a safe, deterministic "no match" - while still
 /// leaving room for a genuine match.
@@ -810,21 +809,10 @@ fn set_bfentity_name(entity: &BFEntity, name: &str) -> Vec<u8> {
     encoded
 }
 
-/// Writes `name` into `habitat`'s `exhibit_name` field (`+0x154`, a `ZTBufferString`) by raw offset
-/// write - same technique and same 3-pointer shape as `set_bfentity_name`.
-///
-/// **Previously wrote only `start`/`end` (`+0x154`/`+0x158`), modeled on `exhibit_name` as a 2-pointer
-/// `ZTBoundedString`.** `zthabitatmgr.rs`'s own field comment on `exhibit_name` documents that this was
-/// corrected to the 3-pointer `ZTBufferString` (`start`/`end`/`buffer_end`) - this helper was never
-/// updated to match, leaving `buffer_end_ptr` (`+0x15c`) at whatever `build_standalone_show_info`-style
-/// zero-init left it. `ZTBufferString::copy_to_string`'s read loop requires `char_address < buffer_end`
-/// on every iteration, so a zeroed `buffer_end_ptr` (always less than any real `start` address) made it
-/// read zero bytes regardless of `name`'s actual content. Live-reproduced (`ZTTHOUGHT_GET_STRING` with a
-/// widened `cases` count): `case=Habitat("0")` against a real `%s`-shaped template gave `left: "...for
-/// 0."` (real vanilla) vs `right: "...for ."` (reimplementation - `get_string`'s habitat branch read
-/// back an empty exhibit name). Masked at the default case count because it only surfaces when a fuzzed
-/// `string_id` happens to resolve to a real, loadable, `%s`-shaped template *and* the `Habitat` branch
-/// is drawn with a non-empty name - rare enough to look "sporadic" rather than reliably reproducing.
+/// Writes `name` into `habitat`'s `exhibit_name` field (`+0x154`, a 3-pointer `ZTBufferString`) by raw
+/// offset write - same technique as `set_bfentity_name`. All three pointers must be written: a zeroed
+/// `buffer_end_ptr` (`+0x15c`, always less than any real `start`) makes `ZTBufferString::copy_to_string`'s
+/// `char_address < buffer_end` loop read zero bytes regardless of `name`'s actual content.
 fn set_habitat_exhibit_name(habitat: &ZTHabitat, name: &str) -> Vec<u8> {
     let mut encoded = name.as_bytes().to_vec();
     let len = encoded.len() as u32;
@@ -856,8 +844,7 @@ fn get_string_substitution_strategy() -> impl Strategy<Value = GetStringSubstitu
 
 /// True if `template` is shaped the way every real, decompile-confirmed `ZTThought` message is: either
 /// no `%` conversion at all, or exactly one `%s`. Real vanilla always calls `wsprintfA(dest, template,
-/// name_ptr)` with exactly one argument when a substitution is attempted (see
-/// `ztthought-getstring-pluralization-bug-handover.md`); this reimplementation's naive
+/// name_ptr)` with exactly one argument when a substitution is attempted; this reimplementation's naive
 /// `replacen("%s", name, 1)` only agrees with that for templates shaped this way - confirmed against
 /// every real thought-message string id `ZTGuest::fGuestThought`'s call sites use (see
 /// `run_thought_get_string_test`'s own doc comment).
@@ -876,7 +863,7 @@ fn is_single_percent_s_or_none(template: &str) -> bool {
 /// `exhibit_name` set via `set_habitat_exhibit_name`). `get_string` only ever reads these two fields
 /// directly (no vtable dispatch), so a zeroed fixture with just the name field populated is a safe,
 /// complete stand-in for a real live `BFEntity`/`ZTHabitat`. Runs from
-/// `run_on_completion_reset_test_and_exit`'s later chain: language DLLs, which
+/// `always_late_tests()`: language DLLs, which
 /// `load_string_by_id`/`BFApp::loadString` both depend on, aren't loaded yet at the early injection
 /// point.
 ///

@@ -81,6 +81,7 @@ pub fn init() {
         crate::ztshowscriptmgr::init();
         crate::ztshow::init();
         crate::ztshowstate::init();
+        crate::ztshowinfo::init();
         // ZTShowMgr's detours (stages 2-6: `initShowParams`, the `registerShow`/`unregisterShow`
         // shadow/mirror pair, the `getShowInfo`/`getScriptID` read cutover, the
         // `enterNewMonth`/`update` walk ports, and the `save`/`load` pair) - same reason as the

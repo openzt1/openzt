@@ -127,6 +127,11 @@ mod ztshow;
 /// ZTShowState reimplementation, see openzt/plans/ztshowinfo-implementation-plan.md.
 mod ztshowstate;
 
+/// ztshowinfo module - Stage 2 (status predicates: isReady/isStarted/isStopped/hasKeeper/needsKeeper/
+/// getScheduledShowKeeperType/getScheduledShowScript) of the ZTShowInfo + ZTShowState reimplementation,
+/// see openzt/plans/ztshowinfo-implementation-plan.md.
+mod ztshowinfo;
+
 /// ztshowui module - Stage 4 (UI consumers: showpanel_fillTrickLists/_copyListToScript) of the
 /// show-script reimplementation, see openzt/plans/ztshowscriptmgr-implementation-plan.md.
 mod ztshowui;
@@ -260,6 +265,7 @@ mod zoo_init {
             ztshowscriptmgr::init();
             ztshow::init();
             ztshowstate::init();
+            ztshowinfo::init();
             ztshowmgr::init();
             ztshowui::init();
             ztguest::init();

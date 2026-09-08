@@ -2,10 +2,10 @@
 //! of `ZTGameMgr`'s pointed-to sub-object classes: `ztgamemgr.rs` holds it as `soundscape_ptr`
 //! (`this+0x1190`, explicitly zeroed by `CreateZTGameMgr`) and drives it through this port (`start`
 //! allocates + constructs + `init`s it, `update_sim` calls `update`, `stop` runs the destructor + free).
-//! See `openzt/plans/ztsoundscape-implementation-plan.md` - this file is the full in-scope port (the two
-//! `#[repr(C)]` structs, the pure-write constructor, the [`ZTSoundscape::init`] and
-//! [`ZTSoundscape::update`] ports, live-verified by the `ZTSOUNDSCAPE_*` battery tests) plus the
-//! [`soundscape_detours`] block hooking the class's three hooked entries (`CONSTRUCTOR`/`INIT`/`UPDATE`),
+//! This file is the full in-scope port (the two `#[repr(C)]` structs, the pure-write constructor, the
+//! [`ZTSoundscape::init`] and [`ZTSoundscape::update`] ports, verified live by the `ZTSOUNDSCAPE_*`
+//! battery tests) plus the [`soundscape_detours`] block hooking the class's three hooked entries
+//! (`CONSTRUCTOR`/`INIT`/`UPDATE`),
 //! so any caller reaching those addresses runs the Rust code - which is also why `ztgamemgr.rs`'s own
 //! three call sites call the Rust methods directly rather than through the addresses. The destructor
 //! entry (`generated.rs`'s bare-named `ZTSOUNDSCAPE`) stays deliberately un-detoured (see below), so its
@@ -41,7 +41,7 @@
 //! and the `init` port will allocate the two `Ambients` blocks through the same vanilla `OPERATOR_NEW`
 //! for *vanilla's* dtor to free. Never a Rust `Box` on vanilla-owned memory.
 //!
-//! Shared-RNG constraint (`update`'s obligation, landed in stage 3): `update`'s position jitter
+//! Shared-RNG constraint: `update`'s position jitter
 //! advances the real global RNG state at VA `0x00638060` through the classic MSVC LCG
 //! (`state = state * 0x343fd + 0x269ec3`), 4 chained advances per `Ambients` object, crowd first. The
 //! port reads/advances/writes **that exact address** in vanilla's exact advance order - never a
@@ -115,7 +115,7 @@ const DEFAULT_CROWD_ATTEN: i32 = 0x5dc;
 /// state shared with a long list of un-ported vanilla consumers (see the module doc's shared-RNG
 /// constraint). Read/advanced/written via `base + RVA`, exactly like the config-instance addresses.
 const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
-/// The three fade constants `update` reads as `f32` at runtime through data RVAs (plan-faithful; the
+/// The three fade constants `update` reads as `f32` at runtime through data RVAs (the
 /// binary-confirmed values below are what the unit tests pass as arguments). Read from zoo.exe's
 /// `.rdata` via a PE-section parse:
 /// - `DAT_0063542c` = `9.999999747378752e-05` (f32 `0x38D1B717`, the f32 nearest to 0.0001) - the
@@ -123,8 +123,8 @@ const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
 /// - `DAT_00635428` = `4500.0` - the attenuation range, equal to the start block's `0x1194` push.
 /// - `DAT_00635490` = `1.0` - the complement base (slot B's formula reads `1.0 - fade*c1`).
 ///
-/// (`_DAT_00635420`, the neighborhood's already-confirmed `0.5`, is MenuMusicHandler's own f64
-/// constant - its low dword alone reads as 0, which is what a 4-byte PE peek at that address shows.)
+/// (`_DAT_00635420` is MenuMusicHandler's own f64 `0.5` constant - its low dword alone reads as 0,
+/// which is what a 4-byte PE peek at that address shows.)
 const DAT_00635428_RVA: u32 = 0x00635428 - 0x400000;
 const DAT_0063542C_RVA: u32 = 0x0063542c - 0x400000;
 const DAT_00635490_RVA: u32 = 0x00635490 - 0x400000;
@@ -145,8 +145,7 @@ struct SndSlot {
 const _: () = assert!(std::mem::size_of::<SndSlot>() == 0x8);
 
 /// Real allocation size `0x54`, confirmed directly by `ZTGameMgr_start.c`'s `operator_new(0x54)` call
-/// (not merely inferred from the constructor's own field writes, which stop at offset `0x50`) - see
-/// the implementation plan's struct-layout table for the per-field evidence.
+/// (not merely inferred from the constructor's own field writes, which stop at offset `0x50`).
 #[repr(C)]
 pub struct ZTSoundscape {
     current_track: i32,       // 0x00 - crowd track index: -1 = none, else 0..=3 into the crowd tables
@@ -365,7 +364,7 @@ impl ZTSoundscape {
         world_config_name: *const u8,
     ) {
         // zoo.exe has no ASLR and always loads at its preferred base, so base + RVA is stable for the
-        // whole process life - the same assumption `MenuMusicHandler::init` already makes.
+        // whole process life - the same assumption `MenuMusicHandler::init` makes.
         let base = get_module_base("zoo.exe") as u32;
         let crowd_config = (base + CROWD_CONFIG_INSTANCE_RVA) as *const u32;
         let world_config = (base + WORLD_CONFIG_INSTANCE_RVA) as *const u32;
@@ -501,7 +500,7 @@ impl ZTSoundscape {
     ///    attempt goes silent until the guest band changes (vanilla behavior, preserved).
     ///
     /// All dispatch is by fixed address through the `sndsound` `FunctionDef`s (established idiom -
-    /// valid because the vanilla dtor's vtable swapdown only happens after the last `update`-era call),
+    /// valid because the vanilla dtor's vtable swapdown only happens after the last `update` call),
     /// and boolean call results are masked to the low byte (`& 0xff`) exactly like `init`'s calls,
     /// because vanilla tests only AL.
     pub fn update(&mut self, delta: i32) {
@@ -608,8 +607,8 @@ impl ZTSoundscape {
 
 /// Hooks `ZTSoundscape`'s three hooked entries (`CONSTRUCTOR`/`INIT`/`UPDATE`) so any caller reaching
 /// those addresses runs the Rust code above. Every detour fully replaces its entry with the
-/// corresponding Rust method (each one is live-verified equivalent by the `ZTSOUNDSCAPE_*` battery
-/// tests) and never calls vanilla. The class's fourth entry - the destructor, `generated.rs`'s
+/// corresponding Rust method (each verified equivalent live by the `ZTSOUNDSCAPE_*` battery tests)
+/// and never calls vanilla. The class's fourth entry - the destructor, `generated.rs`'s
 /// misleadingly bare-named `ZTSOUNDSCAPE` - is deliberately **not** hooked (see the module doc comment
 /// and [`init`]).
 #[detour_mod]
@@ -783,7 +782,7 @@ mod tests {
     /// `{vtable, inner}` dwords plus the two zeroed `Ambients` pointers - with every other byte still
     /// filler. Proves the ctor initializes nothing beyond vanilla's set (the scalars and the filename/
     /// atten tables must stay garbage until `init`, per [`ZTSoundscape::construct`]'s doc comment) and
-    /// pins each written field's offset against the layout table.
+    /// pins each written field's offset.
     #[test]
     fn construct_writes_exactly_the_vanilla_set() {
         #[repr(align(4))]
@@ -848,9 +847,9 @@ mod tests {
     }
 
     /// [`select_target_track`] against the full vanilla net-effect grid (`update.asm` `.1e848` chain,
-    /// re-verified branch by branch): 5 tracks x 7 guest bands, both endpoints of every band. This is
-    /// the plan's flat net-effect table, dead bands (`t = 0`'s `<= 20` hold, etc.) and the `t = -1`
-    /// column included - the selection only depends on band membership, so band endpoints pin it.
+    /// re-verified branch by branch): 5 tracks x 7 guest bands, both endpoints of every band - dead
+    /// bands (`t = 0`'s `<= 20` hold, etc.) and the `t = -1` column included. The selection only
+    /// depends on band membership, so band endpoints pin it.
     #[test]
     fn select_target_track_matches_the_vanilla_grid() {
         // (guest band as inclusive (lo, hi), then the expected target per track -1/0/1/2/3).
@@ -962,7 +961,7 @@ mod tests {
         assert_eq!(fade_atten_a(100, c1, c2), 44);
         assert_eq!(fade_atten_a(9000, c1, c2), 4049);
         assert_eq!(fade_atten_b(60, c1, c2, c3), 4472);
-        // Non-discriminating but plan-noted truncation values.
+        // Non-discriminating truncation values.
         assert_eq!(fade_atten_a(3333, c1, c2), 1499);
         assert_eq!(fade_atten_b(3333, c1, c2, c3), 3000);
 

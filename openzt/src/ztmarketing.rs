@@ -118,7 +118,7 @@ impl ZTMarketing {
         self.current_funding_level.wrapping_add(1) >= count
     }
 
-    /// The `isFundingMined` check - same "inlined at call sites" story as `is_funding_maxed`.
+    /// The `isFundingMined` check - vanilla inlines this at every call site, like `is_funding_maxed`.
     pub fn is_funding_mined(&self) -> bool {
         self.current_funding_level == 0
     }
@@ -411,9 +411,8 @@ mod tests {
 /// Native reimplementation of `ZTMarketingMgr::save`/`load`'s save-file persistence: a single
 /// little-endian `u32`, the current funding-level index (`0` if no `ZTMarketing` is loaded).
 ///
-/// Promoted to the live path (see `detours` below): by default `ZTMarketingMgr::save`/`load` are
-/// detoured to run this module's logic directly against the real save stream, rather than calling
-/// `.original()`.
+/// The live path: `ZTMarketingMgr::save`/`load` are detoured (see `detours` below) to run this
+/// module's logic directly against the real save stream.
 pub(crate) mod marketing_save_reimplementation {
     use openzt_detour_macro::detour_mod;
 
@@ -543,7 +542,7 @@ pub(crate) mod marketing_update_reimplementation {
         }
     }
 
-    /// Installs the `update` detour. Called unconditionally from `ztmarketing::init()`.
+    /// Installs the `update` detour. Called from `ztmarketing::init()`.
     pub fn init() {
         if let Err(e) = unsafe { detours::init_detours() } {
             error!("Failed to initialise marketing-update-reimplementation detours: {e:?}");
@@ -556,8 +555,6 @@ pub(crate) mod marketing_update_reimplementation {
 /// built on the `openzt-configparser` INI parser. There's only ever one `ZTMarketing` instance, so
 /// `loadConfiguration`/`clearConfiguration` stay plain Rust methods and are never detoured on their
 /// own - only the two `ZTMarketingMgr`-level entry points are.
-///
-/// Promoted to the live path unconditionally, with no shadow-mode/vanilla-fallback flag.
 mod marketing_config_reimplementation {
     use openzt_configparser::ini::Ini;
     use openzt_detour_macro::detour_mod;

@@ -63,8 +63,12 @@ unsafe fn call_unit_vtable_u16_u16(unit_ptr: u32, slot_offset: u32, arg1: u16, a
 /// `private/docs/vtables/ZTShowInfo.md`'s slot `+0x0` = `0x0059f013`, exactly `SEND_EVENT`'s own address).
 /// `doTrickEvent` dispatches through `ZTShow`'s `+0x10` `ZTShowInfo*` back-pointer's vtable slot 0 rather
 /// than calling `SEND_EVENT` by name, but they're the same function, so this calls it directly.
+///
+/// `.hooked()`, not `.original()`, since Stage 6 (`ztshowinfo.rs`) now detours this address - see
+/// `CLAUDE.md`'s "every stage that ports a call-through-only method must also switch its own
+/// `.original()` call sites to `.hooked()`" rule.
 unsafe fn send_event(show_info: u32, event_id: u16, unused: u32, category: u8, value: u32, value2: u16, flag: u16) {
-    unsafe { SEND_EVENT.original()(show_info as *const u32, event_id, unused, category, value, value2, flag) };
+    unsafe { SEND_EVENT.hooked()(show_info as *const u32, event_id, unused, category, value, value2, flag) };
 }
 
 /// Reimplementation of `ZTShowInfo::checkUnitType`, per `ZTShowInfo_checkUnitType.c`/`.asm`. `this` is
@@ -300,8 +304,10 @@ pub fn validate_item(this: u32, index: u16) -> i32 {
 
 /// Same mechanism as [`entity_type_matches`], for an *already-resolved* type pointer (e.g. `BFWorldMgr::
 /// getType`'s return) rather than a `BFEntity*` needing its own `+0x128` indirection first - `stop_with_id`/
-/// `start` both call `getType` directly and check its result's own vtable slot `0x1c`.
-unsafe fn type_check(type_ptr: u32, type_check_arg_rva: u32) -> bool {
+/// `start` both call `getType` directly and check its result's own vtable slot `0x1c`. `pub(crate)` since
+/// `ztshowinfo.rs`'s `get_scheduled_show_keeper_type` needs the exact same mechanism (per its own doc
+/// comment).
+pub(crate) unsafe fn type_check(type_ptr: u32, type_check_arg_rva: u32) -> bool {
     let vtable = get_from_memory::<u32>(type_ptr);
     let check_fn = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(get_from_memory::<u32>(vtable + 0x1c)) };
     let arg = crate::globals::get_module_base("zoo.exe") as u32 + type_check_arg_rva;
@@ -311,7 +317,8 @@ unsafe fn type_check(type_ptr: u32, type_check_arg_rva: u32) -> bool {
 /// `DAT_00638690`'s RVA - the same "is this an animal-ish type" check `ztthoughtmgr::
 /// resolve_object_own_habitat_ptr` already uses, reused here for `stop_with_id`/`start`'s own type check
 /// (distinct from [`RVA_SHOW_TRICK_TYPE_CHECK`] - a different sentinel, confirmed via each's own `.asm`).
-const RVA_ANIMAL_TYPE_CHECK: u32 = 0x0023_8690;
+/// `pub(crate)` - see [`type_check`]'s own doc comment.
+pub(crate) const RVA_ANIMAL_TYPE_CHECK: u32 = 0x0023_8690;
 
 /// Raw no-arg virtual dispatch through an object's own vtable at `slot_offset`, returning `bool` - the
 /// shape both the habitat's `+0x20` slot (`start`'s owning-habitat check) and a unit's `+0x22c` slot
@@ -368,7 +375,7 @@ pub fn stop_with_id(this: u32, new_script_id: u16) {
         }
         let show_info = get_from_memory::<u32>(this + 0x10);
         if show_info != 0 {
-            unsafe { RECALCULATE_SCHEDULE.original()(show_info as *const u32, 0) };
+            unsafe { RECALCULATE_SCHEDULE.hooked()(show_info as *const u32, 0) };
         }
     }
 }
@@ -619,7 +626,10 @@ pub fn start(this: u32) {
             // in `ztshowui.rs`). A release build's raw-cast `.original()` would be an accidental
             // re-entry here while debug silently routed to vanilla's tree instead.
             let owning_show_info = unsafe { GET_SHOW_INFO.hooked()(globals().ztshowmgr_ptr() as *const u32, assigned_show_id) };
-            let needs_state = (owning_show_info != 0 && unsafe { IS_STARTED.original()(owning_show_info as *const u32) } == 0)
+            // `.hooked()`, not `.original()`: `IS_STARTED` is now detoured by `ztshowinfo.rs` (Stage 2 of
+            // `ztshowinfo-implementation-plan.md`) - see that plan's own "every stage that ports a
+            // call-through-only method must switch its `.original()` call sites to `.hooked()`" rule.
+            let needs_state = (owning_show_info != 0 && unsafe { IS_STARTED.hooked()(owning_show_info as *const u32) } == 0)
                 || !unsafe { call_entity_vtable_noargs(unit_ptr, 0x22c) };
             if needs_state {
                 let show_id = get_from_memory::<u16>(this + 0x6);
@@ -659,7 +669,7 @@ pub fn start(this: u32) {
 /// pointers, collecting every node upfront and processing them after is equivalent and sidesteps that risk
 /// entirely. A real red-black tree of unit types is never more than a few dozen nodes deep, so recursion
 /// depth is a non-concern (same reasoning `ztawardmgr.rs`'s own `walk_tree` already relies on).
-fn collect_pending_script_nodes(node: u32, out: &mut Vec<u32>) {
+pub(crate) fn collect_pending_script_nodes(node: u32, out: &mut Vec<u32>) {
     if node == 0 {
         return;
     }
@@ -709,9 +719,9 @@ pub fn check_pending_scripts(show_info: u32) {
                 crate::ztshowscriptmgr::script_exists_by_id(pending_id) && crate::ztshowscriptmgr::script_item_count_by_id(pending_id) > 0;
             unsafe {
                 if has_items {
-                    ADD_SHOW.original()(show_info as *const u32, unit_type_id);
+                    ADD_SHOW.hooked()(show_info as *const u32, unit_type_id);
                 } else {
-                    REMOVE_SHOW.original()(show_info as *const u32, unit_type_id);
+                    REMOVE_SHOW.hooked()(show_info as *const u32, unit_type_id);
                 }
             }
         }
@@ -943,7 +953,8 @@ pub fn add_script(show_info: u32, unit_type_id: u32, new_script_id: u16) -> bool
 
     save_to_memory(node + 0x1e, new_script_id);
 
-    let started = unsafe { IS_STARTED.original()(show_info as *const u32) } != 0;
+    // `.hooked()`: see the other `IS_STARTED` call site's own comment above (`ztshowinfo.rs` Stage 2).
+    let started = unsafe { IS_STARTED.hooked()(show_info as *const u32) } != 0;
     if !started {
         let old_current = get_from_memory::<u16>(node + 0x1c);
         save_to_memory(node + 0x1c, new_script_id);
@@ -958,9 +969,9 @@ pub fn add_script(show_info: u32, unit_type_id: u32, new_script_id: u16) -> bool
         crate::ztshowscriptmgr::script_exists_by_id(current_id) && crate::ztshowscriptmgr::script_item_count_by_id(current_id) > 0;
     unsafe {
         if has_items {
-            ADD_SHOW.original()(show_info as *const u32, unit_type_id);
+            ADD_SHOW.hooked()(show_info as *const u32, unit_type_id);
         } else {
-            REMOVE_SHOW.original()(show_info as *const u32, unit_type_id);
+            REMOVE_SHOW.hooked()(show_info as *const u32, unit_type_id);
         }
     }
     true

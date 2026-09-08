@@ -1,7 +1,7 @@
 //! Compares real vanilla `ZTMegatileMgr` against its Rust reimplementation (production file
 //! `openzt/src/ztmegatilemgr.rs`): update/recalculate_characteristics/init against the live loaded
-//! singleton plus the category-map node-layout check. Registry order follows `ztmegatilemgr.rs`'s
-//! own module doc comment's risk sequencing (update first, init last).
+//! singleton plus the category-map node-layout check. Registered in risk order: `update` first
+//! (trivial scalar logic), `init` last (the only vector-resize path).
 
 use openzt_detour::generated::ztmegatilemgr as gen_ztmegatilemgr;
 use proptest::prelude::*;
@@ -17,15 +17,13 @@ use crate::ztmegatilemgr::live_support as megatile_live_support;
 /// `0x1d4b` threshold only. Snapshots the live singleton's scalars, calls the real
 /// `UPDATE.original()`, records the result as expected, restores the snapshot (via
 /// `megatile_live_support::restore_scalars`), calls the reimplemented `update()`, and compares.
-/// Runs after `run_load_live_zoo` so the live singleton is a real, populated grid - see
-/// `ztmegatilemgr.rs`'s own module doc comment for why this is implemented/tested first.
+/// Runs after `run_load_live_zoo` so the live singleton is a real, populated grid.
 ///
-/// Deliberately never crosses the threshold here: doing so calls through to
-/// `recalculate_characteristics` as a side effect (real or reimplemented, either way), which is
-/// exercised directly and more thoroughly by `run_megatilemgr_recalculate_characteristics_test`
-/// below - no need for this test to also trigger it as a side effect. The threshold/dirty-flag
-/// transition logic itself is still fully covered by `ztmegatilemgr::tests::update_state_*` (pure,
-/// no live memory touched).
+/// Deliberately never crosses the threshold: crossing it calls through to
+/// `recalculate_characteristics` as a side effect, which is
+/// `run_megatilemgr_recalculate_characteristics_test`'s job to compare. The threshold/dirty-flag
+/// transition logic itself is covered by `ztmegatilemgr::tests::update_state_*` (pure, no live
+/// memory touched).
 pub(crate) fn run_megatilemgr_update_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTMEGATILEMGR_UPDATE";
     let mgr_ptr = globals().ztmegatilemgr_ptr();
@@ -41,10 +39,10 @@ pub(crate) fn run_megatilemgr_update_test(failure_log: &mut Option<std::fs::File
     let mut fail_flag = false;
     match runner.run(&(0u32..0x1000u32), |delta_ticks| {
         let mgr = unsafe { &mut *mgr_ptr };
-        // Force a known-safe starting accumulator (not just restore the pre-call value) - the live
-        // singleton's own accumulator may already be close to the threshold from real game ticks
-        // that ran before this test, and `delta_ticks + before_accumulator` crossing `0x1d4b` would
-        // hit the same live recalc crash this test exists to avoid (see the doc comment above).
+        // Force a known-safe starting accumulator rather than restoring the pre-call value - the
+        // live singleton's own accumulator may already be close to `0x1d4b` from real game ticks,
+        // so `delta_ticks` on top of it could cross the threshold and trigger a full recalculation
+        // (see the doc comment above).
         megatile_live_support::restore_scalars(mgr, false, 0);
         let before_dirty = false;
         let before_accumulator = 0u32;
@@ -59,9 +57,8 @@ pub(crate) fn run_megatilemgr_update_test(failure_log: &mut Option<std::fs::File
         let reimpl_accumulator = mgr.tick_accumulator();
 
         // A recalculation triggered by either side (real or reimplemented) already leaves the grid
-        // in a self-consistent state per its own logic - `ZTMEGATILEMGR_RECALCULATE_CHARACTERISTICS`
-        // is the dedicated test for whether that recalculation itself matches, so this test only
-        // compares the scalars `update` itself owns.
+        // in a self-consistent state per its own logic - this test only compares the scalars
+        // `update` itself owns.
         prop_assert_eq!(reimpl_dirty, expected_dirty, "dirty mismatch for delta_ticks={}", delta_ticks);
         prop_assert_eq!(reimpl_accumulator, expected_accumulator, "tick_accumulator mismatch for delta_ticks={}", delta_ticks);
         Ok(())
@@ -81,8 +78,7 @@ pub(crate) fn run_megatilemgr_update_test(failure_log: &mut Option<std::fs::File
     fail_flag
 }
 
-/// Compares two megatile-grid snapshots allowing a small tolerance on the float fields (`stink`,
-/// formerly `esthetic_bonus` - see `ztmegatilemgr.rs`'s `ZTMegatile::stink`/finding 2) - real vanilla
+/// Compares two megatile-grid snapshots allowing a small tolerance on the `stink` field - real vanilla
 /// x87 arithmetic and Rust's SSE2 `f32` arithmetic can differ in the last bit or two despite following
 /// the same formula, which isn't a meaningful mismatch for this test. `guest_count` (an integer
 /// accumulation) is still compared exactly.
@@ -174,8 +170,8 @@ pub(crate) fn run_megatile_category_map_layout_test(failure_log: &mut Option<std
     fail_flag
 }
 
-/// ZTMEGATILEMGR_INIT: run last, and only after the other three are passing - `init()` resizes the
-/// outer/inner vectors (the actual allocation-adjacent call), the single highest-risk piece in
+/// ZTMEGATILEMGR_INIT: registered last of the four ZTMegatile tests - `init()` resizes the
+/// outer/inner vectors (the actual allocation-adjacent call), the highest-risk piece in
 /// `ztmegatilemgr.rs`. For a few small tile-count targets (both shrinking and growing relative to the
 /// live map's own size), calls the real `INIT.original()` to capture the resulting grid dimensions,
 /// resets to a different size, then calls the reimplemented `init()` for the same target and compares

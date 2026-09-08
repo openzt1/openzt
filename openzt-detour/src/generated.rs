@@ -4493,7 +4493,7 @@ pub mod ztshowinfo {
     pub const GET_SCHEDULED_SHOW_SCRIPT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059dff6, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e725, function_type: PhantomData};
     pub const LISTEN: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e8aa, function_type: PhantomData};
-    pub const GET_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e8c7, function_type: PhantomData};
+    pub const GET_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0059e8c7, function_type: PhantomData};
     pub const CLEANUP_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e96e, function_type: PhantomData};
     pub const GET_NUM_UNITS: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> i32> = FunctionDef{address: 0x0059eaad, function_type: PhantomData};
     pub const GET_SCHEDULED_SHOW_KEEPER_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059efc8, function_type: PhantomData};

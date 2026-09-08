@@ -22,9 +22,9 @@ use crate::ztawardmgr::live_support as award_live_support;
 /// Resets both the real vanilla singleton's earned-id vector and the Rust-side store to empty.
 /// Exploits `ZTAwardMgr::load`'s own "reset-then-fill" semantics as a safe, allocator-agnostic clear
 /// for the real side (feeding a single `0i32` count via `io_redirect::begin_replay` means the real
-/// `load` resets the vector, reads a `0` count, and returns immediately without calling `addAward`)
-/// - there's no dedicated clear method and no way to build a second standalone instance for this
-///   class (see `ztawardmgr.rs`'s module doc comment).
+/// `load` resets the vector, reads a `0` count, and returns immediately without calling `addAward`) -
+/// there's no dedicated clear method and no way to build a second standalone instance for this class
+/// (see `ztawardmgr.rs`'s module doc comment).
 pub(crate) fn reset_awardmgr_both_sides() {
     let real_ptr = award_live_support::real_ptr();
     let file_buffer = [0u32; 4];
@@ -35,12 +35,12 @@ pub(crate) fn reset_awardmgr_both_sides() {
 }
 
 // ============================================================================================
-// ZTAwardMgr - see openzt/src/ztawardmgr.rs and openzt/plans/ztawardmgr-implementation-plan.md.
+// ZTAwardMgr - see openzt/src/ztawardmgr.rs.
 // `_ADD_AWARD_SAVE_LOAD`/`_START`/`_GET_AWARD` and `ZTSCENARIOSIMPLEGOAL_EVAL_AWARD_COUNT` are
 // self-contained (resources are already loaded by this early injection point, and none of them
-// need `GLOBAL_ZTWorldMgr`), so they run from the early battery above. `_SHOW_AWARDS` needs a live
-// `BFUIMgr` element, so it runs from `run_on_completion_reset_test_and_exit`'s later chain instead,
-// after `run_load_live_zoo`.
+// need `GLOBAL_ZTWorldMgr`), so they run from `early_tests()`. `_SHOW_AWARDS` and
+// `ZTAWARDMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE` need the live zoo (a live `BFUIMgr` element /
+// the loaded real zoo's earned awards), so they are registered in `live_zoo_tests()`.
 // ============================================================================================
 
 /// ZTAWARDMGR_ADD_AWARD_SAVE_LOAD: for a generated sequence of ids, feeds the same sequence through
@@ -194,33 +194,25 @@ fn listbox_item_count(listbox: *const u32) -> i32 {
     }
 }
 
-/// ZTAWARDMGR_SHOW_AWARDS: real diff-oracle comparison of the reimplemented `_showAwards` detour
-/// against real vanilla. Seeds both the real singleton and the Rust store with the same two catalogue
-/// award ids (from `ZTAWARDMGR_START`, which has already run earlier in this battery), clears the
-/// listbox and populates it via real vanilla (`ztawardmgr::show_awards_detour::call_real`'s `retour`
-/// trampoline - **not** `SHOW_AWARDS.original()`, which in release is a raw address cast that would
-/// just loop back into this same detour once it's hooked; debug `.original()` routes through the hook
-/// registry, but `call_real` keeps the vanilla pole release-safe), counts items via [`listbox_item_count`], then repeats
-/// against the hooked address (our detour, driven by the Rust store) and compares counts. Runs after
-/// `run_load_live_zoo` since it needs a live `BFUIMgr` element `0x101c` to exist.
+/// ZTAWARDMGR_SHOW_AWARDS: diff-oracle comparison of the reimplemented `_showAwards` detour against
+/// real vanilla. Seeds both the real singleton and the Rust store with the same two catalogue award
+/// ids (from `ZTAWARDMGR_START`, which has already run earlier in this battery), clears the listbox
+/// and populates it via real vanilla (`ztawardmgr::show_awards_detour::call_real` - see its doc
+/// comment for why not `SHOW_AWARDS.original()`), counts items via [`listbox_item_count`], then
+/// repeats against the hooked address (our detour, driven by the Rust store) and compares counts.
+/// Runs after `run_load_live_zoo` since it needs a live `BFUIMgr` element `0x101c` to exist.
 ///
-/// Only item *counts* are compared, not per-item content - per `ztawardmgr.rs`'s `show_awards_detour`
-/// doc comment, the icon-buffer/color-argument shape and the `load_string_by_id`-vs-`buildString` text
-/// equivalence remain open items needing separate manual live verification, since `UIListBoxItem`'s
-/// internal field layout for those isn't decompile-confirmed. A count mismatch still catches real bugs
-/// (wrong catalogue filtering, an id silently dropped, an off-by-one in the population loop).
+/// Only item *counts* are compared, not per-item content - the icon-buffer/color-argument shape and
+/// the `load_string_by_id`-vs-`buildString` text equivalence remain open items needing separate
+/// manual live verification, since `UIListBoxItem`'s internal field layout for those isn't
+/// decompile-confirmed. A count mismatch still catches real bugs (wrong catalogue filtering, an id
+/// silently dropped, an off-by-one in the population loop).
 ///
 /// **Resets both sides, then re-runs `ztawardmgr::start()`, in that order** - not the reverse.
-/// `ZTSCENARIOSIMPLEGOAL_EVAL_AWARD_COUNT` runs immediately before this test (in this same
-/// post-`run_load_live_zoo` battery) and its own `reset_awardmgr_both_sides()` call clears the
-/// Rust-side catalogue too (`reset_reimplemented_store` clears both `earned_ids` and `awards`), not
-/// just earned-ids - real vanilla's own catalogue tree is untouched by that reset (`ZTAwardMgr::load`
-/// only resets the earned-ids vector), so only the Rust side needs repopulating. **Confirmed live,
-/// twice**: populating the catalogue *before* this function's own `reset_awardmgr_both_sides()` call
-/// left `reimplemented_award_triples()` empty again immediately afterward (the reset doesn't
-/// distinguish "just populated" from stale) - `real_count=2, reimpl_count=0` on the first live run of
-/// this rewritten test, a genuine catch by the new diff oracle, though of a test-harness ordering bug
-/// rather than the detour itself. Resetting first, then calling `start()`, avoids that.
+/// `reset_awardmgr_both_sides` clears the Rust-side catalogue too (`reset_reimplemented_store` clears
+/// both `earned_ids` and `awards`, not just earned-ids), while real vanilla's own catalogue tree is
+/// untouched by that reset (`ZTAwardMgr::load` only resets the earned-ids vector) - so only the Rust
+/// side needs repopulating, and populating it before the reset would leave it empty.
 pub(crate) fn run_awardmgr_show_awards_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTAWARDMGR_SHOW_AWARDS";
 
@@ -271,20 +263,18 @@ pub(crate) fn run_awardmgr_show_awards_test(failure_log: &mut Option<std::fs::Fi
     }
 }
 
-/// ZTAWARDMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE: real-zoo round-trip coverage for
-/// `openzt/plans/real-zoo-save-load-roundtrip-tests-plan.md`'s `ZTAwardMgr` item. Unlike that plan's
-/// literal wording (which assumed `earned_ids()` - the Rust-side store - already reflected the real
-/// zoo's earned awards), this test build never installs `ztawardmgr::award_mgr_detours` (see this
-/// file's own `init()` doc comment on why - `.original()` needs to stay reachable for the other
-/// `ZTAWARDMGR_*` tests' real-vanilla comparisons), so the real zoo's own `ZTAwardMgr::load` ran
-/// genuine, undetoured vanilla code against the real singleton's own `+0xc` vector, never touching
+/// ZTAWARDMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE: round-trips the loaded real zoo's earned awards
+/// through the reimplementation. This test build never installs `ztawardmgr::award_mgr_detours` (see
+/// `reimplementation_tests::init()`'s comment on why - `.original()` needs to stay reachable for the
+/// other `ZTAWARDMGR_*` tests' real-vanilla comparisons), so the real zoo's own `ZTAwardMgr::load`
+/// runs genuine, undetoured vanilla code against the real singleton's `+0xc` vector, never touching
 /// the Rust store. This reads that real vector directly
 /// (`award_live_support::read_vanilla_earned_ids`), captures real vanilla `save()`'s own output for
 /// it (`.original()`, since `SAVE` is undetoured here too), replays those bytes into the Rust
 /// reimplementation's `load()` (`crate::ztawardmgr::load`, a plain function - there's no hooked
 /// address to go through), and asserts the reimplementation's resulting `earned_ids()` matches the
-/// real vector, compared as sorted sets per the plan's own caution about `add_award`'s sorted-unique
-/// re-insertion possibly reordering.
+/// real vector, compared as sorted sets (`load` re-inserts via `add_award`'s sorted-unique insert,
+/// which may reorder).
 pub(crate) fn run_ztawardmgr_real_zoo_save_load_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTAWARDMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE";
     let mut fail_flag = false;

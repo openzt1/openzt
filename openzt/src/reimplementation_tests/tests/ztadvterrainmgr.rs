@@ -12,15 +12,12 @@ use crate::reimplementation_tests::harness::write_success_line;
 
 /// ZTADVTERRAINMGR_START: sanity-checks the reimplemented `ZTAdvTerrainMgr::start()` against a real,
 /// live singleton. Deliberately does **not** also invoke the real `START.original()` for comparison,
-/// unlike this repo's usual real-vs-reimplemented pattern: `start()`'s own body (both the real one and
-/// this reimplementation) calls through to the real `start2D`/`startD3D`/`loadTextures`/`setupRender`
-/// D3D bring-up functions - those aren't designed to be re-entrant, so invoking them via both the real
-/// vtable call *and* the reimplementation in the same test run would re-run real device/texture
-/// bring-up twice in a row, risking a live D3D device corruption or crash for no comparison value (the
-/// orchestration logic itself - the short-circuit call sequence - is what this reimplementation adds,
-/// and it's simple enough to verify by code review; see the module's own `ztadvterrainmgr.rs` doc
-/// comment). Instead this just runs the reimplementation once against the live singleton and checks
-/// the result is plausible (succeeds, and leaves `state == 2` per `ZTAdvTerrainMgr_start.c`).
+/// unlike the usual real-vs-reimplemented pattern: both bodies call through to the real
+/// `start2D`/`startD3D`/`loadTextures`/`setupRender` D3D bring-up functions, which aren't re-entrant -
+/// running them twice in one test would risk live device/texture corruption for no comparison value
+/// (the short-circuit call sequence is simple enough to verify by review). Instead this runs the
+/// reimplementation once and checks the result is plausible (succeeds, and leaves `state == 2` per
+/// `ZTAdvTerrainMgr_start.c`).
 pub(crate) fn run_ztadvterrainmgr_start_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTADVTERRAINMGR_START";
     let mgr_ptr = globals().ztadvterrainmgr_ptr();
@@ -53,15 +50,14 @@ pub(crate) fn run_ztadvterrainmgr_start_test(failure_log: &mut Option<std::fs::F
 /// ZTADVTERRAINMGR_UPDATE: exercises the reimplemented `ZTAdvTerrainMgr::update()` against the live
 /// singleton's real world/queue state, for `delta_ticks` in `0..0x1000` crossed with every branch of
 /// `compute_update_state`'s `state` switch. Deliberately does **not** also call the real
-/// `UPDATE.original()` for comparison in the same run: `update()`'s only shared, meaningfully mutable
-/// state is the live pending-tile queue (`+0x1d8`), and calling both the real and reimplemented
-/// versions back-to-back could each try to pop/free the same vanilla-owned node, double-freeing it -
-/// see `ztadvterrainmgr.rs`'s own module doc comment on the cross-allocator hazard. The live queue is
+/// `UPDATE.original()`: the only shared, meaningfully mutable state is the live pending-tile queue
+/// (`+0x1d8`), and running both back-to-back could pop/free the same vanilla-owned node twice - see
+/// `ztadvterrainmgr.rs`'s module doc comment on the cross-allocator hazard. The live queue is
 /// populated only by other, un-reimplemented vanilla code and may well be empty during this test -
 /// that's an expected, non-failing case; when non-empty, this still safely exercises the real
-/// pop-front/recycle path against genuine vanilla-allocated nodes. The assertion itself is narrow but
-/// real: `update()` never mutates `state` (confirmed - it's read-only in `ZTAdvTerrainMgr_update.c`),
-/// so forcing `state` to each branch and checking it comes back unchanged catches any accidental write.
+/// pop-front/recycle path against genuine vanilla-allocated nodes. The assertion is narrow but real:
+/// `update()` never mutates `state` (it's read-only in `ZTAdvTerrainMgr_update.c`), so forcing each
+/// branch and checking it comes back unchanged catches any accidental write.
 pub(crate) fn run_ztadvterrainmgr_update_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTADVTERRAINMGR_UPDATE";
     let mgr_ptr = globals().ztadvterrainmgr_ptr();

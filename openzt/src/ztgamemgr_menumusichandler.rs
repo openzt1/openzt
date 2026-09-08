@@ -1,6 +1,4 @@
-//! `ZTGameMgr::MenuMusicHandler` reimplementation - see
-//! `openzt/plans/menumusichandler-implementation-plan.md` for the full investigation. A **self-contained
-//! leaf class**: every method is called through a fixed address (there is no `MenuMusicHandler` vtable),
+//! `ZTGameMgr::MenuMusicHandler` reimplementation. A **self-contained leaf class**: every method is called through a fixed address (there is no `MenuMusicHandler` vtable),
 //! so detouring this class's own 6 addresses redirects every *non-inlined* caller - all in un-ported,
 //! un-detoured `ZTGameMgr` methods (`initMenuMusic`/`startMenuMusic`/`startMenuMusicFade_*`) that stay
 //! real vanilla code and never need to change. The exceptions are the sites where the compiler inlined a
@@ -17,10 +15,10 @@
 //! real, vanilla-allocated `SNDSound*` (or `0`), which falls out naturally as long as every mutator here
 //! writes through vanilla's own allocator/constructors rather than substituting Rust-owned state.
 //!
-//! All four in-scope stages (struct + constructor + `init` + `startPlay`/`startFade` + `update`); the
-//! destructor needs no port or detour - Stage 5 resolved that it is inlined into `~ZTGameMgr` (whose
-//! tail-merge block is what `generated.rs` mislabels `MENU_MUSIC_HANDLER_0`) and has no standalone Windows
-//! address, so there is nothing to hook.
+//! The port covers the struct, constructor, `init`, `startPlay`/`startFade`, and `update`; the destructor
+//! needs no port or detour - it is inlined into `~ZTGameMgr` (whose tail-merge block is what
+//! `generated.rs` mislabels `MENU_MUSIC_HANDLER_0`) and has no standalone Windows address, so there is
+//! nothing to hook.
 
 use std::ffi::c_void;
 
@@ -50,7 +48,7 @@ use crate::{
 };
 
 /// `GLOBAL_DX8SndMgr`'s RVA - a raw pointer-typed global (one dereference gives the live `DX8SndMgr*`
-/// singleton), resolved by the user directly (`0x006380a8`). Used by [`MenuMusicHandler::init`] as the
+/// singleton) at `0x006380a8`. Used by [`MenuMusicHandler::init`] as the
 /// `this` for `DX8SndMgr::attempt` (`MenuMusicHandler_init.asm`'s `MOV ECX, dword ptr GLOBAL_DX8SndMgr`
 /// before that call) - same one-level-of-indirection shape as `ztgamemgr.rs`'s own
 /// `GLOBAL_ZTSCENARIOMGR_RVA`/`GLOBAL_ZTAPP_RVA`.
@@ -67,7 +65,7 @@ const SNDSOUND_VTABLE: u32 = 0x00630bc0;
 
 /// Real allocation size `0x14`, confirmed directly by `ZTGameMgr_initMenuMusic.c`'s
 /// `operator_new(0x14)` call (not merely inferred from the constructor's own field writes, which stop at
-/// offset `0x10`) - see the implementation plan's struct-layout table for the per-field evidence.
+/// offset `0x10`).
 #[repr(C)]
 pub struct MenuMusicHandler {
     sound_ptr: u32,               // 0x0 - SNDSound*, 0 when none
@@ -102,10 +100,9 @@ impl MenuMusicHandler {
 
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::init`, per `MenuMusicHandler_init.c`/`.asm`.
     ///
-    /// The real function takes two stack args (`RET 0x8`), not the one `generated.rs`'s auto-derived
-    /// `INIT` originally carried - surfaced for the generator pass, which now emits both: `filename`
-    /// (a real vanilla C string, typed `u32` in the generated entry, so cast at the detour boundary)
-    /// and `attenuation` (an `i32`, forwarded unchanged to `SNDSound::setBaseAttenuation` on success).
+    /// The real function takes two stack args (`RET 0x8`): `filename` (a real vanilla C string, typed
+    /// `u32` in the generated entry, so cast at the detour boundary) and `attenuation` (an `i32`,
+    /// forwarded unchanged to `SNDSound::setBaseAttenuation` on success).
     ///
     /// Faithfully reproduces one vanilla oddity: releasing an existing, currently-*playing* `sound_ptr`
     /// (`stop()` + slot-0 `release(1)`) does **not** clear `self.sound_ptr` afterwards - if
@@ -150,7 +147,7 @@ impl MenuMusicHandler {
     }
 
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::startPlay`, per
-    /// `MenuMusicHandler_startPlay.c`/`.asm` (vtable offsets per the implementation plan's call table).
+    /// `MenuMusicHandler_startPlay.c`/`.asm`.
     ///
     /// No-op when `ini_menu_music_disabled` is set or `sound_ptr` is null. Otherwise: if the `SNDSound` is
     /// still valid ([`VALID`], vtable `+0x14`) but not currently playing ([`IS_PLAYING`], `+0x50`),
@@ -193,8 +190,8 @@ impl MenuMusicHandler {
     }
 
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::update`, per `MenuMusicHandler_update.c`/`.asm`.
-    /// A no-op unless a fade is armed (`fading != 0` - the gate the plan's Stage-4 summary omits, but the
-    /// `.asm`'s very first test, `MOV AL,[ESI+4]` / `TEST AL,AL`) and a `SNDSound` is present. Then a
+    /// A no-op unless a fade is armed (`fading != 0` - the `.asm`'s very first test, `MOV AL,[ESI+4]` /
+    /// `TEST AL,AL`) and a `SNDSound` is present. Then a
     /// two-phase state machine:
     ///
     /// 1. A fixed 5-tick warm-up delay (`warmup_ticks < 5` -> increment and return, signed `JL`), matching
@@ -204,7 +201,7 @@ impl MenuMusicHandler {
     ///    signed `JG`) or push the updated counter through [`SET_FADE_ATTENUATION`] (`+0x4c`) plus a
     ///    constant `0` through [`SET_VOLUME`] (`+0x40`).
     ///
-    /// The completion branch is gated harder than the plan's Stage-4 summary states: **every** field clear
+    /// The completion branch is gated harder than it looks: **every** field clear
     /// and the sound teardown sit *inside* the [`IS_PLAYING`] check (`JZ` past the whole block in the
     /// `.asm`), not after it - if the sound reports not playing, a `fade_counter` past 3000 is left as-is
     /// and nothing at all happens. Only inside that gate: `fading` = 0, `fade_counter` = 0, [`STOP`]
@@ -290,8 +287,7 @@ fn fade_increment(delta: u32) -> i32 {
 /// temporary strings occupies exactly 3 stack dwords, matching this layout exactly), so it always
 /// allocates its character buffer on the heap - built and torn down through the real vanilla
 /// constructor/destructor (`std_basic_string::BASIC_STRING_2`/`BASIC_STRING_0`) rather than a hand-rolled
-/// stand-in, matching `ztgamemgr-implementation-plan.md`'s `VanillaTagString` precedent (live-tested, then
-/// reverted for unrelated reasons - see that plan's `removedZooDoo` section). Never write `ptr`/`len`/
+/// stand-in. Never write `ptr`/`len`/
 /// `capacity` directly from Rust: construction and destruction always go through vanilla's own allocator,
 /// so a Rust-side write here would risk exactly the cross-allocator hazard `CLAUDE.md` warns about.
 #[repr(C)]
@@ -403,8 +399,8 @@ mod menu_music_handler_detours {
 
 /// Registers this module's live detours. Does **not** detour the destructor - there is no destructor
 /// function to detour: `MENU_MUSIC_HANDLER_0` in `generated.rs` (`0x00504e27`) is actually `~ZTGameMgr`'s
-/// tail-merge block containing the inlined dtor (see the module doc comment and the implementation plan's
-/// Stage 5), so hooking or calling it would run mid-`~ZTGameMgr` code under a wrong register contract.
+/// tail-merge block containing the inlined dtor (see the module doc comment), so hooking or calling it
+/// would run mid-`~ZTGameMgr` code under a wrong register contract.
 pub fn init() {
     if let Err(e) = unsafe { menu_music_handler_detours::init_detours() } {
         error!("Failed to initialise ztgamemgr_menumusichandler detours: {e:?}");
@@ -429,7 +425,7 @@ pub(crate) mod live_support {
     /// construction, **without calling any vanilla destructor path**. There is no real vanilla
     /// `MenuMusicHandler` destructor to call: the export Ghidra labels `~MenuMusicHandler`
     /// (`generated.rs`'s `MENU_MUSIC_HANDLER_0`, `0x00504e27`) is actually `~ZTGameMgr`'s tail-merge
-    /// block with the dtor inlined (plan Stage 5) - its first lines do the real, structurally-sound
+    /// block with the dtor inlined - its first lines do the real, structurally-sound
     /// `sound_ptr` teardown (`if (sound_ptr) { if (isPlaying()) stop(); release(); }`), but the rest is
     /// `~ZTGameMgr`'s own tail (`operator_delete` on `EDI` = the handler pointer, a `BFMgr` vtable store
     /// through `ESI` = `~ZTGameMgr`'s `this`, entered via `~ZTGameMgr`'s `JMP`/`JZ` with its own stack

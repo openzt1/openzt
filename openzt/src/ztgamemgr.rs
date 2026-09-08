@@ -1,19 +1,70 @@
 //! `ZTGameMgr` reimplementation. Follows a third named pattern variant, distinct from
 //! `ztadvterrainmgr.rs`'s "thin-shell whole-class" call-through and `ztmegatilemgr.rs`'s "100%
 //! vanilla-owned" style: **per-method delegation to an embedded sub-object**.
-//! `ZTGameMgr`'s own vtable/non-virtual logic is (or, stage by stage, will be) fully ported to Rust,
-//! and each method that needs the `ZooStatus` finance/rating tracker embedded inline at `this+0x10`
-//! (confirmed via `_CreateZTGameMgr.c`'s `OOAnalyzer::ZooStatus::init((ZooStatus *)(puVar2 + 4),...)`)
-//! now calls directly into the reimplemented `impl ZooStatus` methods in `zoostatus.rs`
-//! (`openzt/plans/zoostatus-implementation-plan.md`'s Stage 8 rewiring - `ZooStatus`'s own ~30-method
-//! surface is that plan's concern, not this file's). Because `ZTGameMgr` stays vanilla-layout-compatible
-//! and `ZooStatus` lives inline in the *same* memory block rather than a separate allocation, reading/
-//! writing that live memory from within a Rust `ZTGameMgr` method body is always safe - nothing is freed
-//! or reallocated in place, so none of `CLAUDE.md`'s cross-allocator hazards apply here.
+//! `ZTGameMgr`'s own vtable/non-virtual logic is fully ported to Rust, and each method that needs the
+//! `ZooStatus` finance/rating tracker embedded inline at `this+0x10` (confirmed via
+//! `_CreateZTGameMgr.c`'s `OOAnalyzer::ZooStatus::init((ZooStatus *)(puVar2 + 4),...)`) calls directly
+//! into the reimplemented `impl ZooStatus` methods in `zoostatus.rs`. Because `ZTGameMgr` stays
+//! vanilla-layout-compatible and `ZooStatus` lives inline in the *same* memory block rather than a
+//! separate allocation, reading/writing that live memory from within a Rust `ZTGameMgr` method body is
+//! always safe - nothing is freed or reallocated in place, so none of `CLAUDE.md`'s cross-allocator
+//! hazards apply here.
 //!
-//! No dynamic containers live in `ZTGameMgr`'s or the real `ZooStatus`'s own memory - only scalars and
-//! fixed-size arrays (see the implementation plan's "No dynamic containers" section), so the
-//! vanilla-layout-compatible struct below never needs to model a `Vec`/map/tree.
+//! No dynamic containers live in `ZTGameMgr`'s own memory - only scalars and fixed-size arrays - so the
+//! vanilla-layout-compatible struct below never needs to model a `Vec`/map/tree. (The embedded
+//! `ZooStatus` region's own array fields are modeled field-by-field in `zoostatus.rs`.)
+//!
+//! # Methods deliberately not detoured
+//!
+//! Each item is confirmed against the decompiles (`private/resources/decompiles/ZTGameMgr_*`):
+//!
+//! - **Destructor** (`ZTGAME_MGR_0`/`ZTGAME_MGR_1`): `~ZTGameMgr_0.c` tears down the embedded
+//!   `ZTSoundscape` (if `soundscape_ptr != 0`) and `MenuMusicHandler` (if `menu_music_handler_ptr != 0`),
+//!   then swaps the vtable pointer to `BFMgr_vftable` and returns, continuing into `BFMgr`'s own
+//!   base-class teardown; `~ZTGameMgr_1.c` is just the deleting variant (`bDelete` byte gating a
+//!   `FUN_00402629` free after the same body runs). Since this reimplementation stays
+//!   vanilla-layout-compatible (style 1: same memory, no independent Rust-owned heap state), there is
+//!   nothing this detour would do differently from vanilla's own body - mirrors `ztmegatilemgr.rs`'s
+//!   and `ztadvterrainmgr.rs`'s own stated reasoning for skipping their destructors.
+//! - **`removedZooDoo`**: not ported. The logic itself is comprehensible and portable in principle -
+//!   real entry point `0x004a2c98` (`generated.rs`'s `ztgamemgr::REMOVED_ZOO_DOO` carries the corrected
+//!   address/signature; the mangled 11-parameter export Ghidra first produced for it came from analysis
+//!   starting at an internal `JMP` target, `0x004a2ee1`, mistaken for the function boundary - and
+//!   `ztworldmgr::GET_BUILDING_LIST`'s entry is a genuine `thiscall`, both confirmed via `.asm`
+//!   tracing): a tile-distance search over `ZTWorldMgr::getBuildingList("compost")`,
+//!   `ZTBuilding::receiveIncome`, `ZooStatus::refundConstruction`/`addCash`. The only known-working,
+//!   live-tested call shape builds the "compost" tag string through a real vanilla `std::string`
+//!   constructor/destructor; a simpler, self-owned (non-vanilla-allocated) string reproducibly crashes
+//!   `getBuildingList` for a reason never root-caused. A working path depending on unexplained vanilla
+//!   behavior, on top of an already-nontrivial chain of hand-derived ABI facts (parameter order,
+//!   list-node layout, a small-object-free address), is too much unverified surface, so the port is not
+//!   wired up. The `.asm`-traced corrections above remain ground truth for whoever revisits this.
+//! - **`gotoStart(...)`**: `ZTGameMgr_gotoStart.c` is genuinely decompiler-mangled, not just verbose -
+//!   `unaff_EBX`/`unaff_ESI`/`unaff_EDI` register-allocation artifacts stand in for real
+//!   parameters/locals, and the recovered signature (14 params, mostly untyped `undefined`) doesn't
+//!   match any real call site. `generated.rs`'s own `GOTO_START` entry (`u8×12, u32×2`) reflects the
+//!   same automatic-signature-recovery confusion. Not faithfully portable from this decompile - left
+//!   un-detoured.
+//! - **`startMenuMusic()`/`startMenuMusicFade()`**: `startMenuMusicFade` compiles to two distinct
+//!   calling-convention instances of the *same* logical method - `_0` (thiscall, `0x004c9d67`) and `_2`
+//!   (fastcall, `0x004cc59d`) have identical trivial bodies (forward to `MenuMusicHandler::startFade`
+//!   when `menu_music_handler_ptr != 0`), and both `.meta`s list `startFade` as a called function - not
+//!   duplicates worth deduping here. `_1` (fastcall, `0x004ca478`) is a **different function**
+//!   entirely: its body directly implements a vtable dispatch (`(**(code**)(*vtable+0x50))()`) plus a
+//!   fade-state flag/counter reset, calls nothing named (empty `calling_functions` in its `.meta`,
+//!   unlike `_0`/`_2`), and is almost certainly `MenuMusicHandler::startFade`'s own real body,
+//!   mislabeled with the `ZTGameMgr::` name by the decompile corpus's automated naming pass. The
+//!   wrappers stay un-detoured regardless: they are pure call-throughs whose target address
+//!   `ztgamemgr_menumusichandler.rs` already detours, so vanilla callers already reach the
+//!   reimplemented logic through them, and the single-address `startMenuMusic()` additionally calls
+//!   `initMenuMusic` (below).
+//! - **`initMenuMusic()`**: confirmed Windows address (`ztgamemgr::INIT_MENU_MUSIC`, `0x00521e18` - the
+//!   same address the `startMenuMusic` decompile's `FUN_00521e18` lead points at). Constructs a
+//!   `BFIniFile` (still an untouched dependency) in addition to a `MenuMusicHandler` (itself
+//!   reimplemented, `ztgamemgr_menumusichandler.rs`); `BFIniFile` is what keeps it un-detoured.
+//!
+//! `menuMusicAttenToScrollbarVal`/`scrollbarValToMenuMusicAtten` (macOS-only, no Windows address)
+//! also remain out of scope - see `pad11` in the struct below.
 
 use std::ffi::c_void;
 
@@ -32,10 +83,10 @@ use openzt_detour::generated::{
     },
 };
 // `ZooStatus`'s own 8 call-through sites below (spend_research/spend_marketing/set_new_game_defaults'
-// init+ratingChecks/override_new_game_defaults/save/load/update_sim) now call the reimplemented
-// `impl ZooStatus` methods directly (Stage 8 of `zoostatus-implementation-plan.md`) rather than going
-// through `zoostatus::*`'s real-vanilla `.original()` - see `zoostatus.rs`'s own `zoostatus_detours`
-// module for the address-level detours this rewiring pairs with.
+// init+ratingChecks/override_new_game_defaults/save/load/update_sim) call the reimplemented
+// `impl ZooStatus` methods directly rather than going through `zoostatus::*`'s real-vanilla
+// `.original()` - see `zoostatus.rs`'s own `zoostatus_detours` module for the address-level detours
+// this pairs with.
 #[cfg(feature = "reimplementation-tests")]
 use openzt_detour::generated::{standalone::CREATE_ZTGAME_MGR, ztgamemgr::ZTGAME_MGR_1};
 use openzt_detour_macro::detour_mod;
@@ -95,12 +146,10 @@ pub struct ZTGameMgr {
     cash: f32,                // 0x0C
     pad2a: [u8; 0x28 - 0x10], // 0x10
     /// Set to `true` by `updateSim` when the game date's `w_month` field changes across its
-    /// `FILETIME` round-trip (`ZTGameMgr_updateSim.c`/`.asm`: `this->field_0x28 = 1` when
-    /// `*(short*)&this->field_0x1196` - i.e. `date.w_month`, confirmed against the `.asm`'s
-    /// `word ptr [ESI+0x1196]` compare, **not** `w_day_of_week` as an earlier pass of this plan
-    /// mis-labelled it - `Systemtime`'s own field order puts `w_day_of_week` at `+4`, not `+2` -
-    /// differs before/after). Never cleared by `updateSim` itself; whatever consumes it is out of
-    /// scope for this reimplementation.
+    /// `FILETIME` round-trip (`ZTGameMgr_updateSim.c`/`.asm`: `this->field_0x28 = 1` when the
+    /// `.asm`'s `word ptr [ESI+0x1196]` compare - `w_month` at `+2`, not `w_day_of_week` at
+    /// `+4` - differs before/after). Never cleared by `updateSim` itself; whatever consumes it
+    /// is out of scope for this reimplementation.
     day_changed_flag: bool,   // 0x28
     pad2b: [u8; 0x30 - 0x29], // 0x29
     num_animals: u16,              // 0x30
@@ -116,30 +165,17 @@ pub struct ZTGameMgr {
     num_guests_restroom_need: u16, // 0x48
     pad8: [u8; 0x54 - 0x4A],       // 0x48
     /// A live guest-tile count from `ZooStatus::calculateSums`' world walk - see `zoostatus.rs`'s
-    /// `ZooStatus::guest_tile_count` doc comment for the full naming history (this field was originally
-    /// `num_guests`, then briefly `escaped_animal_tile_count` on a mistaken "escape counter" reading
-    /// that Stage 5's full `calculateSums.asm` read overturned back in the guest direction - same
-    /// underlying bytes throughout, `ZooStatus`-relative `+0x44`, `ZTGameMgr`-relative `+0x54` after the
-    /// `+0x10` embedding offset). Renaming this is a pure documentation fix - the bytes read here are
-    /// unchanged.
+    /// `ZooStatus::guest_tile_count` doc comment. Same underlying bytes as `ZooStatus`-relative
+    /// `+0x44`, shifted to `ZTGameMgr`-relative `+0x54` by the `+0x10` embedding offset.
     guest_tile_count: u16, // 0x54
-    // This pad also covers the embedded `ZooStatus`'s "monthly history" fixed-size float-array region
-    // (see `ZooStatus`'s own doc comment below) - offsets guessed at, unconfirmed, and pending a real
-    // shape resolution:
-    // admissions_income_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x254),
-    // concessions_benefit_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x29c),
-    // recycling_benefit_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x340),
-    // // net_income maybe?: get_from_memory::<i32>(zt_game_mgr_prt + 0x404),
-    // income_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x404),
-    // income_expense_totals_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x44c),
-    // zoo_rating_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x464),
-    // unknown_array: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x4c4),
-    // construction_cost_by_month: get_from_memory::<[f32; 12]>(zt_game_mgr_prt + 0x824),
+    // This pad also covers the embedded `ZooStatus`'s history/flat-totals array region - modeled
+    // field-by-field in `zoostatus.rs` (`monthly_history`/`yearly_history`/`flat_totals`), left as pad
+    // here since no `ZTGameMgr` method reads into it directly.
     pad9: [u8; 0x1160 - 0x56], // 0x54
     zoo_admission_cost: f32,   // 0x1160
     pad10: [u8; 0x1190 - 0x1164], // 0x1164 - includes `removedZooDoo`'s refund-per-item base amount at
                                    // `+0x117c` (`ZTGameMgr_removedZooDoo.c`/`.asm`), unnamed since that
-                                   // method is not currently ported - see the module's Stage-5 doc comment
+                                   // method is not ported - see the module doc comment
     /// `ZTSoundscape*`, read/written by `start`/`stop`/`updateSim`/the destructor. Explicitly zeroed
     /// by `CreateZTGameMgr` (`puVar2[0x464] = 0;`, dword index `0x464` = byte offset `0x1190`).
     soundscape_ptr: u32, // 0x1190
@@ -150,7 +186,7 @@ pub struct ZTGameMgr {
     menu_music_handler_ptr: u32, // 0x11A4
     pad11: [u8; 0x11b0 - 0x11A8], // 0x11A8 - a menu-music-ini read result read/written by the
                                    // macOS-only `menuMusicAttenToScrollbarVal`/`scrollbarValToMenuMusicAtten`
-                                   // (see this module's Stage-5 doc comment) - not untouched, just out of
+                                   // (see the module doc comment) - not untouched, just out of
                                    // this reimplementation's current scope
 }
 
@@ -159,7 +195,7 @@ const _: () = assert!(std::mem::size_of::<ZTGameMgr>() == 0x11b0);
 /// Vanilla's embedded `SYSTEMTIME` (same field order/size as `windows::Win32::Foundation::SYSTEMTIME`,
 /// confirmed against that crate's own definition) - kept as a distinct, private type rather than the
 /// real `windows` struct directly so `ZTGameMgr`'s own field remains `#[repr(C)]`-stable independent of
-/// that crate's own attributes; `updateSim` (Stage 3) converts to/from the real `SYSTEMTIME`/`FILETIME`
+/// that crate's own attributes; `updateSim` converts to/from the real `SYSTEMTIME`/`FILETIME`
 /// via [`Systemtime::to_win32`]/[`Systemtime::from_win32`] for its `SystemTimeToFileTime`/
 /// `FileTimeToSystemTime` round-trip.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -227,7 +263,8 @@ fn ticks_to_filetime(ticks: u64) -> FILETIME {
 /// branch: it drives a standalone instance whose `delta` is bounded `0..=0x3e9` against a tick accumulator
 /// reset to `0` immediately before each call, so the accumulator can only ever equal `delta` itself - never
 /// enough to cross the `> 0x3e9` UI-refresh threshold this formula lives behind (see that test's own doc
-/// comment in `reimplementation_tests/mod.rs`). Covered by a `#[cfg(test)]` unit test below instead.
+/// comment in `reimplementation_tests/tests/ztgamemgr.rs`). Covered by a `#[cfg(test)]` unit test below
+/// instead.
 fn rating_from_metric(metric: i32, population: u16) -> i32 {
     if population == 0 {
         0
@@ -259,7 +296,7 @@ impl ZTGameMgr {
         self.cash = value;
     }
 
-    /// Test-only accessors for Stage 2's `ZTGAMEMGR_SAVE_LOAD` live test, letting it seed/read the
+    /// Test-only accessors for the `ZTGAMEMGR_SAVE_LOAD` live test, letting it seed/read the
     /// three fields `save`/`load` actually touch (`cash`/`date`/`elapsed_sim_ticks`) without exposing
     /// the private `Systemtime` type outside this module.
     #[cfg(feature = "reimplementation-tests")]
@@ -284,15 +321,12 @@ impl ZTGameMgr {
         out
     }
 
-    /// Ports `ZTGameMgr::subtractCash` (`ZTGameMgr_subtractCash.c`, read in full): subtracts `amount`
+    /// Ports `ZTGameMgr::subtractCash` (`ZTGameMgr_subtractCash.c`): subtracts `amount`
     /// from the budget, then refreshes the on-screen money display (`ZTUI::main::setMoneyText`). Used
     /// by `ztresearch::ZTResearchBranch::update`'s native reimplementation of the branch funding cost,
-    /// among other callers.
-    ///
-    /// Now that Stage 4 wires a real `#[detour(SUBTRACT_CASH)]`, this ports the actual body rather than
-    /// calling through to `.original()` (as it did through Stages 0-3) - vanilla-side callers of the
-    /// real function address (not just Rust API callers) now also route through this same logic once
-    /// detoured. The real signature has a trailing, unread `bool` parameter (`ZTGameMgr::subtractCash(float,
+    /// among other callers. Vanilla-side callers of the real function address (not just Rust API
+    /// callers) route through this same logic via the `SUBTRACT_CASH` detour below. The real signature
+    /// has a trailing, unread `bool` parameter (`ZTGameMgr::subtractCash(float,
     /// bool)`, per the `.asm`'s `RET 8`) - not part of this method's own logic, so not part of this
     /// method's own signature either; the detour wrapper below supplies/discards it.
     pub fn subtract_cash(&mut self, amount: f32) {
@@ -300,14 +334,14 @@ impl ZTGameMgr {
         unsafe { ZTUI_MAIN_SET_MONEY_TEXT.original()() };
     }
 
-    /// Ports `ZTGameMgr::addCash` (`ZTGameMgr_addCash.c`, read in full): adds `amount` to the budget,
+    /// Ports `ZTGameMgr::addCash` (`ZTGameMgr_addCash.c`): adds `amount` to the budget,
     /// then refreshes the on-screen money display (`ZTUI::main::setMoneyText`).
     pub fn add_cash(&mut self, amount: f32) {
         self.cash += amount;
         unsafe { ZTUI_MAIN_SET_MONEY_TEXT.original()() };
     }
 
-    /// Ports `ZTGameMgr::getDate` (`ZTGameMgr_getDate.c`/`.asm`, read in full): converts `date` to a
+    /// Ports `ZTGameMgr::getDate` (`ZTGameMgr_getDate.c`/`.asm`): converts `date` to a
     /// `FILETIME` via `SystemTimeToFileTime` and returns it as a raw 64-bit tick count. Per the real
     /// body, a conversion failure is never checked - the decompile just proceeds with whatever ended up
     /// in the (potentially-uninitialized) local `FILETIME`. This port can't reproduce genuine stack
@@ -319,16 +353,14 @@ impl ZTGameMgr {
         filetime_to_ticks(file_time)
     }
 
-    /// Ports `ZTGameMgr::isGameDate` (`ZTGameMgr_isGameDate.c`/`.asm`, read in full - the `.asm` is the
+    /// Ports `ZTGameMgr::isGameDate` (`ZTGameMgr_isGameDate.c`/`.asm` - the `.asm` is the
     /// clean read; the `.c`'s messy `CONCAT`/register-reuse noise around the return value is decompiler
     /// artifact, not real extra logic). Round-trips `get_date()` back through `FileTimeToSystemTime` and
     /// compares `day`/`month` against the result, `0xffffffff` acting as a per-field wildcard. Returns
-    /// `false` outright if the round-trip fails.
-    ///
-    /// **Correction from the implementation plan**, which described this as `isGameDate(month, day)`:
-    /// the real parameter order, confirmed independently from both the `.c`'s offset math
-    /// (`local_10._6_4_` = `wDay` compared against `param_1`; `local_10._2_4_` = `wMonth` compared
-    /// against `param_2`) and the `.asm`'s stack-offset reads, is `(day, month)`.
+    /// `false` outright if the round-trip fails. Real parameter order is `(day, month)`, confirmed
+    /// independently from both the `.c`'s offset math (`local_10._6_4_` = `wDay` compared against
+    /// `param_1`; `local_10._2_4_` = `wMonth` compared against `param_2`) and the `.asm`'s stack-offset
+    /// reads.
     pub fn is_game_date(&self, day: u32, month: u32) -> bool {
         let file_time = ticks_to_filetime(self.get_date());
         let mut sys_time = SYSTEMTIME::default();
@@ -338,38 +370,33 @@ impl ZTGameMgr {
         (day == 0xffffffff || sys_time.wDay as u32 == day) && (month == 0xffffffff || sys_time.wMonth as u32 == month)
     }
 
-    /// Ports `ZTGameMgr::isRealWorldDate` (`ZTGameMgr_isRealWorldDate.c`, read in full). Unlike
+    /// Ports `ZTGameMgr::isRealWorldDate` (`ZTGameMgr_isRealWorldDate.c`). Unlike
     /// `is_game_date`, this has no `this` dependency at all (confirmed by its `stdcall`/no-`this`
     /// `IS_REAL_WORLD_DATE` entry) - it calls `GetSystemTime` directly and has no `0xffffffff` wildcard
-    /// handling. **Same parameter-order correction as `is_game_date`**: real order is `(day, month)`,
-    /// not the plan's `(month, day)`.
+    /// handling. Real parameter order is `(day, month)`, same as [`Self::is_game_date`].
     pub fn is_real_world_date(day: u32, month: u32) -> bool {
         let sys_time = unsafe { GetSystemTime() };
         sys_time.wDay as u32 == day && sys_time.wMonth as u32 == month
     }
 
-    /// Ports `ZTGameMgr::timeAgo` (`ZTGameMgr_timeAgo.c`/`.asm`, read in full): `get_date() - reference`
+    /// Ports `ZTGameMgr::timeAgo` (`ZTGameMgr_timeAgo.c`/`.asm`): `get_date() - reference`
     /// as a 64-bit subtraction (the real body's `SUB`/`SBB` pair over the two `FILETIME` dwords is
-    /// exactly a wrapping `u64` subtraction). See the `TIME_AGO` `FunctionDef`'s own doc comment in
-    /// `generated.rs` for why the auto-generated entry needed hand-correcting before this could be
-    /// wired to a real detour at all.
+    /// exactly a wrapping `u64` subtraction).
     pub fn time_ago(&self, reference: u64) -> u64 {
         self.get_date().wrapping_sub(reference)
     }
 
-    /// Ports `ZTGameMgr::hoursAgo` (`ZTGameMgr_hoursAgo.c`/`.asm`, read in full): same `get_date() -
+    /// Ports `ZTGameMgr::hoursAgo` (`ZTGameMgr_hoursAgo.c`/`.asm`): same `get_date() -
     /// reference` 64-bit subtraction as `time_ago`, divided by `36_000_000_000` (100ns intervals per
-    /// hour) via the real body's own unsigned 64-bit division (`_aulldiv`). See the `HOURS_AGO`
-    /// `FunctionDef`'s own doc comment in `generated.rs` for the separate return-type correction this
-    /// needed (the auto-generated `*const u64` would have silently dropped the high dword of a genuine
-    /// EDX:EAX register-pair return).
+    /// hour) via the real body's own unsigned 64-bit division (`_aulldiv`). The real return is a
+    /// full `u64` EDX:EAX register pair (see the `HOURS_AGO` entry's doc comment in `generated.rs`).
     pub fn hours_ago(&self, reference: u64) -> u64 {
         self.get_date().wrapping_sub(reference) / 36_000_000_000
     }
 
-    /// Ports `ZTGameMgr::animalTimeAgo` (`ZTGameMgr_animalTimeAgo.c`/`.asm`, read in full - macOS-only
-    /// method, no Windows decompile existed until this pass; see the module's Stage-5 doc comment for
-    /// the other five macOS-only methods this same investigation covered). Buckets [`Self::hours_ago`]'s
+    /// Ports `ZTGameMgr::animalTimeAgo` (`ZTGameMgr_animalTimeAgo.c`/`.asm`), a genuine standalone
+    /// Windows function at `0x00467a14` (own `RET 0x8`, not inlined into any caller). Buckets
+    /// [`Self::hours_ago`]'s
     /// result into one of three values: `0` (< 1440 hours / 60 days), `1` (1440-8640h), or `2` (> 8640h /
     /// 360 days) - only **two** thresholds. **Not** the three-threshold/four-bucket shape
     /// [`Self::people_time_ago`] uses, despite both being named `*TimeAgo` and sharing the same
@@ -377,7 +404,7 @@ impl ZTGameMgr {
     /// `CMP EAX,0x5a0` / `CMP EAX,0x21c0`, two compares; `peopleTimeAgo`: three). The real return is a
     /// register pair (`ulonglong`) whose low dword is the bucket and whose high dword is `hoursAgo`'s own
     /// leftover EDX half, not part of the bucket value - only the low dword is meaningful here, matching
-    /// this codebase's established `TIME_AGO`/`HOURS_AGO` EDX:EAX correction precedent.
+    /// this codebase's established `TIME_AGO`/`HOURS_AGO` EDX:EAX convention.
     pub fn animal_time_ago(&self, reference: u64) -> u32 {
         let hours = (self.hours_ago(reference) as u32) as i32;
         if hours < 0x5a0 {
@@ -389,8 +416,9 @@ impl ZTGameMgr {
         }
     }
 
-    /// Ports `ZTGameMgr::peopleTimeAgo` (`ZTGameMgr_peopleTimeAgo.c`/`.asm`, read in full - macOS-only
-    /// method, see [`Self::animal_time_ago`]'s doc comment). Same `hoursAgo` base, but **three**
+    /// Ports `ZTGameMgr::peopleTimeAgo` (`ZTGameMgr_peopleTimeAgo.c`/`.asm`), a genuine standalone
+    /// Windows function at `0x0046a791`, same as [`Self::animal_time_ago`]'s doc comment notes for its
+    /// own address. Same `hoursAgo` base, but **three**
     /// thresholds -> four buckets: `0` (<1440h), `1` (1440-5759h), `2` (5760-8639h), `3` (>8639h) - this
     /// is the "1440/5760/8640 = 60/240/360 days" shape, distinct from `animal_time_ago`'s own two-bucket
     /// shape.
@@ -432,21 +460,20 @@ impl ZTGameMgr {
     /// base-class body (just zeroing `elapsed_sim_ticks`) inlined directly - see the module doc comment
     /// for why there's no separate `BFGameMgr`-vs-`ZTGameMgr` split kept in this port.
     ///
-    /// Per the decompile/`.asm` (`ZTGameMgr_setNewGameDefaults.c`/`.asm`, read in full - **the plan this
-    /// was scoped from mis-described this method's first step as "zero `elapsed_sim_ticks`"; the real
-    /// first write is `[this+0xc] = 0`, i.e. `cash`, confirmed independently by both the Windows
-    /// `LEA ECX,[ESI+0xc]` / `MOV [ECX],EAX` `.asm` and the macOS decompile's `ZTEcon__init((float
-    /// *)(param_1 + 0xc))` - `elapsed_sim_ticks` is only ever zeroed once, at the very end**), the real
-    /// order is:
+    /// Per the decompile/`.asm` (`ZTGameMgr_setNewGameDefaults.c`/`.asm`), the real order is (the first
+    /// write is `[this+0xc] = 0`, i.e. `cash`, not `elapsed_sim_ticks` - confirmed independently by both
+    /// the Windows `LEA ECX,[ESI+0xc]` / `MOV [ECX],EAX` `.asm` and the macOS decompile's
+    /// `ZTEcon__init((float *)(param_1 + 0xc))`; `elapsed_sim_ticks` is only ever zeroed once, at the
+    /// very end):
     /// 1. `cash = 0.0`
-    /// 2. `ZooStatus::init(&self.zoo_status, config)` (reimplemented, embedded sub-object - Stage 8)
+    /// 2. `ZooStatus::init(&self.zoo_status, config)` (reimplemented, embedded sub-object)
     /// 3. set `date` to the hardcoded new-game default (2001-01-01, a Monday, 00:00:00.000)
     /// 4. if `is_new_game`: call through `GLOBAL_ZTAIMgr`'s real vtable slot `+0x4` (`0x0058f269`,
-    ///    inherited unchanged from `BFAIMgr` - see `private/docs/vtables/BFAIMgr.md`), now identified by a
-    ///    Ghidra regen as `BFAIMgr::loadData` (`thiscall fn(this, bool) -> u32`), with `false`, matching
+    ///    inherited unchanged from `BFAIMgr` - see `private/docs/vtables/BFAIMgr.md`), identified by the
+    ///    Ghidra pass as `BFAIMgr::loadData` (`thiscall fn(this, bool) -> u32`), with `false`, matching
     ///    the real thiscall/1-arg shape confirmed by both this function's and `_setCursorQuality`'s own
     ///    `.asm`
-    /// 5. `ZooStatus::ratingChecks(&self.zoo_status)` (reimplemented, embedded sub-object - Stage 8)
+    /// 5. `ZooStatus::ratingChecks(&self.zoo_status)` (reimplemented, embedded sub-object)
     /// 6. `elapsed_sim_ticks = 0`
     pub fn set_new_game_defaults(&mut self, config: *const u32, is_new_game: bool) {
         self.cash = 0.0;
@@ -474,9 +501,10 @@ impl ZTGameMgr {
         self.elapsed_sim_ticks = 0;
     }
 
-    /// Ports `ZTGameMgr::overrideNewGameDefaults` (`ZTGameMgr_overrideNewGameDefaults.c`, read in full -
-    /// macOS-only method, see the module's Stage-5 doc comment). One-line call-through to the
-    /// reimplemented `ZooStatus::override` on the embedded sub-object at `self+0x10` (Stage 8), exactly
+    /// Ports `ZTGameMgr::overrideNewGameDefaults` (`ZTGameMgr_overrideNewGameDefaults.c`/`.asm`), a
+    /// genuine standalone Windows function at `0x00591a40` (own `RET 0x4`, not inlined into any caller).
+    /// One-line call-through to the
+    /// reimplemented `ZooStatus::override` on the embedded sub-object at `self+0x10`, exactly
     /// the same shape as [`Self::spend_research`]/[`Self::spend_marketing`].
     pub fn override_new_game_defaults(&mut self, config: *const u32) {
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
@@ -487,9 +515,9 @@ impl ZTGameMgr {
     /// writing `elapsed_sim_ticks`) inlined directly - see the module doc comment for why there's no
     /// separate `BFGameMgr`-vs-`ZTGameMgr` split kept in this port.
     ///
-    /// Per the decompile (`ZTGameMgr_save.c`, read in full), write order is: a fixed `0` marker dword
+    /// Per the decompile (`ZTGameMgr_save.c`), write order is: a fixed `0` marker dword
     /// (`local_8` - pure format padding, no real state); `ZooStatus::save` on the embedded sub-object at
-    /// `self+0x10` (reimplemented - Stage 8); `date` raw (16 bytes); `cash` (captured into a local
+    /// `self+0x10` (reimplemented); `date` raw (16 bytes); `cash` (captured into a local
     /// before the marker write in the decompile, but reading it here instead is equivalent - nothing in
     /// between can mutate `cash`); then chain to base (just `elapsed_sim_ticks`). Every step's success is
     /// ANDed together, matching `ztawardmgr.rs`'s own `save`.
@@ -514,9 +542,9 @@ impl ZTGameMgr {
     /// Ports `ZTGameMgr::load` (vtable `+0xc`), with `BFGameMgr::load`'s own base-class body inlined
     /// directly (see [`Self::save`]'s doc comment for why).
     ///
-    /// Per the decompile (`ZTGameMgr_load.c`, read in full), read order mirrors `save`'s write order: a
+    /// Per the decompile (`ZTGameMgr_load.c`), read order mirrors `save`'s write order: a
     /// `0` marker dword (read and discarded - only its success/failure matters) -> `ZooStatus::load`
-    /// (reimplemented, embedded sub-object - Stage 8) -> `date` raw (16 bytes, written directly into
+    /// (reimplemented, embedded sub-object) -> `date` raw (16 bytes, written directly into
     /// `self.date` regardless of what happens next, matching the decompile's direct-into-field read) ->
     /// `cash` (read into a local first). **`cash` is only assigned from that local after every earlier
     /// read has succeeded** - matching the decompile's `if (bVar4 != 0) { this->field_0xc = local_8; ...
@@ -559,8 +587,8 @@ impl ZTGameMgr {
         }
     }
 
-    /// Ports `ZTGameMgr::update` (vtable `+0x10`). Per the decompile (`ZTGameMgr_update.c`, read in
-    /// full) this is a pure call-through to the embedded `MenuMusicHandler` when present - no logic of
+    /// Ports `ZTGameMgr::update` (vtable `+0x10`). Per the decompile (`ZTGameMgr_update.c`) this is a
+    /// pure call-through to the embedded `MenuMusicHandler` when present - no logic of
     /// `ZTGameMgr`'s own. Calls the reimplemented [`MenuMusicHandler::update`] directly rather than
     /// going through `UPDATE`'s address (`.original()`/`.hooked()`): keeping the old address-based
     /// call-through would route around this caller's own reimplementation differently per hook state,
@@ -573,12 +601,12 @@ impl ZTGameMgr {
     }
 
     /// Ports `ZTGameMgr::updateSim` (vtable `+0x14`). Per the decompile/`.asm` (`ZTGameMgr_updateSim.c`/
-    /// `.asm`, read in full), in order:
+    /// `.asm`), in order:
     /// 1. `elapsed_sim_ticks += delta` (`BFGameMgr::updateSim`'s own base body, inlined - see the module
     ///    doc comment for why there's no separate `BFGameMgr`-vs-`ZTGameMgr` split kept in this port).
     /// 2. The raw global tick accumulator `DAT_006394b8` (`this->mbr_0x8`'s sibling, not part of
     ///    `ZTGameMgr`'s own memory) `+= delta`.
-    /// 3. `ZooStatus::update(&self.zoo_status, delta)` (reimplemented, embedded sub-object - Stage 8).
+    /// 3. `ZooStatus::update(&self.zoo_status, delta)` (reimplemented, embedded sub-object).
     /// 4. If the accumulator now exceeds `0x3e9` (1001): reduce it `%= 0x3e9`, then recompute and push
     ///    animal/guest/zoo ratings plus the money/date UI text (`ZTUI::main::set{Animal,Guest,Zoo}Rating`/
     ///    `setMoneyText`/`setDateText`) - the animal/guest metrics live inside the embedded `ZooStatus`
@@ -594,8 +622,8 @@ impl ZTGameMgr {
     ///    `SystemTimeToFileTime` failure is intentionally ignored here, matching the decompile's own
     ///    `GetLastError()`-then-continue error path, which has no further observable effect; a
     ///    `FileTimeToSystemTime` failure aborts the rest of the method, also matching), then sets
-    ///    `day_changed_flag` if the round-trip changed `date.w_month` (see that field's own doc comment
-    ///    for why - **not** `w_day_of_week`, correcting an earlier pass of the implementation plan).
+    ///    `day_changed_flag` if the round-trip changed `date.w_month` (see that field's own doc comment -
+    ///    **not** `w_day_of_week`).
     pub fn update_sim(&mut self, delta: u32) {
         self.elapsed_sim_ticks = self.elapsed_sim_ticks.wrapping_add(delta);
 
@@ -651,7 +679,7 @@ impl ZTGameMgr {
         }
     }
 
-    /// Test-only accessors for Stage 3's `ZTGAMEMGR_UPDATE_SIM` live test, letting it seed/read
+    /// Test-only accessors for the `ZTGAMEMGR_UPDATE_SIM` live test, letting it seed/read
     /// `day_changed_flag` without exposing it as public API.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn set_day_changed_flag(&mut self, value: bool) {
@@ -722,9 +750,7 @@ impl ZTGameMgr {
 
     /// Ports `ZTGameMgr::stop`. **The `.c` export for this method is corrupted** - it inlines the entire
     /// body of a different, tail-called function (`ZTUI::main::unpauseGame`) as if it were part of
-    /// `stop()` itself, the same species of decompiler-boundary bug already found and fixed in
-    /// `ztshowscriptstate::CONSTRUCTOR` (see the roadmap/review history) and originally suspected (then
-    /// disproven the other direction) in `removedZooDoo`. Ground truth is the `.asm`, cross-checked
+    /// `stop()` itself. Ground truth is the `.asm`, cross-checked
     /// against `ZTGameMgr_stop.meta`'s own `calling_functions` list (exactly two callees:
     /// `~ZTSoundscape`/`FUN_00402629`) and `main_unpauseGame.c`/`.meta` (whose body matches the "extra"
     /// material in the corrupted `stop.c` export almost verbatim - same `BFUIMgr::getElement(0x430/0x42f)`/
@@ -739,8 +765,8 @@ impl ZTGameMgr {
     ///    pointer.
     /// 2. `started = false`.
     /// 3. Read the live `GLOBAL_ZTApp` singleton's `+0x440` byte field (`appInitSuccess` - see
-    ///    [`GLOBAL_ZTAPP_RVA`]); if non-zero, tail-call real vanilla `ZTUI::main::unpauseGame` (already a
-    ///    plain, cleanly-addressed `generated.rs` entry - `ztui_main::UNPAUSE_GAME`, no hand-add needed).
+    ///    [`GLOBAL_ZTAPP_RVA`]); if non-zero, tail-call real vanilla `ZTUI::main::unpauseGame`
+    ///    (`ztui_main::UNPAUSE_GAME`).
     ///
     /// **Deliberately not reproduced**: the real body's "if `GLOBAL_ZTApp` is null, lazily assign it a
     /// bogus `ZTApp::handleMessages`-function-pointer sentinel before re-reading it" defensive branch -
@@ -748,7 +774,7 @@ impl ZTGameMgr {
     /// `ZTGameMgr::stop()` call can happen, so this branch is dead in every real-game scenario; if it were
     /// somehow null anyway, this port just treats that as "app not ready" and skips the `unpauseGame` call,
     /// rather than writing a nonsensical code-address-as-data-pointer into live global state to match a
-    /// real but never-taken vanilla path (`CLAUDE.md`: don't handle scenarios that can't happen).
+    /// real but never-taken vanilla path.
     pub fn stop(&mut self) {
         if self.soundscape_ptr != 0 {
             unsafe { ZTSOUNDSCAPE_DESTRUCTOR.original()(self.soundscape_ptr as *const c_void) };
@@ -805,94 +831,8 @@ pub fn command_zoostats(_args: Vec<&str>) -> Result<String, CommandError> {
     Ok(format!("\nBudget: {}\nAnimals: {}\nSpecies: {}\nTired Guests: {}\nHungry Guests: {}\nThirsty Guests: {}\nGuests Need Restroom: {}\nGuest Tiles: {}\nZoo Admission Cost: ${}", ztgamemgr.cash, ztgamemgr.num_animals, ztgamemgr.num_species, ztgamemgr.num_tired_guests, ztgamemgr.num_hungry_guests, ztgamemgr.num_thirst_guests, ztgamemgr.num_guests_restroom_need, ztgamemgr.guest_tile_count, ztgamemgr.zoo_admission_cost))
 }
 
-/// Stage 5 of `openzt/plans/ztgamemgr-implementation-plan.md`: the destructor and the
-/// `gotoStart`/`removedZooDoo`/`startMenuMusic*` call-through tier are deliberately **not** detoured. No
-/// porting, no new live tests - only a documented decision per item, all confirmed directly against the
-/// decompiles (`private/resources/decompiles/ZTGameMgr_*`) this session.
-///
-/// **`removedZooDoo`'s decompile is no longer the blocker, but the method is still un-ported.** A
-/// follow-up pass to the review that produced this section found the decompile export this bullet
-/// originally cited was itself broken (analysis had started at an internal `JMP` target, `0x004a2ee1`,
-/// mistaking it for the function boundary, producing the mangled 11-parameter/`unaff_*`-artifact signature
-/// this bullet used to describe). The corrected export, real entry point `0x004a2c98`, is clean and its
-/// logic is comprehensible (tile-distance search over `ZTWorldMgr::getBuildingList("compost")`,
-/// `ZTBuilding::receiveIncome`, `ZooStatus::refundConstruction`/`addCash`) - `generated.rs`'s
-/// `ztgamemgr::REMOVED_ZOO_DOO` entry reflects this corrected address/signature, and `ztworldmgr::
-/// GET_BUILDING_LIST`'s signature was corrected to a genuine `thiscall` while investigating this
-/// (both confirmed via careful `.asm` tracing, independent of the point below). The regeneration first
-/// reverted `GET_BUILDING_LIST` to its wrong auto-derived `stdcall` shape, but after the correction was
-/// re-surfaced to the generator pass the entry now carries the right shape natively (verified against the
-/// function's own `.c`/`.asm` and the caller's `MOV %ECX, %EBX` immediately before the `CALL`). A full port was attempted
-/// and got as far as passing its own live smoke test - but only by constructing the "compost" tag string
-/// via a real vanilla `std::string` constructor/destructor call, after a simpler, self-owned
-/// (non-vanilla-allocated) string reproducibly crashed `getBuildingList` live for a reason never fully
-/// root-caused. That result - a working path that depends on unexplained vanilla behavior, sitting on top
-/// of an already-nontrivial chain of hand-derived ABI facts (parameter order, list-node layout, a
-/// small-object-free address) - was judged too much unverified surface for a single pass, so
-/// the port was backed out. The `.asm`-traced corrections remain confirmed ground truth for whoever
-/// revisits this; the Rust port itself is not wired up. Likewise, `animalTimeAgo`/`peopleTimeAgo`/
-/// `overrideNewGameDefaults` (macOS-only methods that never entered this plan's original scope at all -
-/// see [`ZTGameMgr::animal_time_ago`]/[`ZTGameMgr::people_time_ago`]/
-/// [`ZTGameMgr::override_new_game_defaults`]) picked up real Windows addresses/decompiles and are now
-/// ported too, not part of this "left un-detoured" tier. `initMenuMusic` (also macOS-only-scoped
-/// originally) picked up a confirmed Windows address too (`ztgamemgr::INIT_MENU_MUSIC`, `0x00521e18` -
-/// the same address the `startMenuMusic` decompile's `FUN_00521e18` lead pointed at) but **stays
-/// out of scope**, unlike its three siblings: it pulls in `BFIniFile` construction (still an untouched
-/// dependency) plus a `MenuMusicHandler` - which has since been reimplemented itself (see
-/// `ztgamemgr_menumusichandler.rs`), so that half of the original blocker is gone; `BFIniFile` is what
-/// keeps it un-detoured.
-///
-/// **`start()`/`stop()` are now ported**, closing out a review-flagged candidate that turned out to need a
-/// second pass: `start()`'s `.c`/`.asm` agree cleanly, but `stop()`'s `.c` export is corrupted the same way
-/// the original (pre-correction) `removedZooDoo` export was - it inlines the entire body of a *different*,
-/// tail-called function (`ZTUI::main::unpauseGame`) as if it were part of `stop()` itself. The real `.asm`
-/// (cross-checked against `stop.meta`'s own 2-callee list and `main_unpauseGame.c`/`.meta`, whose body
-/// matches the corrupted export's "extra" material almost verbatim) is simple: soundscape teardown, clear
-/// `started`, then a conditional tail-call into the real, separately-addressed `unpauseGame()` - see
-/// [`ZTGameMgr::start`]/[`ZTGameMgr::stop`]'s own doc comments for the full account. Closing this out also
-/// needed four raw *global data* addresses (`GLOBAL_ZTScenarioMgr`, `GLOBAL_ZTApp`, plus `GLOBAL_BFUIMgr`/
-/// `GLOBAL_DX8SndMgr`, the latter two turning out to be internal to `unpauseGame()` rather than something
-/// this port touches directly) that don't exist anywhere in `generated.rs` (which only carries function
-/// addresses) or `globals.rs` - unlike every other address in this file, these came from the user directly
-/// rather than the local decompile/vtable corpus, the same class of blocker `menuMusicAttenToScrollbarVal`/
-/// `scrollbarValToMenuMusicAtten` below remain stuck on.
-///
-/// - **Destructor** (`ZTGAME_MGR_0`/`ZTGAME_MGR_1`): `~ZTGameMgr_0.c` tears down the embedded
-///   `ZTSoundscape` (if `soundscape_ptr != 0`) and `MenuMusicHandler` (if `menu_music_handler_ptr != 0`,
-///   both out of scope, see the module doc comment) then swaps the vtable pointer to `BFMgr_vftable` and
-///   returns, continuing into `BFMgr`'s own base-class teardown; `~ZTGameMgr_1.c` is just the deleting
-///   variant (`bDelete` byte gating a `FUN_00402629` free after the same body runs). Since this
-///   reimplementation stays vanilla-layout-compatible (style 1: same memory, no independent Rust-owned
-///   heap state), there is nothing this detour would do differently from vanilla's own body - mirrors
-///   `ztmegatilemgr.rs`'s and `ztadvterrainmgr.rs`'s own stated reasoning for skipping their destructors.
-/// - **`removedZooDoo(...)`**: see the paragraph above - decompile/`generated.rs` corrected and confirmed
-///   portable in principle, but the actual port was attempted and backed out this session after live
-///   testing surfaced a crash risk that wasn't fully understood, not because the logic itself is
-///   unclear. Left un-detoured.
-/// - **`gotoStart(...)`**: `ZTGameMgr_gotoStart.c` is confirmed genuinely decompiler-mangled, not just
-///   verbose - `unaff_EBX`/`unaff_ESI`/`unaff_EDI` register-allocation artifacts stand in for real
-///   parameters/locals, and the recovered signature (14 params, mostly untyped `undefined`) doesn't match
-///   any real call site. `generated.rs`'s own `GOTO_START` entry (`u8×12, u32×2`) reflects the same
-///   automatic-signature-recovery confusion. Not faithfully portable from this decompile - left
-///   un-detoured.
-/// - **`startMenuMusic()`/`startMenuMusicFade()`**: confirmed by reading all three
-///   `startMenuMusicFade_{0,1,2}` decompiles and `.meta` files directly (resolving the plan's open
-///   question about whether they're 3 redundant call sites or 3 real variants - they're neither, cleanly).
-///   `_0` (thiscall, `0x004c9d67`) and `_2` (fastcall, `0x004cc59d`) have identical trivial bodies -
-///   forward to `MenuMusicHandler::startFade` when `menu_music_handler_ptr != 0` - and both `.meta`s list
-///   `startFade` as a called function: these are two distinct compiled/calling-convention instances of
-///   the *same* logical `ZTGameMgr::startMenuMusicFade`, not duplicates worth deduping here. `_1`
-///   (fastcall, `0x004ca478`) is a **different function** entirely - its body directly implements a
-///   vtable dispatch (`(**(code**)(*vtable+0x50))()`) plus a fade-state flag/counter reset, calls nothing
-///   named (empty `calling_functions` in its `.meta`, unlike `_0`/`_2`), and is almost certainly
-///   `MenuMusicHandler::startFade`'s own real body, mislabeled with the `ZTGameMgr::` name by the
-///   decompile corpus's automated naming pass. All three stay out of scope regardless (either
-///   `ZTGameMgr::startMenuMusicFade` itself - a pure call-through into the out-of-scope
-///   `MenuMusicHandler` - or `MenuMusicHandler::startFade` itself, squarely inside that same out-of-scope
-///   class), as does the single-address `startMenuMusic()` (same `menu_music_handler_ptr`-gated
-///   call-through shape, plus a call to `initMenuMusic` - see above). Left un-detoured.
-///
-/// registers the Lua functions
+/// Registers the Lua commands and installs this module's detours (see the module doc comment's
+/// "Methods deliberately not detoured" section for what is intentionally left to vanilla).
 pub fn init() {
     // get_date() - no args
     lua_fn!("get_date", "Returns current in-game date/time", "get_date()", || {
@@ -942,10 +882,9 @@ pub fn init() {
     }
 }
 
-/// Stage 1-3's vtable detours (`setNewGameDefaults`/`save`/`load`/`update`/`updateSim`, per
-/// `openzt/plans/ztgamemgr-implementation-plan.md`); named `lifecycle` to distinguish from
-/// `gamemgr_finance_detours` below, which covers Stage 4's non-virtual `addCash`/`subtractCash`/
-/// date-family helpers.
+/// The vtable/lifecycle detours (`setNewGameDefaults`/`save`/`load`/`update`/`updateSim`/`start`/
+/// `stop`); named `lifecycle` to distinguish from `gamemgr_finance_detours` below, which covers the
+/// non-virtual finance/date methods.
 #[detour_mod]
 mod gamemgr_lifecycle_detours {
     use super::*;
@@ -990,8 +929,8 @@ mod gamemgr_lifecycle_detours {
     }
 }
 
-/// Stage 4's non-virtual finance/date detours (`addCash`/`subtractCash`/`getDate`/`isGameDate`/
-/// `isRealWorldDate`/`timeAgo`/`hoursAgo`, per `openzt/plans/ztgamemgr-implementation-plan.md`).
+/// The non-virtual finance/date detours (`addCash`/`subtractCash`/`getDate`/`isGameDate`/
+/// `isRealWorldDate`/`timeAgo`/`hoursAgo`/`animalTimeAgo`/`peopleTimeAgo`/`overrideNewGameDefaults`).
 #[detour_mod]
 mod gamemgr_finance_detours {
     use super::*;
@@ -1074,8 +1013,8 @@ pub(crate) mod live_support {
     /// Builds a standalone `ZTGameMgr` via the real vanilla free-function constructor. Confirmed via
     /// `_CreateZTGameMgr.c` that construction explicitly zeroes `started` (offset `0x4`),
     /// `soundscape_ptr` (`0x1190`), and `menu_music_handler_ptr` (`0x11A4`) - `operator_new` itself does
-    /// not guarantee zeroed memory, so any *other* field a later stage's test reads must either be
-    /// confirmed as genuinely initialized by this constructor plus `set_new_game_defaults` (Stage 1), or
+    /// not guarantee zeroed memory, so any *other* field a later test reads must either be
+    /// confirmed as genuinely initialized by this constructor plus `set_new_game_defaults`, or
     /// the block explicitly `memset` to `0` first.
     pub(crate) fn build_standalone_mgr() -> *mut ZTGameMgr {
         unsafe { CREATE_ZTGAME_MGR.original()() as *mut ZTGameMgr }

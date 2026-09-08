@@ -142,18 +142,16 @@ fn generated_branches(cases: &[BranchCase]) -> Vec<live_support::GeneratedBranch
 /// Used only by `ZTRESEARCHMGR_LOAD`/`ZTRESEARCHMGR_LOAD_CORRUPT_STREAM`, whose tail calls
 /// `on_completion()` for any program whose loaded `current_progress` ends up `>= target_cost`.
 ///
-/// This used to thread each program's generated `effect_kind_raw` through instead of pinning it,
-/// specifically to exercise that dispatch - but a valid `effect_kind` (`0..=7`) makes
-/// `on_completion()` call straight into real vanilla code (`SET_AVAIL`/`SET_*_CHARACTERISTIC`/
-/// `SET_TRICK_AVAILABLE`/`SET_EFFECT_DISCOUNT`), and every one of those unconditionally walks
-/// `GLOBAL_ZTWorldMgr`'s entity-type list - which is null at this early `LOAD_LANG_DLLS`-hooked
-/// injection point (confirmed live via `crash-capture`: an access violation inside
-/// `SET_EFFECT_DISCOUNT`, at exactly the instruction its decompile shows dereferencing
-/// `GLOBAL_ZTWorldMgr->BFWorldMgr.field_0x98`). Pinning `-1` here trades away that dispatch
-/// coverage, but it was never actually verified by this test's own assertions anyway -
-/// `predict_load`/`funding_levels`/`enabled`/`progress_bits` are all fully determined by the read
-/// loop that runs *before* this tail, so `on_completion()`'s real-vanilla side effects, even when
-/// they succeed, never touch a field this test checks.
+/// A valid `effect_kind` (`0..=7`) would make `on_completion()` call straight into real vanilla code
+/// (`SET_AVAIL`/`SET_*_CHARACTERISTIC`/`SET_TRICK_AVAILABLE`/`SET_EFFECT_DISCOUNT`), and every one of
+/// those unconditionally walks `GLOBAL_ZTWorldMgr`'s entity-type list - which is null at this early
+/// `LOAD_LANG_DLLS`-hooked injection point (confirmed live via `crash-capture`: an access violation
+/// inside `SET_EFFECT_DISCOUNT`, at exactly the instruction its decompile shows dereferencing
+/// `GLOBAL_ZTWorldMgr->BFWorldMgr.field_0x98`). Pinning `-1` here trades away dispatch coverage, but
+/// it wouldn't be verified by this test's own assertions anyway - `predict_load`/`funding_levels`/
+/// `enabled`/`progress_bits` are all fully determined by the read loop that runs *before* this tail,
+/// so `on_completion()`'s real-vanilla side effects, even when they succeed, never touch a field this
+/// test checks.
 fn generated_branches_for_load(cases: &[BranchCase]) -> Vec<live_support::GeneratedBranch> {
     cases
         .iter()
@@ -428,11 +426,9 @@ fn loaded_records_and_ids(cases: &[BranchCase]) -> LoadedRecordsAndIds {
     (records, branch_ids, category_ids, program_ids, funding_level_counts)
 }
 
-/// BFTILE_GET_LOCAL_ELEVATION: registered as `early_tests`' first entry - the position this
-/// battery's formerly hand-inlined version occupied (it ran straight after `detour_target` created
-/// the log, before every other early test). Compares the real vanilla `GET_LOCAL_ELEVATION` against
-/// the reimplemented `BFTile::get_local_elevation` for every known value of the tile's
-/// not-yet-fully-understood `unknown_byte_2` byte, over x/y in `0..1000`.
+/// BFTILE_GET_LOCAL_ELEVATION: registered as `early_tests`' first entry. Compares the real vanilla
+/// `GET_LOCAL_ELEVATION` against the reimplemented `BFTile::get_local_elevation` for every known
+/// value of the tile's not-yet-fully-understood `unknown_byte_2` byte, over x/y in `0..1000`.
 pub(crate) fn run_bftile_get_local_elevation_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let runner_config = ProptestConfig {
         failure_persistence: Some(Box::new(NoopFailurePersistence)),
@@ -592,23 +588,19 @@ fn days_approximately_eq(real: Option<f32>, reimpl: Option<f32>) -> bool {
 }
 
 /// ZTRESEARCHBRANCH_PCT_DAYS_REMAINING: compares the real `ZTResearchBranch::pctRemainingOnProgram`/
-/// `daysRemainingOnProgram` (`ztresearchbranch::PCT_REMAINING_ON_PROGRAM`/`DAYS_REMAINING_ON_PROGRAM`
-/// - a Ghidra regen has since fixed these `FunctionDef`s' auto-detected signatures, which were
-///   originally wrong: `-> i64` and no return type at all, respectively. See `pct_remaining_on_program`'s
-///   own doc comment in `ztresearch.rs` for the disassembly evidence that drove that fix) against the
-///   reimplemented `pct_remaining_on_program`/`days_remaining_on_program`, on a single branch built via
-///   `live_support::build_update_test_branch`. Both real and reimplemented sides read the exact same
-///   branch instance - these methods are `&self`-only with no side effects, so unlike the funding-level
-///   tests above there's no need to build two independent trees. `target_cost` includes an explicit
-///   `0.0` case alongside a general range: dividing by zero, `pct`'s only real edge case (`days`
-///   divides by `rate`, never `target_cost` - see its own doc comment in `ztresearch.rs`), produces a
-///   NaN/±Infinity that has to survive `pct`'s float-to-int conversion - this is exactly the case that
-///   originally caught the reimplementation's `f32 as i32` saturating cast disagreeing with vanilla's
-///   `FISTP`-based one (see `pct_remaining_on_program`'s own doc comment). Whether there's a real
-///   "None" for a given case is derived from `current_funding_rate() > 0.0` (the same guard both real
-///   and reimplemented code apply) rather than trusting `pct`'s raw `-1` return as a sentinel - `-1` is
-///   also a legitimate in-range percentage (e.g. progress just past target_cost), so it can't be told
-///   apart from the guard-failure sentinel by value alone.
+/// `daysRemainingOnProgram` (`ztresearchbranch::PCT_REMAINING_ON_PROGRAM`/`DAYS_REMAINING_ON_PROGRAM`)
+/// against the reimplemented `pct_remaining_on_program`/`days_remaining_on_program`, on a single
+/// branch built via `live_support::build_update_test_branch`. Both real and reimplemented sides read
+/// the exact same branch instance - these methods are `&self`-only with no side effects, so unlike the
+/// funding-level tests above there's no need to build two independent trees. `target_cost` includes an
+/// explicit `0.0` case alongside a general range: dividing by zero, `pct`'s only real edge case (`days`
+/// divides by `rate`, never `target_cost` - see its own doc comment in `ztresearch.rs`), produces a
+/// NaN/±Infinity that has to survive `pct`'s float-to-int conversion (see `pct_remaining_on_program`'s
+/// own doc comment for the x87 `FISTP` behavior this exercises). Whether there's a real "None" for a
+/// given case is derived from `current_funding_rate() > 0.0` (the same guard both real and
+/// reimplemented code apply) rather than trusting `pct`'s raw `-1` return as a sentinel - `-1` is also
+/// a legitimate in-range percentage (e.g. progress just past target_cost), so it can't be told apart
+/// from the guard-failure sentinel by value alone.
 pub(crate) fn run_research_branch_pct_days_remaining_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let runner_config = ProptestConfig {
         failure_persistence: Some(Box::new(NoopFailurePersistence)),
@@ -1299,13 +1291,8 @@ pub(crate) fn run_funding_text_test(failure_log: &mut Option<std::fs::File>) -> 
 /// `0.0..2.0` (`cash_delta` computed from the same generated `days`/`funding_cost` via
 /// `predict_branch_progress(.., f32::MAX).0`), so roughly half of generated cases land unaffordable
 /// and half affordable - exercising both `ZTGameMgr::subtractCash`/`subtract_cash` on the real and
-/// reimplemented sides. This used to be restricted to the *insufficient-cash* case only, because of
-/// a real bug: `openzt-detour/src/generated.rs`'s `SUBTRACT_CASH` `FunctionDef` declared one `f32`
-/// stack arg, but the real `ZTGameMgr::subtractCash` takes `(f32, bool)` per its `.asm`'s `RET 8` -
-/// a 4-byte stack imbalance on every `.original()` call. That's now fixed (see
-/// `ztmarketing-update-setmoneytext-crash-investigation.md`'s "Resolution" section), so the
-/// affordable branch is safe to exercise here too. The exact `available_cash == cash_delta` boundary
-/// is separately covered deterministically by `run_branch_update_reimpl_boundary_test` below.
+/// reimplemented sides. The exact `available_cash == cash_delta` boundary is separately covered
+/// deterministically by `run_branch_update_reimpl_boundary_test` below.
 pub(crate) fn run_branch_update_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let runner_config = ProptestConfig {
         failure_persistence: Some(Box::new(NoopFailurePersistence)),
@@ -1373,11 +1360,9 @@ pub(crate) fn run_branch_update_test(failure_log: &mut Option<std::fs::File>) ->
 }
 
 /// Deterministic single-case regression for the *reimplemented* side of `ZTRESEARCHBRANCH_UPDATE`'s
-/// affordable branch - the actual previously-buggy path (`ZTResearchBranch::update` ->
-/// `ZTGameMgr::spend_research`/`subtract_cash`, routed through our own `SPEND_RESEARCH`/`SUBTRACT_CASH`
-/// `FunctionDef`s). Mirrors `run_marketing_update_reimpl_boundary_test`'s shape/rationale - see
-/// `ztmarketing-update-setmoneytext-crash-investigation.md`'s "Resolution" section and "Suggested next
-/// steps" item 7.
+/// affordable branch (`ZTResearchBranch::update` -> `ZTGameMgr::spend_research`/`subtract_cash`,
+/// routed through our own `SPEND_RESEARCH`/`SUBTRACT_CASH` `FunctionDef`s). Mirrors
+/// `run_marketing_update_reimpl_boundary_test`'s shape/rationale.
 ///
 /// Calls only the reimplemented `ZTResearchBranch::update`, skipping `.original()` entirely. `TARGET_COST`
 /// stays fixed far above any possible progress delta (same rationale as `run_branch_update_test` above), so
@@ -1415,8 +1400,8 @@ pub(crate) fn run_branch_update_reimpl_boundary_test(failure_log: &mut Option<st
 /// against the reimplemented `update`, for 1-3 synthetic branches built via
 /// `live_support::with_update_test_branches`. The zero-branch `ZTRESEARCHMGR_UPDATE` test above
 /// only exercises `elapsed_ticks`' accumulator/day-count bookkeeping in isolation - this is the
-/// first test that actually exercises `ZTResearchMgr::update` iterating multiple branches and
-/// threading the correct `days` count to each (via `ZTResearchBranch::update`, native since Phase F).
+/// test that exercises `ZTResearchMgr::update` iterating multiple branches and threading the correct
+/// `days` count to each (via `ZTResearchBranch::update`).
 ///
 /// `target_cost` stays fixed far above any possible progress delta, same rationale as
 /// `run_branch_update_test` above, so `on_completion`/`pick_random_program`/UI never run on either
@@ -1428,17 +1413,9 @@ pub(crate) fn run_branch_update_reimpl_boundary_test(failure_log: &mut Option<st
 /// sums every branch's own `cash_delta` (via `predict_branch_progress(.., f32::MAX).0`) for the
 /// shared `days` count the whole call receives. A multiplier below `1.0` naturally produces
 /// "prefix affordable, suffix not" cases as an earlier branch exhausts the shared pool - exercising
-/// real sequential depletion, not just per-branch affordability in isolation.
-///
-/// This used to be restricted to the *insufficient-cash* case only (`AVAILABLE_CASH = 0.0`,
-/// `funding_rate` fixed inert at `0.0`), because of a real bug: `openzt-detour/src/generated.rs`'s
-/// `SUBTRACT_CASH` `FunctionDef` declared one `f32` stack arg, but the real
-/// `ZTGameMgr::subtractCash` takes `(f32, bool)` per its `.asm`'s `RET 8` - a 4-byte stack imbalance
-/// on every `.original()` call. That's now fixed (see
-/// `ztmarketing-update-setmoneytext-crash-investigation.md`'s "Resolution" section), so
-/// `funding_rate` is now generated too - a fixed `0.0` would leave `current_progress` trivially
-/// unchanged regardless of whether the affordable-branch math is right, silently defeating the
-/// comparison now that cash is sometimes affordable.
+/// real sequential depletion, not just per-branch affordability in isolation. `funding_rate` is
+/// generated (not fixed at `0.0`) so `current_progress` actually moves on the affordable branches,
+/// exercising the affordable-branch math rather than trivially leaving it unchanged.
 pub(crate) fn run_research_mgr_update_branches_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let runner_config = ProptestConfig {
         failure_persistence: Some(Box::new(NoopFailurePersistence)),

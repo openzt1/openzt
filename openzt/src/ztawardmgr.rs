@@ -2,19 +2,16 @@
 //! player has earned (persisted) and the catalogue of awards the `award*.cfg` resource files define (rebuilt from resources
 //! every load, never persisted).
 //!
-//! Unlike this codebase's other `ZT*Mgr` reimplementations (`ZTMarketingMgr`/`ZTResearchMgr`/
-//! `ZTThoughtMgr`/`ZTMegatileMgr`), `ZTAwardMgr` has no vtable and its global instance is a
+//! This module is a fully independent Rust store: `ZTAwardMgr` has no vtable and its global instance is a
 //! **directly-embedded** struct at a fixed address (`0x006390e8`), not a pointer to a heap allocation - see
 //! `private/docs/vtables/ZTAwardMgr.md`. A full decompile-corpus grep found exactly two external callers
 //! that read its fields directly (bypassing any method call): `ZTScenarioSimpleGoal::eval`'s case `0xb`
-//! arm (see [`eval_award_count_override`]) and `_showAwards` (see [`show_awards_detour`]) - both of those
-//! are reimplemented/detoured here too, closing the surface. Every other caller goes through a plain
-//! method call and is layout-agnostic.
-//!
-//! That closed surface makes this class a candidate for CLAUDE.md's "fully independent Rust store" style:
-//! the constructor/destructor are deliberately left un-detoured (vanilla's own copy of the tree/vector
-//! becomes inert dead weight, never read or written by any of the code below), which sidesteps the
-//! cross-allocator hazard class entirely. [`live_support::read_vanilla_award_tree`] is the sole exception -
+//! arm (see [`eval_award_count_override`]) and `_showAwards` (see [`show_awards_detour`]) - both are
+//! reimplemented/detoured here too, closing the surface; every other caller goes through a plain method
+//! call and is layout-agnostic. The constructor/destructor are therefore left un-detoured (vanilla's own
+//! copy of the tree/vector becomes inert dead weight, never read or written by any of the code below),
+//! which sidesteps the cross-allocator hazard class entirely. [`live_support::read_vanilla_award_tree`] is
+//! the sole exception -
 //! a read-only, never-mutating/freeing walk of vanilla's real tree, used only by the live-comparison test
 //! suite to check the two representations agree.
 
@@ -75,14 +72,12 @@ struct ZTAwardMgrState {
 
 static AWARD_MGR: LazyLock<Mutex<ZTAwardMgrState>> = LazyLock::new(|| Mutex::new(ZTAwardMgrState::default()));
 
-/// Reimplementation of `OOAnalyzer::ZTAwardMgr::addAward`. Vanilla's duplicate check is a genuine linear
-/// scan (`for (piVar7 = begin; piVar7 != end && *piVar7 != param_1; ...)`), independent of any
-/// ordering. The insertion-sort-shaped code that follows a successful append (confirmed live via
-/// `ZTAWARDMGR_ADD_AWARD_SAVE_LOAD` - `add_award([0, -1])` produces `[0, -1]`, not the ascending `[-1,
-/// 0]` an initial ascending-binary-search implementation of this function produced) keeps the vector
-/// sorted **descending** (largest first), not ascending - confirmed by hand-tracing
-/// `ZTAwardMgr_addAward.c`'s inner comparisons (`*piVar4 < iVar11` / `iVar8 < iVar11`), which shift
-/// smaller existing elements rightward to make room for a larger new one at the front.
+/// Reimplementation of `ZTAwardMgr::addAward`'s insert. Vanilla's duplicate check is a genuine linear
+/// scan, independent of any ordering; the insertion-sort-shaped code that follows a successful append
+/// keeps the vector sorted **descending** (largest first), not ascending - per `ZTAwardMgr_addAward.c`'s
+/// inner comparisons (`*piVar4 < iVar11` / `iVar8 < iVar11`), which shift smaller existing elements
+/// rightward to make room for a larger new one at the front. The live-observed ordering is pinned by the
+/// `insert_sorted_unique_matches_live_observed_ordering` unit test.
 fn insert_sorted_unique(ids: &mut Vec<i32>, id: i32) {
     if ids.contains(&id) {
         return;
@@ -204,32 +199,26 @@ fn first_parse<T: std::str::FromStr>(ini: &Ini, section: &str, key: &str) -> Opt
 }
 
 /// Reimplementation of `ZTAwardMgr::start`'s resource parse. `BFResource::find(this, "award", ".cfg")`
-/// (per `ZTAwardMgr_start.c`) is a **multi-file** lookup, not a single fixed path - confirmed live: this
-/// codebase's real `awards/` resource directory holds several distinct `award*.cfg` files
-/// (`awards/awards.cfg`, `awards/award001.cfg`, `awards/award002.cfg`, `awards/award003.cfg`), and only
-/// the three `award0NN.cfg` files carry the `id`/`nameID`/`tooltipID`/`icon`-bearing catalogue data,
-/// gated behind a `[Version]` section - `awards/awards.cfg` itself is a different, unrelated small file
-/// (an `[Awards]` section with a bare `award=`/`maxCurrent=` pair, no `[Version]` section at all), which
-/// `ZTAwardMgr_start.c`'s own version-gate (`getInt(this, Version, version, &local_78)`, only proceeding
-/// if `local_78 > 0`) correctly skips. Since `resource_manager::lazyresourcemap`'s `LAZY_RESOURCE_MAP` is
-/// keyed by exact lowercased filename (collapsing same-named files across archives to one, but not
-/// collapsing *distinct* filenames), every matching name is enumerated here directly via
-/// `get_file_names()` and filtered by basename prefix `"award"`/suffix `".cfg"`, reproducing vanilla's
-/// multi-file search without needing a dedicated prefix-search primitive in the resource layer.
+/// (per `ZTAwardMgr_start.c`) is a **multi-file** lookup, not a single fixed path: the real `awards/`
+/// resource directory holds `awards.cfg` plus `award001.cfg`-`award003.cfg`, and only the `award0NN.cfg`
+/// files carry the `id`/`nameID`/`tooltipID`/`icon`-bearing catalogue data, gated behind a `[Version]`
+/// section - `awards.cfg` is a different, unrelated small file (an `[Awards]` section with a bare
+/// `award=`/`maxCurrent=` pair, no `[Version]` section), which the version gate (`getInt(this, Version,
+/// version, &local_78)`, only proceeding if `local_78 > 0`) skips. Since
+/// `resource_manager::lazyresourcemap`'s `LAZY_RESOURCE_MAP` is keyed by exact lowercased filename,
+/// every matching name is enumerated here via `get_file_names()` and filtered by basename prefix
+/// `"award"`/suffix `".cfg"`, reproducing vanilla's multi-file search without a prefix-search primitive
+/// in the resource layer.
 ///
-/// For each matching file (in enumeration order - unlike a single unique-key resource lookup, there's no
-/// natural "first/last wins" ordering across separate files, and none is needed: every real award id is
-/// only ever defined once, in exactly one qualifying file), checks a `[Version]` section's `version` key
-/// is present and positive (skipping the file otherwise - this is what correctly excludes
-/// `awards/awards.cfg`, which has no `[Version]` section at all), then reads the repeated `award` key from
-/// the `[Awards]` section. **Confirmed live against the real files** (not assumed from the decompile's own
-/// symbolic-looking `Version`/`Awards` argument names, which turned out to name *sections*, not
-/// `[default]`-section keys, and whose actual per-file key is the lowercase singular `award`/`version` -
-/// see `ZTAWARDMGR_START` in `reimplementation_tests/mod.rs`). Each `award` value is itself a section name
-/// (in practice just the id's own decimal digits, e.g. `13`) whose `id`/`nameID`/`tooltipID`/`icon` keys
-/// are read via the 4-arg form. Only inserted when `id != 0 && nameID != 0` (matching
-/// `ZTAwardMgr_start.c:65`); a later section with the same `id` overwrites an earlier one (the tree-insert
-/// itself is unconditional overwrite-by-id, not first-wins).
+/// The decompile's symbolic `Version`/`Awards` argument names are *section* names, not
+/// `[default]`-section keys; the actual per-file keys are the lowercase singular `award`/`version`
+/// (confirmed live against the real files - see `ZTAWARDMGR_START` in
+/// `reimplementation_tests/tests/ztawardmgr.rs`). Each `award` value is itself a section name (in
+/// practice just the id's own decimal digits, e.g. `13`) whose `id`/`nameID`/`tooltipID`/`icon` keys are
+/// read via the 4-arg form. Only inserted when `id != 0 && nameID != 0` (matching
+/// `ZTAwardMgr_start.c:65`); a later section with the same `id` overwrites an earlier one (the
+/// tree-insert is unconditional overwrite-by-id, not first-wins). Enumeration order across files doesn't
+/// matter - every real award id is defined in exactly one qualifying file.
 pub fn start() -> bool {
     let candidates: Vec<String> = crate::resource_manager::lazyresourcemap::get_file_names()
         .into_iter()
@@ -379,11 +368,9 @@ pub(crate) mod eval_award_count_override {
         }
 
         /// Exposes the real vanilla trampoline for the live comparison test. `EVAL.original()` can't be
-        /// used for this once this module's own detour has patched `EVAL`'s address - `FunctionDef::
-        /// original()` is a raw address cast in release (debug builds route it through openzt-detour's
-        /// hook registry, see `openzt-detour/src/lib.rs`), so once hooked it silently re-enters this same
-        /// detour instead of reaching real vanilla there. `EVAL_DETOUR.call(this)` (the `retour`
-        /// trampoline this macro generates) is the way back to real vanilla behavior in every build.
+        /// used once this module's own detour has patched `EVAL`'s address - it re-enters this same
+        /// detour (a raw address cast in release; only debug builds route through openzt-detour's hook
+        /// registry), so `EVAL_DETOUR.call(this)` is the way back to real vanilla in every build.
         pub(super) fn call_real(this: *const u32) -> i32 {
             unsafe { EVAL_DETOUR.call(this) }
         }
@@ -427,9 +414,8 @@ pub(crate) mod show_awards_detour {
     /// mirroring `_showAwards.c`'s exact argument mapping: `icon` is passed as the raw `p2` slot (the
     /// award's value-payload `+0x1c` dword directly - **not** a `ZTBufferString` wrapper, unlike `text`),
     /// `p5` is `0xffffffff` (not null), and `color` is
-    /// `((tooltip_id as u32) & 0xff00_0000) | AWARD_LIST_ITEM_COLOR` - implemented exactly this way
-    /// (not pre-simplified to the bare literal) so a live comparison can confirm the top byte of a real
-    /// `tooltip_id` is always `0` in practice, per this module's own doc comment on that open question.
+    /// `((tooltip_id as u32) & 0xff00_0000) | AWARD_LIST_ITEM_COLOR`, kept unsimplified so a live
+    /// comparison can confirm the top byte of a real `tooltip_id` is always `0` in practice.
     #[allow(clippy::manual_dangling_ptr)] // literal sentinel value `1`, not a real pointer
     fn add_award_to_list_box(list_box: *const u32, text: &str, icon: &str, tooltip_id: i32) {
         let mut encoded_text = encode_to_ansi(text);
@@ -479,8 +465,8 @@ pub(crate) mod show_awards_detour {
         }
 
         /// Exposes the real vanilla trampoline for the live comparison test - see
-        /// `eval_award_count_override::detours::call_real`'s doc comment for why `SHOW_AWARDS.original()`
-        /// can't be used for this once this detour has patched the address.
+        /// `eval_award_count_override::detours::call_real`'s doc comment for why `.original()` can't be
+        /// used once this detour has patched the address.
         pub(super) fn call_real() {
             unsafe { SHOW_AWARDS_DETOUR.call() }
         }
@@ -557,7 +543,7 @@ pub(crate) mod live_support {
     /// `private/docs/vtables/ZTAwardMgr.md`. Used by the real-zoo save/load round-trip test to see what
     /// real, undetoured vanilla `ZTAwardMgr::load` actually populated from the loaded zoo file - nothing
     /// in `AWARD_MGR` mirrors it, since this test build never installs `award_mgr_detours` (see
-    /// `reimplementation_tests/mod.rs`'s own `init()` doc comment on why). Never mutates anything.
+    /// `reimplementation_tests::init()`'s comment on why). Never mutates anything.
     pub(crate) fn read_vanilla_earned_ids() -> Vec<i32> {
         let this = real_ptr() as u32;
         let begin = get_from_memory::<u32>(this + 0xc);

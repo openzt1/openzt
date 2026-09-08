@@ -1,20 +1,18 @@
 //! Reimplementations of `ZTGuest`'s three megatile-reading methods -
-//! `fCrowdDensityMegatile`/`fEstheticBonusMegatile`/`fStinkyMegatile`. These were, until this module
-//! existed, the last vanilla code that read `ZTMegatileMgr`'s grid directly, by pointer-chasing, bypassing
-//! any detour (see `ztmegatilemgr.rs`'s module doc comment) - closing this read loop is a prerequisite for
-//! `openzt/plans/native-data-structures-plan.md`'s Module 2 (migrating `ZTMegatileMgr`'s storage to native
-//! `Vec`/`HashMap`), which this module deliberately does not attempt: `ZTMegatileMgr`'s struct layout must
-//! still stay byte-exact for now, since the accessors this file calls
+//! `fCrowdDensityMegatile`/`fEstheticBonusMegatile`/`fStinkyMegatile`, detoured onto the reimplementations
+//! below. These detours remove the last direct pointer-chasing reads of `ZTMegatileMgr`'s grid from
+//! vanilla code (see `ztmegatilemgr.rs`'s module doc comment); `ZTMegatileMgr`'s struct layout must still
+//! stay byte-exact, since the accessors this file calls
 //! (`megatile()`/`guest_count()`/`stink()`/`category_value()`) still read vanilla's own live-owned memory,
 //! not a migrated Rust store.
 //!
 //! No Windows decompile exists for any of the three, nor for their sole caller,
-//! `ZTGuest::doEnvironmentEffectCheck` (only macOS decompiles were available previously) - all four
-//! addresses used here were confirmed by direct disassembly of `zoo.dll` instead. See
-//! `private/docs/vtables/ZTGuest.md`'s "Non-virtual confirmed methods" section for the full evidence chain
-//! (call-site uniqueness, the `ZTGuestType::environment_effect_check`/`crowded_viewing_threshold`/
-//! `object_esthetic_threshold`/`stink_threshold` field-offset matches, and the `GLOBAL_ZTMegatileMgr`/
-//! `MegatileRow`/`ZTMegatile` stride matches).
+//! `ZTGuest::doEnvironmentEffectCheck` - all four addresses used here were confirmed by direct
+//! disassembly of `zoo.dll`. See `private/docs/vtables/ZTGuest.md`'s "Non-virtual confirmed methods"
+//! section for the full evidence chain (call-site uniqueness, the
+//! `ZTGuestType::environment_effect_check`/`crowded_viewing_threshold`/`object_esthetic_threshold`/
+//! `stink_threshold` field-offset matches, and the `GLOBAL_ZTMegatileMgr`/`MegatileRow`/`ZTMegatile`
+//! stride matches).
 
 use std::mem;
 
@@ -49,10 +47,8 @@ pub fn crowd_density_megatile(tile: &BFTile) -> i32 {
     tile_megatile(tile).map_or(0, |m| m.guest_count() * 10 / 25)
 }
 
-/// `ZTGuest::fStinkyMegatile` (`0x0043b84a`). Reads the megatile's `stink` scalar (formerly mislabeled
-/// `esthetic_bonus` - see `ztmegatilemgr.rs`'s `ZTMegatile::stink`/finding 2 in
-/// `ztmegatilemgr-review-findings.md`), confirmed by the real function loading
-/// `ZTMegatile+0x10` (`fld dword ptr [eax+edx*4+0x10]`) and comparing the result against
+/// `ZTGuest::fStinkyMegatile` (`0x0043b84a`). Reads the megatile's `stink` scalar, confirmed by the real
+/// function loading `ZTMegatile+0x10` (`fld dword ptr [eax+edx*4+0x10]`) and comparing the result against
 /// `ZTGuestType::stink_threshold` (`bfentitytype.rs`, offset `0x2B0`). `0.0` for a tile with no allocated
 /// megatile.
 pub fn stinky_megatile(tile: &BFTile) -> f32 {

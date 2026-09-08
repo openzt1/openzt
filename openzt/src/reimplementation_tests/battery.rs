@@ -142,6 +142,11 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSHOWSTATE_DETOURS_ENABLED", run: tests::ztshowstate::run_ztshowstate_detours_enabled_test },
             RegisteredTest { name: "ZTSHOWSTATE_INIT", run: tests::ztshowstate::run_ztshowstate_init_test },
             RegisteredTest { name: "ZTSHOWSTATE_SAVE_LOAD_ROUNDTRIP", run: tests::ztshowstate::run_ztshowstate_save_load_roundtrip_test },
+            RegisteredTest { name: "ZTSHOWINFO_DETOURS_ENABLED", run: tests::ztshowinfo::run_ztshowinfo_detours_enabled_test },
+            RegisteredTest { name: "ZTSHOWINFO_STATUS_PREDICATES_LIVE", run: tests::ztshowinfo::run_ztshowinfo_status_predicates_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_ACCUMULATORS_LIVE", run: tests::ztshowinfo::run_ztshowinfo_accumulators_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_ADD_REMOVE_SHOW_LIVE", run: tests::ztshowinfo::run_ztshowinfo_add_remove_show_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_EVENT_SYSTEM_LIVE", run: tests::ztshowinfo::run_ztshowinfo_event_system_live_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_FADE_CONSTANTS", run: tests::ztsoundscape::run_ztsoundscape_fade_constants_test },
             RegisteredTest { name: "MENUMUSICHANDLER_INIT", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_init_test },
             RegisteredTest { name: "MENUMUSICHANDLER_START_PLAY", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_start_play_test },
@@ -188,16 +193,16 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSHOW_PENDING_SCRIPT_TREE_REAL_ZOO_INTEGRITY_LIVE", run: tests::ztshow::run_ztshow_pending_script_tree_real_zoo_integrity_live_test },
             RegisteredTest { name: "ZTSHOWINFO_REAL_SAVE_LOAD_BYTE_COUNT_LIVE", run: tests::ztshow::run_ztshowinfo_real_save_load_byte_count_live_test },
             RegisteredTest { name: "ZTRESEARCHMGR_REAL_ZOO_SAVE_ROUNDTRIP_LIVE", run: tests::ztresearch::run_ztresearchmgr_real_zoo_save_roundtrip_live_test },
-            // openzt/plans/real-zoo-save-load-roundtrip-tests-plan.md's three order-independent items: none
-            // of these three mutate real vanilla memory (marketing's real singleton round-trips its own
-            // reimplemented state; award/thought read real vanilla memory read-only and only ever mutate
-            // their own independent Rust-side stores, reset back to empty afterward where relevant).
+            // Order-independent: none of these three mutates real vanilla memory (marketing's real
+            // singleton round-trips its own reimplemented state; award/thought read real vanilla memory
+            // read-only and only ever mutate their own independent Rust-side stores, reset back to empty
+            // afterward where relevant).
             RegisteredTest { name: "ZTMARKETINGMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE", run: tests::ztmarketing::run_ztmarketingmgr_real_zoo_save_load_roundtrip_live_test },
             RegisteredTest { name: "ZTAWARDMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE", run: tests::ztawardmgr::run_ztawardmgr_real_zoo_save_load_roundtrip_live_test },
             RegisteredTest { name: "ZTTHOUGHTMGR_REAL_ZOO_SAVE_ROUNDTRIP_LIVE", run: tests::ztthoughtmgr::run_ztthoughtmgr_real_zoo_save_roundtrip_live_test },
-            // Risk-sequenced per ztmegatilemgr.rs's module doc comment: update() first (trivial scalar
-            // logic), then recalculate_characteristics() (in-place map mutation, no vector resize), then
-            // the category-map node-layout live check, then init() last (the only vector-resize path).
+            // Risk-sequenced: update() first (trivial scalar logic), then recalculate_characteristics()
+            // (in-place map mutation, no vector resize), then the category-map node-layout live check,
+            // then init() last (the only vector-resize path).
             RegisteredTest { name: "ZTMEGATILEMGR_UPDATE", run: tests::ztmegatilemgr::run_megatilemgr_update_test },
             RegisteredTest { name: "ZTMEGATILEMGR_RECALCULATE_CHARACTERISTICS", run: tests::ztmegatilemgr::run_megatilemgr_recalculate_characteristics_test },
             RegisteredTest { name: "ZTMEGATILE_CATEGORY_MAP_LAYOUT", run: tests::ztmegatilemgr::run_megatile_category_map_layout_test },
@@ -210,41 +215,30 @@ pub(super) mod detour_zoo_main {
             // live one.
             RegisteredTest { name: "ZTSCENARIOSIMPLEGOAL_EVAL_AWARD_COUNT", run: tests::ztscenariosimplegoal::run_ztscenariosimplegoal_eval_award_count_test },
             RegisteredTest { name: "ZTAWARDMGR_SHOW_AWARDS", run: tests::ztawardmgr::run_awardmgr_show_awards_test },
-        // ZTShowScriptMgr reimplementation plan, open item 11 (Stage 2 live coverage): all three need
-        // a real, loaded zoo - Group 1 (ADD_SCRIPT/CHECK_PENDING_SCRIPTS) needs a live GLOBAL_ZTGameMgr
-        // for GET_DATE, Groups 2/3 need real GLOBAL_ZTHabitatMgr/GLOBAL_ZTWorldMgr data.
+        // ZTShowScriptMgr/ZTShow live coverage: all three need a real, loaded zoo - Group 1
+        // (ADD_SCRIPT/CHECK_PENDING_SCRIPTS) needs a live GLOBAL_ZTGameMgr for GET_DATE, Groups 2/3
+        // need real GLOBAL_ZTHabitatMgr/GLOBAL_ZTWorldMgr data.
         //
-        // The ZTShowScriptMgr/ZTShow detours are now installed unconditionally near the top of this
-        // file's `init()` (alongside `research_save_reimplementation`/`marketing_save_reimplementation`)
-        // rather than only here, after `run_load_live_zoo` - see open item 1's diagnostics there for
-        // why that used to be necessary and what fixed it. **Real, session-defining finding** (from the
-        // session that first installed these two detours here, after the zoo already loaded): this
-        // crate's production entry point (`openztlib::init()`, reached via `zoo_init::init_detours()`)
-        // is never called by `openzt-test-dll`'s own `DllMain` (`openzt-test-dll/src/lib.rs` calls
-        // `openztlib::reimplementation_tests::init()` directly instead) - meaning *no* per-module
-        // detour (`ztshow`, `ztshowscriptmgr`, `ztawardmgr`, `ztthoughtmgr`, `ztmegatilemgr`, ...) was
-        // ever installed in this test harness except the handful explicitly installed in this file's
-        // own `init()`. Every "call the real, now-hooked address directly" live test in this file
-        // predating that finding (`ZTAWARDMGR_SHOW_AWARDS`, `ZTSCENARIOSIMPLEGOAL_EVAL_AWARD_COUNT`)
-        // was therefore silently calling real, un-hooked vanilla code all along and only ever verifying
-        // "vanilla doesn't crash" - not exercising the Rust reimplementation at all, despite each one's
-        // own doc comment describing it as testing the hooked path. Confirmed live via reliable,
-        // non-tracing (`std::sync::atomic`/direct-file-write) diagnostics, after `tracing`-based
-        // `error!`/`info!` diagnostics turned out to be lossy under this battery's `std::process::exit()`
-        // end-of-run (queued-but-unflushed log lines vanish silently - `error!` calls placed early in a
-        // test function routinely never made it to `openzt.log`, while calls placed right at the end
-        // reliably did).
+        // Harness wiring: `openzt-test-dll`'s DllMain calls `openztlib::reimplementation_tests::init()`
+        // directly and never runs `lib.rs`'s production boot cascade, so the only detours in this
+        // harness are the ones this file's own `init()` installs - no per-module detour (`ztshow`,
+        // `ztshowscriptmgr`, `ztawardmgr`, `ztthoughtmgr`, `ztmegatilemgr`, ...) exists unless that
+        // includes it. The ZTShowScriptMgr/ZTShow detours are installed unconditionally near the top
+        // of this file's `init()` (alongside `research_save_reimplementation`/
+        // `marketing_save_reimplementation`), not gated behind `run_load_live_zoo`.
         //
-        // Since fixed for these two specifically: `ztawardmgr::eval_award_count_override::init`/
-        // `ztawardmgr::show_awards_detour::init` are now installed in this file's own `init()` too
-        // (deliberately *not* the whole `ztawardmgr::init`, which would also hook `ADD_AWARD`/
-        // `GET_AWARD`/`SAVE`/`LOAD`/`START` and break the three other award tests' use of
-        // `.original()` for real-vanilla comparison), and both tests now compare against real vanilla
-        // via a `retour` trampoline (`call_real`) instead of `.original()`, which can't reach real
-        // vanilla once a function is hooked in-process (see either `call_real`'s own doc comment).
+        // The two award tests registered above run through a `retour` trampoline (`call_real`) instead
+        // of `.original()`, which can't reach real vanilla once a function is hooked in-process (see
+        // either `call_real`'s own doc comment); only `ztawardmgr::eval_award_count_override::init`/
+        // `ztawardmgr::show_awards_detour::init` are installed for them (deliberately *not* the whole
+        // `ztawardmgr::init`, which would also hook `ADD_AWARD`/`GET_AWARD`/`SAVE`/`LOAD`/`START` and
+        // break the three other award tests' use of `.original()` for real-vanilla comparison).
             RegisteredTest { name: "ZTSHOWINFO_ADD_SCRIPT_CHECK_PENDING_SCRIPTS_LIVE", run: tests::ztshow::run_ztshowinfo_add_script_check_pending_scripts_live_test },
             RegisteredTest { name: "ZTSHOWINFO_PENDING_SCRIPT_TREE_STRESS_LIVE", run: tests::ztshow::run_ztshowinfo_pending_script_tree_stress_live_test },
             RegisteredTest { name: "ZTSHOW_CHECK_OWNING_HABITAT_LIVE", run: tests::ztshow::run_ztshow_check_owning_habitat_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_SCHEDULE_FREQUENCY_LIVE", run: tests::ztshowinfo::run_ztshowinfo_schedule_frequency_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_KEEPER_PREDICATES_LIVE", run: tests::ztshowinfo::run_ztshowinfo_keeper_predicates_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_CREATE_DEFAULT_SCRIPT_LIVE", run: tests::ztshowinfo::run_ztshowinfo_create_default_script_live_test },
             RegisteredTest { name: "ZTSHOW_GROUP3_TRICK_LIVE", run: tests::ztshow::run_ztshow_group3_trick_live_test },
             RegisteredTest { name: "ZTSHOWUI_FILL_TRICK_LISTS_LIVE", run: tests::ztshowui::run_ztshowui_fill_trick_lists_live_test },
             RegisteredTest { name: "ZTSHOWSCRIPT_CTOR_REGISTRATION_LIVE", run: tests::ztshowscriptmgr::run_ztshowscript_ctor_registration_live_test },

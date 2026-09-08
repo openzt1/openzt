@@ -2,9 +2,8 @@
 //! (production file `openzt/src/ztmarketing.rs`): increase/decrease/set funding level, mgr
 //! update/save/load/clear/dtor, `ZTMarketing::update` (incl. boundary reproductions), and
 //! `loadConfigurations` against the path vanilla's own boot-time call passes (captured by
-//! `battery.rs`'s transparent path-capture detour). `funding_level_case_strategy` is also imported
-//! back into `battery.rs` by the staying `ZTResearchBranch` funding-text tests. The marketing part
-//! of the real-zoo round-trip battery lives at the bottom of this file.
+//! `battery.rs`'s transparent path-capture detour). `funding_level_case_strategy` is also used by
+//! `ztresearch.rs`'s `ZTResearchBranch` funding-text tests.
 
 use openzt_detour::generated::standalone;
 use openzt_detour::generated::ztmarketing;
@@ -254,9 +253,9 @@ pub(crate) fn run_marketingmgr_update_test(failure_log: &mut Option<std::fs::Fil
 /// `ZTMarketing` against the reimplemented `update`, with `tick_accumulator` fixed so a threshold
 /// crossing always happens (`delta_ticks` generated `3000..10000`, always `> 359` days' worth per
 /// `predict_mgr_update`) - so `ZTMarketing::update` genuinely runs on both sides, not just the
-/// accumulator bookkeeping already covered by `ZTMARKETINGMGR_UPDATE` above. Run from
-/// `run_on_completion_reset_test_and_exit`'s `updateSim` injection point, since `GLOBAL_ZTGameMgr`
-/// isn't constructed yet at the earlier `LOAD_LANG_DLLS` battery.
+/// accumulator bookkeeping already covered by `ZTMARKETINGMGR_UPDATE` above. Registered in
+/// `always_late_tests()`, which runs from `run_on_completion_reset_test_and_exit`'s `updateSim`
+/// injection point - `GLOBAL_ZTGameMgr` isn't constructed yet at the earlier `early_tests()` point.
 ///
 /// The funding table has `1..5` entries (`ZTMarketing::update`'s unchecked
 /// `funding_level(current_funding_level)` read needs a real, non-empty table to be safe), with
@@ -265,14 +264,9 @@ pub(crate) fn run_marketingmgr_update_test(failure_log: &mut Option<std::fs::Fil
 /// `available_cash` is generated as `cash_delta * cash_multiplier` for `cash_multiplier` in
 /// `0.0..2.0` (`cash_delta` computed the same way as `ZTMarketing::update`'s own
 /// `DAYS_TO_FUNDING_SCALE` formula below), so roughly half of generated cases land unaffordable and
-/// half affordable - taking the real affordable `<=` branch calls
+/// half affordable - the affordable `<=` branch calls
 /// `ZooStatus::spendMarketing`/`ZTGameMgr::subtractCash` on the real `GLOBAL_ZTGameMgr` singleton on
-/// both sides. This used to be restricted to the *insufficient-cash* case only, because of a real
-/// bug: `openzt-detour/src/generated.rs`'s `SUBTRACT_CASH` `FunctionDef` declared one `f32` stack
-/// arg, but the real `ZTGameMgr::subtractCash` takes `(f32, bool)` per its `.asm`'s `RET 8` - a
-/// 4-byte stack imbalance on every `.original()` call. That's now fixed (see
-/// `ztmarketing-update-setmoneytext-crash-investigation.md`'s "Resolution" section), so the
-/// affordable branch is safe to exercise here too. The exact `available_cash == cash_delta`
+/// both sides. The exact `available_cash == cash_delta`
 /// boundary is separately covered deterministically by `run_marketing_update_boundary_test` (real
 /// side only) and `run_marketing_update_reimpl_boundary_test` (reimplemented side only) below.
 pub(crate) fn run_marketing_update_test(failure_log: &mut Option<std::fs::File>) -> bool {
@@ -358,23 +352,16 @@ pub(crate) fn run_marketing_update_test(failure_log: &mut Option<std::fs::File>)
     fail_flag
 }
 
-/// Deterministic single-case reproduction of the `ZTMARKETING_UPDATE` affordable-branch crash.
+/// Deterministic single-case probe of the real side of `ZTMARKETING_UPDATE`'s affordable branch.
 /// Calls only the real `ZTMarketingMgr::update`, skipping the reimplemented side entirely, so a
 /// crash unambiguously means the real vanilla call path. `available_cash` is pinned to exactly
 /// `cash_delta` (the `<=` boundary itself, never exercised by `run_marketing_update_test` above),
 /// forcing the real side onto the affordable `spendMarketing`/`subtractCash` branch every time.
 ///
-/// Runs unconditionally as part of the normal battery. This whole module only compiles under the
-/// `reimplementation-tests` feature (never the shipped `openzt.dll`), so there's no production
-/// exposure to gate against. The crash this reproduces only occurs when `zoo.exe` is running under
-/// Windows' "Windows 7" compatibility-mode shim - with that shim off, this runs clean. If this test
-/// ever crashes the battery, check `zoo.exe`'s Compatibility tab before assuming a regression.
-///
-/// This test's crash risk was always independent of the (now-fixed) `SUBTRACT_CASH` stack-imbalance
-/// bug documented on `run_marketing_update_test` above - it only ever calls genuine vanilla code via
-/// `.original()`, never routing through our own buggy `FunctionDef`. See
-/// `run_marketing_update_reimpl_boundary_test` below for the counterpart that exercises the
-/// reimplemented side, the path that *was* affected by that bug.
+/// Known to crash when `zoo.exe` runs under Windows' "Windows 7" compatibility-mode shim; runs
+/// clean otherwise. If this test crashes the battery, check `zoo.exe`'s Compatibility tab before
+/// assuming a regression. The reimplemented counterpart is `run_marketing_update_reimpl_boundary_test`
+/// below.
 pub(crate) fn run_marketing_update_boundary_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTMARKETING_UPDATE_BOUNDARY_REPRO";
 
@@ -410,17 +397,12 @@ pub(crate) fn run_marketing_update_boundary_test(failure_log: &mut Option<std::f
     false
 }
 
-/// Deterministic single-case regression for the *reimplemented* side of `ZTMARKETING_UPDATE`'s affordable
-/// branch - the actual previously-buggy path (`ZTMarketing::update` -> `ZTGameMgr::spend_marketing`/
-/// `subtract_cash`, routed through our own `SPEND_MARKETING`/`SUBTRACT_CASH` `FunctionDef`s - unlike
-/// `run_marketing_update_boundary_test` above, which only ever calls genuine vanilla). See
-/// `ztmarketing-update-setmoneytext-crash-investigation.md`'s "Resolution" section for the fixed
-/// `SUBTRACT_CASH` signature bug, and its "Suggested next steps" item 7 for why this path specifically
-/// needed an independent check - it had never been exercised past the always-unaffordable branch before.
+/// Deterministic single-case coverage for the *reimplemented* side of `ZTMARKETING_UPDATE`'s affordable
+/// branch (`ZTMarketing::update` -> `spend_marketing`/`subtract_cash`, unlike
+/// `run_marketing_update_boundary_test` above, which only ever calls genuine vanilla).
 ///
 /// Calls only the reimplemented `ZTMarketingMgr::update`, skipping the real vanilla side entirely.
-/// `available_cash` is pinned to exactly `cash_delta`, forcing the affordable branch every time. Runs
-/// unconditionally as part of the normal battery, same rationale as `run_marketing_update_boundary_test`.
+/// `available_cash` is pinned to exactly `cash_delta`, forcing the affordable branch every time.
 pub(crate) fn run_marketing_update_reimpl_boundary_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTMARKETING_UPDATE_REIMPL_BOUNDARY_REPRO";
 
@@ -454,7 +436,7 @@ pub(crate) fn run_marketing_update_reimpl_boundary_test(failure_log: &mut Option
 /// ZTMARKETING_GET_FUNDING_TEXT: compares the real `ZTMarketing::getFundingText`'s output against
 /// the reimplemented `ZTMarketing::funding_text`, for a standalone marketing with a generated
 /// funding table and `current_funding_level` spanning negative/in-range/out-of-range relative to
-/// the table's length. Same shape as `run_funding_text_test` above, reusing its
+/// the table's length. Same shape as `tests::ztresearch::run_funding_text_test`, reusing its
 /// `funding_level_case_strategy` for the (name_id, cost) generation.
 pub(crate) fn run_marketing_funding_text_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let runner_config = ProptestConfig {
@@ -639,12 +621,11 @@ pub(crate) fn run_marketingmgr_load_test(failure_log: &mut Option<std::fs::File>
 /// The stale pointer is never dereferenced further here, only checked for non-nullness via
 /// `marketing_ptr_raw()`.
 ///
-/// Unlike every other real-vanilla call this file makes elsewhere (which only ever read memory),
-/// `clearConfigurations` actually **frees** the owned `ZTMarketing` - and freeing a Rust
-/// `Box`-allocated `ZTMarketing` through vanilla's own destructor/delete path is a cross-heap risk.
-/// So the "real" side's `ZTMarketing` is instead allocated via the native `standalone::OPERATOR_NEW`
-/// and initialized via `ztmarketing::CONSTRUCTOR`, keeping the real free heap-consistent with how
-/// the memory was allocated.
+/// `clearConfigurations` **frees** the owned `ZTMarketing`, and freeing a Rust `Box`-allocated one
+/// through vanilla's own destructor/delete path is a cross-heap risk - so the "real" side's
+/// `ZTMarketing` is allocated via the native `standalone::OPERATOR_NEW` and initialized via
+/// `ztmarketing::CONSTRUCTOR`, keeping the real free heap-consistent with how the memory was
+/// allocated.
 pub(crate) fn run_marketingmgr_clear_configurations_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let runner_config = ProptestConfig {
         failure_persistence: Some(Box::new(NoopFailurePersistence)),
@@ -696,13 +677,13 @@ pub(crate) fn run_marketingmgr_clear_configurations_test(failure_log: &mut Optio
     fail_flag
 }
 
-/// ZTMARKETINGMGR_DTOR: verifies the fix for the real correctness bug `ztmarketing.rs`'s
-/// `marketing_dtor_detour` module doc comment describes - vanilla's own `ZTMARKETING_MGR_1`
-/// scalar-deleting destructor, if ever allowed to run over a Rust-`Vec`-allocated funding table,
-/// would call `operator delete` on memory Rust's global allocator owns (the same cross-allocator
-/// hazard CLAUDE.md's "Live Reimplementation-Comparison Tests" section documents for
-/// `ZTThoughtMgr`). This deliberately never calls `.original()()` against Rust-allocated memory -
-/// that would just reproduce the crash the fix exists to prevent.
+/// ZTMARKETINGMGR_DTOR: exercises the teardown hazard `ztmarketing.rs`'s `marketing_dtor_detour`
+/// module doc comment describes - vanilla's own `ZTMARKETING_MGR_1` scalar-deleting destructor, if
+/// ever allowed to run over a Rust-`Vec`-allocated funding table, would call `operator delete` on
+/// memory Rust's global allocator owns (the same cross-allocator hazard CLAUDE.md's "Live
+/// Reimplementation-Comparison Tests" section documents for `ZTThoughtMgr`). This deliberately never
+/// calls `.original()()` against Rust-allocated memory - that would just reproduce the crash the
+/// detour exists to prevent.
 ///
 /// Two independent halves, like `run_marketingmgr_clear_configurations_test` above:
 /// - **Real**: a fresh, genuinely vanilla-allocated `ZTMarketingMgr`+`ZTMarketing` (empty funding
@@ -826,16 +807,13 @@ pub(crate) fn run_marketingmgr_load_configurations_test(failure_log: &mut Option
     }
 }
 
-/// ZTMARKETINGMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE: real-zoo round-trip coverage for
-/// `openzt/plans/real-zoo-save-load-roundtrip-tests-plan.md`'s `ZTMarketingMgr` item - the only one
-/// of that plan's four managers where a genuine full round-trip against the real singleton is both
-/// safe and easy (`load` is a pure decode with a ready-made pure oracle,
-/// `marketing_save_reimplementation::predict_load`). Snapshots the real, live
-/// `globals().ztmarketingmgr()` singleton's current funding-level index, captures real `save()`'s
-/// bytes (`.hooked()` - the detoured reimplementation, installed unconditionally by this battery's
-/// own `init()`), replays them into real `load()` at the live save-format version, and asserts the
-/// resulting index matches `predict_load`'s prediction computed from the pre-save index/table
-/// length.
+/// ZTMARKETINGMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE: genuine full round-trip against the real, live
+/// `globals().ztmarketingmgr()` singleton - safe because `load` is a pure decode with a ready-made
+/// pure oracle, `marketing_save_reimplementation::predict_load`. Snapshots the singleton's current
+/// funding-level index, captures real `save()`'s bytes (`.hooked()` - the detoured reimplementation,
+/// installed by this battery's own `init()`), replays them into real `load()` at the live save-format
+/// version, and asserts the resulting index matches `predict_load`'s prediction computed from the
+/// pre-save index/table length.
 pub(crate) fn run_ztmarketingmgr_real_zoo_save_load_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTMARKETINGMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE";
     const CURRENT_VERSION: u32 = 0x100;

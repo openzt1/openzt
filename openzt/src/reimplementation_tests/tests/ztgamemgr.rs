@@ -31,16 +31,15 @@ use crate::util::save_to_memory;
 use crate::ztgamemgr::{self, live_support as gamemgr_live_support};
 use crate::zoostatus::ZooStatus;
 
-/// `ZTGAMEMGR_STANDALONE_ROUNDTRIP` - `ztgamemgr-implementation-plan.md` Stage 0: builds one
-/// standalone `ZTGameMgr` via the real vanilla free-function constructor
-/// (`ztgamemgr::live_support::build_standalone_mgr`, wrapping `standalone::CREATE_ZTGAME_MGR`),
-/// confirms it's non-null, dumps its raw bytes and logs which offsets are non-zero (resolves the
-/// "does `operator_new` zero the block" caveat empirically - `_CreateZTGameMgr.c` explicitly zeroes
-/// `started`/`soundscape_ptr`/`menu_music_handler_ptr` but says nothing about the rest), then
-/// immediately destroys it. No comparison logic yet - this only proves the construct/destroy harness
-/// itself is safe before Stage 1's `SET_NEW_GAME_DEFAULTS` test builds on it. Doesn't need a live
-/// zoo (`GLOBAL_ZTWorldMgr`/`GLOBAL_ZTGameMgr`), so it runs alongside the other standalone-only tests
-/// above, before `run_load_live_zoo`.
+/// `ZTGAMEMGR_STANDALONE_ROUNDTRIP` - builds one standalone `ZTGameMgr` via the real vanilla
+/// free-function constructor (`ztgamemgr::live_support::build_standalone_mgr`, wrapping
+/// `standalone::CREATE_ZTGAME_MGR`), confirms it's non-null, dumps its raw bytes and logs which
+/// offsets are non-zero (resolves the "does `operator_new` zero the block" caveat empirically -
+/// `_CreateZTGameMgr.c` explicitly zeroes `started`/`soundscape_ptr`/`menu_music_handler_ptr` but
+/// says nothing about the rest), then immediately destroys it. No comparison logic - this only
+/// proves the construct/destroy harness itself is safe before the `SET_NEW_GAME_DEFAULTS` test
+/// builds on it. Doesn't need a live zoo (`GLOBAL_ZTWorldMgr`/`GLOBAL_ZTGameMgr`), so it runs
+/// alongside the other standalone-only tests above, before `run_load_live_zoo`.
 pub(crate) fn run_gamemgr_standalone_roundtrip_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTGAMEMGR_STANDALONE_ROUNDTRIP";
     let ptr = gamemgr_live_support::build_standalone_mgr();
@@ -68,15 +67,15 @@ pub(crate) fn run_gamemgr_standalone_roundtrip_test(failure_log: &mut Option<std
     false
 }
 
-/// `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS` - `ztgamemgr-implementation-plan.md` Stage 1: builds two
-/// standalone `ZTGameMgr` instances (Stage 0's harness), runs the real
+/// `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS` - builds two standalone `ZTGameMgr` instances (the
+/// `ZTGAMEMGR_STANDALONE_ROUNDTRIP` harness), runs the real
 /// `SET_NEW_GAME_DEFAULTS.original()` against one and the Rust
 /// `ztgamemgr::ZTGameMgr::set_new_game_defaults` against the other (one shared, real vanilla-
 /// constructed `BFConfigFile` passed to both - see below for why a zeroed/`Default` one crashes),
 /// then diffs the full `0x11b0`-byte block.
 ///
 /// **`config` must be built via the real vanilla constructor, not a zeroed `BFConfigFile::default()`.**
-/// First attempt used a zeroed instance and reliably crashed inside vanilla `ZooStatus::init`'s
+/// A zeroed instance reliably crashes inside vanilla `ZooStatus::init`'s
 /// tail call into `BFConfigFile::getString` (`bfconfigfile::GET_STRING_1`) ->
 /// `standalone::SEARCH_CONFIG_METHOD`, a null-pointer dereference (`mov edi,[edx+4]` with `edx=0`,
 /// confirmed via `./openzt.bat crash-capture`). `BFConfigFile_BFConfigFile_0.c` shows why: a real
@@ -92,8 +91,8 @@ pub(crate) fn run_gamemgr_standalone_roundtrip_test(failure_log: &mut Option<std
 /// `is_new_game` is pinned to `false` on both sides rather than proptested: the `true` branch calls
 /// through `GLOBAL_ZTAIMgr`'s real vtable slot `+0x4` (`openzt_detour::generated::ztaimgr::VIRT_METH_0X58F269`),
 /// the *global*, shared AI manager singleton - not part of either standalone instance's own memory -
-/// so triggering it here would be a real side effect on live game state, the same class of risk the
-/// plan's own Stage 3 flags for `ZTUI::main::set*`/`ZTSoundscape::update`.
+/// so triggering it here would be a real side effect on live game state, the same risk class as a
+/// `ZTUI::main::set*`/`ZTSoundscape::update` call-through.
 pub(crate) fn run_gamemgr_set_new_game_defaults_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTGAMEMGR_SET_NEW_GAME_DEFAULTS";
 
@@ -113,7 +112,8 @@ pub(crate) fn run_gamemgr_set_new_game_defaults_test(failure_log: &mut Option<st
         return true;
     }
 
-    // Resolves Stage 0's own "operator_new doesn't zero memory" caveat: ZooStatus::init reads at
+    // Resolves the "operator_new doesn't zero memory" caveat the standalone harness leaves open:
+    // ZooStatus::init reads at
     // least one field (`this[0xd].field_0xc`, per `ZooStatus_init.c`) before ever writing it in this
     // function - genuine uninitialized-read behavior in the real decompile, not a porting bug - so
     // two independently-allocated standalone instances can carry different heap leftovers there and
@@ -142,7 +142,7 @@ pub(crate) fn run_gamemgr_set_new_game_defaults_test(failure_log: &mut Option<st
     let reimpl_bytes = unsafe { std::slice::from_raw_parts(reimpl_ptr as *const u8, struct_size) };
 
     // soundscape_ptr (0x1190)/menu_music_handler_ptr (0x11A4): both null pre-start() on a freshly
-    // constructed instance, so these should already match - excluded only defensively, per the plan.
+    // constructed instance, so these should already match - excluded only defensively.
     let excluded_ranges: [std::ops::Range<usize>; 2] = [0x1190..0x1194, 0x11A4..0x11A8];
 
     let mismatches: Vec<(usize, u8, u8)> = (0..struct_size)
@@ -167,14 +167,15 @@ pub(crate) fn run_gamemgr_set_new_game_defaults_test(failure_log: &mut Option<st
 }
 
 /// Canonicalizes a `cash` bit pattern for `ZTGAMEMGR_SAVE_LOAD`'s comparison: any NaN collapses to a
-/// single representative bit pattern, sidestepping both IEEE-754 `NaN != NaN` on direct equality *and*
-/// a real, root-caused x87-vs-SSE2 NaN-canonicalization artifact this test's own failures surfaced.
+/// single representative bit pattern, sidestepping both IEEE-754 `NaN != NaN` on direct equality and
+/// a real x87-vs-SSE2 asymmetry: the real `load` quiets signaling NaNs, the reimplementation
+/// preserves their bits.
 ///
-/// A failing case had `cash` written as a *signaling* NaN (mantissa MSB `0`): `save`'s captured output
-/// was bit-identical real vs. reimpl (so `ZooStatus::save`, which never touches `cash`, wasn't
-/// involved), but after `load`, the real side came back as a *quiet* NaN (mantissa MSB `1`, i.e.
-/// `real_bits == reimpl_bits | 0x0040_0000`) while the reimplemented side kept the original signaling
-/// bits. `ZTGameMgr_load.asm` (read in full) pins this to `ZTGameMgr::load`'s own `this->cash =
+/// A `cash` written as a *signaling* NaN (mantissa MSB `0`) is bit-identical in both sides' `save`
+/// output (so `ZooStatus::save`, which never touches `cash`, isn't involved), but after `load` the
+/// real side comes back as a *quiet* NaN (mantissa MSB `1`, i.e. `real_bits == reimpl_bits |
+/// 0x0040_0000`) while the reimplemented side keeps the original signaling bits. `ZTGameMgr_load.asm`
+/// pins this to `ZTGameMgr::load`'s own `this->cash =
 /// local_8;` line: it compiles to `FLD float ptr [ESP+0x10]` / `FSTP float ptr [ESP]` (the field is
 /// genuinely `float`-typed, even though the decompiler shows a raw `undefined4` dword copy) - x87
 /// silences a signaling NaN by setting its quiet bit on any load/store through the FPU stack. This
@@ -189,9 +190,9 @@ fn normalize_cash_bits(cash: f32) -> u32 {
     }
 }
 
-/// `ZTGAMEMGR_SAVE_LOAD` - `ztgamemgr-implementation-plan.md` Stage 2: builds two Stage-1-seeded
-/// standalone `ZTGameMgr` instances (real `SET_NEW_GAME_DEFAULTS.original()` run on both, via the
-/// same real `BFConfigFile` construction `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS`'s own test already uses),
+/// `ZTGAMEMGR_SAVE_LOAD` - builds two standalone `ZTGameMgr` instances seeded via
+/// `set_new_game_defaults` (real `SET_NEW_GAME_DEFAULTS.original()` run on both, via the
+/// same real `BFConfigFile` construction `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS` uses),
 /// then for a generated `(cash, date_bytes, elapsed_sim_ticks, version)` seeds both instances
 /// identically via the test-only `set_cash`/`set_date_bytes`/`set_elapsed_sim_ticks` accessors
 /// (`ztgamemgr.rs`'s `Systemtime` is private, so the raw 16-byte `date` blob is generated/compared
@@ -330,8 +331,8 @@ pub(crate) fn run_gamemgr_save_load_test(failure_log: &mut Option<std::fs::File>
     fail_flag
 }
 
-/// `ZTGAMEMGR_UPDATE_SIM` - `ztgamemgr-implementation-plan.md` Stage 3: builds two Stage-1-seeded
-/// standalone `ZTGameMgr` instances, then for a generated `(delta, valid date fields,
+/// `ZTGAMEMGR_UPDATE_SIM` - builds two standalone `ZTGameMgr` instances seeded via
+/// `set_new_game_defaults`, then for a generated `(delta, valid date fields,
 /// elapsed_sim_ticks)` seeds both instances identically (`set_date_bytes`/`set_elapsed_sim_ticks`/
 /// `set_day_changed_flag(false)`) and runs the real `UPDATE_SIM.original()` against one and the
 /// reimplemented `ztgamemgr::ZTGameMgr::update_sim` against the other, comparing the resulting
@@ -348,8 +349,8 @@ pub(crate) fn run_gamemgr_save_load_test(failure_log: &mut Option<std::fs::File>
 /// accumulator (`DAT_006394b8`) is reset to `0` immediately before *each* side's call - both
 /// standalone instances' `updateSim` reads/writes the *same* process-wide global, so without this
 /// reset the two sides would race each other into (and out of) the `ZTUI::main::set*`-refresh branch
-/// depending purely on call order. Per the implementation plan's own caution, this branch is never
-/// exercised here: calling those UI-refresh functions against a standalone, non-globally-registered
+/// depending purely on call order. This branch is never exercised here: calling those UI-refresh
+/// functions against a standalone, non-globally-registered
 /// `ZTGameMgr` risks corrupting real, unrelated live UI state (the rating-formula arithmetic that
 /// branch also gates is covered separately, live-independent, by `ztgamemgr.rs`'s own
 /// `rating_from_metric` unit tests).
@@ -357,14 +358,15 @@ pub(crate) fn run_gamemgr_save_load_test(failure_log: &mut Option<std::fs::File>
 /// Two more branches also get zero live exercise here, worth calling out explicitly rather than
 /// leaving implicit: `soundscape_ptr`/`menu_music_handler_ptr` (the latter via [`Self::update`] below,
 /// not `update_sim` itself) stay null on every standalone instance this battery ever builds - nothing
-/// in the Stage-1 `set_new_game_defaults` seeding path or anywhere else in scope ever sets either
-/// field (only the out-of-scope `start()` does, per `ztgamemgr.rs`'s Stage-5 doc comment) - so their
+/// in the `set_new_game_defaults` seeding path or anywhere else in this port ever sets either
+/// field (only `start()` does, per `ztgamemgr.rs`'s module doc comment) - so their
 /// `ZTSoundscape::update`/`MenuMusicHandler::update` call-through branches never run, live or
-/// otherwise. Acceptable since both delegate entirely to still-out-of-scope classes with no logic of
-/// `ZTGameMgr`'s own to verify, but genuinely untested rather than intentionally skipped.
+/// otherwise. Acceptable since neither branch carries any `ZTGameMgr` logic of its own - both
+/// delegate entirely to the embedded class's own `update` - but genuinely untested rather than
+/// intentionally skipped.
 ///
-/// One more branch is deliberately disabled rather than left to chance, added after this test crashed
-/// the live battery: `update_sim` calls `ZooStatus::update` unconditionally every tick, which can roll
+/// One more branch is deliberately disabled rather than left to chance: `update_sim` calls
+/// `ZooStatus::update` unconditionally every tick, which can roll
 /// a real vanilla `fChance` and fire `ZooStatus::f_grant_donation` - a genuine UI-dialog path in the
 /// same family the paragraph above already avoids, just reached through a different call chain
 /// (`ZooStatus::update`, not `update_sim` itself). Both standalone instances get
@@ -417,18 +419,16 @@ pub(crate) fn run_gamemgr_update_sim_test(failure_log: &mut Option<std::fs::File
     // `ZTApp::getApp`/`BFApp::loadString`. Both are unsafe to exercise here: `always_late_tests` (this
     // test's own group) runs on `ZTApp::updateSim`'s first tick, before `run_load_live_zoo` loads a
     // real zoo - `GLOBAL_ZTGameMgr` isn't the live game's own manager yet, and the string
-    // registry/`BFApp` singleton isn't necessarily fully populated, which crashed this test live
-    // (confirmed via `crash-capture`: `ZooStatus::f_grant_donation` -> `load_localized_string` ->
-    // `CStr::from_ptr` walking off the end of a not-null-terminated 512-byte stack buffer). Zeroing
+    // registry/`BFApp` singleton isn't necessarily fully populated. Zeroing
     // `donation_chance_percent` on both instances makes every `fChance(0)` roll deterministically
     // false, so `f_grant_donation` never fires - the same "keep a real UI-dialog condition false"
-    // discipline `ZOOSTATUS_CHECKS`'s own doc comment already established for this exact hazard.
+    // discipline `ZOOSTATUS_CHECKS`'s own doc comment follows for this exact hazard.
     //
     // `finance_check_pending` is forced `false` alongside it for the same reason, defensively:
     // `set_new_game_defaults`/`init` already leave it `false` and nothing in this test's call path
     // sets it `true`, but `ZooStatus::update`'s `financeChecks` call-through walks `ZTWorldMgr`'s
-    // freelist-backed building list - the same cross-allocator risk class as the donation-roll crash
-    // this guard's sibling above was added for. An explicit write here, rather than relying on it
+    // freelist-backed building list - the same cross-allocator risk class as the donation-roll guard
+    // above. An explicit write here, rather than relying on it
     // staying false by construction, means a future caller change can't silently reintroduce that
     // hazard into this test unnoticed.
     unsafe {
@@ -511,7 +511,7 @@ pub(crate) fn run_gamemgr_update_sim_test(failure_log: &mut Option<std::fs::File
 
     // A small, dedicated `update(delta)` check - both instances have a null menu_music_handler_ptr
     // (never set by set_new_game_defaults or anything above), so this should be a pure no-op on both
-    // sides with nothing to diff, but still gets *some* live coverage per the implementation plan.
+    // sides with nothing to diff, but still gets *some* live coverage.
     unsafe {
         ZTGAMEMGR_UPDATE.original()(real_ptr as *const u32, 16);
         (*reimpl_ptr).update(16);
@@ -527,11 +527,11 @@ pub(crate) fn run_gamemgr_update_sim_test(failure_log: &mut Option<std::fs::File
     fail_flag
 }
 
-/// `ZTGAMEMGR_FINANCE_DATE_HELPERS` - `ztgamemgr-implementation-plan.md` Stage 4 (+ Stage 7's
-/// follow-up methods): builds two Stage-1-seeded standalone `ZTGameMgr` instances, then proptests
+/// `ZTGAMEMGR_FINANCE_DATE_HELPERS` - builds two standalone `ZTGameMgr` instances seeded via
+/// `set_new_game_defaults`, then proptests
 /// `addCash`/`subtractCash`/`getDate`/`isGameDate`/`isRealWorldDate`/`timeAgo`/`hoursAgo`/
 /// `animalTimeAgo`/`peopleTimeAgo`/`overrideNewGameDefaults` real `.original()` vs the reimplemented
-/// methods. `removedZooDoo` itself is not ported/detoured - see `ztgamemgr.rs`'s Stage-5 doc comment
+/// methods. `removedZooDoo` itself is not ported/detoured - see `ztgamemgr.rs`'s module doc comment
 /// for why - so there's no test for it here.
 ///
 /// `addCash`/`subtractCash` mutate `cash`, so both sides are reseeded to the same generated `cash`
@@ -539,8 +539,8 @@ pub(crate) fn run_gamemgr_update_sim_test(failure_log: &mut Option<std::fs::File
 /// helper's own doc comment). The date-family helpers (`getDate`/`isGameDate`/`timeAgo`/`hoursAgo`/
 /// `animalTimeAgo`/`peopleTimeAgo`) don't mutate `this`, so both sides are seeded with the same
 /// generated `date` bytes (`set_date_bytes`) and compared purely on return value - `isGameDate`'s real
-/// return has garbage upper bits (see `ZTGameMgr::is_game_date`'s own doc comment), so only the low
-/// byte is compared; `animalTimeAgo`/`peopleTimeAgo` similarly only compare the low dword/byte (see
+/// return only defines `AL` (the upper EAX bits are undefined leftover), so only the low byte is
+/// compared; `animalTimeAgo`/`peopleTimeAgo` similarly only compare the low dword/byte (see
 /// their own doc comments for why the rest is undefined leftover). `isRealWorldDate` takes no
 /// `this`/seeded state at all (calls `GetSystemTime` directly on both sides, independently,
 /// microseconds apart) - comparing real vs reimpl booleans here only risks a spurious mismatch in the
@@ -549,9 +549,9 @@ pub(crate) fn run_gamemgr_update_sim_test(failure_log: &mut Option<std::fs::File
 /// both sides, so the whole `0x10..0x1160` region is byte-diffed afterward rather than compared
 /// field-by-field.
 ///
-/// Calls the real `TIME_AGO.original()`/`HOURS_AGO.original()` using the hand-corrected signatures
-/// now in `generated.rs` (see those `FunctionDef`s' own doc comments) - calling either with the
-/// original, auto-generated signatures would have corrupted the stack/dropped the high dword.
+/// Calls the real `TIME_AGO.original()`/`HOURS_AGO.original()` with their corrected signatures (see
+/// those `FunctionDef`s' own doc comments) - the auto-generated ones would corrupt the stack/drop the
+/// high dword.
 pub(crate) fn run_gamemgr_finance_date_helpers_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTGAMEMGR_FINANCE_DATE_HELPERS";
 
@@ -776,11 +776,10 @@ pub(crate) fn run_gamemgr_finance_date_helpers_test(failure_log: &mut Option<std
 /// comment for why: the `true` branch calls through `GLOBAL_ZTAIMgr`'s real vtable slot, the live,
 /// shared AI manager singleton, so exercising it is a real side effect on live game state, not
 /// something a synthetic standalone instance can safely absorb before a zoo has even loaded). Deferred
-/// to here, after `run_load_live_zoo`, for the same reason `removedZooDoo`'s own smoke test had to move
-/// (see `ztgamemgr.rs`'s Stage-5 doc comment / this file's git history): a global pointer being
+/// to here, after `run_load_live_zoo`: a global pointer being
 /// non-null (`GLOBAL_ZTAIMgr` is set well before this point) is not the same guarantee as the global's
 /// *internal* state being genuinely constructed, and calling into a still-uninitialized manager's real
-/// vtable slot pre-zoo-load is exactly the class of bug that crashed `getBuildingList` there. Once a
+/// vtable slot pre-zoo-load is exactly how a call-through like `getBuildingList`'s crashes. Once a
 /// real zoo is loaded, calling this is no different from what real "start new game" gameplay already
 /// does.
 ///
@@ -788,9 +787,9 @@ pub(crate) fn run_gamemgr_finance_date_helpers_test(failure_log: &mut Option<std
 /// comparison between the two standalone instances wouldn't reflect anything meaningful about either
 /// side's own logic. This only confirms the call wiring (`this`/args passed into
 /// `BFAIMGR_LOAD_DATA.original()`) doesn't crash on either side - a wrong-`this`/wrong-arg bug there is
-/// exactly what the pinned-`false` Stage 1 test structurally cannot see. Run last in this file's
-/// battery (see `run_all_tests`), since `BFAIMgr::loadData` may have real side effects on live AI state
-/// that earlier tests shouldn't have to account for.
+/// exactly what `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS` (pinned `false`) structurally cannot see. Registered
+/// near the end of `battery.rs`'s `live_zoo_tests`, since `BFAIMgr::loadData` may have real side
+/// effects on live AI state that earlier tests shouldn't have to account for.
 pub(crate) fn run_gamemgr_set_new_game_defaults_is_new_game_smoke_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTGAMEMGR_SET_NEW_GAME_DEFAULTS_IS_NEW_GAME_SMOKE";
 
@@ -838,7 +837,7 @@ pub(crate) fn run_gamemgr_set_new_game_defaults_is_new_game_smoke_test(failure_l
 }
 
 /// `ZTGAMEMGR_START_STOP_SMOKE` - one-shot wiring check for the reimplemented `start`/`stop`
-/// (`ztgamemgr.rs`'s Stage-5 doc comment covers the full port). Not a byte-diff: `start`/`stop` read
+/// (`ztgamemgr.rs`'s module doc comment covers the full port). Not a byte-diff: `start`/`stop` read
 /// the live `GLOBAL_ZTScenarioMgr`/`GLOBAL_ZTApp` singletons and call through to real vanilla
 /// `ZTSoundscape`/`ZTUI::main::unpauseGame` - side effects on shared global/audio state, not something
 /// a standalone instance's own memory can meaningfully diff against a second standalone instance. This
@@ -847,7 +846,7 @@ pub(crate) fn run_gamemgr_set_new_game_defaults_is_new_game_smoke_test(failure_l
 /// after the `is_new_game=true` smoke test above, for the same reason that one is deferred:
 /// `GLOBAL_ZTScenarioMgr`/`GLOBAL_ZTApp` being non-null pointers is not the same guarantee as their
 /// internal state being genuinely constructed pre-zoo-load (the same "non-null but uninitialized
-/// registry" hazard class that crashed `getBuildingList` during the `removedZooDoo` investigation).
+/// registry" hazard class that crashes `getBuildingList`).
 pub(crate) fn run_gamemgr_start_stop_smoke_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTGAMEMGR_START_STOP_SMOKE";
 
@@ -912,15 +911,14 @@ pub(crate) fn run_gamemgr_start_stop_smoke_test(failure_log: &mut Option<std::fs
     fail_flag
 }
 
-/// ZTGAMEMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE: real-zoo round-trip coverage for
-/// `openzt/plans/real-zoo-save-load-roundtrip-tests-plan.md`'s `ZTGameMgr` item. Snapshots
+/// ZTGAMEMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE: real-zoo save/load round-trip. Snapshots
 /// `cash`/`date`/`elapsed_sim_ticks` directly off the real, live `globals().ztgamemgr()` singleton,
 /// captures its own `save()`'s bytes, replays them into `load()` **in place on that same singleton**
-/// (there's no cheap standalone copy of a fully-populated real `ZTGameMgr` to load into instead - see
-/// the plan), and asserts the three fields match afterward. Real `ZooStatus::save`/`load`
+/// (there's no cheap standalone copy of a fully-populated real `ZTGameMgr` to load into instead),
+/// and asserts the three fields match afterward. Real `ZooStatus::save`/`load`
 /// (`.original()`, an opaque un-reimplemented vanilla sub-object at `self+0x10`) run as a side
 /// effect of both calls - presumed safe (persisted zoo-status counters only) but not independently
-/// verified, per the plan's own flag. Mutates the live singleton in place, so this is registered
+/// verified. Mutates the live singleton in place, so this is registered
 /// last in `live_zoo_tests` - nothing later in the battery depends on these three fields being
 /// untouched.
 pub(crate) fn run_ztgamemgr_real_zoo_save_load_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
