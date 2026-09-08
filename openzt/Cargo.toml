@@ -21,7 +21,7 @@ openzt-configparser = { path = "../openzt-configparser", version = "1.1.1", feat
 openzt-detour = { path = "../openzt-detour", version = "0.1.0" }
 openzt-detour-macro = { path = "../openzt-detour-macro", version = "0.1.0" }
 anyhow = "1.0.104"
-getset = "0.1.6"
+getset = "0.1.7"
 maplit = "1.0.2"
 field_accessor_as_string = { path = "../field_accessor_as_string" }
 field_accessor_as_string_trait = { path = "../field_accessor_as_string_trait" }

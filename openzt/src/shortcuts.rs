@@ -64,6 +64,12 @@ impl<const CODE: i32> Key<CODE> {
     }
 }
 
+impl<const CODE: i32> Default for Key<CODE> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ============================================================================
 // Const Key Items - for ergonomic shortcut creation
 // ============================================================================

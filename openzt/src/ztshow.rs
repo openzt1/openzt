@@ -216,7 +216,7 @@ pub fn do_trick_event(this: u32, state_ptr: u32) {
                     } else {
                         send_event(show_info, 0x272b, 0, 0x57, mirror as u32, 0, 1);
                     }
-                    send_event(show_info, 0x271f, 0, 0x4b, 0, trick_index as u16, 1);
+                    send_event(show_info, 0x271f, 0, 0x4b, 0, trick_index, 1);
                 }
                 return;
             }

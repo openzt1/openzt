@@ -648,6 +648,9 @@ impl DependencyResolver {
     /// 1. Pure legacy archives (no meta.toml) - inserted at position 0 alphabetically
     /// 2. ztd_type="legacy" with no deps - inserted at position 0 alphabetically
     /// 3. Mods with deps or other ztd_type - resolved via dependency graph
+    // Eight distinct, already-grouped inputs (each list feeds a different priority branch); a params
+    // struct would be a mechanical reshuffle of integration-tested dependency-resolution code.
+    #[allow(clippy::too_many_arguments)]
     fn insert_new_entries(
         &self,
         existing_order: &[String],

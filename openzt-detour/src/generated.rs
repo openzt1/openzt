@@ -4437,6 +4437,7 @@ pub mod ztshow {
 
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x0046df38, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cca2c, function_type: PhantomData};
+    pub const ZTSHOW_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f28c3, function_type: PhantomData};
     pub const CHECK_SCRIPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16) -> u32> = FunctionDef{address: 0x0059e2bd, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0059e773, function_type: PhantomData};
     pub const GET_SHOW_SCRIPT_STATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x0059eb99, function_type: PhantomData};
@@ -4463,7 +4464,7 @@ pub mod ztshow {
     pub const CALCULATE_SATISFACTION_PERCENT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a8a1d, function_type: PhantomData};
     pub const CLEAR_UNIT_GOALS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a8a93, function_type: PhantomData};
     pub const REINIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a8b25, function_type: PhantomData};
-    pub const ZTSHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604d36, function_type: PhantomData};
+    pub const ZTSHOW_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604d36, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00612c6e, function_type: PhantomData};
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00612c8c, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x00612c91, function_type: PhantomData};
@@ -4610,7 +4611,6 @@ pub mod ztshowstate {
 
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> bool> = FunctionDef{address: 0x0046de22, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cc9c6, function_type: PhantomData};
-    pub const ZTSHOW_STATE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f28c3, function_type: PhantomData};
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059f72f, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a8b3e, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x00612d89, function_type: PhantomData};

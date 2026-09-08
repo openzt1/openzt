@@ -710,8 +710,8 @@ impl ZTGameMgr {
 
         unsafe {
             mut_from_memory::<ZTSoundscape>(self.soundscape_ptr).init(
-                crowd_ambients as *const u8,
-                world_ambients as *const u8,
+                crowd_ambients,
+                world_ambients,
                 crowd_config,
                 world_config,
             )
@@ -752,7 +752,7 @@ impl ZTGameMgr {
     pub fn stop(&mut self) {
         if self.soundscape_ptr != 0 {
             unsafe { ZTSOUNDSCAPE_DESTRUCTOR.original()(self.soundscape_ptr as *const c_void) };
-            unsafe { OPERATOR_DELETE.original()(self.soundscape_ptr as u32) };
+            unsafe { OPERATOR_DELETE.original()(self.soundscape_ptr) };
             self.soundscape_ptr = 0;
         }
 
@@ -772,7 +772,7 @@ impl ZTGameMgr {
 /// usage: `get_date`
 pub fn command_get_date_str(_args: Vec<&str>) -> Result<String, CommandError> {
     let ztgamemgr = globals().ztgamemgr();
-    let date = ztgamemgr.date.clone();
+    let date = ztgamemgr.date;
     info!("Date: {:#?}", date);
 
     Ok(format!(

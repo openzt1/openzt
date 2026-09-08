@@ -146,7 +146,7 @@ impl EntityType for BFEntityType {
                 self.uses_placement_cube as u32,
                 self.show as u32,
                 self.hit_threshold,
-                self.avoid_edges as u32,
+                { self.avoid_edges },
                 self.footprintx,
                 self.footprinty,
                 self.footprintz,

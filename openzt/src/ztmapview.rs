@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::bfentitytype::{BFEntityType, ZTAnimalType, ZTEntityTypeClass, ZTSceneryType, ZTUnitType, zt_entity_type_class_is};
 use crate::globals::globals;
-use crate::util::{get_from_memory, ref_from_memory, Addr, MemAddr};
+use crate::util::{get_from_memory, ref_from_memory, MemAddr};
 use crate::zthabitatmgr::ZTTankExhibit;
 use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal};
 // use crate::{
@@ -217,7 +217,7 @@ impl BFTile {
 
 #[detour_mod]
 pub mod zoo_ztmapview {
-    use tracing::{info, error};
+    use tracing::error;
 
     use crate::util::{get_from_memory, ref_from_memory, save_to_memory};
     use crate::ztmapview::{BFTile, ZTMapView};
@@ -325,11 +325,11 @@ impl ZTMapView {
         // off an arbitrary, possibly-plain-`ZTHabitat` (0x178 bytes) pointer would over-read.
         let tank = get_from_memory::<ZTTankExhibit>(habitat_ptr);
         let entity_type_class = temp_entity.entity_type_class();
-        if !zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Keeper) {
-            if let Some(t) = habitat.get_gate_tile_in()
-                && temp_entity.is_on_tile(&t) {
-                    return Err(ErrorStringId::ObjectTooCloseToLadderOrPlatform);
-                }
+        if !zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Keeper)
+            && let Some(t) = habitat.get_gate_tile_in()
+            && temp_entity.is_on_tile(&t)
+        {
+            return Err(ErrorStringId::ObjectTooCloseToLadderOrPlatform);
         }
         if zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Scenery) {
             let scenery_entity_type = unsafe { ref_from_memory::<ZTSceneryType>(*temp_entity.inner_class_ptr()) };

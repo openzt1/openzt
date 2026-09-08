@@ -123,6 +123,10 @@ mod ztshowmgr;
 /// reimplementation, see openzt/plans/ztshowscriptmgr-implementation-plan.md.
 mod ztshow;
 
+/// ztshowstate module - Stage 1 (full ZTShowState port: init/clear/save/load) of the ZTShowInfo +
+/// ZTShowState reimplementation, see openzt/plans/ztshowinfo-implementation-plan.md.
+mod ztshowstate;
+
 /// ztshowui module - Stage 4 (UI consumers: showpanel_fillTrickLists/_copyListToScript) of the
 /// show-script reimplementation, see openzt/plans/ztshowscriptmgr-implementation-plan.md.
 mod ztshowui;
@@ -209,10 +213,10 @@ mod zoo_init {
 
         // Initialize TUI if enabled
         #[cfg(feature = "tui")]
-        if config.tui.enabled {
-            if let Err(e) = tui_console::init(&config.tui) {
-                info!("Failed to initialize TUI: {}", e);
-            }
+        if config.tui.enabled
+            && let Err(e) = tui_console::init(&config.tui)
+        {
+            info!("Failed to initialize TUI: {}", e);
         }
 
         // Command console is broken on latest stable Rust so we disable it by default.
@@ -255,6 +259,7 @@ mod zoo_init {
             ztawardmgr::init();
             ztshowscriptmgr::init();
             ztshow::init();
+            ztshowstate::init();
             ztshowmgr::init();
             ztshowui::init();
             ztguest::init();

@@ -270,10 +270,10 @@ impl ZTMarketingMgr {
     pub fn update(&mut self, delta_ticks: u32) {
         let (new_tick_accumulator, days) = predict_mgr_update(self.tick_accumulator, delta_ticks);
         self.tick_accumulator = new_tick_accumulator;
-        if days > 0 {
-            if let Some(marketing) = self.marketing() {
-                marketing.update(days);
-            }
+        if days > 0
+            && let Some(marketing) = self.marketing()
+        {
+            marketing.update(days);
         }
     }
 

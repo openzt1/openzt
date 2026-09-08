@@ -38,8 +38,10 @@ use crate::{
     globals::{get_module_base, globals},
     lua_fn,
     string_registry::load_string_by_id,
-    util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory, ZTArray, ZTBufferString, ZTString},
+    util::{get_from_memory, mut_from_memory, ref_from_memory, ZTArray, ZTBufferString, ZTString},
 };
+#[cfg(feature = "reimplementation-tests")]
+use crate::util::save_to_memory;
 
 /// Upper bounds used purely to stop `command_list_research` from looping forever/crashing on a
 /// garbage count if the global address or a pointer chain turns out to be wrong; real vanilla data
@@ -3616,7 +3618,11 @@ pub(crate) mod research_save_reimplementation {
                     }
                     SaveRecord::Category { id, enabled: value } => {
                         if let Some(slot) = enabled.get_mut(&id) {
-                            *slot = value;
+                            // Matches `detours::load`'s `category.set_enabled(value != 0)` - the real
+                            // detour normalizes the loaded byte to a strict 0/1 boolean, it doesn't
+                            // store the raw byte. A raw-byte prediction would mismatch for any loaded
+                            // value other than exactly 0 or 1.
+                            *slot = (value != 0) as u8;
                         }
                     }
                     SaveRecord::Program { id, current_progress_bits } => {

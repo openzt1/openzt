@@ -117,15 +117,15 @@ impl ZTThought {
         self.thinker_ptr = world_mgr.resolve_entity_by_id(self.thinker_id) as u32;
         self.object_ptr = world_mgr.resolve_entity_by_id(self.object_id) as u32;
 
-        if self.object_ptr != 0 {
-            if let Some(habitat_ptr) = resolve_object_own_habitat_ptr(self.object_ptr) {
-                self.habitat_ptr = habitat_ptr;
-                if self.habitat_ptr != 0 {
-                    let habitat = unsafe { ref_from_memory::<ZTHabitat>(self.habitat_ptr) };
-                    if let Some(tile) = habitat.get_gate_tile_in() {
-                        self.tile_x = tile.pos.x;
-                        self.tile_y = tile.pos.y;
-                    }
+        if self.object_ptr != 0
+            && let Some(habitat_ptr) = resolve_object_own_habitat_ptr(self.object_ptr)
+        {
+            self.habitat_ptr = habitat_ptr;
+            if self.habitat_ptr != 0 {
+                let habitat = unsafe { ref_from_memory::<ZTHabitat>(self.habitat_ptr) };
+                if let Some(tile) = habitat.get_gate_tile_in() {
+                    self.tile_x = tile.pos.x;
+                    self.tile_y = tile.pos.y;
                 }
             }
         }
@@ -156,11 +156,11 @@ impl ZTThought {
             if *habitat.unknown_flag_0x2c() == 0 {
                 thought.habitat_ptr = habitat_arg;
             }
-            if thought.habitat_ptr != 0 {
-                if let Some(tile) = unsafe { ref_from_memory::<ZTHabitat>(thought.habitat_ptr) }.get_gate_tile_in() {
-                    thought.tile_x = tile.pos.x;
-                    thought.tile_y = tile.pos.y;
-                }
+            if thought.habitat_ptr != 0
+                && let Some(tile) = unsafe { ref_from_memory::<ZTHabitat>(thought.habitat_ptr) }.get_gate_tile_in()
+            {
+                thought.tile_x = tile.pos.x;
+                thought.tile_y = tile.pos.y;
             }
         }
         thought
@@ -924,6 +924,9 @@ pub(crate) mod live_support {
     /// `0`: `ZTThoughtMgr::save` dispatches through each node's own `data.vtable` slot 0 rather than
     /// calling `ZTThought::save` directly, so every node reachable from a real vanilla call needs a
     /// genuinely valid vtable, not just correct data fields.
+    // The args are `ZTThought`'s own flat field list in declaration order (minus `vtable`, which this
+    // sets itself) - a params struct would just wrap the same eight values.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_thought(
         string_id: u32,
         thinker_id: u32,

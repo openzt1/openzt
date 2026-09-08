@@ -1428,6 +1428,9 @@ impl ZooStatus {
     /// questions" section) - so this mirrors the real addressing mode directly instead of guessing a row
     /// index. [`Self::flat_totals`]' slots, by contrast, are never index-scaled (`.asm` addresses them as
     /// a bare `[ECX+<offset>]`), so `flat_own`/`flat_shared` are used as-is.
+    // The eight args mirror the six raw byte-offset literals `amount`/`shared_sign` are applied to
+    // (see above) - a params struct would obscure the 1:1 correspondence with the `.asm` addressing.
+    #[allow(clippy::too_many_arguments)]
     fn accumulate(&mut self, monthly_own: u32, monthly_shared: u32, yearly_own: u32, yearly_shared: u32, flat_own: u32, flat_shared: u32, amount: f32, shared_sign: f32) {
         let base = self as *mut Self as u32;
         let month_offset = self.current_month_index as u32 * 4;

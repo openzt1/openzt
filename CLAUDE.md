@@ -453,6 +453,60 @@ Separate from integration tests: the `reimplementation-tests` feature (`openzt/s
 
 **⚠️ Never free real vanilla output through Rust's allocator, or vice versa.** If a class manages its own heap objects (e.g. `ZTThoughtMgr`'s intrusive linked list, allocated through vanilla's own small-object freelist when reached via `.original()`, vs. `Box` when built by test/reimplementation code), calling `Box::from_raw`/`drop` on a node that real vanilla code allocated - or letting vanilla code's own free path touch a `Box`-allocated node - is a genuine cross-allocator heap corruption bug, not just a leak. It will crash, but Windows' Fault Tolerant Heap can silently absorb the crash (no dialog, no WER crash dump, `openzt.log` empty) after a few occurrences, making it look like the game "just exited" - a reboot is sometimes needed to see a real crash again after FTH kicks in. When a real, undetoured mutator is called live in a test and might allocate/link nodes of its own, build a leak-only teardown path for that side (free only what your own code allocated - the sentinel/outer struct - and deliberately leak anything vanilla's own allocator produced) rather than reusing the normal Box-walking cleanup. See `ztthoughtmgr.rs`'s `live_support::destroy_standalone_mgr_leaking_nodes` for a worked example.
 
+**⚠️ A `generated.rs` destructor-shaped entry may not take the class's own pointer.** More than once (`ztgamemgr_menumusichandler`'s `MENU_MUSIC_HANDLER_0`; `ztshowstate`'s original `ZTSHOW_STATE`, since corrected) a destructor address the generator pass clustered into one class's module turned out to actually be a *different* class's own destructor (typically the derived class that embeds the named one), which tears the named class down only as an inlined tail - after first adjusting `this` by some base-class offset and restoring *its own* vtable. Calling such an entry directly with the named class's bare pointer (e.g. to build a standalone live-test fixture) reads/writes past that allocation and can crash the live battery outright, with no exception logged (see the Fault Tolerant Heap note above - this looks exactly like that). Before calling any destructor-shaped `generated.rs` entry against a standalone fixture, read its `.asm`'s first few instructions: an unexpected `ADD ECX, N`/similar `this`-adjustment, or a vtable restore for a class other than the one you're testing, means it belongs to that other (usually enclosing) class and needs a `this` pointer embedded inside a real instance of *it*, not a bare pointer to the class under test. If you find one, this is exactly the kind of generator-pass mislabeling the section above says to surface rather than hand-edit.
+
+**⚠️ A module's live-test detours must be wired into `reimplementation_tests::init()`, separately from `lib.rs`.** `openzt-test-dll`'s `DllMain` calls `openztlib::reimplementation_tests::init()` directly - it never runs `lib.rs`'s own `LOAD_LANG_DLLS_DETOUR`-gated boot cascade at all. `reimplementation_tests::init()` (top of `openzt/src/reimplementation_tests/mod.rs`) keeps its own separate, explicit list of which modules' `::init()` to call for the live battery. A module wired only into `lib.rs`'s cascade (see "Wire a new module into `lib.rs`" in the Reimplementation Pattern section below) never gets its detours installed under `run --test`/`build --test` - and this fails **silently**: `init_detours()` for the missing module is simply never called, there is no error to see, and every `.hooked()` call in that module's own live tests quietly falls through to real, un-detoured vanilla code. A comparison test can still *pass* this way, by coincidence (real and ported behavior happen to agree on the cases exercised), giving zero actual coverage while looking green. **Always add both**: the module's `::init()` call to `reimplementation_tests::init()`'s list, and a `<CLASS>_DETOURS_ENABLED` test alongside its other live tests (`ztgamemgr_menumusichandler`/`ztsoundscape`/`zoostatus`/`ztshowstate` all follow the same `live_support::detour_status()` → per-detour `.is_enabled()` pattern) - the enabled-check is the only thing in the battery that catches a missing-wiring gap directly, rather than it hiding behind a false-positive comparison test.
+
+#### How to add a new live test
+
+The mechanics below aren't obvious from the file's own size (~12k lines) or from a single example - they're
+spread across the `RegisteredTest`/list-builder plumbing near the top of `openzt/src/reimplementation_tests/mod.rs`
+and the `io_redirect` submodule. Read an existing test close to what you're adding (e.g. `ZTSHOWMGR_SAVE_LOAD`
+for a save/load round trip, `ZTSHOW_GET_SHOW_SCRIPT_STATE` for a pure fixture comparison) before writing a new
+one from scratch.
+
+1. **Write the test function**: a private `fn run_<name>_test(failure_log: &mut Option<std::fs::File>) -> bool`
+   in the same big `mod` as every other test (so it can see the top-of-file `use crate::{...}` imports).
+   The bool's polarity is "did it fail" (`true` = failed), not "did it pass" - easy to get backwards. Standard
+   shape: accumulate `let mut failures: Vec<String> = Vec::new();` as you go, then end with
+   ```rust
+   if failures.is_empty() {
+       write_success_line(failure_log, test_name);
+       false
+   } else {
+       for msg in &failures { error!("{}: {}", test_name, msg); }
+       if let Some(log_file) = failure_log {
+           let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+       }
+       true
+   }
+   ```
+2. **Register it**, don't just define it - a test function that's never pushed onto a list silently never runs
+   (no error, just absent from the log). Add `tests.push(RegisteredTest { name: "YOUR_NAME", run: run_your_name_test });`
+   to exactly one of the three ordered-list builder functions, chosen by what the test needs:
+   - `early_tests()` - no live zoo needed, runs first.
+   - `always_late_tests()` - no live zoo needed, runs after `early_tests()` but before the live-zoo gate; where
+     most standalone-fixture comparison tests belong (matches `ztshowstate`'s own `_DETOURS_ENABLED`/`_INIT`/
+     `_SAVE_LOAD_ROUNDTRIP` entries).
+   - `live_zoo_tests()` - needs `run_load_live_zoo` to have already succeeded (real `GLOBAL_*` globals
+     populated from an actual loaded save); auto-skipped with an explicit `(skipped: live zoo not loaded)` log
+     line otherwise, so a gap in the log is never silent.
+   These three lists are the single source of truth for the battery's total expected-test count (the
+   start/finish markers) - no separate counter to update anywhere.
+3. **For a save/load-style test**, use the `io_redirect` submodule to capture/replay bytes without a real file:
+   `io_redirect::begin_capture()` / `end_capture() -> Vec<u8>` redirect the vanilla `WRITE_BYTES_TO_FILE` calls
+   made inside whatever you call next into an in-memory buffer; `io_redirect::begin_replay(bytes: Vec<u8>)` /
+   `end_replay()` do the same for reads (`DEALLOCATE`). Wrap exactly the `.hooked()`/`.original()` call whose
+   I/O you want captured - not more, not less - between the matching begin/end pair.
+4. **For a standalone-instance comparison test**, reuse the class module's own `#[cfg(feature =
+   "reimplementation-tests")] pub(crate) mod live_support` (see "File/module shape for a class reimplementation"
+   below) rather than hand-rolling allocation here - `build_standalone_*`/`destroy_standalone_*` helpers already
+   exist for most ported classes. Import the module at the top of `reimplementation_tests/mod.rs`'s own `use
+   crate::{...}` block as `<module>::{self, live_support as <alias>_live_support}`, matching the existing
+   `ztshow_live_support`/`showmgr_live_support`/etc. aliases.
+5. If this is the module's first live test, it also needs the two wiring steps from the warnings above: an
+   `::init()` call in `reimplementation_tests::init()`, and a `<CLASS>_DETOURS_ENABLED` test.
+
 ### Game Launch Checks
 
 The build script automatically checks if Zoo Tycoon is already running before attempting to launch:
@@ -616,7 +670,10 @@ aggregating each submodule's `init()` -> `#[cfg(feature = "reimplementation-test
 live_support { ... }` with test-only helpers -> `#[cfg(test)] mod tests { ... }` for plain logic unit tests.
 
 Wire a new module into `lib.rs`: add `mod <name>;` near the other `mod zt*mgr;` declarations, and
-`<name>::init();` inside the `if cfg!(feature = "experimental") { ... }` block.
+`<name>::init();` inside the `if cfg!(feature = "experimental") { ... }` block. **If the module has live
+tests, it also needs a separate `<name>::init();` call in `reimplementation_tests::init()`** - see the
+Testing section's "Live Reimplementation-Comparison Tests" warning above on why this is a second,
+independent wiring step, not implied by the `lib.rs` one.
 
 ### Two reimplementation styles - pick based on whether other vanilla code reads the class's raw memory
 

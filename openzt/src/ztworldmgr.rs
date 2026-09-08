@@ -9,8 +9,7 @@ use std::{collections::HashMap, fmt};
 use tracing::{error, info};
 
 use crate::bfentitytype::{ZTAnimalType, ZTEntityTypeClass, ZTUnitType};
-use crate::shortcuts::M;
-use crate::util::{ZTBufferString, mut_from_memory};
+use crate::util::ZTBufferString;
 use crate::ztmapview::BFTile;
 use crate::{
     bfentitytype::{read_zt_entity_type_from_memory, BFEntityType, ZTEntityType, ZTSceneryType},
@@ -292,10 +291,10 @@ impl BFEntity {
                     continue;
                 }
 
-                if let Some(tile) = world_mgr.get_tile_from_coords(check_x, check_y) {
-                    if tile.north_fence != 0 || tile.east_fence != 0 || tile.south_fence != 0 || tile.west_fence != 0 {
-                        return true;
-                    }
+                if let Some(tile) = world_mgr.get_tile_from_coords(check_x, check_y)
+                    && (tile.north_fence != 0 || tile.east_fence != 0 || tile.south_fence != 0 || tile.west_fence != 0)
+                {
+                    return true;
                 }
             }
         }
@@ -899,7 +898,7 @@ fn command_get_zt_world_mgr_entities(args: Vec<&str>) -> Result<String, CommandE
     let filter = if args.len() > 1 {
         return Err(CommandError::new("Too many arguments".to_string()));
     } else if args.len() == 1 {
-        Some(args[0].parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?)
+        Some(args[0].parse::<ZTEntityClass>().map_err(CommandError::new)?)
     } else {
         None
     };
@@ -993,10 +992,12 @@ fn parse_offset_reads(
 }
 
 // Helper function to parse variadic args into (offsets, types, filter)
+type ParsedOffsetArgs<'a> = (Vec<&'a str>, Vec<&'a str>, Option<&'a str>);
+
 fn parse_offset_type_filter_args<'a>(
     args: &'a [&'a str],
     valid_types: &[&str],
-) -> Result<(Vec<&'a str>, Vec<&'a str>, Option<&'a str>), CommandError> {
+) -> Result<ParsedOffsetArgs<'a>, CommandError> {
     if args.is_empty() {
         return Err(CommandError::new("At least one offset must be provided".to_string()));
     }
@@ -1035,9 +1036,9 @@ fn parse_offset_type_filter_args<'a>(
         if offset_strs.len() > 1 && !valid_types.contains(offset_strs.last().unwrap()) {
             // Last arg might be filter
             let (offsets, filter) = offset_strs.split_at(offset_strs.len() - 1);
-            (offsets, &[].as_slice(), Some(filter[0]))
+            (offsets, [].as_slice(), Some(filter[0]))
         } else {
-            (offset_strs, &[].as_slice(), None)
+            (offset_strs, [].as_slice(), None)
         }
     };
 
@@ -1054,7 +1055,7 @@ fn command_read_entity_offset(args: Vec<&str>) -> Result<String, CommandError> {
 
     // Parse entity type filter
     let filter = if let Some(filter_str) = filter {
-        Some(filter_str.parse::<ZTEntityClass>().map_err(|e| CommandError::new(e))?)
+        Some(filter_str.parse::<ZTEntityClass>().map_err(CommandError::new)?)
     } else {
         None
     };
@@ -1097,7 +1098,7 @@ fn command_read_entity_offset(args: Vec<&str>) -> Result<String, CommandError> {
                 "bool" => format!("{}", get_from_memory::<bool>(ewp.ptr + read.offset)),
                 _ => unreachable!(),
             };
-            parts.push(format!("{}", value_str));
+            parts.push(value_str.to_string());
         }
 
         string_array.push(parts.join(" | "));
@@ -1115,7 +1116,7 @@ fn command_read_entity_type_offset(args: Vec<&str>) -> Result<String, CommandErr
 
     // Parse entity type class filter
     let filter = if let Some(filter_str) = filter {
-        Some(filter_str.parse::<ZTEntityTypeClass>().map_err(|e| CommandError::new(e))?)
+        Some(filter_str.parse::<ZTEntityTypeClass>().map_err(CommandError::new)?)
     } else {
         None
     };
