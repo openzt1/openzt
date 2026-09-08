@@ -10,6 +10,19 @@ pub struct FunctionDef<T> {
     function_type: PhantomData<T>,
 }
 
+impl<T> FunctionDef<T> {
+    /// Builds a `FunctionDef` for an address with a signature not (yet) reflected in `generated.rs`.
+    ///
+    /// `generated.rs` is auto-generated from a Ghidra analysis pass run outside this repo - per
+    /// `CLAUDE.md`, it must never be hand-edited, even when a specific entry's signature is known to be
+    /// wrong or incomplete (missing a hidden-return-pointer parameter, wrong ABI, etc.). This constructor
+    /// lets a call site define its own corrected, local `FunctionDef` for the same address instead of
+    /// waiting on a regeneration - a stopgap, not a substitute for eventually fixing the real entry.
+    pub const fn new(address: u32) -> Self {
+        Self { address, function_type: PhantomData }
+    }
+}
+
 impl<T> FunctionDef<T>
 where
     T: retour::Function,

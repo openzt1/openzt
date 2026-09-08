@@ -71,6 +71,13 @@ mod bfconfigfile;
 /// ztgamemgr module has commands to interact with the live zoo stats such as cash, num animals, species, guests, etc. via the vanilla ZTGameMgr class.
 mod ztgamemgr;
 
+/// zoostatus module - vanilla ZooStatus reimplementation, see
+/// openzt/plans/zoostatus-implementation-plan.md. ZooStatus is the finance/rating tracker ZTGameMgr
+/// embeds inline at its own +0x10; ztgamemgr.rs's per-method call sites call the reimplemented
+/// `impl ZooStatus` methods directly since both stay vanilla-layout-compatible in the same memory
+/// block. Stage 8 adds this module's own address-level detours (`zoostatus::init()` below).
+mod zoostatus;
+
 /// ztgamemgr_menumusichandler module reimplements ZTGameMgr::MenuMusicHandler, a self-contained leaf
 /// class embedded/pointed to by ZTGameMgr - see openzt/plans/menumusichandler-implementation-plan.md.
 mod ztgamemgr_menumusichandler;
@@ -236,6 +243,7 @@ mod zoo_init {
             info!("Feature 'experimental' enabled");
             ztadvterrainmgr::init();
             ztgamemgr::init();
+            zoostatus::init();
             ztgamemgr_menumusichandler::init();
             experimental::init();
             ztmapview::init();

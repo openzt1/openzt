@@ -337,10 +337,20 @@ fn add_available_trick(list_element: u32, item_ptr: u32, valid: bool) {
 /// reimplementations of [`fill_trick_lists`]/[`copy_list_to_script`] replaced the *entire* body of the
 /// vanilla functions that used to call this at specific points in their control flow - without explicitly
 /// replicating those calls, the real vanilla body that computes that display never runs anymore, leaving
-/// the happiness-bonus display stuck at whatever it last showed (observed live as a stuck `0`). Safe to
-/// call with either `0` (real vanilla memory: the current "assigned tricks" listbox) or a real/synthetic
-/// `ZTShowScript` identity, since the real function only ever reaches show-script data through
-/// `ZTShowScript::size`/`getItem`, both already Stage-1-detoured onto this crate's own store.
+/// the happiness-bonus display stuck at whatever it last showed (observed live as a stuck `0`).
+///
+/// **Correction, not yet acted on beyond [`copy_list_to_script`]'s own call site: this function is NOT
+/// safe to call with a real/synthetic `ZTShowScript` identity, despite an earlier version of this doc
+/// comment claiming otherwise.** `showpanel_recalcShowStats.c`'s own `param_1 != 0` branch raw-walks
+/// `param_1->mbr_0x10`'s embedded list directly (`for (puVar15 = *(u32**)param_1->mbr_0x10; puVar15 !=
+/// param_1->mbr_0x10; puVar15 = *puVar15)`) to count items **before** ever reaching the safely
+/// Stage-1-detoured `ZTShowScript::getItem` call later in the same branch - live-confirmed via
+/// `crash-capture`: calling this with a synthetic handle (`ztshowscriptmgr::synthetic_script_handle`,
+/// returned whenever the species already has a registered script) crashes exactly on that raw
+/// dereference. Only `param_1 == 0` (the real, un-detoured "assigned tricks" listbox branch, which never
+/// touches `param_1` at all) is actually safe - matching what [`copy_list_to_script`] now always passes.
+/// A full reimplementation of this function (real fix, not attempted here - see that call site's own
+/// comment for why) would let it safely take a real handle again.
 fn recalc_show_stats(script_handle: u32) {
     unsafe { RECALC_SHOW_STATS.original()(script_handle as *const u32) };
 }
@@ -568,7 +578,17 @@ pub fn copy_list_to_script() -> u32 {
         }
     }
 
-    recalc_show_stats(script_handle);
+    // TEMPORARY, INACCURATE WORKAROUND - remove once `recalc_show_stats`/`RECALC_SHOW_STATS` is properly
+    // reimplemented. Passing `script_handle` here crashes real vanilla `recalcShowStats` whenever it's a
+    // synthetic handle (the species already had a registered script) - it raw-dereferences `+0x10`
+    // directly, see `recalc_show_stats`'s own doc comment for the live-confirmed evidence. Passing `0`
+    // instead routes through vanilla's other, real-vanilla-memory-only branch (recomputes stats from the
+    // "assigned tricks" listbox we just populated above, rather than from the script object), which is
+    // safe but NOT byte-identical: it won't reflect a sentinel trick this function just auto-inserted for
+    // exceeding the complexity budget, since the listbox never contains that sentinel. Cosmetic only (the
+    // displayed happiness-bonus number/smiley), not a correctness/safety issue - but it is a real,
+    // known-inaccurate stand-in, not the real fix.
+    recalc_show_stats(0);
     crate::ztshow::add_script(show_info, unit_type_id, script_id);
     (crate::ztshowscriptmgr::script_item_count_by_id(script_id) > 0) as u32
 }

@@ -32,7 +32,8 @@ use crate::{
     globals::{get_module_base, globals},
     resource_manager::lazyresourcemap::get_file,
     string_registry::load_string_by_id,
-    util::{get_from_memory, ZTBufferString},
+    util::{get_from_memory, ref_from_memory, ZTBufferString},
+    zoostatus::ZooStatus,
 };
 
 /// One entry in the `award*.cfg` catalogue - rebuilt from resources by [`start`] every load, never
@@ -270,7 +271,8 @@ const AWARD_COUNT_SUBMETRIC: i32 = 0xb;
 const NUMERIC_STAT_GOAL_KIND: i32 = 1;
 
 fn elapsed_metric(game_mgr_ptr: u32) -> i32 {
-    get_from_memory::<i32>(game_mgr_ptr + 0x15c) + get_from_memory::<i32>(game_mgr_ptr + 0x160) * 12
+    let zoo_status = unsafe { ref_from_memory::<ZooStatus>((game_mgr_ptr + 0x10) as *const u32) };
+    zoo_status.current_month_index + zoo_status.current_year_index * 12
 }
 
 /// Pure gate for `ZTScenarioSimpleGoal::eval`'s case `0xb` arm, isolated for testing without touching

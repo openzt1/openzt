@@ -26,7 +26,7 @@ maplit = "1.0.2"
 field_accessor_as_string = { path = "../field_accessor_as_string" }
 field_accessor_as_string_trait = { path = "../field_accessor_as_string_trait" }
 serde = {version = "1.0.228", features = ["derive"]}
-toml = { version = "1.1.5+spec-1.1.0", features = ["preserve_order"] }
+toml = { version = "1.1.5", features = ["preserve_order"] }
 regex = "1.12.2"
 indexmap = { version = "2", features = ["serde"] }
 public = "0.2.2"

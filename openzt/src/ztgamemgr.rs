@@ -1,16 +1,15 @@
 //! `ZTGameMgr` reimplementation. Follows a third named pattern variant, distinct from
 //! `ztadvterrainmgr.rs`'s "thin-shell whole-class" call-through and `ztmegatilemgr.rs`'s "100%
-//! vanilla-owned" style: **per-method delegation to an embedded, untouched sub-object**.
+//! vanilla-owned" style: **per-method delegation to an embedded sub-object**.
 //! `ZTGameMgr`'s own vtable/non-virtual logic is (or, stage by stage, will be) fully ported to Rust,
-//! but each method that needs the `ZooStatus` finance/rating tracker embedded inline at `this+0x10`
+//! and each method that needs the `ZooStatus` finance/rating tracker embedded inline at `this+0x10`
 //! (confirmed via `_CreateZTGameMgr.c`'s `OOAnalyzer::ZooStatus::init((ZooStatus *)(puVar2 + 4),...)`)
-//! calls through to real vanilla `zoostatus::*::original()` for that sub-object's own behavior, rather
-//! than porting `ZooStatus`'s own ~30-method surface (out of scope - see
-//! `openzt/plans/ztgamemgr-implementation-plan.md`). Because `ZTGameMgr` stays vanilla-layout-compatible
-//! and `ZooStatus` lives inline in the *same* memory block rather than a separate allocation, calling
-//! vanilla `ZooStatus::*` code against that live memory from within a Rust `ZTGameMgr` method body is
-//! always safe - nothing is freed or reallocated, only read/written in place, so none of `CLAUDE.md`'s
-//! cross-allocator hazards apply here.
+//! now calls directly into the reimplemented `impl ZooStatus` methods in `zoostatus.rs`
+//! (`openzt/plans/zoostatus-implementation-plan.md`'s Stage 8 rewiring - `ZooStatus`'s own ~30-method
+//! surface is that plan's concern, not this file's). Because `ZTGameMgr` stays vanilla-layout-compatible
+//! and `ZooStatus` lives inline in the *same* memory block rather than a separate allocation, reading/
+//! writing that live memory from within a Rust `ZTGameMgr` method body is always safe - nothing is freed
+//! or reallocated in place, so none of `CLAUDE.md`'s cross-allocator hazards apply here.
 //!
 //! No dynamic containers live in `ZTGameMgr`'s or the real `ZooStatus`'s own memory - only scalars and
 //! fixed-size arrays (see the implementation plan's "No dynamic containers" section), so the
@@ -26,16 +25,17 @@ use openzt_detour::generated::{
         SET_ANIMAL_RATING as ZTUI_MAIN_SET_ANIMAL_RATING, SET_DATE_TEXT as ZTUI_MAIN_SET_DATE_TEXT, SET_GUEST_RATING as ZTUI_MAIN_SET_GUEST_RATING,
         SET_MONEY_TEXT as ZTUI_MAIN_SET_MONEY_TEXT, SET_ZOO_RATING as ZTUI_MAIN_SET_ZOO_RATING, UNPAUSE_GAME as ZTUI_MAIN_UNPAUSE_GAME,
     },
-    zoostatus::{
-        SPEND_MARKETING, SPEND_RESEARCH, INIT as ZOOSTATUS_INIT, LOAD as ZOOSTATUS_LOAD, OVERRIDE as ZOOSTATUS_OVERRIDE,
-        RATING_CHECKS as ZOOSTATUS_RATING_CHECKS, SAVE as ZOOSTATUS_SAVE, UPDATE as ZOOSTATUS_UPDATE,
-    },
     bfaimgr::LOAD_DATA as BFAIMGR_LOAD_DATA,
     ztgamemgr::{
         ADD_CASH, ANIMAL_TIME_AGO, GET_DATE, HOURS_AGO, IS_GAME_DATE, IS_REAL_WORLD_DATE, LOAD, OVERRIDE_NEW_GAME_DEFAULTS, PEOPLE_TIME_AGO,
         SAVE, SET_NEW_GAME_DEFAULTS, START, STOP, SUBTRACT_CASH, TIME_AGO, UPDATE, UPDATE_SIM,
     },
 };
+// `ZooStatus`'s own 8 call-through sites below (spend_research/spend_marketing/set_new_game_defaults'
+// init+ratingChecks/override_new_game_defaults/save/load/update_sim) now call the reimplemented
+// `impl ZooStatus` methods directly (Stage 8 of `zoostatus-implementation-plan.md`) rather than going
+// through `zoostatus::*`'s real-vanilla `.original()` - see `zoostatus.rs`'s own `zoostatus_detours`
+// module for the address-level detours this rewiring pairs with.
 #[cfg(feature = "reimplementation-tests")]
 use openzt_detour::generated::{standalone::CREATE_ZTGAME_MGR, ztgamemgr::ZTGAME_MGR_1};
 use openzt_detour_macro::detour_mod;
@@ -52,6 +52,7 @@ use crate::{
     util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory},
     ztgamemgr_menumusichandler::MenuMusicHandler,
     ztsoundscape::ZTSoundscape,
+    zoostatus::{self, ZooStatus},
 };
 
 /// `DAT_006394b8`'s RVA (Ghidra VA `0x006394b8` minus the default load base `0x400000`) - a raw, signed
@@ -114,7 +115,14 @@ pub struct ZTGameMgr {
     pad7: [u8; 0x48 - 0x46],       // 0x44
     num_guests_restroom_need: u16, // 0x48
     pad8: [u8; 0x54 - 0x4A],       // 0x48
-    num_guests: u16,               // 0x54
+    /// A live guest-tile count from `ZooStatus::calculateSums`' world walk - see `zoostatus.rs`'s
+    /// `ZooStatus::guest_tile_count` doc comment for the full naming history (this field was originally
+    /// `num_guests`, then briefly `escaped_animal_tile_count` on a mistaken "escape counter" reading
+    /// that Stage 5's full `calculateSums.asm` read overturned back in the guest direction - same
+    /// underlying bytes throughout, `ZooStatus`-relative `+0x44`, `ZTGameMgr`-relative `+0x54` after the
+    /// `+0x10` embedding offset). Renaming this is a pure documentation fix - the bytes read here are
+    /// unchanged.
+    guest_tile_count: u16, // 0x54
     // This pad also covers the embedded `ZooStatus`'s "monthly history" fixed-size float-array region
     // (see `ZooStatus`'s own doc comment below) - offsets guessed at, unconfirmed, and pending a real
     // shape resolution:
@@ -147,57 +155,6 @@ pub struct ZTGameMgr {
 }
 
 const _: () = assert!(std::mem::size_of::<ZTGameMgr>() == 0x11b0);
-
-/// Typed, logic-free view of the vanilla `ZooStatus` object embedded inline inside `ZTGameMgr` at
-/// `+0x10`. Every real operation on this data still goes through `zoostatus::*::original()` - this
-/// struct exists only to name the offsets `ZTGameMgr`'s own logic already touches
-/// (`command_zoostats`'s `num_*` fields, same relative positions as `ZTGameMgr`'s own copies above,
-/// less the `0x10` embedding offset), not to be a byte-exact map of every one of `ZooStatus`'s `0x1150`
-/// bytes.
-///
-/// The "monthly history" fixed-size float-array region (see the implementation plan's "No dynamic
-/// containers" background) is deliberately left as unnamed padding: loop-bound evidence in
-/// `ZooStatus_init.c`/`_calculateSums.c` points to 2D `[[f32; N]; M]` shapes (using a decompiler-local
-/// `ZooStatus` unit stride that isn't independently confirmed), not the flat `[f32; 12]` per-field this
-/// file used to guess in a stale `TODO` comment - naively keeping that flat guess produces overlapping
-/// fields for at least two of the arrays (`income_expense_totals_by_month`/`zoo_rating_by_month`).
-/// Resolving the real shapes is left for a future pass, same as the still-unresolved `+0x104`/`+0x108`/
-/// `+0x1164` `ZooStatus`-relative gaps the roadmap plan already calls out as out of scope.
-#[derive(Debug)]
-#[repr(C)]
-pub struct ZooStatus {
-    _pad0a: [u8; 0x1c],
-    /// Current zoo rating, read directly (no formula) by `ZTGameMgr::updateSim` and passed straight to
-    /// `ZTUI::main::setZooRating` (confirmed via the `.asm`: `EBX` = `&this->field_0x10` i.e. this
-    /// `ZooStatus` sub-object, `dword ptr [EBX+0x1c]` read right before the `setZooRating` call).
-    zoo_rating_current: i32, // 0x1c
-    num_animals: u16, // 0x20
-    _pad1: [u8; 0x28 - 0x22],
-    num_species: u16, // 0x28
-    _pad2: [u8; 0x2C - 0x2A],
-    num_tired_guests: u16, // 0x2C
-    _pad3: [u8; 0x30 - 0x2E],
-    num_hungry_guests: u16, // 0x30
-    _pad4: [u8; 0x34 - 0x32],
-    num_thirst_guests: u16, // 0x34
-    _pad5: [u8; 0x38 - 0x36],
-    num_guests_restroom_need: u16, // 0x38
-    _pad6: [u8; 0x44 - 0x3A],
-    num_guests: u16, // 0x44
-    _rest_pre: [u8; 0x5c - 0x46],
-    /// Raw animal-happiness metric `ZTGameMgr::updateSim` feeds through `((metric + 100) * 100) / 200`
-    /// before calling `ZTUI::main::setAnimalRating` (confirmed via the `.asm`: `dword ptr [EBX+0x5c]`,
-    /// `EBX` = this `ZooStatus` sub-object).
-    animal_rating_metric: i32, // 0x5c
-    /// Same shape as `animal_rating_metric`, feeding `ZTUI::main::setGuestRating`
-    /// (`dword ptr [EBX+0x60]`).
-    guest_rating_metric: i32, // 0x60
-    /// Everything else - including the unresolved monthly-history array region (see the struct doc
-    /// comment).
-    _rest: [u8; 0x1150 - 0x64],
-}
-
-const _: () = assert!(std::mem::size_of::<ZooStatus>() == 0x1150);
 
 /// Vanilla's embedded `SYSTEMTIME` (same field order/size as `windows::Win32::Foundation::SYSTEMTIME`,
 /// confirmed against that crate's own definition) - kept as a distinct, private type rather than the
@@ -262,7 +219,10 @@ fn ticks_to_filetime(ticks: u64) -> FILETIME {
 
 /// The animal/guest UI rating formula `ZTGameMgr::updateSim` feeds `ZooStatus`'s raw metric through
 /// before calling `ZTUI::main::set{Animal,Guest}Rating` - `0` outright if `population` (the corresponding
-/// `num_animals`/`num_guests` count) is `0`, otherwise `(metric + 100) * 100 / 200`. Pulled out as its own
+/// `num_animals`/`guest_tile_count` count, matching vanilla's own byte-identical read - see
+/// `zoostatus.rs`) is `0`, otherwise
+/// `(metric + 100) * 100 / 200` (via [`zoostatus::scaled_rating_metric`], shared with `ZooStatus::ratingChecks`'
+/// own animal/guest score contributions - same formula, different scale constant). Pulled out as its own
 /// pure function because the live `ZTGAMEMGR_UPDATE_SIM` comparison test can never actually exercise this
 /// branch: it drives a standalone instance whose `delta` is bounded `0..=0x3e9` against a tick accumulator
 /// reset to `0` immediately before each call, so the accumulator can only ever equal `delta` itself - never
@@ -272,7 +232,7 @@ fn rating_from_metric(metric: i32, population: u16) -> i32 {
     if population == 0 {
         0
     } else {
-        (metric + 100) * 100 / 200
+        zoostatus::scaled_rating_metric(metric, 100)
     }
 }
 
@@ -457,15 +417,15 @@ impl ZTGameMgr {
     /// to match vanilla's own call order.
     pub fn spend_research(&mut self, amount: f32) {
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
-        unsafe { SPEND_RESEARCH.original()(zoostatus_ptr, amount) }
+        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_research(amount)
     }
 
-    /// Calls the vanilla `ZooStatus::spendMarketing` on the same embedded `ZooStatus` sub-object as
+    /// Calls the reimplemented `ZooStatus::spendMarketing` on the same embedded `ZooStatus` sub-object as
     /// `spend_research`. Used by `ztmarketing::ZTMarketing::update`, called before `subtract_cash` to
     /// match vanilla's own call order.
     pub fn spend_marketing(&mut self, amount: f32) {
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
-        unsafe { SPEND_MARKETING.original()(zoostatus_ptr, amount) }
+        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_marketing(amount)
     }
 
     /// Ports `ZTGameMgr::setNewGameDefaults` (vtable `+0x4`), with `BFGameMgr::setNewGameDefaults`'s own
@@ -479,20 +439,20 @@ impl ZTGameMgr {
     /// *)(param_1 + 0xc))` - `elapsed_sim_ticks` is only ever zeroed once, at the very end**), the real
     /// order is:
     /// 1. `cash = 0.0`
-    /// 2. `ZooStatus::init(&self.zoo_status, config)` (real vanilla call-through, embedded sub-object)
+    /// 2. `ZooStatus::init(&self.zoo_status, config)` (reimplemented, embedded sub-object - Stage 8)
     /// 3. set `date` to the hardcoded new-game default (2001-01-01, a Monday, 00:00:00.000)
     /// 4. if `is_new_game`: call through `GLOBAL_ZTAIMgr`'s real vtable slot `+0x4` (`0x0058f269`,
     ///    inherited unchanged from `BFAIMgr` - see `private/docs/vtables/BFAIMgr.md`), now identified by a
     ///    Ghidra regen as `BFAIMgr::loadData` (`thiscall fn(this, bool) -> u32`), with `false`, matching
     ///    the real thiscall/1-arg shape confirmed by both this function's and `_setCursorQuality`'s own
     ///    `.asm`
-    /// 5. `ZooStatus::ratingChecks(&self.zoo_status)` (real vanilla call-through)
+    /// 5. `ZooStatus::ratingChecks(&self.zoo_status)` (reimplemented, embedded sub-object - Stage 8)
     /// 6. `elapsed_sim_ticks = 0`
     pub fn set_new_game_defaults(&mut self, config: *const u32, is_new_game: bool) {
         self.cash = 0.0;
 
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
-        unsafe { ZOOSTATUS_INIT.original()(zoostatus_ptr, config as *const c_void) };
+        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.init(config as *const c_void);
 
         self.date = Systemtime {
             w_year: 0x7d1,
@@ -509,18 +469,18 @@ impl ZTGameMgr {
             unsafe { BFAIMGR_LOAD_DATA.original()(globals().ztaimgr_ptr(), false) };
         }
 
-        unsafe { ZOOSTATUS_RATING_CHECKS.original()(zoostatus_ptr) };
+        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.rating_checks();
 
         self.elapsed_sim_ticks = 0;
     }
 
     /// Ports `ZTGameMgr::overrideNewGameDefaults` (`ZTGameMgr_overrideNewGameDefaults.c`, read in full -
-    /// macOS-only method, see the module's Stage-5 doc comment). One-line call-through to
-    /// `ZooStatus::override` on the embedded sub-object at `self+0x10`, exactly the same shape as
-    /// [`Self::spend_research`]/[`Self::spend_marketing`].
+    /// macOS-only method, see the module's Stage-5 doc comment). One-line call-through to the
+    /// reimplemented `ZooStatus::override` on the embedded sub-object at `self+0x10` (Stage 8), exactly
+    /// the same shape as [`Self::spend_research`]/[`Self::spend_marketing`].
     pub fn override_new_game_defaults(&mut self, config: *const u32) {
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
-        unsafe { ZOOSTATUS_OVERRIDE.original()(zoostatus_ptr, config) }
+        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.override_config(config as *const c_void)
     }
 
     /// Ports `ZTGameMgr::save` (vtable `+0x8`), with `BFGameMgr::save`'s own base-class body (just
@@ -529,7 +489,7 @@ impl ZTGameMgr {
     ///
     /// Per the decompile (`ZTGameMgr_save.c`, read in full), write order is: a fixed `0` marker dword
     /// (`local_8` - pure format padding, no real state); `ZooStatus::save` on the embedded sub-object at
-    /// `self+0x10` (real vanilla call-through); `date` raw (16 bytes); `cash` (captured into a local
+    /// `self+0x10` (reimplemented - Stage 8); `date` raw (16 bytes); `cash` (captured into a local
     /// before the marker write in the decompile, but reading it here instead is equivalent - nothing in
     /// between can mutate `cash`); then chain to base (just `elapsed_sim_ticks`). Every step's success is
     /// ANDed together, matching `ztawardmgr.rs`'s own `save`.
@@ -538,7 +498,7 @@ impl ZTGameMgr {
         let mut ok = unsafe { WRITE_BYTES_TO_FILE.hooked()(&marker as *const u32, 4, 1, file as *const i8) } == 1;
 
         let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
-        let zoostatus_result = unsafe { ZOOSTATUS_SAVE.original()(zoostatus_ptr, file as *const i8) };
+        let zoostatus_result = unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.save(file as *const i8);
         ok &= zoostatus_result == 1;
 
         ok &= unsafe { WRITE_BYTES_TO_FILE.hooked()(&self.date as *const Systemtime as *const u32, 0x10, 1, file as *const i8) } == 1;
@@ -555,15 +515,15 @@ impl ZTGameMgr {
     /// directly (see [`Self::save`]'s doc comment for why).
     ///
     /// Per the decompile (`ZTGameMgr_load.c`, read in full), read order mirrors `save`'s write order: a
-    /// `0` marker dword (read and discarded - only its success/failure matters) -> `ZooStatus::load` on
-    /// the embedded sub-object -> `date` raw (16 bytes, written directly into `self.date` regardless of
-    /// what happens next, matching the decompile's direct-into-field read) -> `cash` (read into a local
-    /// first). **`cash` is only assigned from that local after every earlier read has succeeded** -
-    /// matching the decompile's `if (bVar4 != 0) { this->field_0xc = local_8; ... }` gating: if the
-    /// marker or `ZooStatus::load` fails, this returns `false` immediately without touching `cash` or
-    /// even attempting the `date`/`cash` reads; if `date` or `cash` fails, `cash` is left untouched (but
-    /// `date` may already have been partially overwritten, exactly as vanilla's own read-in-place would
-    /// leave it).
+    /// `0` marker dword (read and discarded - only its success/failure matters) -> `ZooStatus::load`
+    /// (reimplemented, embedded sub-object - Stage 8) -> `date` raw (16 bytes, written directly into
+    /// `self.date` regardless of what happens next, matching the decompile's direct-into-field read) ->
+    /// `cash` (read into a local first). **`cash` is only assigned from that local after every earlier
+    /// read has succeeded** - matching the decompile's `if (bVar4 != 0) { this->field_0xc = local_8; ...
+    /// }` gating: if the marker or `ZooStatus::load` fails, this returns `false` immediately without
+    /// touching `cash` or even attempting the `date`/`cash` reads; if `date` or `cash` fails, `cash` is
+    /// left untouched (but `date` may already have been partially overwritten, exactly as vanilla's own
+    /// read-in-place would leave it).
     ///
     /// `BFGameMgr::load`'s own inlined base body (`BFGameMgr_load.c`) only reads `elapsed_sim_ticks` when
     /// `version > 0x48`; older saves leave it zeroed instead.
@@ -575,7 +535,7 @@ impl ZTGameMgr {
         }
 
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
-        let zoostatus_result = unsafe { ZOOSTATUS_LOAD.original()(zoostatus_ptr, file as *const u8, version) };
+        let zoostatus_result = unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.load(file, version);
         if (zoostatus_result & 0xff) == 0 {
             return false;
         }
@@ -618,15 +578,15 @@ impl ZTGameMgr {
     ///    doc comment for why there's no separate `BFGameMgr`-vs-`ZTGameMgr` split kept in this port).
     /// 2. The raw global tick accumulator `DAT_006394b8` (`this->mbr_0x8`'s sibling, not part of
     ///    `ZTGameMgr`'s own memory) `+= delta`.
-    /// 3. `ZooStatus::update(&self.zoo_status, delta)` (real vanilla call-through, embedded sub-object).
+    /// 3. `ZooStatus::update(&self.zoo_status, delta)` (reimplemented, embedded sub-object - Stage 8).
     /// 4. If the accumulator now exceeds `0x3e9` (1001): reduce it `%= 0x3e9`, then recompute and push
     ///    animal/guest/zoo ratings plus the money/date UI text (`ZTUI::main::set{Animal,Guest,Zoo}Rating`/
     ///    `setMoneyText`/`setDateText`) - the animal/guest metrics live inside the embedded `ZooStatus`
     ///    sub-object (confirmed via the `.asm`: `EBX` = `&this->field_0x10` for these reads, not `this`
     ///    directly, resolving what looked like a `ZTGameMgr`- vs `ZooStatus`-relative offset mismatch
     ///    between the `.c` and `.asm`), each fed through `((metric + 100) * 100) / 200` unless the
-    ///    corresponding count (`num_animals`/`num_guests`) is `0`, in which case the rating is `0`
-    ///    outright; zoo rating is read directly, no formula.
+    ///    corresponding count (`num_animals`/`guest_tile_count`) is `0`, in which case the
+    ///    rating is `0` outright; zoo rating is read directly, no formula.
     /// 5. If `soundscape_ptr` is non-null, call the reimplemented [`ZTSoundscape::update`] directly
     ///    (same no-address-call-through rationale as [`Self::update`] below).
     /// 6. Advance `date` by `delta` simulation ticks via a real `SystemTimeToFileTime`/`FileTimeToSystemTime`
@@ -645,7 +605,7 @@ impl ZTGameMgr {
         save_to_memory(dat_addr, tick_accumulator);
 
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
-        unsafe { ZOOSTATUS_UPDATE.original()(zoostatus_ptr, delta as i32) };
+        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.update(delta as i32);
 
         if tick_accumulator > 0x3e9 {
             tick_accumulator %= 0x3e9;
@@ -656,7 +616,7 @@ impl ZTGameMgr {
             let animal_rating = rating_from_metric(zoostatus.animal_rating_metric, self.num_animals);
             unsafe { ZTUI_MAIN_SET_ANIMAL_RATING.original()(animal_rating) };
 
-            let guest_rating = rating_from_metric(zoostatus.guest_rating_metric, self.num_guests);
+            let guest_rating = rating_from_metric(zoostatus.guest_rating_metric, self.guest_tile_count);
             unsafe { ZTUI_MAIN_SET_GUEST_RATING.original()(guest_rating) };
 
             unsafe { ZTUI_MAIN_SET_ZOO_RATING.original()(zoostatus.zoo_rating_current) };
@@ -842,7 +802,7 @@ pub fn command_enable_dev_mode(args: Vec<&str>) -> Result<String, CommandError> 
 /// usage: `zoostats`
 pub fn command_zoostats(_args: Vec<&str>) -> Result<String, CommandError> {
     let ztgamemgr = globals().ztgamemgr();
-    Ok(format!("\nBudget: {}\nAnimals: {}\nSpecies: {}\nTired Guests: {}\nHungry Guests: {}\nThirsty Guests: {}\nGuests Need Restroom: {}\nNum Guests: {}\nZoo Admission Cost: ${}", ztgamemgr.cash, ztgamemgr.num_animals, ztgamemgr.num_species, ztgamemgr.num_tired_guests, ztgamemgr.num_hungry_guests, ztgamemgr.num_thirst_guests, ztgamemgr.num_guests_restroom_need, ztgamemgr.num_guests, ztgamemgr.zoo_admission_cost))
+    Ok(format!("\nBudget: {}\nAnimals: {}\nSpecies: {}\nTired Guests: {}\nHungry Guests: {}\nThirsty Guests: {}\nGuests Need Restroom: {}\nGuest Tiles: {}\nZoo Admission Cost: ${}", ztgamemgr.cash, ztgamemgr.num_animals, ztgamemgr.num_species, ztgamemgr.num_tired_guests, ztgamemgr.num_hungry_guests, ztgamemgr.num_thirst_guests, ztgamemgr.num_guests_restroom_need, ztgamemgr.guest_tile_count, ztgamemgr.zoo_admission_cost))
 }
 
 /// Stage 5 of `openzt/plans/ztgamemgr-implementation-plan.md`: the destructor and the
@@ -1145,7 +1105,7 @@ mod tests {
 
     #[test]
     fn zoostatus_size_matches_embedded_region() {
-        assert_eq!(std::mem::size_of::<ZooStatus>(), 0x1150);
+        assert_eq!(std::mem::size_of::<ZooStatus>(), 0x1180);
     }
 
     #[test]

@@ -233,7 +233,7 @@ pub mod zoo_ztmapview {
     //004df688
     #[detour(CHECK_TANK_PLACEMENT)]
     // fn check_tank_placement(ZTMapView *other_this, BFEntity *param_2, BFTile *param_3, int *param_4)
-    unsafe extern "stdcall" fn check_tank_placement(temp_entity_ptr: *const u32, tile: *const u32, response_ptr: *mut u32) -> bool {
+    unsafe extern "stdcall" fn check_tank_placement(temp_entity_ptr: *const u32, tile: *const u32, response_ptr: *const u32) -> bool {
         let _result = unsafe { CHECK_TANK_PLACEMENT_DETOUR.call(temp_entity_ptr, tile, response_ptr) };
 
         // let entity = get_from_memory(temp_entity);

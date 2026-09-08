@@ -35,8 +35,8 @@ use openzt_detour::generated::{
         IS_PLAYING, PLAY_LOOPED_1, SET_BASE_ATTENUATION, SET_FADE_ATTENUATION, SET_VOLUME,
         SNDSOUND_1, STOP, VALID,
     },
+    msvc_std_basic_string::{BASIC_STRING_0, BASIC_STRING_2},
     standalone::OPERATOR_NEW,
-    std_basic_string::{BASIC_STRING_0, BASIC_STRING_2},
     ztgamemgr_menumusichandler::{
         INIT, MENU_MUSIC_HANDLER_1 as CONSTRUCTOR, START_FADE, START_PLAY, UPDATE,
     },
