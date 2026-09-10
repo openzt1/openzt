@@ -3,43 +3,51 @@
 //! (`this+0x1190`, explicitly zeroed by `CreateZTGameMgr`) and drives it through this port (`start`
 //! allocates + constructs + `init`s it, `update_sim` calls `update`, `stop` runs the destructor + free).
 //! This file is the full in-scope port (the two `#[repr(C)]` structs, the pure-write constructor, the
-//! [`ZTSoundscape::init`] and [`ZTSoundscape::update`] ports, verified live by the `ZTSOUNDSCAPE_*`
-//! battery tests) plus the [`soundscape_detours`] block hooking the class's three hooked entries
-//! (`CONSTRUCTOR`/`INIT`/`UPDATE`),
+//! [`ZTSoundscape::init`]/[`ZTSoundscape::update`]/[`ZTSoundscape::destruct`] ports, verified live by
+//! the `ZTSOUNDSCAPE_*` battery tests) plus the [`soundscape_detours`] block hooking the class's three
+//! hooked entries (`CONSTRUCTOR`/`INIT`/`UPDATE`),
 //! so any caller reaching those addresses runs the Rust code - which is also why `ztgamemgr.rs`'s own
 //! three call sites call the Rust methods directly rather than through the addresses. The destructor
-//! entry (`generated.rs`'s bare-named `ZTSOUNDSCAPE`) stays deliberately un-detoured (see below), so its
-//! call-through in `stop` stays `.original()`.
+//! entry (`ztsoundscape::DESTRUCTOR`) stays deliberately un-detoured (see below), so `stop`'s
+//! call-through to it stays `.original()` - the same teardown also exists as the Rust
+//! [`ZTSoundscape::destruct`] for ported callers, while the address keeps serving vanilla ones.
 //!
 //! The class has no vtable of its own (confirmed - every vtable dispatch inside its decompiled bodies
 //! belongs to an *embedded* `SNDSound` member or a pointed-to `Ambients` object). Its whole method
 //! surface is 4 fixed addresses, all already `generated.rs` `ztsoundscape::*` entries: constructor
-//! `0x00592596`, `init` `0x005922fd`, `update` `0x004352dd`, and the destructor `0x005003e2` - which
-//! the generator filed under the misleadingly bare name `ZTSOUNDSCAPE` (confirmed to actually be the
-//! destructor via `ZTSoundscape_~ZTSoundscape.meta`'s matching address; `ztgamemgr.rs` imports it
-//! aliased as `ZTSOUNDSCAPE_DESTRUCTOR`).
+//! `0x00592596`, `init` `0x005922fd`, `update` `0x004352dd`, and the destructor `0x005003e2`
+//! (`ztsoundscape::DESTRUCTOR`, confirmed via `ZTSoundscape_~ZTSoundscape.meta`'s matching address;
+//! `ztgamemgr.rs` imports it aliased as `ZTSOUNDSCAPE_DESTRUCTOR`).
 //!
-//! Thin-shell scope boundary: **nothing in the `ambients`/`ambientsgroup`/`sndsound`/`bfsndmgr` modules
-//! gets detoured.** `Ambients` stays an out-of-scope class whose construction/play/teardown all run as
-//! real vanilla - which also leaves the shared-ownership consumers (`ZTViewingArea` and `ZTHabitat` call
-//! `Ambients::play` on their own instances) untouched - and all sound-device interaction runs through
-//! the embedded slots' vtables as real vanilla dispatch.
+//! Scope boundary: `ambients`/`ambientsgroup` (`openzt/src/ambients.rs`,
+//! `openzt/plans/ztsoundscape-ambients-full-port-plan.md`) are the full Rust reimplementation and
+//! detoured - [`ZTSoundscape::init`]/[`ZTSoundscape::update`] call their Rust methods directly
+//! (reimplemented-to-reimplemented) rather than through `generated.rs` addresses, and the
+//! shared-ownership consumers (`ZTViewingArea`/`ZTHabitat`, which each hold their own `Ambients*` and
+//! call `Ambients::play` on it independently) pick up the Rust implementation automatically once
+//! `ambients.rs`'s detours are installed, without any changes of their own. `sndsound`/`bfsndmgr` stay
+//! out of scope: all sound-device interaction still runs through the embedded slots' vtables as real
+//! vanilla dispatch.
 //!
-//! Vanilla-layout-compatible (style 1, per `CLAUDE.md`'s two-style split), forced by the teardown: the
-//! destructor is deliberately never detoured (straight-line vanilla teardown, no decision logic - the
-//! `MenuMusicHandler`/`ZTMegatileMgr`/`ZTAdvTerrainMgr` destructor precedent) and is still called by
-//! both `ztgamemgr.rs`'s `stop` and un-ported vanilla `~ZTGameMgr`. It walks the raw fields - stopping
-//! the world sound and both crowd slots through the embedded objects' vtables, running `~Ambients` +
-//! vanilla `operator delete` on both `Ambients` blocks (behind vanilla's own both-non-null pairing
-//! quirk, preserved by not touching it), and swapping the embedded slots' vtables down to
-//! `SNDSoundBase`'s - so the fields must at all times hold vanilla-shaped content, which falls out
-//! naturally as long as the port constructs everything exactly the way vanilla's own ctor/`init` do.
+//! Vanilla-layout-compatible (style 1, per `CLAUDE.md`'s two-style split), forced by the teardown:
+//! the teardown walks the raw fields - stopping the world sound and both crowd slots through the
+//! embedded objects' vtables, running `~Ambients` (the Rust `Ambients::destruct` reimplementation in
+//! `ambients.rs`; the vanilla address routes there through that module's `ambients::DESTRUCTOR` detour,
+//! the port calls the method directly) + vanilla `operator delete` on both `Ambients` blocks (behind
+//! vanilla's own both-non-null pairing quirk, preserved by not touching it), and swapping the embedded
+//! slots' vtables down to `SNDSoundBase`'s - so the fields must at all times hold vanilla-shaped
+//! content, which falls out naturally as long as the port constructs everything exactly the way
+//! vanilla's own ctor/`init` do. The teardown is ported in full as [`ZTSoundscape::destruct`], while
+//! its `generated.rs` entry (`ztsoundscape::DESTRUCTOR`) stays deliberately un-detoured (straight-line
+//! teardown, no decision logic) and is still what both `ztgamemgr.rs`'s `stop` and un-ported vanilla
+//! `~ZTGameMgr` run.
 //!
 //! Cross-allocator contract (per `CLAUDE.md`): the `0x54` block and both `0x18` `Ambients` blocks are
 //! vanilla `OPERATOR_NEW`/`operator delete` on both sides - the `0x54` block is allocated by
 //! `ztgamemgr.rs`'s `start` and freed by `stop` via vanilla `OPERATOR_DELETE` (unchanged by this port),
-//! and the `init` port will allocate the two `Ambients` blocks through the same vanilla `OPERATOR_NEW`
-//! for *vanilla's* dtor to free. Never a Rust `Box` on vanilla-owned memory.
+//! and the `init` port allocates the two `Ambients` blocks through the same vanilla `OPERATOR_NEW`
+//! for the destructor to free (either pole - the vanilla address or [`ZTSoundscape::destruct`]). Never
+//! a Rust `Box` on vanilla-owned memory.
 //!
 //! Shared-RNG constraint: `update`'s position jitter
 //! advances the real global RNG state at VA `0x00638060` through the classic MSVC LCG
@@ -55,12 +63,17 @@
 /// preferred base, so a vtable's Ghidra VA already equals its runtime VA.
 const SNDSOUND_VTABLE: u32 = 0x00630bc0;
 
+/// `SNDSoundBase`'s real vtable VA (`private/docs/vtables/SNDSoundBase.md`) - `SNDSound`'s own base
+/// class. The destructor's terminal state: each embedded slot's `vtable` holds this once
+/// [`ZTSoundscape::destruct`]'s swapdown (or the vanilla dtor's) has run. Same raw-constant shape as
+/// [`SNDSOUND_VTABLE`].
+const SNDSOUNDBASE_VTABLE: u32 = 0x00635268;
+
 use std::ffi::c_void;
 
+use crate::ambients::Ambients;
 use crate::globals::{get_module_base, globals};
-use crate::util::{get_from_memory, mut_from_memory, save_to_memory};
-use openzt_detour::generated::ambients::CONSTRUCTOR as AMBIENTS_CONSTRUCTOR;
-use openzt_detour::generated::ambients::PLAY as AMBIENTS_PLAY;
+use crate::util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory};
 use openzt_detour::generated::bfconfigfile::{ATTEMPT_0, GET_INT, GET_STRING_1, RELEASE};
 use openzt_detour::generated::bfsndmgr::GET_SCREEN_CENTER;
 use openzt_detour::generated::sndsound::{
@@ -69,7 +82,7 @@ use openzt_detour::generated::sndsound::{
     SET_FADE_ATTENUATION as SNDSOUND_SET_FADE_ATTENUATION, SET_VOLUME as SNDSOUND_SET_VOLUME,
     STOP as SNDSOUND_STOP, VALID as SNDSOUND_VALID,
 };
-use openzt_detour::generated::standalone::OPERATOR_NEW;
+use openzt_detour::generated::standalone::{OPERATOR_DELETE, OPERATOR_NEW};
 use openzt_detour::generated::ztsoundscape::{CONSTRUCTOR, INIT, UPDATE};
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -134,11 +147,11 @@ const DAT_00635490_RVA: u32 = 0x00635490 - 0x400000;
 const START_FADE_ATTEN: i32 = 0x1194;
 
 /// One embedded `SNDSound` member, `{vtable, inner}` exactly as vanilla's ctor writes it. `vtable` is
-/// `SNDSound`'s while live and `SNDSoundBase`'s (`0x00635268`) once the vanilla dtor has run;
+/// `SNDSound`'s while live and `SNDSoundBase`'s (`0x00635268`) once the destructor has run;
 /// `inner` is a vanilla-owned inner sound resource handle that never travels through this port.
 #[repr(C)]
 struct SndSlot {
-    vtable: u32, // SNDSound's vtable (0x00630bc0) while live; SNDSoundBase's (0x00635268) after the vanilla dtor runs
+    vtable: u32, // SNDSound's vtable (0x00630bc0) while live; SNDSoundBase's (0x00635268) after the destructor runs
     inner: u32,  // vanilla-owned inner sound resource handle; never read or written by the port
 }
 
@@ -289,6 +302,24 @@ fn fade_atten_b(fade: i32, c1: f32, c2: f32, c3: f32) -> i32 {
     ((c3 as f64 - t as f64) * c2 as f64) as i32
 }
 
+/// `destruct`'s per-slot swapdown, one embedded `SNDSound` slot at a time. The inner object's
+/// concrete class is whatever `attempt` installed - unknowable statically - so the release
+/// dispatches dynamically through the inner's own vtable slot 0 with `bDelete = 1`, vanilla's
+/// `if (obj[1] != 0) (*(code*)**obj[1])(1); obj[1] = 0;` idiom (SNDSound.md's last paragraph; same
+/// live-vtable call-through shape as `ztguest.rs`'s `entity_category_id`), then the slot's vtable
+/// lands on [`SNDSOUNDBASE_VTABLE`] - `SNDSound`'s base class, the terminal state the destructor
+/// leaves every embedded slot in.
+fn destruct_slot(slot: &mut SndSlot) {
+    if slot.inner != 0 {
+        let inner = slot.inner;
+        let deleting_dtor: unsafe extern "thiscall" fn(*const u32, u32) =
+            unsafe { std::mem::transmute(get_from_memory::<u32>(get_from_memory::<u32>(inner))) };
+        unsafe { deleting_dtor(inner as *const u32, 1) };
+        slot.inner = 0;
+    }
+    slot.vtable = SNDSOUNDBASE_VTABLE;
+}
+
 impl ZTSoundscape {
     /// Reimplementation of `ZTSoundscape::ZTSoundscape` (`0x00592596`), per
     /// `ZTSoundscape_ZTSoundscape.c`/`.asm`. Pure constant writes, no calls: `{vtable:
@@ -372,17 +403,16 @@ impl ZTSoundscape {
         unsafe {
             // Both Ambients blocks, crowd then world - allocated + constructed before any config
             // parsing (vanilla order, see this method's doc comment). Vanilla zeroes a 3-dword stack
-            // local and hands its address as the ctor's second argument.
+            // local and hands its address as the ctor's second argument. Constructed via a direct Rust
+            // call (reimplemented-to-reimplemented, see the module doc's scope-boundary note) rather
+            // than through `generated.rs`'s `ambients::CONSTRUCTOR` address.
             let crowd_block = OPERATOR_NEW.original()(0x18);
             self.crowd_ambients = if crowd_block.is_null() {
                 0
             } else {
                 let mut ctor_data = [0u32; 3];
-                AMBIENTS_CONSTRUCTOR.original()(
-                    crowd_block as *const u32,
-                    crowd_ambients_name as *const u32,
-                    ctor_data.as_mut_ptr(),
-                ) as u32
+                (*(crowd_block as *mut Ambients)).construct(crowd_ambients_name, ctor_data.as_mut_ptr() as *const i32);
+                crowd_block as u32
             };
 
             let world_block = OPERATOR_NEW.original()(0x18);
@@ -390,11 +420,8 @@ impl ZTSoundscape {
                 0
             } else {
                 let mut ctor_data = [0u32; 3];
-                AMBIENTS_CONSTRUCTOR.original()(
-                    world_block as *const u32,
-                    world_ambients_name as *const u32,
-                    ctor_data.as_mut_ptr(),
-                ) as u32
+                (*(world_block as *mut Ambients)).construct(world_ambients_name, ctor_data.as_mut_ptr() as *const i32);
+                world_block as u32
             };
 
             // Defaults, in vanilla's write order.
@@ -500,7 +527,7 @@ impl ZTSoundscape {
     ///    attempt goes silent until the guest band changes (vanilla behavior, preserved).
     ///
     /// All dispatch is by fixed address through the `sndsound` `FunctionDef`s (established idiom -
-    /// valid because the vanilla dtor's vtable swapdown only happens after the last `update` call),
+    /// valid because the destructor's vtable swapdown only happens after the last `update` call),
     /// and boolean call results are masked to the low byte (`& 0xff`) exactly like `init`'s calls,
     /// because vanilla tests only AL.
     pub fn update(&mut self, delta: i32) {
@@ -533,10 +560,12 @@ impl ZTSoundscape {
             save_to_memory(ambients + 0x14, position[2]);
         }
 
-        // Step 5: both Ambients blocks play for real, crowd (delta, level), world (delta, 0x32).
+        // Step 5: both Ambients blocks play through the Rust reimplementation, crowd (delta, level),
+        // world (delta, 0x32) - reimplemented-to-reimplemented, matching the direct Rust construct
+        // calls in `init` above rather than `generated.rs`'s `ambients::PLAY` address.
         unsafe {
-            AMBIENTS_PLAY.original()(self.crowd_ambients as *const u32, delta, level);
-            AMBIENTS_PLAY.original()(self.world_ambients as *const u32, delta, 0x32);
+            ref_from_memory::<Ambients>(self.crowd_ambients).play(delta, level);
+            ref_from_memory::<Ambients>(self.world_ambients).play(delta, 0x32);
         }
 
         // Step 6: crossfade block, only while fading (see this method's doc comment).
@@ -603,13 +632,90 @@ impl ZTSoundscape {
             self.current_track = target as i32;
         }
     }
+
+    /// Reimplementation of `ZTSoundscape::~ZTSoundscape` (`0x005003e2`), per
+    /// `ZTSoundscape_~ZTSoundscape.asm`. The `generated.rs` entry (`ztsoundscape::DESTRUCTOR`) stays
+    /// deliberately un-detoured - straight-line teardown, no decision logic - and is still what both
+    /// `ztgamemgr.rs`'s `stop` and un-ported vanilla `~ZTGameMgr` run (`.original()` on the
+    /// un-detoured address is the real vanilla body in every profile); this method is the same
+    /// teardown for ported callers. The outer `0x54` block's own free stays the caller's job, exactly
+    /// as with the vanilla address. Three passes, in vanilla's order:
+    ///
+    /// 1. **valid→release pass** - world slot, then crowd A, then crowd B (the crowd loop iterates
+    ///    `+0xc` upward): per slot, real vanilla `VALID` (`+0x14`, low-byte-masked) gates a real
+    ///    vanilla `RELEASE` (`+0x10`). **No `STOP` (`+0x60`) call anywhere in this dtor** - releasing
+    ///    a still-live sound *is* the whole stop action (`SNDSound.md`'s `+0x10` row documents
+    ///    exactly this reading). Dispatch is by fixed `sndsound` address rather than live vtable
+    ///    dispatch on the same grounds [`ZTSoundscape::update`]'s doc states: each slot's vtable is
+    ///    guaranteed to still be the live `SNDSound` vtable until this method's own swapdown below.
+    /// 2. **Ambients frees**, behind vanilla's both-non-null pairing quirk, preserved verbatim: gate
+    ///    1 reads `crowd_ambients` first, then `world_ambients`, and when both are non-null frees the
+    ///    **world** block; gate 2 re-reads `world_ambients` first, then `crowd_ambients`, and frees
+    ///    the **crowd** block the same way. **Neither pointer is zeroed afterward** (both left
+    ///    dangling, vanilla-faithfully), so with exactly one non-null pointer *neither* block is
+    ///    freed - a one-block leak vanilla ships with, not "fixed" here. `~Ambients` is the Rust
+    ///    [`Ambients::destruct`] called directly (reimplemented-to-reimplemented, matching `init`'s
+    ///    direct `construct` calls) and the block free is vanilla `OPERATOR_DELETE` (the same
+    ///    allocator `init` allocated both blocks with).
+    /// 3. **Per-slot swapdown** - world slot, then crowd B, then crowd A (the crowd loop iterates
+    ///    downward from `+0x1c`), one [`destruct_slot`] call each: release the slot's inner sound
+    ///    object through *its own* vtable slot 0 with `bDelete = 1`, zero `inner`, then drop the
+    ///    slot's vtable to [`SNDSOUNDBASE_VTABLE`]. Vanilla's transient intermediate vtable write
+    ///    (re-writing the live `SNDSound` vtable, immediately overwritten before any dispatch) is a
+    ///    no-op in practice and is not reproduced.
+    ///
+    /// `.asm` annotation note: Ghidra renders both vtable writes as `MOV dword ptr [ESI],
+    /// SNDSound::~SNDSound` / `SNDSoundBase::~SNDSoundBase`, which reads like code addresses; those
+    /// annotations are the vtable **array** addresses (Ghidra labels a vtable pointer-array by its
+    /// slot-0 destructor entry). The constructor's `.asm` writes the same `SNDSound::~SNDSound`
+    /// annotation and provably writes the live `SNDSound` vtable `0x00630bc0` (pinned byte-for-byte
+    /// by `ZTSOUNDSCAPE_STANDALONE_ROUNDTRIP`), so `.asm` and `.c` agree and the swapdown's final
+    /// value per slot is exactly [`SNDSOUNDBASE_VTABLE`], matching [`SndSlot`]'s field doc.
+    pub fn destruct(&mut self) {
+        // Pass 1: valid→release - world slot first, then the two crowd slots (vanilla's +0xc-upward
+        // loop). Fixed-address dispatch and low-byte masking, the established `update` idiom.
+        for slot in [
+            &self.world_snd as *const SndSlot as *const u32,
+            &self.crowd_snd_a as *const SndSlot as *const u32,
+            &self.crowd_snd_b as *const SndSlot as *const u32,
+        ] {
+            if (unsafe { SNDSOUND_VALID.original()(slot) } & 0xff) != 0 {
+                unsafe { SNDSOUND_RELEASE.original()(slot) };
+            }
+        }
+
+        // Pass 2: both Ambients frees behind the both-non-null pairing quirk, written as vanilla's
+        // two separate gates with their own read order (see this method's doc comment).
+        unsafe {
+            if self.crowd_ambients != 0 {
+                let world = self.world_ambients;
+                if world != 0 {
+                    (*(world as *mut Ambients)).destruct();
+                    OPERATOR_DELETE.original()(world);
+                }
+            }
+            if self.world_ambients != 0 {
+                let crowd = self.crowd_ambients;
+                if crowd != 0 {
+                    (*(crowd as *mut Ambients)).destruct();
+                    OPERATOR_DELETE.original()(crowd);
+                }
+            }
+        }
+
+        // Pass 3: per-slot swapdown - world, then crowd B, then crowd A (vanilla's downward loop
+        // from +0x1c).
+        destruct_slot(&mut self.world_snd);
+        destruct_slot(&mut self.crowd_snd_b);
+        destruct_slot(&mut self.crowd_snd_a);
+    }
 }
 
 /// Hooks `ZTSoundscape`'s three hooked entries (`CONSTRUCTOR`/`INIT`/`UPDATE`) so any caller reaching
 /// those addresses runs the Rust code above. Every detour fully replaces its entry with the
 /// corresponding Rust method (each verified equivalent live by the `ZTSOUNDSCAPE_*` battery tests)
 /// and never calls vanilla. The class's fourth entry - the destructor, `generated.rs`'s
-/// misleadingly bare-named `ZTSOUNDSCAPE` - is deliberately **not** hooked (see the module doc comment
+/// `ztsoundscape::DESTRUCTOR` - is deliberately **not** hooked (see the module doc comment
 /// and [`init`]).
 #[detour_mod]
 mod soundscape_detours {
@@ -687,11 +793,11 @@ mod soundscape_detours {
 }
 
 /// Registers this module's live detours. Does **not** detour the destructor - `generated.rs`'s
-/// misleadingly bare-named `ztsoundscape::ZTSOUNDSCAPE` entry (`0x005003e2`) is real vanilla
-/// `~ZTSoundscape` (confirmed via `ZTSoundscape_~ZTSoundscape.meta`'s matching address), straight-line
-/// teardown with no decision logic that both `ztgamemgr.rs`'s `stop` and un-ported vanilla `~ZTGameMgr`
-/// still run - the `MenuMusicHandler`/`ZTMegatileMgr`/`ZTAdvTerrainMgr` destructor precedent (see the
-/// module doc comment).
+/// `ztsoundscape::DESTRUCTOR` entry (`0x005003e2`) is real vanilla
+/// `~ZTSoundscape` (confirmed via `ZTSoundscape_~ZTSoundscape.meta`'s matching address), whose
+/// straight-line teardown both `ztgamemgr.rs`'s `stop` and un-ported vanilla `~ZTGameMgr` still run
+/// through `.original()`, even though the same teardown is ported as [`ZTSoundscape::destruct`] (see
+/// the module doc comment).
 pub fn init() {
     if let Err(e) = unsafe { soundscape_detours::init_detours() } {
         error!("Failed to initialise ztsoundscape detours: {e:?}");
@@ -702,7 +808,7 @@ pub fn init() {
 #[cfg(feature = "reimplementation-tests")]
 pub(crate) mod live_support {
     use openzt_detour::generated::standalone::OPERATOR_DELETE;
-    use openzt_detour::generated::ztsoundscape::ZTSOUNDSCAPE as ZTSOUNDSCAPE_DESTRUCTOR;
+    use openzt_detour::generated::ztsoundscape::DESTRUCTOR as ZTSOUNDSCAPE_DESTRUCTOR;
 
     use super::*;
 
@@ -730,7 +836,7 @@ pub(crate) mod live_support {
 
     /// Frees a standalone instance built via [`allocate_uninitialized`] plus construction **and** a
     /// call to [`ZTSoundscape::init`] (real vanilla or reimplemented): the real vanilla destructor
-    /// (`generated.rs`'s misleadingly-named `ztsoundscape::ZTSOUNDSCAPE` entry - confirmed to actually
+    /// (`ztsoundscape::DESTRUCTOR` - confirmed to actually
     /// be the destructor via `ZTSoundscape_~ZTSoundscape.meta`; the same two-call shape
     /// `ztgamemgr.rs`'s `stop` uses) followed by vanilla `OPERATOR_DELETE`. Clean per `CLAUDE.md`'s
     /// cross-allocator rule because *everything* an init'ed block holds - the `0x54` block itself, both

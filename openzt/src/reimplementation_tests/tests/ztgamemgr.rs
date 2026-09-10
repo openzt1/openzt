@@ -13,8 +13,10 @@ use windows::Win32::Foundation::FILETIME;
 use openzt_detour::generated::bfconfigfile::{
     CONSTRUCTOR_0 as BFCONFIGFILE_CONSTRUCTOR_0, RELEASE as BFCONFIGFILE_RELEASE,
 };
+use openzt_detour::generated::standalone::OPERATOR_DELETE;
 use openzt_detour::generated::ztgamemgr::{
-    ADD_CASH as ZTGAMEMGR_ADD_CASH, ANIMAL_TIME_AGO as ZTGAMEMGR_ANIMAL_TIME_AGO, GET_DATE as ZTGAMEMGR_GET_DATE,
+    ADD_CASH as ZTGAMEMGR_ADD_CASH, ANIMAL_TIME_AGO as ZTGAMEMGR_ANIMAL_TIME_AGO,
+    GET_DATE as ZTGAMEMGR_GET_DATE,
     HOURS_AGO as ZTGAMEMGR_HOURS_AGO, IS_GAME_DATE as ZTGAMEMGR_IS_GAME_DATE,
     IS_REAL_WORLD_DATE as ZTGAMEMGR_IS_REAL_WORLD_DATE, LOAD as ZTGAMEMGR_LOAD,
     OVERRIDE_NEW_GAME_DEFAULTS as ZTGAMEMGR_OVERRIDE_NEW_GAME_DEFAULTS,
@@ -29,6 +31,7 @@ use crate::reimplementation_tests::io_redirect;
 use crate::reimplementation_tests::NoopFailurePersistence;
 use crate::util::save_to_memory;
 use crate::ztgamemgr::{self, live_support as gamemgr_live_support};
+use crate::ztgamemgr_menumusichandler::live_support as menumusichandler_live_support;
 use crate::zoostatus::ZooStatus;
 
 /// `ZTGAMEMGR_STANDALONE_ROUNDTRIP` - builds one standalone `ZTGameMgr` via the real vanilla
@@ -65,6 +68,105 @@ pub(crate) fn run_gamemgr_standalone_roundtrip_test(failure_log: &mut Option<std
     gamemgr_live_support::destroy_standalone_mgr(ptr);
     write_success_line(failure_log, test_name);
     false
+}
+
+/// `ZTGAMEMGR_CONSTRUCT` - builds one standalone `ZTGameMgr` via the real vanilla free-function
+/// constructor (`gamemgr_live_support::build_standalone_mgr`) and one via the new Rust-native
+/// `ztgamemgr::ZTGameMgr::construct` (`gamemgr_live_support::construct_standalone_via_rust`), then diffs
+/// the full `0x11b0`-byte block. Unlike `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS`, this test can't pre-zero both
+/// blocks to a shared starting point: each side's own constructor call performs its own real vanilla
+/// `operator_new` internally, so whatever the allocator's freelist happened to hand back is already
+/// live before either constructor body runs.
+///
+/// The exclusion ranges below were derived by first running this test with no exclusions, then
+/// classifying every observed mismatch offset against `ztgamemgr.rs`'s struct/`construct()` and
+/// `zoostatus.rs`'s struct/`init()` (read in full) - each one is either compiler-inserted alignment
+/// padding (a `_padN`/`pad_0x*` field, never explicitly written by *any* code, real or reimplemented) or
+/// a named field neither `CreateZTGameMgr` nor `ZooStatus::init` ever assigns. Every other byte in the
+/// `0x11b0` block - the vast majority of the embedded `ZooStatus` region included - *is* deterministically
+/// written by one side or the other and stays in the diff:
+///
+/// - `0x8..0x10` - `elapsed_sim_ticks`/`cash`: real `ZTGameMgr`-own fields `_CreateZTGameMgr.c` never
+///   touches (only `started`/`soundscape_ptr`/`menu_music_handler_ptr`/the ini-read result are written
+///   outside the embedded `ZooStatus` call).
+/// - `0x29..0x2c` - `ZooStatus::_pad_0x19` (compiler padding after `finance_check_pending`).
+/// - `0x32..0x3c` - `ZooStatus::_pad_0x22` + `animal_condition_counter_1` + `_pad_0x26` + `num_species` +
+///   `_pad_0x2a`: `init`'s own doc comment states `num_species`/`animal_condition_counter_1` (`+0x24`/
+///   `+0x28`, ZooStatus-relative) are deliberately left untouched (recomputed later by `calculateSums`),
+///   and the two padding halves flanking them are never written either.
+/// - `0x3e..0x40`, `0x42..0x44`, `0x46..0x48`, `0x4a..0x4c`, `0x4e..0x50`, `0x52..0x54` - `ZooStatus`'s
+///   `_pad_0x2e`/`_pad_0x32`/`_pad_0x36`/`_pad_0x3a`/`_pad_0x3e`/`_pad_0x42`: compiler padding between
+///   the `num_tired_guests`/`num_hungry_guests`/`num_thirst_guests`/`num_guests_restroom_need`/
+///   `guest_condition_counter_1`/`guest_condition_counter_2` `u16` fields - every one of those named
+///   fields itself *is* written (`= 0`) by `init` and correctly stays in the diff.
+/// - `0x1160..0x1164` - `zoo_admission_cost` (`ZooStatus::admission_price`): `init`'s own doc comment
+///   states this is deliberately never written (`set_adult_admission_price` clamps whatever was already
+///   there into `[admission_price_min, admission_price_max]` = `[0.0, 100.0]`, but a fresh instance's
+///   pre-clamp value is raw heap leftover).
+/// - `0x1194..0x11a4` - `date`: a real `ZTGameMgr`-own field, never touched by `_CreateZTGameMgr.c`.
+/// - `0x11ac..0x11b0` - `pad11`, the struct's trailing unaccounted space (see its own field comment).
+///
+/// Notably `menu_music_max_attenuation` (`0x11a8..0x11ac`) is *not* excluded and does compare
+/// byte-identical between both sides - both call the same real `BFIniFile::read("UI",
+/// "menuMusicMaxAttenuation", -1000)`, so this is a genuine, deterministic confirmation that
+/// [`ztgamemgr::ZTGameMgr::construct`]'s ini-read port matches vanilla exactly.
+pub(crate) fn run_gamemgr_construct_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTGAMEMGR_CONSTRUCT";
+
+    let real_ptr = gamemgr_live_support::build_standalone_mgr();
+    let reimpl_ptr = gamemgr_live_support::construct_standalone_via_rust();
+    if real_ptr.is_null() || reimpl_ptr.is_null() {
+        error!("{}: constructor returned null (real={:?}, reimpl={:?})", test_name, real_ptr, reimpl_ptr);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: constructor returned null (real={:?}, reimpl={:?})\n", test_name, real_ptr, reimpl_ptr).as_bytes());
+        }
+        if !real_ptr.is_null() {
+            gamemgr_live_support::destroy_standalone_mgr(real_ptr);
+        }
+        if !reimpl_ptr.is_null() {
+            gamemgr_live_support::destroy_standalone_mgr(reimpl_ptr);
+        }
+        return true;
+    }
+
+    let struct_size = size_of::<ztgamemgr::ZTGameMgr>();
+    let real_bytes = unsafe { std::slice::from_raw_parts(real_ptr as *const u8, struct_size) };
+    let reimpl_bytes = unsafe { std::slice::from_raw_parts(reimpl_ptr as *const u8, struct_size) };
+
+    let excluded_ranges: [std::ops::Range<usize>; 12] = [
+        0x8..0x10,
+        0x29..0x2c,
+        0x32..0x3c,
+        0x3e..0x40,
+        0x42..0x44,
+        0x46..0x48,
+        0x4a..0x4c,
+        0x4e..0x50,
+        0x52..0x54,
+        0x1160..0x1164,
+        0x1194..0x11a4,
+        0x11ac..0x11b0,
+    ];
+
+    let mismatches: Vec<(usize, u8, u8)> = (0..struct_size)
+        .filter(|i| !excluded_ranges.iter().any(|r| r.contains(i)))
+        .filter_map(|i| if real_bytes[i] != reimpl_bytes[i] { Some((i, real_bytes[i], reimpl_bytes[i])) } else { None })
+        .collect();
+
+    let failed = !mismatches.is_empty();
+    if failed {
+        let shown = &mismatches[..mismatches.len().min(32)];
+        error!("{}: {} byte mismatch(es) (offset, real, reimpl), first {}: {:?}", test_name, mismatches.len(), shown.len(), shown);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {} byte mismatch(es), first {}: {:?}\n", test_name, mismatches.len(), shown.len(), shown).as_bytes());
+        }
+    } else {
+        write_success_line(failure_log, test_name);
+    }
+
+    gamemgr_live_support::destroy_standalone_mgr(real_ptr);
+    gamemgr_live_support::destroy_standalone_mgr(reimpl_ptr);
+    failed
 }
 
 /// `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS` - builds two standalone `ZTGameMgr` instances (the
@@ -909,6 +1011,86 @@ pub(crate) fn run_gamemgr_start_stop_smoke_test(failure_log: &mut Option<std::fs
     gamemgr_live_support::destroy_standalone_mgr(ptr);
 
     fail_flag
+}
+
+/// `ZTGAMEMGR_DESTRUCT` - the migration plan's Stage 4 live test (`plans/ztgamemgr-vanilla-storage-
+/// migration-plan.md`). Builds two standalone `ZTGameMgr` instances, `start()`s both (populating a real
+/// `soundscape_ptr` the same way `ZTGAMEMGR_START_STOP_SMOKE` does) and manually populates
+/// `menu_music_handler_ptr` on both with a real, zero-initialized `MenuMusicHandler` block (via
+/// `set_menu_music_handler_ptr` - `start()`/`set_new_game_defaults()` never touch this field, see that
+/// accessor's own doc comment), then tears one down via the real vanilla deleting destructor
+/// (`gamemgr_live_support::real_destructor_1`, `bDelete=1`) and the other via the new Rust-native
+/// `ztgamemgr::ZTGameMgr::destruct` followed by a matching `OPERATOR_DELETE` - mirroring the real
+/// deleting destructor's own destruct-then-free split. Repeated across several iterations in one process,
+/// same reasoning as `ztthoughtmgr.rs`'s leak-only-teardown tests and this migration plan's own live-test
+/// section: a real double-free/use-after-free/cross-allocator bug is likely to crash or corrupt heap
+/// state detectably within a handful of iterations, and there's no second "real" pole left to byte-diff
+/// against once both sides have been freed. Deferred to run after `ZTGAMEMGR_START_STOP_SMOKE`, since
+/// `start()` needs a genuinely-loaded live zoo (`GLOBAL_ZTScenarioMgr`) for the same reason that test is
+/// deferred.
+pub(crate) fn run_gamemgr_destruct_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTGAMEMGR_DESTRUCT";
+    const ITERATIONS: usize = 8;
+
+    for i in 0..ITERATIONS {
+        let real_ptr = gamemgr_live_support::build_standalone_mgr();
+        let reimpl_ptr = gamemgr_live_support::build_standalone_mgr();
+        if real_ptr.is_null() || reimpl_ptr.is_null() {
+            error!("{}: CREATE_ZTGAME_MGR returned null on iteration {} (real={:?}, reimpl={:?})", test_name, i, real_ptr, reimpl_ptr);
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("Test Failed {}: CREATE_ZTGAME_MGR returned null on iteration {}\n", test_name, i).as_bytes());
+            }
+            if !real_ptr.is_null() {
+                gamemgr_live_support::destroy_standalone_mgr(real_ptr);
+            }
+            if !reimpl_ptr.is_null() {
+                gamemgr_live_support::destroy_standalone_mgr(reimpl_ptr);
+            }
+            return true;
+        }
+
+        unsafe {
+            (*real_ptr).start();
+            (*reimpl_ptr).start();
+        }
+
+        let real_handler = menumusichandler_live_support::allocate_uninitialized();
+        let reimpl_handler = menumusichandler_live_support::allocate_uninitialized();
+        if real_handler.is_null() || reimpl_handler.is_null() {
+            error!("{}: MenuMusicHandler allocation returned null on iteration {} (real={:?}, reimpl={:?})", test_name, i, real_handler, reimpl_handler);
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("Test Failed {}: MenuMusicHandler allocation returned null on iteration {}\n", test_name, i).as_bytes());
+            }
+            gamemgr_live_support::destroy_standalone_mgr(real_ptr);
+            gamemgr_live_support::destroy_standalone_mgr(reimpl_ptr);
+            return true;
+        }
+
+        unsafe {
+            (*real_handler).construct();
+            (*reimpl_handler).construct();
+            (*real_ptr).set_menu_music_handler_ptr(real_handler as u32);
+            (*reimpl_ptr).set_menu_music_handler_ptr(reimpl_handler as u32);
+        }
+
+        // Real pole: the real vanilla deleting destructor - tears down the soundscape and menu-music-
+        // handler through its own tail-merge shape (see the migration plan's re-verification section),
+        // then frees `real_ptr` itself. Routed through the test_real trampoline (not `.original()`
+        // directly) since Stage 5 detours this address - see `gamemgr_live_support::real_destructor_1`'s
+        // own doc comment for why a raw `.original()` call isn't safe here in every build profile.
+        gamemgr_live_support::real_destructor_1(real_ptr as *const u32, 1);
+
+        // Reimpl pole: the new Rust-native destruct() followed by a matching OPERATOR_DELETE, mirroring
+        // the real deleting destructor's own destruct-then-free split.
+        unsafe {
+            (*reimpl_ptr).destruct();
+            OPERATOR_DELETE.original()(reimpl_ptr as u32);
+        }
+    }
+
+    info!("{}: {} construct/start/populate-handler/destruct cycles completed without crashing on either pole", test_name, ITERATIONS);
+    write_success_line(failure_log, test_name);
+    false
 }
 
 /// ZTGAMEMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE: real-zoo save/load round-trip. Snapshots

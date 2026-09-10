@@ -5,6 +5,7 @@
 //! its ordered `RegisteredTest` lists. See the parent module's doc comment for the "how to add a
 //! new test" guide.
 
+pub(crate) mod ambients;
 pub(crate) mod footprints;
 pub(crate) mod ztadvterrainmgr;
 pub(crate) mod ztawardmgr;

@@ -235,46 +235,41 @@
 
 //! ## Stage 8 - unit-roster mutation
 //! `ZTShowInfo_addUnit.c`/`.asm`, `_addUnitToList.c`/`.asm`, `_removeUnit.c`/`.asm`, `_gatherUnits.c`/`.asm`
-//! all read in full. Narrower scope than the plan's own Stage 8 originally described: only
-//! [`remove_unit`] (erase-only) is ported; `addUnit`/`addUnitToList` and `ZTShowInfo`'s own `gatherUnits`
-//! stay real and un-detoured, per the plan's own explicit permission to narrow this stage rather than ship
-//! an under-verified allocator interaction. Both reasons below matured directly from reading their own
-//! `.asm`, not from re-deriving the plan's own hedge in the abstract.
+//! all read in full. [`remove_unit`] (erase-only) shipped in this stage's original pass; [`add_unit`]/
+//! [`add_unit_to_list`] and this class's own [`gather_units`] were deferred at the time - both blocked on
+//! opaque shared helpers (`FUN_0040146c`, the list-node insert; `FUN_00404f0c`, the pool-node bulk
+//! deallocate) with no independently-resolved identity - and shipped later in a follow-up pass (Stage 8b)
+//! once renaming both in Ghidra and regenerating `generated.rs` resolved them: `FUN_0040146c` is
+//! `msvc_std_listuint::INSERT`, confirmed generic (allocates a 12-byte `{next, prev, value}` node from the
+//! same bucketed small-object pool [`free_unit_array_buffer`] already uses and splices it into a doubly-
+//! linked list) but reimplemented natively here anyway (see [`insert_unit_list_entry`]'s own doc comment)
+//! rather than called through, since its own real call sites marshal the position/value arguments through
+//! several layers of stack-temporary iterator copies this session could not pin a confident calling
+//! convention for even after resolving its identity. `FUN_00404f0c` is `poolalloc::DEALLOCATE_N`
+//! (`PoolAlloc::deallocate_n`, named directly in `ZTShowInfo_gatherUnits.c`'s own decompile) - confirmed
+//! generic and safe to call through directly, unlike the list-insert helper.
 //!
-//! **`addUnit`/`addUnitToList` deferred**: unlike every other insert this class family already ports
-//! (the pending-scripts tree, via [`crate::ztshow::find_or_insert_pending_script_node`]'s own
-//! reduced-to-an-unbalanced-BST substitute for `AI_cls_0x404fd6::meth_0x5abe74`), inserting a *unit* into a
-//! node's own circular list (`node+0x18`) goes through a different, shared helper - `FUN_0040146c`,
-//! confirmed via cross-reference (`private/resources/decompiles/*.c`) to be called from dozens of unrelated
-//! classes across this whole corpus (`UILayout`, `ZTGuest`, `ZTWorldMgr`, `ZTShowScript`, `BFTile`, ...),
-//! all funnelling into the *same* shared small-object freelist this module's own [`free_unit_array_buffer`]
-//! already uses (`DAT_00638004` - confirmed to be the same base by [`remove_unit`]'s own read of its
-//! erase-side counterpart, see that function's doc comment). No call site of `FUN_0040146c` has a
-//! `generated.rs` entry of its own, and its own `.asm` (read at several call sites, e.g.
-//! `BFTile_addUnit.asm`, `UICallbackMgr_addGlobalTrigger.asm`) marshals its arguments through several
-//! layers of stack-temporary copies whose real calling convention this session could not pin down with
-//! confidence - reproducing a subtly-wrong version of a helper this many unrelated systems share would risk
-//! corrupting freelist state well outside this class's own scope, a materially worse failure mode than
-//! leaving two methods un-ported. Calling the real address directly (the `ALLOCATE_UNIT_ARRAY`-style
-//! workaround [`add_show`] already uses for a different *not-shared*, single-purpose helper) was considered
-//! and rejected for the same reason: an ABI mistake here has blast radius far beyond `ZTShowInfo`.
+//! **`addUnit`/`addUnitToList`** ([`add_unit`]/[`add_unit_to_list`]): finds or creates the type-keyed
+//! pending-scripts node (real vanilla's own three redundant re-walks for the same key collapse to one
+//! [`crate::ztshow::find_or_insert_pending_script_node`] call, matching every other insert this class
+//! family already ports), constructing a default script on a genuine first insertion for that type; then
+//! walks the node's own `+0x18` circular unit list checking whether the unit is already present (real
+//! vanilla's own body is idempotent - a duplicate `addUnit` call is a no-op past the find-or-insert side
+//! effect) before appending via [`insert_unit_list_entry`]. Always calls real, un-ported
+//! `ZTUI::showpanel::forceUpdate()` last, matching every other unit-roster mutator in this module.
 //!
-//! **`ZTShowInfo`'s own `gatherUnits` (`0x005a437d`) deferred**: the plan's own "Open items" flagged this
-//! address as ambiguous against `ztshow::GATHER_UNITS` (`0x005a4519`, already called through by
-//! [`crate::ztshow::do_current_item`]/friends). Reading both resolves the ambiguity - they're genuinely
-//! different, both-real functions, and `ZTShow_gatherUnits.c` confirms the *chain*:
-//! `ZTShow::gatherUnits` (`0x005a4519`, real, called via `.original()`) forwards straight into
-//! `ZTShowInfo::gatherUnits` (`0x005a437d`, this class's own, still real/un-ported) as
-//! `ZTShowInfo::gatherUnits(this->mbr_0x10, this->mbr_0x8)` - i.e. it *is* reachable, not dead weight.
-//! But its own body is a materially harder problem than [`remove_unit`]'s erase: it drains a node's *entire*
-//! unit list in one call (walking it twice - once to check an eligibility predicate per unit via real
-//! `BFWorldMgr::getEntity` + a vtable-`0x1c` call, once to unlink-and-free every entry), via yet another
-//! unconfirmed shared helper (`FUN_00404f0c`) neither this session nor any already-ported code in this
-//! corpus has previously pinned down. Since the existing `ztshow::GATHER_UNITS.original()` call-through
-//! already reaches this real function correctly, un-hooked, nothing in this crate needs
-//! `ZTShowInfo::gatherUnits` itself ported for current behavior to keep working - matching this module's own
-//! `getShowSpeciesList` precedent (Stage 5's section above) for deferring a real-but-uncalled-by-Rust method
-//! rather than guessing at an unconfirmed allocator interaction.
+//! **`ZTShowInfo::gatherUnits`** (`0x005a437d`, [`gather_units`] - distinct from `ztshow::GATHER_UNITS` at
+//! `0x005a4519`, which forwards straight into this one as `ZTShowInfo::gatherUnits(this->mbr_0x10,
+//! this->mbr_0x8)` per `ZTShow_gatherUnits.c`, and stays real/`.original()`-called since only this class's
+//! own method needed porting): a read-only tree search (a genuine miss does **not** insert, unlike
+//! `addUnitToList`'s own find-or-insert) for `unit_type_id`'s node, returning `false` immediately on a
+//! miss. On a hit, drains the node's entire `+0x18` unit list: one pass checks each entry's real-entity
+//! eligibility (`bfworldmgr::GET_ENTITY.original()` plus [`entity_type_matches`] against
+//! [`RVA_SHOW_TRICK_TYPE_CHECK`] - the same gate [`check_unit`] already uses) to compute the return value,
+//! a second pass frees every entry plus the list's own sentinel via `poolalloc::DEALLOCATE_N.original()`
+//! (confirmed identical to [`free_unit_array_buffer`]'s own bucket-push for a `0xc`-byte capacity). The
+//! type-keyed tree node itself is **not** removed - only its unit list is drained and its sentinel freed,
+//! matching real vanilla's own final state exactly.
 //!
 //! **`removeUnit`'s own real third parameter is a pointer-as-integer typing wart, not a genuine pointer -
 //! and the one existing `.original()` call site this stage converts had a real bug because of it.**
@@ -310,17 +305,19 @@
 //! ## Stage 9 - `enterNewMonth` / `update`
 //! `ZTShowInfo_enterNewMonth.c`/`.asm`, `_update.c`/`.asm` (all four read in full). Both close with the
 //! identical tail: sample a real "engagement" value keyed by `this->field_0x70` (the AI-event target id
-//! [`send_event`]/[`get_events`]/[`listen`] already use) via [`FUN_0059E8F0`], store it at `this+0x88`,
+//! [`send_event`]/[`get_events`]/[`listen`] already use) via [`GET_GRANDSTANDS_UPKEEP`], store it at `this+0x88`,
 //! and fold it into a running total at `this+0x90` - see [`apply_engagement_sample`]'s own doc comment for
-//! the shared tail and [`FUN_0059E8F0`]'s own doc comment for why its real calling convention (not its
-//! internal logic) is all that's reproduced here.
+//! the shared tail. `GET_GRANDSTANDS_UPKEEP` returns a real x87 `ST(0)` scalar float (not a hidden-pointer
+//! RVO return, despite Ghidra's usual `float10 *` false-positive for this pattern), and both real callers
+//! only ever fill the low 16 bits of the pushed argument (from `this->field_0x70`) - only its calling
+//! convention is reproduced here, not its internal logic.
 //!
 //! **`enterNewMonth`'s own job**: roll every "current month" attendance/receipts accumulator - both
 //! instance-level (`this+0x7c`/`this+0x94`) and per-node (pending-scripts tree, `node+0x34`/`node+0x28`) -
 //! into its own "last month" slot, resetting the current-month accumulator to `0`; the "all-time" slots
 //! ([`increment_attendance`]/[`increment_receipts`]'s own `+0x3c`/`+0x84`/`+0x30`/`+0x9c`) are untouched, and
 //! neither instance total nor a real allocator call is involved. [`roll_monthly_totals`] is the pure half of
-//! this (host-testable); [`enter_new_month`] itself only adds the live [`FUN_0059E8F0`] tail. The node loop
+//! this (host-testable); [`enter_new_month`] itself only adds the live [`GET_GRANDSTANDS_UPKEEP`] tail. The node loop
 //! walks the pending-scripts tree via [`collect_pending_script_nodes`] rather than real vanilla's own
 //! in-order successor algorithm (`.asm`'s own `_Tree::_Inc`-style walk, starting from the tree header's
 //! `+0x8` leftmost cache) - the exact same "value-mutation-only, so an equivalent recursive collect is
@@ -335,7 +332,7 @@
 //! own confirmed-slot table settles it), then [`cleanup_events`] (`+0x14`) - followed by `this+0x90 -=
 //! this+0x88` (undoing the *previous* tick's own sample before folding in a fresh one, i.e. a decaying
 //! running total rather than `enterNewMonth`'s own accumulate-then-archive), then the same
-//! [`FUN_0059E8F0`]/[`apply_engagement_sample`] tail. The embedded `ZTShow::update` call-through is left
+//! [`GET_GRANDSTANDS_UPKEEP`]/[`apply_engagement_sample`] tail. The embedded `ZTShow::update` call-through is left
 //! real and un-ported, matching this class family's established "port the orchestration, call through to a
 //! still-real sibling" precedent (`ztshowinfo-implementation-plan.md`'s own Stage 9 note).
 //!
@@ -358,7 +355,7 @@
 //! [`set_show_info_id`]'s own doc comment (carried over from the original `ZTShowMgr::set_show_info_id`
 //! derivation) for the field map and the unreachable-through-any-current-caller return-0 path.
 //!
-//! ## Stage 11 - `save`/`load` (`updateFromLoad` deferred - see below)
+//! ## Stage 11 - `save`/`load`/`updateFromLoad`
 //! Read `ztshowinfo-pending-scripts-tree-plan.md` and `ztshow-save-corruption-investigation.md` in full
 //! before touching this section again - both documents are the live-verified ground truth for
 //! `this+0x44`/`+0x48` (the pending-scripts tree header pointer and its *separate* cached node count,
@@ -423,26 +420,91 @@
 //! state via a simpler algorithm" substitution this class family already uses for the pending-scripts tree's
 //! own unbalanced-BST insert.
 //!
-//! **`updateFromLoad` is deliberately deferred, left real and un-detoured.** Its own body
-//! (`ZTShowInfo_updateFromLoad.c`, read in full) copy-constructs the embedded `ZTShow` sub-object at
-//! `this+0x4` via `cls_0x485448::cls_0x485448(&this->field_0x4, &param_1->field_0x4)` - an opaque helper
-//! with no decompile, no independently-resolved address, and no other call site anywhere in this corpus to
-//! cross-check against. `ZTShow` embeds `ZTShowState` (Stage 1) at its own `+0x18`, whose `+0x1c` field is a
-//! *heap pointer* to that instance's own script-state tree header - if `cls_0x485448` performs anything
-//! resembling a naive memberwise copy over that offset range (impossible to rule out without its own
-//! decompile), `this` would end up aliasing `param_1`'s tree header pointer directly. `param_1` is always the
-//! `ZTHabitatMgr::load` stack temporary that gets destructed immediately after `updateFromLoad` returns (see
-//! `ztshowinfo-pending-scripts-tree-plan.md`'s own lifecycle table) - an aliased pointer would leave `this`
-//! holding a dangling reference into memory that destructor may free, the same class of cross-allocator/
-//! dangling-pointer hazard `CLAUDE.md`'s own section on this warns about, and genuinely not something to
-//! guess at. This is the same "narrow the stage's own scope rather than ship an unverified aliasing/allocator
-//! interaction" call Stage 8 already made for `addUnit`/`addUnitToList` - surfaced here rather than resolved,
-//! per `CLAUDE.md`'s "surface it to the user" instruction for a `generated.rs`-adjacent gap this session
-//! can't close confidently. [`show_info_save`]/[`show_info_load`] do not depend on `updateFromLoad` in any
-//! way (they operate on a single object, never two), so this gap does not block either of them.
+//! **`load`'s own legacy version gates have no dedicated live test, and this is deliberate, not an
+//! oversight.** `show_info_load` always finishes with real, un-ported `ZTSHOW_LOAD.original()` on the
+//! embedded `ZTShow`, passed the *same* `version` this function was called with - real `ZTShow::load`'s own
+//! body (no decompile read this session) almost certainly has its own, independent version-gated legacy
+//! branches for the same old thresholds, and there is no way to exercise `ZTShowInfo::load`'s own low-
+//! version paths without also making that real, unexamined sibling function take whatever legacy path *it*
+//! has for the same version number. A hand-built `io_redirect` buffer attempting this crashed the live
+//! battery outright the one time it was tried (even after padding well past every field this module's own
+//! reads touch) - removed rather than landed broken, per this module's own "surface it, don't guess"
+//! convention. [`show_info_save`]/[`show_info_load`]'s only live coverage remains
+//! `ZTSHOWINFO_SAVE_LOAD_ROUNDTRIP`, which only ever exercises `CURRENT_VERSION = 0x100` (past every gate) -
+//! the legacy branches above are covered by reading, not by a live test.
+//!
+//! **`updateFromLoad` (Stage 8b Stage 2)** - originally deferred on `cls_0x485448::cls_0x485448(&this->
+//! field_0x4, &param_1->field_0x4)`, an opaque call inside `updateFromLoad`'s own body
+//! (`ZTShowInfo_updateFromLoad.c`, read in full) with no independently-resolved identity at the time.
+//! `0x00485448` is `ZTShow::operator_assign` (`ztshow::OPERATOR_ASSIGN`, confirmed via
+//! `ZTShow_operator_assign.c`/`.asm`, both read in full) - real `operator=`, with a genuine self-assignment
+//! guard (comparing the two objects' own script-state tree header *field addresses*, not their values) and
+//! a node-by-node deep clone of the script-state tree (never a raw pointer/struct copy - the exact hazard
+//! this section used to flag). [`update_from_load`] ports both `updateFromLoad`'s own body and
+//! `operator_assign`'s logic together, since `updateFromLoad` calls it inline on the embedded `ZTShow`:
+//!
+//! 1. Direct scalar copies: `+0x68`/`+0xa4` first, then (after the merges below) `+0x6c`/`+0x70`/`+0x88`/
+//!    `+0x8c`/`+0x90`/`+0x94`/`+0x98`/`+0x9c`/`+0x7c`/`+0x80`/`+0x84` - all confirmed direct `this->field_X =
+//!    param_1->field_X` writes in the decompile, matching fields already established elsewhere in this
+//!    module (the accumulator pairs, the schedule/frequency pair, the show-info-id field).
+//! 2. The registered-unit-types array (`+0x50`/`+0x54`/`+0x58`) is replaced wholesale with a copy of
+//!    `source`'s own array contents ([`merge_registered_unit_types`]) - real vanilla's own three-branch
+//!    growth-strategy dispatch (reuse current capacity / shift into existing capacity / allocate fresh) is
+//!    a `std::vector`-style insert-at-position optimization whose *net effect*, confirmed by its own final
+//!    `this->field_0x54 = this->field_0x50 + source_count*4` write, is always "dest ends up holding exactly
+//!    source's elements" - so this frees dest's old buffer and builds a fresh one sized to `source`'s count
+//!    via the same [`free_unit_array_buffer`]/`ALLOCATE_UNIT_ARRAY` [`add_show`] already uses, rather than
+//!    replicating three growth branches for an unobservable difference.
+//! 3. The pending-scripts tree (`+0x44`) is deep-merged node by node: for each of `source`'s nodes,
+//!    [`find_or_insert_pending_script_node`] on `this` for the same key, then
+//!    [`copy_pending_script_value_fields`] copies every value field `show_info_save` also serializes
+//!    (`+0x1c`/`+0x1e`/`+0x24`/`+0x28`/`+0x2c`/`+0x30`/`+0x34`/`+0x38`/`+0x3c`/`+0x40`/`+0x44` - confirmed
+//!    against that function's own write list, the authoritative "real, externally observable" field set;
+//!    `+0x20`, an "unconfirmed flag byte" per [`allocate_pending_script_node`]'s own doc comment, is
+//!    captured by real vanilla's own local buffer too but never written back to any field anywhere in this
+//!    function's decompile, matching `save`/`load`'s own silence on it - genuinely dead, not omitted here).
+//!    Real vanilla's own six-call, redundant-relookup shape for the same set of fields collapses to one
+//!    lookup per node, the same simplification this module's accumulators/`checkUnit`/`removeUnit` already
+//!    established. **Never copies `+0x18`** (the node's own unit-list sentinel pointer) - `source`'s own
+//!    node already keeps its own independent list; aliasing it onto `this`'s node would be exactly the
+//!    cross-allocator/dangling-pointer hazard this section originally flagged, and real vanilla's own
+//!    capture buffer never writes that field back either (confirmed via its own decompile - only offsets
+//!    `+0x1c` and later ever reach a destination write).
+//! 4. **Not reproduced: the `+0x5c`/`+0x60`/`+0x64` `BFEvent` scratch-event array merge** (`FUN_00484d0a`,
+//!    still opaque - no decompile, no independently-resolved address). Left untouched on `this` rather than
+//!    guessed at, per this module's own "surface it, don't guess" convention - this array is AI-event
+//!    scratch state ([`get_events`]/[`listen`]/[`cleanup_events`]'s own domain), never itself persisted by
+//!    [`show_info_save`]/[`show_info_load`], so `source` (a just-`load()`-ed temporary) always holds it
+//!    zeroed/empty regardless; the only real divergence from vanilla this gap could produce is failing to
+//!    *clear* a `this` that happened to hold a non-empty scratch queue at the moment of reload, an edge
+//!    case no live test in this file's own battery reaches.
+//! 5. `ZTShow::operator_assign`'s own scope: `ZTShow`'s trailing scalars (`+0x8`/`+0xa`, the show-info-id
+//!    mirror pair; `+0x8`/`+0xc`/`+0x10`/`+0x14` relative to the embedded `ZTShow`) and `ZTShowState`'s own
+//!    scalars (`+0x4`/`+0x6`/`+0x7`/`+0x8`/`+0xc`/`+0x10`/`+0x14`/`+0x18`/`+0x24` relative to the embedded
+//!    `ZTShowState`) are copied directly, then the script-state tree (`ZTShowState+0x1c`) is cleared on
+//!    `this` via the already-existing, already-tested [`crate::ztshowstate::show_state_clear`] (replacing
+//!    real vanilla's own inlined clear-if-nonempty guard - clearing an already-empty tree is a safe no-op)
+//!    and rebuilt node by node from `source` via [`crate::ztshowstate::find_or_insert_state_node`] plus a
+//!    fresh, deep-copied `ZTShowScriptState` value object per node ([`clone_script_state_value`] - a flat
+//!    `0x14`-byte `operator_new`/`operator_delete`-backed struct per `ztshowstate.rs`'s own doc comment, so
+//!    a plain word-for-word copy is safe), rather than real vanilla's own node-cloning helpers
+//!    (`FUN_004f9283`/`AI_cls_0x404fd6::meth_0x5aa3f3`, both still opaque) - the same "same end state via a
+//!    simpler algorithm" substitution this class family already uses for the pending-scripts tree's own
+//!    unbalanced-BST insert. The tree's own serialized entry count (`ZTShowState+0x20`) is copied directly
+//!    from `source` last, matching real vanilla's own final write.
+//! 6. Finally, [`set_show_info_id`] reproduces `updateFromLoad`'s own tail (the back-pointer-repoint block,
+//!    structurally identical to that function's own body - confirmed field-for-field against `this+0x14`/
+//!    `this+0xa`), then `this` is re-registered with `GLOBAL_ZTShowMgr` via
+//!    [`crate::ztshowmgr::ZTShowMgr::register_show`] (`force = false`, matching vanilla exactly - a
+//!    genuine post-copy id collision is silently ignored, same as real vanilla's own unchecked return), and
+//!    the *old* id is unregistered via [`crate::ztshowmgr::ZTShowMgr::unregister_show`] only if the id
+//!    actually changed and [`crate::ztshowmgr::ZTShowMgr::get_show_info`] still resolves it to a real show.
+//!
+//! [`show_info_save`]/[`show_info_load`] never depended on `updateFromLoad` (they operate on a single
+//! object, never two), so this stage's own completion doesn't change either of their own behavior.
 //!
 //! ## Stage 12 (closing stage) - constructors / destructor
-//! `CONSTRUCTOR_0`/`CONSTRUCTOR_1` (`ZTShowInfo_ZTShowInfo_0.c`/`_1.c`), `ZTSHOW_INFO_0`/`ZTSHOW_INFO_1`
+//! `CONSTRUCTOR_0`/`CONSTRUCTOR_1` (`ZTShowInfo_ZTShowInfo_0.c`/`_1.c`), `ztshowinfo::DESTRUCTOR_0`/`DESTRUCTOR_1`
 //! (the vtable-slot-`+0x18` deleting destructor and its plain body, `ZTShowInfo_~ZTShowInfo_0.c`/`.asm`,
 //! `_~ZTShowInfo_1.c`, all read in full) - confirmed and left real, un-detoured, exactly the plan's own
 //! predicted outcome for this closing stage.
@@ -472,30 +534,31 @@
 //!
 //! **The destructor pair needed the same "does this address take the class's own pointer" check
 //! `CLAUDE.md`'s own warning calls out - here it checks out clean, unlike `ztshowstate`'s same-shaped
-//! slot.** `ZTSHOW_INFO_1` (`ZTShowInfo_~ZTShowInfo_1.c`, the vtable `+0x18` "deleting destructor") calls
-//! plain `~ZTShowInfo(this)` (`ZTSHOW_INFO_0`) with **no `this`-adjustment** and restores *this class's
+//! slot.** `ztshowinfo::DESTRUCTOR_1` (`ZTShowInfo_~ZTShowInfo_1.c`, the vtable `+0x18` "deleting destructor") calls
+//! plain `~ZTShowInfo(this)` (`ztshowinfo::DESTRUCTOR_0`) with **no `this`-adjustment** and restores *this class's
 //! own* vtable pointer (`ZTShowInfo__vtable_006353cc`, not some enclosing class's), then conditionally
 //! `operator_delete(this)` when its flag byte's low bit is set - the genuine "usual MSVC deleting
 //! destructor flag-byte shape" the plan's own vtable table already predicted, confirmed rather than
 //! assumed. The plain destructor's own body (`ZTShowInfo_~ZTShowInfo_0.c`/`.asm`, both read - the `.asm`
 //! shows a rotated/shared free block the `.c` flattens into three separate `if`s, same result) frees, in
-//! order: the `BFEvent` array (`+0x5c`, via `FUN_00401b16` sized by element count) if non-null, the
-//! registered-unit-types array (`+0x50`, via the shared small-object freelist `DAT_00638000` bucketed by
-//! byte size, or `operator_delete` past `0x80` bytes) if non-null, and the pending-scripts tree: a
-//! non-empty tree (`+0x48` node count != 0 **and** the header's own root != 0) tail-calls opaque
-//! `FUN_005aade2` (no decompile, no independently-resolved address anywhere in this corpus - the same
-//! class of gap `CONSTRUCTOR_0`'s own tree reconstruction above already surfaces) to recursively free
-//! every node; otherwise (empty tree) it inlines a trivial self-unlink and unconditionally frees the
-//! header block itself (`+0x44`, `0x48` bytes, via `FUN_00401b16`) if non-null. None of this is
-//! reproducible without pinning `FUN_00401b16`/`FUN_005aade2`'s real calling conventions - the same
-//! "reproducing a subtly-wrong version of a helper this many unrelated systems share would risk
-//! corrupting freelist state well outside this class's own scope" call Stage 8's own doc comment already
-//! made for `FUN_0040146c`, reused verbatim here for these two.
+//! order: the `BFEvent` array (`+0x5c`, via `poolalloc::DEALLOCATE`/`0x00401b16` sized by element count) if
+//! non-null, the registered-unit-types array (`+0x50`, via the same pool allocator's bucketed small-object
+//! freelist `DAT_00638000`, or `operator_delete` past `0x80` bytes) if non-null, and the pending-scripts
+//! tree: a non-empty tree (`+0x48` node count != 0 **and** the header's own root != 0) recursively frees
+//! every node via `ai_cls_0x404fd6::ERASE` (`0x005aae1f`, recurse left / `FREENODE`-equivalent cleanup per
+//! node / continue right) and `msvc_std_mapuint_ztshowunittypeinfo::FREENODE` (`0x005aad9a`) - what was
+//! once tracked here as opaque `FUN_005aade2` turned out not to be a real function at all, but a Ghidra
+//! flow-analysis artifact splitting this same destructor body into two pieces; otherwise (empty tree) it
+//! inlines a trivial self-unlink and unconditionally frees the header block itself (`+0x44`, `0x48` bytes,
+//! via `poolalloc::DEALLOCATE`) if non-null. [`clear_pending_script_tree`] reproduces this same non-empty
+//! teardown shape (minus the recursive tree walk, which [`collect_pending_script_nodes`] flattens up
+//! front) for [`show_info_load`]'s own use, and the destructor itself still stays real/un-detoured - there
+//! is no Rust-owned `ZTShowInfo` to free via a Rust destructor, matching every other class in this family.
 //!
 //! **Live coverage**: `ZTSHOWINFO_STANDALONE_ROUNDTRIP` runs both constructors and the real destructor
 //! end-to-end - entirely real vanilla address calls operating on real vanilla-allocated memory throughout
 //! (`OPERATOR_NEW.original()` for the outer buffers, `CONSTRUCTOR_1`/`CONSTRUCTOR_0.original()` to
-//! construct, `ZTSHOW_INFO_1.original()` with the flag byte clear to destruct without a nested
+//! construct, `ZTSHOWINFO_DESTRUCTOR.original()` with the flag byte clear to destruct without a nested
 //! `operator_delete`, then this module's own `OPERATOR_DELETE.original()` for the outer buffers it
 //! allocated itself) - so unlike most of this class family's other standalone fixtures, this test needs
 //! no leak-only exception: nothing here ever crosses into Rust's own allocator. Confirms this module's
@@ -504,25 +567,23 @@
 //! header) and that the copy constructor produces an independent tree/array allocation rather than
 //! aliasing the source's own.
 
-use std::ffi::c_void;
-
-use openzt_detour::{
-    generated::{
-        bfevent::{CONSTRUCTOR as BFEVENT_CONSTRUCTOR, LOAD as BFEVENT_LOAD, SAVE as BFEVENT_SAVE},
-        bfworldmgr::{GET_TYPE, GET_UNIT},
-        standalone::{DEALLOCATE, OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
-        ztgamemgr::GET_DATE,
-        ztshow::{ABORT_SHOW, LOAD as ZTSHOW_LOAD, SAVE as ZTSHOW_SAVE},
-        ztshowinfo::{
-            ADD_SHOW, CHECK_UNIT, CLEANUP_EVENTS, CREATE_DEFAULT_SCRIPT, ENTER_NEW_MONTH, GET_EVENTS, GET_NUM_UNITS,
-            GET_SCHEDULED_SHOW_KEEPER_TYPE, GET_SCHEDULED_SHOW_SCRIPT, GET_SHOW_UNIT_LIST, HAS_KEEPER, INCREMENT_ATTENDANCE,
-            INCREMENT_RECEIPTS, IS_READY, IS_STARTED, IS_STOPPED, LISTEN, LOAD, NEEDS_KEEPER, RECALCULATE_SCHEDULE, REMOVE_SHOW,
-            REMOVE_UNIT, SAVE, SEND_EVENT, SET_SHOW_FREQUENCY, SET_SHOW_INFO_ID, UPDATE,
-        },
-        ztshowscript::CONSTRUCTOR as ZTSHOW_SCRIPT_CONSTRUCTOR,
-        ztui_showpanel::FORCE_UPDATE,
+use openzt_detour::generated::{
+    bfevent::{CONSTRUCTOR as BFEVENT_CONSTRUCTOR, LOAD as BFEVENT_LOAD, SAVE as BFEVENT_SAVE},
+    bfworldmgr::{GET_ENTITY, GET_TYPE, GET_UNIT},
+    poolalloc::{self, ALLOCATE as ALLOCATE_UNIT_ARRAY},
+    standalone::{DEALLOCATE, OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
+    ztgamemgr::GET_DATE,
+    ztshow::{ABORT_SHOW, LOAD as ZTSHOW_LOAD, SAVE as ZTSHOW_SAVE},
+    ztshowinfo::{
+        ADD_SHOW, ADD_UNIT, ADD_UNIT_TO_LIST, CALCULATE_ALL_FROM_TYPES as SET_DEFAULT_SATISFACTION_FIELDS, CHECK_UNIT, CLEANUP_EVENTS,
+        CREATE_DEFAULT_SCRIPT, ENTER_NEW_MONTH, GATHER_UNITS, GET_EVENTS, GET_NUM_UNITS, GET_SCHEDULED_SHOW_KEEPER_TYPE,
+        GET_SCHEDULED_SHOW_SCRIPT, GET_SHOW_UNIT_LIST, HAS_KEEPER, INCREMENT_ATTENDANCE, INCREMENT_RECEIPTS, IS_READY, IS_STARTED,
+        IS_STOPPED, LISTEN, LOAD, NEEDS_KEEPER, RECALCULATE_SCHEDULE, REMOVE_SHOW, REMOVE_UNIT, SAVE, SEND_EVENT, SET_SHOW_FREQUENCY,
+        SET_SHOW_INFO_ID, UPDATE, UPDATE_FROM_LOAD,
     },
-    FunctionDef,
+    ztshowscript::CONSTRUCTOR as ZTSHOW_SCRIPT_CONSTRUCTOR,
+    ztui_showpanel::FORCE_UPDATE,
+    ztworldmgr::GET_GRANDSTANDS_UPKEEP,
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -530,13 +591,15 @@ use windows::Win32::Foundation::FILETIME;
 
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, save_to_memory},
+    util::{get_from_memory, mut_from_memory, save_to_memory},
     ztmegatilemgr::entity_type_matches,
     ztshow::{
-        call_entity_vtable_u32_noargs, check_unit_type, collect_pending_script_nodes, find_or_insert_pending_script_node, type_check,
-        RVA_ANIMAL_TYPE_CHECK, RVA_SHOW_TRICK_TYPE_CHECK,
+        add_script, call_entity_vtable_u32_noargs, check_unit_type, collect_pending_script_nodes, find_or_insert_pending_script_node,
+        type_check, RVA_ANIMAL_TYPE_CHECK, RVA_SHOW_TRICK_TYPE_CHECK,
     },
+    ztshowmgr::ZTShowMgr,
     ztshowscriptmgr::{add_item, ZTShowScriptItemRaw},
+    ztshowstate::{collect_tree_nodes as collect_state_tree_nodes, find_or_insert_state_node, show_state_clear},
     ztshowui::{find_trick_by_id, validate_trick, walk_trick_list},
 };
 
@@ -759,12 +822,6 @@ pub fn set_show_frequency(this: u32, frequency: i32) {
     }
 }
 
-/// Growth allocator for the show's registered-unit-types array (`this+0x50`/`+0x54`/`+0x58`) - a plain
-/// cdecl helper (`ZTShowInfo_addShow.asm`'s own `PUSH bytes; CALL FUN_0040107f; ADD ESP,0x4`), has no
-/// `generated.rs` entry. Declared locally per CLAUDE.md's sanctioned workaround (`FunctionDef::new`),
-/// matching `zoostatus.rs`'s/`ztshowstate.rs`'s own precedent for a confirmed-but-unclaimed address.
-const ALLOCATE_UNIT_ARRAY: FunctionDef<unsafe extern "cdecl" fn(u32) -> *const c_void> = FunctionDef::new(0x0040_107f);
-
 /// Base of vanilla's shared small-object freelist bucket array, bucketed by `(byte_capacity - 1) >> 3` -
 /// confirmed directly and completely in `ZTShowInfo_addShow.asm`'s own old-buffer-free tail (`DEC EAX;
 /// SHR EAX,3; MOV EDX,[EAX*4+0x638000]; MOV [ECX],EDX; MOV [EAX*4+0x638000],ECX`) - a plain per-bucket
@@ -778,7 +835,11 @@ const RVA_UNIT_ARRAY_FREELIST_BUCKETS: u32 = 0x0023_8000;
 
 /// Frees a former `this+0x50` buffer of `byte_capacity` bytes back to wherever real vanilla's own
 /// `addShow` would - see [`RVA_UNIT_ARRAY_FREELIST_BUCKETS`]'s doc comment. No-op for a null buffer.
-fn free_unit_array_buffer(buf: u32, byte_capacity: u32) {
+///
+/// This is the same bucket-push protocol `generated.rs`'s `poolalloc::DEALLOCATE` (`0x00401b16`, a real
+/// SGI/Dinkumware-style `PoolAlloc::deallocate`) performs natively, so it's also reused by
+/// [`clear_pending_script_tree`] to free that tree's own pool-carved nodes correctly.
+pub(crate) fn free_unit_array_buffer(buf: u32, byte_capacity: u32) {
     if buf == 0 {
         return;
     }
@@ -790,6 +851,204 @@ fn free_unit_array_buffer(buf: u32, byte_capacity: u32) {
     let old_head = get_from_memory::<u32>(bucket_head_addr);
     save_to_memory(buf, old_head);
     save_to_memory(bucket_head_addr, buf);
+}
+
+/// Pops a `byte_size`-bucketed block from the shared small-object pool ([`RVA_UNIT_ARRAY_FREELIST_BUCKETS`]),
+/// refilling the bucket via real vanilla's own `poolalloc::REFILL` (`PoolAlloc::refill`, `0x00402f85`,
+/// confirmed by decompile: on a bucket miss it carves a fresh chunk via `CHUNK_ALLOC`/real `operator new`
+/// and threads the pieces onto the same bucket array `free_unit_array_buffer` reads/writes) when the bucket
+/// is empty. This is the fast-path allocate half of `PoolAlloc` real vanilla itself inlines at every call
+/// site rather than exposing as its own symbol - there is no standalone `PoolAlloc::allocate` address
+/// anywhere in this corpus. Anything allocated here is safe to free later through
+/// [`free_unit_array_buffer`], since both use the exact same bucket addressing. Returns `0` only if
+/// `REFILL` itself failed to populate the bucket (real vanilla's own allocation-failure case, not expected
+/// in practice).
+fn pool_allocate(byte_size: u32) -> u32 {
+    let bucket_head_addr = get_module_base("zoo.exe") as u32 + RVA_UNIT_ARRAY_FREELIST_BUCKETS + (((byte_size - 1) >> 3) * 4);
+    let mut head = get_from_memory::<u32>(bucket_head_addr);
+    if head == 0 {
+        unsafe { poolalloc::REFILL.original()(byte_size as i32) };
+        head = get_from_memory::<u32>(bucket_head_addr);
+    }
+    if head == 0 {
+        return 0;
+    }
+    let next = get_from_memory::<u32>(head);
+    save_to_memory(bucket_head_addr, next);
+    head
+}
+
+/// Native reimplementation of `msvc_std::list<uint>::insert` (`0x0040146c`) for this class's own `+0x18`
+/// per-type unit lists. Reimplemented natively rather than called through - unlike every other resolved
+/// Stage 8b helper, its own real call sites construct/copy iterator-shaped locals around the call in a way
+/// this session could not pin down a confident calling convention for, even though the function's own body
+/// is confirmed generic/clean (a plain pool-backed `{next, prev, value}` node splice). Allocates a 12-byte
+/// entry via [`pool_allocate`] and splices it in immediately before `position` (always the sentinel itself
+/// for [`add_unit_to_list`]'s own always-append use, matching real vanilla's own call shape), using the
+/// exact node shape [`remove_unit`]'s own unlink code already assumes (`next:+0x0`, `prev:+0x4`,
+/// `value:+0x8`).
+fn insert_unit_list_entry(position: u32, value: u32) -> u32 {
+    let entry = pool_allocate(0xc);
+    if entry == 0 {
+        return 0;
+    }
+    let prev = get_from_memory::<u32>(position + 4);
+    save_to_memory(entry, position);
+    save_to_memory(entry + 4, prev);
+    save_to_memory(entry + 8, value);
+    save_to_memory(prev, entry);
+    save_to_memory(position + 4, entry);
+    entry
+}
+
+/// Reimplementation of `ZTShowInfo::addUnitToList`, per `ZTShowInfo_addUnitToList.c`/`.asm` (both read in
+/// full) - Stage 8b, unblocked by [`pool_allocate`]/[`insert_unit_list_entry`] resolving the previously
+/// opaque list-insert helper. `unit_ptr` is a real `BFUnit*` despite `generated.rs`'s own `i32` typing (the
+/// same pointer-as-integer wart already documented for [`remove_unit`]'s third parameter and
+/// `CONSTRUCTOR_0`'s first) - real vanilla reads the unit's own numeric type id off its `+0x128` entity-type
+/// vtable slot `0x20` (the exact [`call_entity_vtable_u32_noargs`] call [`check_unit`] already uses) and its
+/// own numeric unit id off `+0x124`.
+///
+/// Finds or creates the type-keyed pending-scripts node (real vanilla's own three separate tree re-walks
+/// for the same key collapse to one [`find_or_insert_pending_script_node`] call, the same redundant-lookup
+/// collapsing this module's own accumulators/[`remove_unit`] already establish); on a genuine first
+/// insertion for this type, mirrors real vanilla's own cache-miss branch by constructing a default script
+/// ([`create_default_script`]) and registering it ([`crate::ztshow::add_script`]). Real vanilla's own
+/// walk-then-insert shape is idempotent - it walks the type's existing unit list checking whether `unit_id`
+/// is already present before appending, so a duplicate `addUnit` call is a no-op past the find-or-insert
+/// side effect. Always calls real, un-ported `ZTUI::showpanel::forceUpdate()` last, matching every other
+/// unit-roster mutator in this module.
+pub fn add_unit_to_list(this: u32, unit_ptr: u32) -> bool {
+    if unit_ptr == 0 {
+        return false;
+    }
+
+    let entity_type_ptr = get_from_memory::<u32>(unit_ptr + 0x128);
+    let unit_type_id = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) };
+    let unit_id = get_from_memory::<u32>(unit_ptr + 0x124);
+
+    let (node, was_inserted) = find_or_insert_pending_script_node(this, unit_type_id);
+    if was_inserted {
+        let script_ptr = create_default_script(this, unit_type_id);
+        if script_ptr != 0 {
+            let script_id = get_from_memory::<u16>(script_ptr + 4);
+            add_script(this, unit_type_id, script_id);
+        }
+    }
+
+    let sentinel = get_from_memory::<u32>(node + 0x18);
+    let mut cursor = get_from_memory::<u32>(sentinel);
+    let mut already_present = false;
+    while cursor != sentinel {
+        if get_from_memory::<u32>(cursor + 0x8) == unit_id {
+            already_present = true;
+            break;
+        }
+        cursor = get_from_memory::<u32>(cursor);
+    }
+    if !already_present {
+        insert_unit_list_entry(sentinel, unit_id);
+    }
+
+    unsafe { FORCE_UPDATE.original()() };
+    true
+}
+
+/// Reimplementation of `ZTShowInfo::addUnit`, per `ZTShowInfo_addUnit.c`/`.asm` - a thin `unit_ptr != 0`
+/// gate in front of [`add_unit_to_list`], matching real vanilla's own body exactly.
+pub fn add_unit(this: u32, unit_ptr: u32) -> bool {
+    if unit_ptr == 0 {
+        return false;
+    }
+    add_unit_to_list(this, unit_ptr)
+}
+
+/// Reimplementation of `ZTShowInfo::gatherUnits` (`0x005a437d`, this class's own - distinct from
+/// [`crate::ztshow::gather_units`]/`ztshow::GATHER_UNITS` at `0x005a4519`, which forwards straight into
+/// this one per the module doc comment's own Stage 8b section), per `ZTShowInfo_gatherUnits.c`/`.asm`
+/// (both read in full) - unblocked by [`crate::ztmegatilemgr::entity_type_matches`]/`poolalloc::DEALLOCATE_N`
+/// resolving the two previously opaque helpers.
+///
+/// Read-only tree search (real vanilla's own `AI_cls_0x404fd6::find` - a genuine miss here does **not**
+/// insert, unlike [`add_unit_to_list`]'s own find-or-insert; confirmed by the decompile's own early return
+/// on a miss) for `unit_type_id`'s node; a miss returns `false` immediately. On a hit, walks the node's own
+/// `+0x18` unit list once checking each entry's real-entity eligibility (`bfworldmgr::GET_ENTITY.original()`
+/// plus [`entity_type_matches`] against [`RVA_SHOW_TRICK_TYPE_CHECK`] - the exact gate real vanilla's own
+/// vtable-`0x1c` dispatch against `DAT_006386b0` performs, and the same gate [`check_unit`] already uses),
+/// returning `true` if any entry resolves to a real, trick-eligible entity.
+///
+/// **Never frees the node's real `+0x18` list - a live use-after-free this function's own earlier version
+/// had, fixed here.** `ZTShowInfo_gatherUnits.c` line 59's `BFTile::meth_0x59f7db(local_a4, node + 0x18)`
+/// is a **copy constructor**, not a reference/borrow: it builds an entirely separate, temporary
+/// `std::list<uint>` (`local_a4`, stack-local, its own freshly-allocated sentinel and element copies) from
+/// the node's list, and lines 60-71 additionally copy several unrelated trailing node fields
+/// (`node+0x1c`..`node+0x44`) into that same temporary alongside it - all in service of a C++ copy-then-
+/// scan-then-destroy idiom. The eligibility scan (lines 72-86) and the two free loops (lines 87-97) all
+/// operate on **that temporary's own copied nodes and copied sentinel** - never on `node`'s real,
+/// persistent `+0x18` list, which is left completely untouched by real vanilla. An earlier version of this
+/// port misread that copy-construct call as operating on the original list in place, and drained/freed the
+/// real list and its real sentinel directly - working the first time `gatherUnits` ran for a given
+/// `unit_type_id`, but leaving `node+0x18` a dangling pointer to freed memory from then on: every
+/// subsequent [`get_num_units`]/[`get_show_unit_list`]/[`add_unit_to_list`] call for that same
+/// `unit_type_id` (none of which re-create `+0x18` - they all just re-find the same, already-existing
+/// node) would dereference that freed pointer, live gameplay memory corruption that eventually crashed
+/// with no relation to whatever the player happened to be doing at the time. Since the scan here only ever
+/// needs the eligibility boolean (this port has no reason to replicate vanilla's own temporary-copy
+/// allocation dance - that's purely an implementation detail of its C++ copy-constructor idiom, invisible
+/// to every caller), a single read-only pass over the *real* list reproduces the exact same observable
+/// return value with no free at all.
+///
+/// This function's own `bool` return is clean, but real vanilla's raw `u32` result is **not** on a miss -
+/// its own asm only ever writes `AL` (`XOR BL,BL` up front, `MOV AL,BL` on exit), leaving
+/// `AI_cls_0x404fd6::find`'s own leftover pointer value in EAX's upper 24 bits on the miss path. Any
+/// caller comparing against the real, un-hooked address's raw return must mask to `& 0xff` - the same
+/// undefined-upper-bits decompiler artifact already documented for `get_scheduled_show_script`/
+/// `ZooStatus::fChance`, confirmed live via `ZTSHOWINFO_GATHER_UNITS_LIVE`.
+pub fn gather_units(this: u32, unit_type_id: u32) -> bool {
+    let header = get_from_memory::<u32>(this + 0x44);
+    let Some(node) = find_pending_script_node(header, unit_type_id) else {
+        return false;
+    };
+
+    let world = globals().ztworldmgr_ptr() as *const u32;
+    let sentinel = get_from_memory::<u32>(node + 0x18);
+
+    let mut found_eligible = false;
+    let mut cursor = get_from_memory::<u32>(sentinel);
+    while cursor != sentinel {
+        let next = get_from_memory::<u32>(cursor);
+        let unit_id = get_from_memory::<u32>(cursor + 0x8);
+        let entity_ptr = unsafe { GET_ENTITY.original()(world, unit_id as i32, true) } as u32;
+        if entity_ptr != 0 && unsafe { entity_type_matches(entity_ptr, RVA_SHOW_TRICK_TYPE_CHECK) } {
+            found_eligible = true;
+        }
+        cursor = next;
+    }
+
+    found_eligible
+}
+
+/// Read-only tree search over the pending-scripts map, mirroring `AI_cls_0x404fd6::find`'s own semantics
+/// (as used by [`gather_units`]) without [`find_or_insert_pending_script_node`]'s own insert-on-miss side
+/// effect - real vanilla's `gatherUnits` deliberately never inserts. `header` is the pending-scripts tree
+/// header (`this+0x44`'s own value); returns the matching node's address, or `None` if the tree has no node
+/// for `unit_type_id`.
+fn find_pending_script_node(header: u32, unit_type_id: u32) -> Option<u32> {
+    let mut candidate = header;
+    let mut cursor = get_from_memory::<u32>(header + 4);
+    while cursor != 0 {
+        if get_from_memory::<u32>(cursor + 0x10) < unit_type_id {
+            cursor = get_from_memory::<u32>(cursor + 0xc);
+        } else {
+            candidate = cursor;
+            cursor = get_from_memory::<u32>(cursor + 0x8);
+        }
+    }
+    if candidate == header || unit_type_id < get_from_memory::<u32>(candidate + 0x10) {
+        None
+    } else {
+        Some(candidate)
+    }
 }
 
 /// Reimplementation of `ZTShowInfo::addShow`, per `ZTShowInfo_addShow.c`/`.asm` (both read in full).
@@ -1063,24 +1322,9 @@ pub(crate) fn scheduled_species_ids(this: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Raw FPU helper `FUN_0059e8f0`, no `generated.rs` entry - see the module doc comment's own Stage 9
-/// section and CLAUDE.md's sanctioned local-`FunctionDef` workaround (this module's own
-/// [`ALLOCATE_UNIT_ARRAY`] precedent). Confirmed thiscall on `GLOBAL_ZTWorldMgr` with a single `u16` stack
-/// argument, returning a value via `ST0` - Ghidra's own `float10 * __return_storage_ptr__(short)` signature
-/// (both real call sites' own `.meta`) is its usual false-positive for an FPU-return function, not a
-/// genuine hidden-pointer parameter: both real callers push exactly one stack value (no second push for a
-/// return slot) and read the result straight off `ST0` via `FST`/`FADD`/`FSTP` immediately after the call.
-/// Both real callers (`update`'s/`enterNewMonth`'s own `.asm`) only ever fill the low 16 bits of the pushed
-/// register before the call (`MOV AX,...`/`MOV DX,...`, from `this->field_0x70`) and leave the upper half
-/// as leftover garbage from an unrelated earlier load (a pointer's own upper bits, in both cases) - the same
-/// "callee only reads the meaningful low bits" shape CLAUDE.md's `ZooStatus::fChance` precedent documents,
-/// so a clean `u16` argument here reproduces real vanilla's own behavior exactly. Real vanilla's own body
-/// past this calling convention was not investigated - only how to call it correctly, matching this class
-/// family's established "port the orchestration, call through to a still-real sibling" precedent.
-const FUN_0059E8F0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16) -> f32> = FunctionDef::new(0x0059_e8f0);
-
 /// The float-decay tail shared verbatim by [`update`]/[`enter_new_month`]'s own real bodies - see the
-/// module doc comment's own Stage 9 section. Stores `sample` (both real callers' own [`FUN_0059E8F0`]
+/// module doc comment's own Stage 9 section. Stores `sample` (both real callers' own
+/// [`GET_GRANDSTANDS_UPKEEP`]
 /// result) into `this+0x88` and folds it into the running total at `this+0x90`. Pure and host-testable with
 /// a fabricated `sample`; only obtaining that sample from real vanilla needs the live game process.
 fn apply_engagement_sample(this: u32, sample: f32) {
@@ -1094,7 +1338,7 @@ fn apply_engagement_sample(this: u32, sample: f32) {
 /// accumulator (per-node `+0x34`/`+0x28`, instance-level `+0x7c`/`+0x94`) into its own "last month" slot
 /// (`+0x38`/`+0x2c`, `+0x80`/`+0x98`) and resets the current-month accumulator to zero; the "all-time" slots
 /// [`increment_attendance`]/[`increment_receipts`] also maintain are untouched. Pure and host-testable;
-/// only [`enter_new_month`]'s own tail (the live [`FUN_0059E8F0`] call) needs the game process.
+/// only [`enter_new_month`]'s own tail (the live [`GET_GRANDSTANDS_UPKEEP`] call) needs the game process.
 fn roll_monthly_totals(this: u32) {
     save_to_memory(this + 0x98, get_from_memory::<f32>(this + 0x94));
     save_to_memory(this + 0x80, get_from_memory::<i32>(this + 0x7c));
@@ -1122,7 +1366,7 @@ pub fn enter_new_month(this: u32) {
 
     let world = globals().ztworldmgr_ptr() as *const u32;
     let target_id = get_from_memory::<u16>(this + 0x70);
-    let sample = unsafe { FUN_0059E8F0.original()(world, target_id) };
+    let sample = unsafe { GET_GRANDSTANDS_UPKEEP.original()(world, target_id as i16) };
     apply_engagement_sample(this, sample);
 }
 
@@ -1142,7 +1386,7 @@ pub fn update(this: u32) {
     save_to_memory(this + 0x90, get_from_memory::<f32>(this + 0x90) - get_from_memory::<f32>(this + 0x88));
     let world = globals().ztworldmgr_ptr() as *const u32;
     let target_id = get_from_memory::<u16>(this + 0x70);
-    let sample = unsafe { FUN_0059E8F0.original()(world, target_id) };
+    let sample = unsafe { GET_GRANDSTANDS_UPKEEP.original()(world, target_id as i16) };
     apply_engagement_sample(this, sample);
 }
 
@@ -1174,12 +1418,170 @@ pub fn set_show_info_id(this: u32, id: u16) -> bool {
     true
 }
 
-/// `ZTShowInfo::meth_0x48a1d7` (real address embedded in the decompile's own symbolic name, per this
-/// codebase's established convention for an opaque helper with no `generated.rs` entry) - sets some default
-/// satisfaction-related fields for a pre-`0x6a`-version load. No decompile exists for its own body; called
-/// through untouched, matching this class family's "port the orchestration, call through to a still-real
-/// sibling" precedent for a real, un-ported callee whose own internals aren't this stage's concern.
-const SET_DEFAULT_SATISFACTION_FIELDS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef::new(0x0048_a1d7);
+/// Replaces `this`'s own registered-unit-types array (`+0x50`/`+0x54`/`+0x58`) with a fresh copy of
+/// `source`'s array contents - see the module doc comment's own Stage 11/`updateFromLoad` section for why
+/// this is a safe simplification of real vanilla's own three-branch growth dispatch. No-op array shape
+/// (`+0x50`/`+0x54`/`+0x58` all left null) when `source`'s array is empty.
+fn merge_registered_unit_types(this: u32, source: u32) {
+    let source_begin = get_from_memory::<u32>(source + 0x50);
+    let source_end = get_from_memory::<u32>(source + 0x54);
+    let count = (source_end - source_begin) >> 2;
+
+    let dest_begin = get_from_memory::<u32>(this + 0x50);
+    let dest_cap_end = get_from_memory::<u32>(this + 0x58);
+    free_unit_array_buffer(dest_begin, dest_cap_end - dest_begin);
+
+    if count == 0 {
+        save_to_memory(this + 0x50, 0u32);
+        save_to_memory(this + 0x54, 0u32);
+        save_to_memory(this + 0x58, 0u32);
+        return;
+    }
+
+    let new_buf = unsafe { ALLOCATE_UNIT_ARRAY.original()(count * 4) as u32 };
+    let mut src = source_begin;
+    let mut dst = new_buf;
+    for _ in 0..count {
+        if dst != 0 {
+            save_to_memory(dst, get_from_memory::<u32>(src));
+            dst += 4;
+        }
+        src += 4;
+    }
+    save_to_memory(this + 0x50, new_buf);
+    save_to_memory(this + 0x54, dst);
+    save_to_memory(this + 0x58, new_buf + count * 4);
+}
+
+/// Copies every pending-scripts node value field `show_info_save` also serializes
+/// (`+0x1c`/`+0x1e`/`+0x24`/`+0x28`/`+0x2c`/`+0x30`/`+0x34`/`+0x38`/`+0x3c`/`+0x40`/`+0x44`) from
+/// `source_node` to `dest_node` - see the module doc comment's own Stage 11/`updateFromLoad` section.
+/// Never touches `+0x18` (the node's own unit-list sentinel pointer) - that field is owned by whichever
+/// [`find_or_insert_pending_script_node`] call created `dest_node`, never `source_node`'s.
+fn copy_pending_script_value_fields(dest_node: u32, source_node: u32) {
+    save_to_memory(dest_node + 0x1c, get_from_memory::<u16>(source_node + 0x1c));
+    save_to_memory(dest_node + 0x1e, get_from_memory::<u16>(source_node + 0x1e));
+    save_to_memory(dest_node + 0x24, get_from_memory::<u32>(source_node + 0x24));
+    save_to_memory(dest_node + 0x28, get_from_memory::<u32>(source_node + 0x28));
+    save_to_memory(dest_node + 0x2c, get_from_memory::<u32>(source_node + 0x2c));
+    save_to_memory(dest_node + 0x30, get_from_memory::<u32>(source_node + 0x30));
+    save_to_memory(dest_node + 0x34, get_from_memory::<u32>(source_node + 0x34));
+    save_to_memory(dest_node + 0x38, get_from_memory::<u32>(source_node + 0x38));
+    save_to_memory(dest_node + 0x3c, get_from_memory::<u32>(source_node + 0x3c));
+    save_to_memory(dest_node + 0x40, get_from_memory::<u32>(source_node + 0x40));
+    save_to_memory(dest_node + 0x44, get_from_memory::<u32>(source_node + 0x44));
+}
+
+/// Allocates a fresh `0x14`-byte `ZTShowScriptState` value (`standalone::OPERATOR_NEW`, matching
+/// `ztshowstate.rs`'s own doc comment on this type's allocator) and deep-copies `source_value`'s own bytes
+/// into it - safe as a flat word-for-word copy since the type is a plain `operator_new`/`operator_delete`
+/// struct with no owned sub-allocations (`ztshowstate.rs`'s own `show_state_clear` frees one via a bare
+/// `OPERATOR_DELETE.original()`, no nested cleanup). Returns `0` (matching real vanilla's own allocation-
+/// failure handling elsewhere in this class family) if the allocation itself fails.
+fn clone_script_state_value(source_value: u32) -> u32 {
+    let new_value = unsafe { OPERATOR_NEW.original()(0x14) } as u32;
+    if new_value == 0 {
+        return 0;
+    }
+    for offset in (0..0x14u32).step_by(4) {
+        save_to_memory(new_value + offset, get_from_memory::<u32>(source_value + offset));
+    }
+    new_value
+}
+
+/// Reimplementation of `ZTShowInfo::updateFromLoad` plus the inlined `ZTShow::operator_assign` it calls -
+/// see the module doc comment's own Stage 11 section for the full six-part breakdown (field groups, the
+/// pending-scripts/script-state tree merges, the one deliberately-unreproduced gap, and the final
+/// register/unregister dance). Matches real vanilla's own outer guard: a no-op when `GLOBAL_ZTShowMgr`
+/// hasn't been constructed yet.
+pub fn update_from_load(this: u32, source: u32) {
+    let mgr_ptr = globals().ztshowmgr_ptr();
+    if mgr_ptr.is_null() {
+        return;
+    }
+
+    save_to_memory(this + 0x68, get_from_memory::<u32>(source + 0x68));
+    save_to_memory(this + 0xa4, get_from_memory::<u32>(source + 0xa4));
+
+    merge_registered_unit_types(this, source);
+
+    let source_header = get_from_memory::<u32>(source + 0x44);
+    let source_root = get_from_memory::<u32>(source_header + 4);
+    let mut source_nodes = Vec::new();
+    collect_pending_script_nodes(source_root, &mut source_nodes);
+    for source_node in source_nodes {
+        let key = get_from_memory::<u32>(source_node + 0x10);
+        let (dest_node, _was_inserted) = find_or_insert_pending_script_node(this, key);
+        copy_pending_script_value_fields(dest_node, source_node);
+    }
+
+    // this+0x5c/+0x60/+0x64 (BFEvent scratch-event array) deliberately not merged - see the module doc
+    // comment's own Stage 11 section, point 4.
+
+    let old_id = get_from_memory::<u16>(this + 0x70);
+    save_to_memory(this + 0x6c, get_from_memory::<u32>(source + 0x6c));
+    let new_id = get_from_memory::<u16>(source + 0x70);
+    save_to_memory(this + 0x70, new_id);
+    save_to_memory(this + 0x88, get_from_memory::<u32>(source + 0x88));
+    save_to_memory(this + 0x8c, get_from_memory::<u32>(source + 0x8c));
+    save_to_memory(this + 0x90, get_from_memory::<u32>(source + 0x90));
+    save_to_memory(this + 0x94, get_from_memory::<u32>(source + 0x94));
+    save_to_memory(this + 0x98, get_from_memory::<u32>(source + 0x98));
+    save_to_memory(this + 0x9c, get_from_memory::<u32>(source + 0x9c));
+    save_to_memory(this + 0x7c, get_from_memory::<u32>(source + 0x7c));
+    save_to_memory(this + 0x80, get_from_memory::<u32>(source + 0x80));
+    save_to_memory(this + 0x84, get_from_memory::<u32>(source + 0x84));
+
+    // ZTShow::operator_assign's own scope: ZTShow's trailing scalars, then ZTShowState's own scalars and
+    // script-state tree.
+    let dest_ztshow = this + 0x4;
+    let source_ztshow = source + 0x4;
+    save_to_memory(dest_ztshow + 0x4, get_from_memory::<u16>(source_ztshow + 0x4));
+    save_to_memory(dest_ztshow + 0x6, get_from_memory::<u16>(source_ztshow + 0x6));
+    save_to_memory(dest_ztshow + 0x8, get_from_memory::<u32>(source_ztshow + 0x8));
+    save_to_memory(dest_ztshow + 0xc, get_from_memory::<u32>(source_ztshow + 0xc));
+    save_to_memory(dest_ztshow + 0x10, get_from_memory::<u32>(source_ztshow + 0x10));
+    save_to_memory(dest_ztshow + 0x14, get_from_memory::<u32>(source_ztshow + 0x14));
+
+    let dest_state = dest_ztshow + 0x18;
+    let source_state = source_ztshow + 0x18;
+    save_to_memory(dest_state + 0x4, get_from_memory::<u16>(source_state + 0x4));
+    save_to_memory(dest_state + 0x6, get_from_memory::<u8>(source_state + 0x6));
+    save_to_memory(dest_state + 0x7, get_from_memory::<u8>(source_state + 0x7));
+    save_to_memory(dest_state + 0x8, get_from_memory::<u8>(source_state + 0x8));
+    save_to_memory(dest_state + 0xc, get_from_memory::<u32>(source_state + 0xc));
+    save_to_memory(dest_state + 0x10, get_from_memory::<u32>(source_state + 0x10));
+    save_to_memory(dest_state + 0x14, get_from_memory::<u32>(source_state + 0x14));
+    save_to_memory(dest_state + 0x18, get_from_memory::<u32>(source_state + 0x18));
+    save_to_memory(dest_state + 0x24, get_from_memory::<u8>(source_state + 0x24));
+
+    show_state_clear(dest_state);
+    let source_state_header = get_from_memory::<u32>(source_state + 0x1c);
+    let source_state_root = get_from_memory::<u32>(source_state_header + 0x4);
+    let mut source_state_nodes = Vec::new();
+    collect_state_tree_nodes(source_state_root, &mut source_state_nodes);
+    let dest_state_header = get_from_memory::<u32>(dest_state + 0x1c);
+    for source_state_node in source_state_nodes {
+        let key = get_from_memory::<u32>(source_state_node + 0x10);
+        let dest_state_node = find_or_insert_state_node(dest_state_header, key);
+        let source_value = get_from_memory::<u32>(source_state_node + 0x14);
+        let new_value = clone_script_state_value(source_value);
+        save_to_memory(dest_state_node + 0x14, new_value);
+    }
+    save_to_memory(dest_state + 0x20, get_from_memory::<u32>(source_state + 0x20));
+
+    // Back-pointer repoint + registration dance - see the module doc comment's own Stage 11 section,
+    // point 6.
+    set_show_info_id(this, new_id);
+    let mgr = unsafe { mut_from_memory::<ZTShowMgr>(mgr_ptr as u32) };
+    mgr.register_show(this as *const u32, false);
+    if old_id != new_id {
+        let old_show = ZTShowMgr::get_show_info(old_id);
+        if old_show != 0 {
+            mgr.unregister_show(old_id, old_show as *const u32, false);
+        }
+    }
+}
 
 fn write_field(addr: u32, size: u32, file: *const i8) -> bool {
     unsafe { WRITE_BYTES_TO_FILE.hooked()(addr as *const u32, size, 1, file) == 1 }
@@ -1194,12 +1596,16 @@ fn read_field(addr: u32, size: u32, file: *const u32) -> bool {
 /// essentially never in practice (`load`'s only real caller constructs a fresh `ZTShowInfo` immediately
 /// beforehand - see `ztshowinfo-pending-scripts-tree-plan.md`'s own lifecycle table), but is reproduced for
 /// completeness rather than assumed unreachable. Real vanilla's own teardown helper for this
-/// (`FUN_005aad9a`) has no decompile; this instead reuses two already-independently-verified teardown
-/// primitives from elsewhere in this class family for the two sub-allocations every node owns: each unit-list
-/// entry via [`free_unit_array_buffer`] (the same freelist [`remove_unit`] already frees list entries
-/// through) and the list's own sentinel plus the node itself via `OPERATOR_DELETE` (matching
-/// [`allocate_pending_script_node`]'s own `OPERATOR_NEW` for both).
-fn clear_pending_script_tree(this: u32) {
+/// (`msvc_std_mapuint_ztshowunittypeinfo::FREENODE`, `0x005aad9a`) frees every node - both the tree nodes
+/// themselves and their embedded unit-list entries - back onto vanilla's pool allocator, never through
+/// `operator delete`, so every sub-allocation here is freed via [`free_unit_array_buffer`]: each unit-list
+/// entry (12 bytes, the same freelist [`remove_unit`] already frees list entries through), the list's own
+/// sentinel (12 bytes), and finally the tree node itself (`0x48` bytes, matching
+/// [`allocate_pending_script_node`]'s own allocation size for both). Freeing the node or its sentinel
+/// through plain `operator delete` instead - as this function used to - is genuine cross-allocator heap
+/// corruption for any node real, still-un-detoured vanilla code ever inserted (see CLAUDE.md's
+/// cross-allocator memory safety section).
+pub(crate) fn clear_pending_script_tree(this: u32) {
     let header = get_from_memory::<u32>(this + 0x44);
     let root = get_from_memory::<u32>(header + 4);
     let mut nodes = Vec::new();
@@ -1214,9 +1620,9 @@ fn clear_pending_script_tree(this: u32) {
                 free_unit_array_buffer(cursor, 0xc);
                 cursor = next;
             }
-            unsafe { OPERATOR_DELETE.original()(sentinel) };
+            free_unit_array_buffer(sentinel, 0xc);
         }
-        unsafe { OPERATOR_DELETE.original()(node) };
+        free_unit_array_buffer(node, 0x48);
     }
 
     save_to_memory(header + 4, 0u32);
@@ -1609,6 +2015,24 @@ mod detours {
         remove_unit(this as u32, unit_type_id, unit_id_ptr as u32);
     }
 
+    /// `unit_ptr as u32`, not a genuine `i32` - see [`add_unit_to_list`]'s own doc comment on why
+    /// `generated.rs`'s `i32` typing here is a pointer-as-integer wart.
+    #[detour(ADD_UNIT_TO_LIST)]
+    unsafe extern "thiscall" fn add_unit_to_list_detour(this: *const u32, unit_ptr: i32) -> u32 {
+        add_unit_to_list(this as u32, unit_ptr as u32) as u32
+    }
+
+    /// `unit_ptr as u32`, not a genuine `i32` - same wart as [`add_unit_to_list_detour`].
+    #[detour(ADD_UNIT)]
+    unsafe extern "thiscall" fn add_unit_detour(this: *const u32, unit_ptr: i32) -> u32 {
+        add_unit(this as u32, unit_ptr as u32) as u32
+    }
+
+    #[detour(GATHER_UNITS)]
+    unsafe extern "thiscall" fn gather_units_detour(this: *const u32, unit_type_id: u32) -> u32 {
+        gather_units(this as u32, unit_type_id) as u32
+    }
+
     #[detour(ENTER_NEW_MONTH)]
     unsafe extern "thiscall" fn enter_new_month_detour(this: *const u32) {
         enter_new_month(this as u32);
@@ -1624,6 +2048,11 @@ mod detours {
         set_show_info_id(this as u32, id)
     }
 
+    #[detour(UPDATE_FROM_LOAD)]
+    unsafe extern "thiscall" fn update_from_load_detour(this: *const u32, source: *const u32) {
+        update_from_load(this as u32, source as u32);
+    }
+
     #[detour(SAVE)]
     unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const i8) -> u32 {
         show_info_save(this as u32, file) as u32
@@ -1637,7 +2066,7 @@ mod detours {
     /// `(name, is_enabled)` per detour - lets `reimplementation_tests`'s `ZTSHOWINFO_DETOURS_ENABLED`
     /// catch a silently-failed `init_detours()`, same rationale as `ztshowstate::detours::status`'s own
     /// doc comment.
-    pub(crate) fn status() -> [(&'static str, bool); 27] {
+    pub(crate) fn status() -> [(&'static str, bool); 31] {
         [
             ("GET_SCHEDULED_SHOW_SCRIPT", GET_SCHEDULED_SHOW_SCRIPT_DETOUR.is_enabled()),
             ("IS_READY", IS_READY_DETOUR.is_enabled()),
@@ -1661,9 +2090,13 @@ mod detours {
             ("GET_SHOW_UNIT_LIST", GET_SHOW_UNIT_LIST_DETOUR.is_enabled()),
             ("CHECK_UNIT", CHECK_UNIT_DETOUR.is_enabled()),
             ("REMOVE_UNIT", REMOVE_UNIT_DETOUR.is_enabled()),
+            ("ADD_UNIT_TO_LIST", ADD_UNIT_TO_LIST_DETOUR.is_enabled()),
+            ("ADD_UNIT", ADD_UNIT_DETOUR.is_enabled()),
+            ("GATHER_UNITS", GATHER_UNITS_DETOUR.is_enabled()),
             ("ENTER_NEW_MONTH", ENTER_NEW_MONTH_DETOUR.is_enabled()),
             ("UPDATE", UPDATE_DETOUR.is_enabled()),
             ("SET_SHOW_INFO_ID", SET_SHOW_INFO_ID_DETOUR.is_enabled()),
+            ("UPDATE_FROM_LOAD", UPDATE_FROM_LOAD_DETOUR.is_enabled()),
             ("SAVE", SAVE_DETOUR.is_enabled()),
             ("LOAD", LOAD_DETOUR.is_enabled()),
         ]
@@ -1686,7 +2119,7 @@ pub(crate) mod live_support {
     /// pending-scripts tree header (no real ctor call, one allocation instead of the several a real
     /// construction performs) - Stage 12's own real-ctor-backed builders below are only for the
     /// constructor/destructor round trip test itself, which needs the real thing.
-    pub(crate) fn detour_status() -> [(&'static str, bool); 27] {
+    pub(crate) fn detour_status() -> [(&'static str, bool); 31] {
         super::detours::status()
     }
 
@@ -1704,7 +2137,7 @@ pub(crate) mod live_support {
     }
 
     use openzt_detour::generated::standalone::{OPERATOR_DELETE, OPERATOR_NEW};
-    use openzt_detour::generated::ztshowinfo::{CONSTRUCTOR_0, CONSTRUCTOR_1, ZTSHOW_INFO_1};
+    use openzt_detour::generated::ztshowinfo::{CONSTRUCTOR_0, CONSTRUCTOR_1, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR};
 
     /// Real `ZTShowInfo` size (Windows) - see `ztshow::live_support::build_standalone_show_info`'s own
     /// doc comment for the `ZTHabitat_setIsShowExhibit.c` `new(0xa8)` evidence.
@@ -1733,15 +2166,15 @@ pub(crate) mod live_support {
     }
 
     /// Tears down a buffer built by either constructor helper above via the real destructor
-    /// (`ZTSHOW_INFO_1`, vtable slot `+0x18`) with its flag byte clear (don't `operator_delete` `this`
+    /// (`ztshowinfo::DESTRUCTOR_1`, vtable slot `+0x18`) with its flag byte clear (don't `operator_delete` `this`
     /// internally), then frees the outer buffer this module itself allocated via
     /// `OPERATOR_NEW.original()`. Confirmed safe to call directly against a bare `ZTShowInfo*` - unlike
-    /// `ztshowstate`'s own same-shaped destructor slot, `ZTSHOW_INFO_1`'s own body performs no
+    /// `ztshowstate`'s own same-shaped destructor slot, `ztshowinfo::DESTRUCTOR_1`'s own body performs no
     /// `this`-adjustment and restores *this class's own* vtable (see the module doc comment's Stage 12
     /// section). Every step here is a real vanilla allocator call over real vanilla-allocated memory, so
     /// this needs no leak-only exception, unlike most of this class family's other standalone fixtures.
     pub(crate) fn destroy_standalone_show_info_via_real_dtor(buf: u32) {
-        unsafe { ZTSHOW_INFO_1.original()(buf as *const u32, 0) };
+        unsafe { ZTSHOWINFO_DESTRUCTOR.original()(buf as *const u32, 0) };
         unsafe { OPERATOR_DELETE.original()(buf) };
     }
 }
@@ -2348,5 +2781,74 @@ mod tests {
         assert_eq!(record.attendance_total, 0);
         assert_eq!(record.filetime_low, 0x1111_2222);
         assert_eq!(record.filetime_high, 0x3333_4444);
+    }
+
+    /// Fixed stand-in for one pending-scripts tree node at the same `+0x8`/`+0xc`/`+0x10` (left/right/key)
+    /// offsets [`find_pending_script_node`] reads - same shape `ztshow.rs`'s own `pending_node_plan_tests`
+    /// module uses for the identical tree layout.
+    #[repr(C)]
+    struct FakeNode {
+        _unused: [u8; 8],
+        left: u32,
+        right: u32,
+        key: u32,
+    }
+
+    struct Arena {
+        header: Box<[u8; 0xc]>,
+        nodes: Vec<Box<FakeNode>>,
+    }
+
+    impl Arena {
+        fn new() -> Self {
+            Arena { header: Box::new([0u8; 0xc]), nodes: Vec::new() }
+        }
+
+        fn header_addr(&self) -> u32 {
+            self.header.as_ptr() as u32
+        }
+
+        fn push_node(&mut self, key: u32, left: u32, right: u32) -> u32 {
+            let node = Box::new(FakeNode { _unused: [0; 8], left, right, key });
+            let addr = node.as_ref() as *const FakeNode as u32;
+            self.nodes.push(node);
+            addr
+        }
+
+        fn set_root(&mut self, root: u32) {
+            save_to_memory(self.header_addr() + 4, root);
+        }
+    }
+
+    #[test]
+    fn find_pending_script_node_returns_none_for_an_empty_tree() {
+        let arena = Arena::new();
+        assert_eq!(find_pending_script_node(arena.header_addr(), 5), None);
+    }
+
+    #[test]
+    fn find_pending_script_node_finds_an_exact_key_match() {
+        let mut arena = Arena::new();
+        let left = arena.push_node(3, 0, 0);
+        let right = arena.push_node(9, 0, 0);
+        let root = arena.push_node(5, left, right);
+        arena.set_root(root);
+
+        assert_eq!(find_pending_script_node(arena.header_addr(), 5), Some(root));
+        assert_eq!(find_pending_script_node(arena.header_addr(), 3), Some(left));
+        assert_eq!(find_pending_script_node(arena.header_addr(), 9), Some(right));
+    }
+
+    #[test]
+    fn find_pending_script_node_returns_none_for_a_missing_key() {
+        let mut arena = Arena::new();
+        let left = arena.push_node(3, 0, 0);
+        let right = arena.push_node(9, 0, 0);
+        let root = arena.push_node(5, left, right);
+        arena.set_root(root);
+
+        assert_eq!(find_pending_script_node(arena.header_addr(), 4), None);
+        assert_eq!(find_pending_script_node(arena.header_addr(), 100), None);
+        assert_eq!(find_pending_script_node(arena.header_addr(), 0), None);
     }
 }

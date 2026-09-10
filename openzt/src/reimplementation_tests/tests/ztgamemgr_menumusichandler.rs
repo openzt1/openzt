@@ -179,6 +179,12 @@ pub(crate) fn run_menumusichandler_standalone_roundtrip_test(failure_log: &mut O
 /// re-allocating and re-running the failed attempt. The first init's `SNDSound` is deliberately
 /// leaked on both sides (vanilla's own re-init path leaks it identically - 8 bytes once per battery
 /// run); the teardown below releases only the current `sound_ptr`.
+///
+/// A third phase smoke-tests [`MenuMusicHandler::destruct`] - the ported dtor sound-teardown, which
+/// has no vanilla pole to diff against (no standalone vanilla dtor address exists; see that method's
+/// doc comment) - by repetition instead: fresh alloc/construct/init/destruct/free cycles, checking
+/// `sound_ptr` is genuinely populated before each release branch runs, so a wrong release path or a
+/// dangling `SNDSound` fails loudly (crash/heap corruption) within a few iterations.
 pub(crate) fn run_menumusichandler_init_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "MENUMUSICHANDLER_INIT";
 
@@ -239,6 +245,41 @@ pub(crate) fn run_menumusichandler_init_test(failure_log: &mut Option<std::fs::F
                 error!("{}: second-init mismatch(es): {:?}", test_name, mismatches);
                 if let Some(log_file) = failure_log {
                     let _ = log_file.write_all(format!("Test Failed {}: second-init mismatch(es): {:?}\n", test_name, mismatches).as_bytes());
+                }
+                failed = true;
+            }
+        }
+
+        // Phase 3: `destruct` repetition - the ported dtor has no vanilla pole to diff against (there
+        // is no standalone vanilla dtor address - see `MenuMusicHandler::destruct`'s doc comment), so
+        // it's smoke-tested by repetition instead: fresh alloc/construct/init/destruct/free cycles,
+        // each releasing a real (failed-attempt) `SNDSound` through the same vanilla entry points the
+        // inlined vanilla dtor uses. A wrong release path or a dangling `SNDSound` crashes or corrupts
+        // the heap within a few iterations.
+        if !failed {
+            const DESTRUCT_ITERATIONS: u32 = 16;
+            let mut destruct_failures: Vec<String> = Vec::new();
+            for iteration in 0..DESTRUCT_ITERATIONS {
+                let ptr = menumusichandler_live_support::allocate_uninitialized();
+                if ptr.is_null() {
+                    destruct_failures.push(format!("iteration {iteration}: OPERATOR_NEW returned null"));
+                    continue;
+                }
+                menumusichandler_live_support::real_constructor(ptr as *const u32);
+                (*ptr).init(FILENAME.as_ptr() as *const i8, ATTENUATION);
+                if (*ptr).sound_ptr() == 0 {
+                    destruct_failures.push(format!(
+                        "iteration {iteration}: sound_ptr null after init - destruct's release branch not exercised"
+                    ));
+                } else {
+                    (*ptr).destruct();
+                }
+                menumusichandler_live_support::destroy_standalone(ptr);
+            }
+            if !destruct_failures.is_empty() {
+                error!("{}: destruct repetition failures: {:?}", test_name, destruct_failures);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: destruct repetition failures: {:?}\n", test_name, destruct_failures).as_bytes());
                 }
                 failed = true;
             }
@@ -533,7 +574,7 @@ pub(crate) fn run_menumusichandler_start_fade_test(failure_log: &mut Option<std:
 ///
 /// The `IS_PLAYING`-**true** completion path (`STOP` + slot-0 release + `sound_ptr` = 0) needs genuinely
 /// playing audio to enter live, so it isn't exercised here - its teardown calls are the exact
-/// [`SNDSOUND_1`] release idiom `MENUMUSICHANDLER_INIT`'s teardown path already runs for real.
+/// `SNDSOUND_DESTRUCTOR` release idiom `MENUMUSICHANDLER_INIT`'s teardown path already runs for real.
 pub(crate) fn run_menumusichandler_update_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "MENUMUSICHANDLER_UPDATE";
 

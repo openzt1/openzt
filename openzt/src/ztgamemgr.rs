@@ -14,18 +14,18 @@
 //! vanilla-layout-compatible struct below never needs to model a `Vec`/map/tree. (The embedded
 //! `ZooStatus` region's own array fields are modeled field-by-field in `zoostatus.rs`.)
 //!
+//! # Construction/destruction (`plans/ztgamemgr-vanilla-storage-migration-plan.md`)
+//!
+//! Unlike every other method below, `CREATE_ZTGAME_MGR`/`DESTRUCTOR_0`/`DESTRUCTOR_1` **are** detoured
+//! (`gamemgr_allocator_detours`, that module's own doc comment has the full detail) - Stage 5 of the
+//! migration plan swaps `GLOBAL_ZTGameMgr`'s own allocator from vanilla `operator_new`/`operator_delete`
+//! to Rust's global allocator (`Box`), confirmed safe by two independent live `cdb` traces plus a full
+//! decompile-corpus sweep each finding exactly one construct and one destroy per process.
+//!
 //! # Methods deliberately not detoured
 //!
 //! Each item is confirmed against the decompiles (`private/resources/decompiles/ZTGameMgr_*`):
 //!
-//! - **Destructor** (`ZTGAME_MGR_0`/`ZTGAME_MGR_1`): `~ZTGameMgr_0.c` tears down the embedded
-//!   `ZTSoundscape` (if `soundscape_ptr != 0`) and `MenuMusicHandler` (if `menu_music_handler_ptr != 0`),
-//!   then swaps the vtable pointer to `BFMgr_vftable` and returns, continuing into `BFMgr`'s own
-//!   base-class teardown; `~ZTGameMgr_1.c` is just the deleting variant (`bDelete` byte gating a
-//!   `FUN_00402629` free after the same body runs). Since this reimplementation stays
-//!   vanilla-layout-compatible (style 1: same memory, no independent Rust-owned heap state), there is
-//!   nothing this detour would do differently from vanilla's own body - mirrors `ztmegatilemgr.rs`'s
-//!   and `ztadvterrainmgr.rs`'s own stated reasoning for skipping their destructors.
 //! - **`removedZooDoo`**: not ported. The logic itself is comprehensible and portable in principle -
 //!   real entry point `0x004a2c98` (`generated.rs`'s `ztgamemgr::REMOVED_ZOO_DOO` carries the corrected
 //!   address/signature; the mangled 11-parameter export Ghidra first produced for it came from analysis
@@ -64,22 +64,24 @@
 //!   reimplemented, `ztgamemgr_menumusichandler.rs`); `BFIniFile` is what keeps it un-detoured.
 //!
 //! `menuMusicAttenToScrollbarVal`/`scrollbarValToMenuMusicAtten` (macOS-only, no Windows address)
-//! also remain out of scope - see `pad11` in the struct below.
+//! also remain out of scope - see `menu_music_max_attenuation` in the struct below.
 
 use std::ffi::c_void;
 
 use openzt_detour::generated::{
     bfscenariomgr::{GET_CROWD_AMBIENTS_NAME, GET_CROWD_CONFIG_NAME, GET_WORLD_AMBIENTS_NAME, GET_WORLD_CONFIG_NAME},
     standalone::{DEALLOCATE, OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
-    ztsoundscape::ZTSOUNDSCAPE as ZTSOUNDSCAPE_DESTRUCTOR,
+    ztsoundscape::DESTRUCTOR as ZTSOUNDSCAPE_DESTRUCTOR,
     ztui_main::{
         SET_ANIMAL_RATING as ZTUI_MAIN_SET_ANIMAL_RATING, SET_DATE_TEXT as ZTUI_MAIN_SET_DATE_TEXT, SET_GUEST_RATING as ZTUI_MAIN_SET_GUEST_RATING,
         SET_MONEY_TEXT as ZTUI_MAIN_SET_MONEY_TEXT, SET_ZOO_RATING as ZTUI_MAIN_SET_ZOO_RATING, UNPAUSE_GAME as ZTUI_MAIN_UNPAUSE_GAME,
     },
     bfaimgr::LOAD_DATA as BFAIMGR_LOAD_DATA,
+    bfinifile::READ,
+    standalone::CREATE_ZTGAME_MGR,
     ztgamemgr::{
-        ADD_CASH, ANIMAL_TIME_AGO, GET_DATE, HOURS_AGO, IS_GAME_DATE, IS_REAL_WORLD_DATE, LOAD, OVERRIDE_NEW_GAME_DEFAULTS, PEOPLE_TIME_AGO,
-        SAVE, SET_NEW_GAME_DEFAULTS, START, STOP, SUBTRACT_CASH, TIME_AGO, UPDATE, UPDATE_SIM,
+        ADD_CASH, ANIMAL_TIME_AGO, DESTRUCTOR_0, DESTRUCTOR_1, GET_DATE, HOURS_AGO, IS_GAME_DATE, IS_REAL_WORLD_DATE, LOAD,
+        OVERRIDE_NEW_GAME_DEFAULTS, PEOPLE_TIME_AGO, SAVE, SET_NEW_GAME_DEFAULTS, START, STOP, SUBTRACT_CASH, TIME_AGO, UPDATE, UPDATE_SIM,
     },
 };
 // `ZooStatus`'s own 8 call-through sites below (spend_research/spend_marketing/set_new_game_defaults'
@@ -87,8 +89,6 @@ use openzt_detour::generated::{
 // `impl ZooStatus` methods directly rather than going through `zoostatus::*`'s real-vanilla
 // `.original()` - see `zoostatus.rs`'s own `zoostatus_detours` module for the address-level detours
 // this pairs with.
-#[cfg(feature = "reimplementation-tests")]
-use openzt_detour::generated::{standalone::CREATE_ZTGAME_MGR, ztgamemgr::ZTGAME_MGR_1};
 use openzt_detour_macro::detour_mod;
 use tracing::{error, info};
 use windows::Win32::{
@@ -105,6 +105,7 @@ use crate::{
     ztsoundscape::ZTSoundscape,
     zoostatus::{self, ZooStatus},
 };
+use crate::vanilla_string::VanillaString;
 
 /// `DAT_006394b8`'s RVA (Ghidra VA `0x006394b8` minus the default load base `0x400000`) - a raw, signed
 /// tick accumulator `ZTGameMgr::updateSim` reads/writes directly (not a pointer, so no
@@ -167,11 +168,11 @@ pub struct ZTGameMgr {
     /// A live guest-tile count from `ZooStatus::calculateSums`' world walk - see `zoostatus.rs`'s
     /// `ZooStatus::guest_tile_count` doc comment. Same underlying bytes as `ZooStatus`-relative
     /// `+0x44`, shifted to `ZTGameMgr`-relative `+0x54` by the `+0x10` embedding offset.
-    guest_tile_count: u16, // 0x54
+    guest_tile_count: i32, // 0x54
     // This pad also covers the embedded `ZooStatus`'s history/flat-totals array region - modeled
     // field-by-field in `zoostatus.rs` (`monthly_history`/`yearly_history`/`flat_totals`), left as pad
     // here since no `ZTGameMgr` method reads into it directly.
-    pad9: [u8; 0x1160 - 0x56], // 0x54
+    pad9: [u8; 0x1160 - 0x58], // 0x58
     zoo_admission_cost: f32,   // 0x1160
     pad10: [u8; 0x1190 - 0x1164], // 0x1164 - includes `removedZooDoo`'s refund-per-item base amount at
                                    // `+0x117c` (`ZTGameMgr_removedZooDoo.c`/`.asm`), unnamed since that
@@ -184,13 +185,33 @@ pub struct ZTGameMgr {
     /// destructor. Explicitly zeroed by `CreateZTGameMgr` (`puVar2[0x469] = 0;`, dword index `0x469` =
     /// byte offset `0x11A4`).
     menu_music_handler_ptr: u32, // 0x11A4
-    pad11: [u8; 0x11b0 - 0x11A8], // 0x11A8 - a menu-music-ini read result read/written by the
-                                   // macOS-only `menuMusicAttenToScrollbarVal`/`scrollbarValToMenuMusicAtten`
-                                   // (see the module doc comment) - not untouched, just out of
-                                   // this reimplementation's current scope
+    /// `BFIniFile::read("UI", "menuMusicMaxAttenuation", -1000)`'s result, computed by
+    /// [`ZTGameMgr::construct`] (`_CreateZTGameMgr.c`'s `puVar2[0x46a] = uVar3;`). The macOS-only
+    /// `menuMusicAttenToScrollbarVal`/`scrollbarValToMenuMusicAtten` (see the module doc comment) are its
+    /// only readers/writers - still out of this reimplementation's scope, but the field's own default
+    /// value's source is now known.
+    menu_music_max_attenuation: i32, // 0x11A8
+    pad11: [u8; 0x11b0 - 0x11AC], // 0x11AC - trailing unaccounted space
 }
 
 const _: () = assert!(std::mem::size_of::<ZTGameMgr>() == 0x11b0);
+
+/// `BFGameMgr`'s real vtable VA (`private/docs/vtables/BFGameMgr.md`) - written into a freshly
+/// allocated block by [`ZTGameMgr::init_fields`] before `ZooStatus::init` runs, then
+/// immediately overwritten by [`ZTGAMEMGR_VTABLE`] once the base subobject's construction step
+/// completes - genuine C++ base-then-derived construction order, not a redundant double-write. A raw
+/// constant, not RVA'd - zoo.exe has no ASLR (same reasoning as this file's other RVA consts / vtable
+/// constants elsewhere, e.g. `ztgamemgr_menumusichandler.rs`'s `SNDSOUND_VTABLE`).
+const BFGAMEMGR_VTABLE: u32 = 0x006350d0;
+
+/// `ZTGameMgr`'s own real vtable VA (`private/docs/vtables/ZTGameMgr.md`).
+const ZTGAMEMGR_VTABLE: u32 = 0x00630b9c;
+
+/// `BFMgr`'s real vtable VA (`private/docs/vtables/BFMgr.md`) - the final vtable state
+/// [`ZTGameMgr::destruct`] leaves `self` in, continuing the tail-chain into `~BFMgr`'s own base-class
+/// teardown (left as a permanent call-through, matching `ZTAdvTerrainMgr`/`ZTMegatileMgr`'s own
+/// precedent for this level of the hierarchy - see [`ZTGameMgr::destruct`]'s doc comment).
+const BFMGR_VTABLE: u32 = 0x006355c0;
 
 /// Vanilla's embedded `SYSTEMTIME` (same field order/size as `windows::Win32::Foundation::SYSTEMTIME`,
 /// confirmed against that crate's own definition) - kept as a distinct, private type rather than the
@@ -265,7 +286,7 @@ fn ticks_to_filetime(ticks: u64) -> FILETIME {
 /// enough to cross the `> 0x3e9` UI-refresh threshold this formula lives behind (see that test's own doc
 /// comment in `reimplementation_tests/tests/ztgamemgr.rs`). Covered by a `#[cfg(test)]` unit test below
 /// instead.
-fn rating_from_metric(metric: i32, population: u16) -> i32 {
+fn rating_from_metric(metric: i32, population: i32) -> i32 {
     if population == 0 {
         0
     } else {
@@ -641,7 +662,7 @@ impl ZTGameMgr {
 
             let zoostatus = unsafe { &*(zoostatus_ptr as *const ZooStatus) };
 
-            let animal_rating = rating_from_metric(zoostatus.animal_rating_metric, self.num_animals);
+            let animal_rating = rating_from_metric(zoostatus.animal_rating_metric, self.num_animals as i32);
             unsafe { ZTUI_MAIN_SET_ANIMAL_RATING.original()(animal_rating) };
 
             let guest_rating = rating_from_metric(zoostatus.guest_rating_metric, self.guest_tile_count);
@@ -703,6 +724,107 @@ impl ZTGameMgr {
         self.soundscape_ptr
     }
 
+    /// Ports `CreateZTGameMgr` (`standalone::CREATE_ZTGAME_MGR`, `0x00527dc7`)'s field-initialization
+    /// logic, read in full from `_CreateZTGameMgr.c`: zero `started`; write the base `BFGameMgr` vtable,
+    /// run `ZooStatus::init` on the embedded sub-object, then overwrite with the real `ZTGameMgr` vtable;
+    /// zero `soundscape_ptr`/`menu_music_handler_ptr`; resolve `menu_music_max_attenuation` from a real
+    /// `BFIniFile::read("UI", "menuMusicMaxAttenuation", -1000)` call via two temporary
+    /// vanilla-constructed strings. Assumes `this` points at a fresh, otherwise-uninitialized `0x11b0`-
+    /// byte block - shared by [`Self::construct`] (vanilla-allocated, for the standalone-instance test
+    /// harness) and the production `CREATE_ZTGAME_MGR` detour (`gamemgr_allocator_detours`, Rust-
+    /// allocated via `Box` - see that module's own doc comment for why the allocator differs per caller).
+    unsafe fn init_fields(this: *mut Self) {
+        unsafe {
+            (*this).started = false;
+
+            (*this).vtable = BFGAMEMGR_VTABLE;
+            let zoostatus_ptr = (this as u32 + 0x10) as *const u32;
+            mut_from_memory::<ZooStatus>(zoostatus_ptr).init(std::ptr::null());
+            (*this).vtable = ZTGAMEMGR_VTABLE;
+
+            (*this).soundscape_ptr = 0;
+            (*this).menu_music_handler_ptr = 0;
+
+            let section = VanillaString::new("UI");
+            let key = VanillaString::new("menuMusicMaxAttenuation");
+            let result = READ.original()(section.as_ptr(), key.as_ptr(), (-1000i32) as u32);
+            (*this).menu_music_max_attenuation = result as i32;
+        }
+    }
+
+    /// Ports `CreateZTGameMgr`'s allocation (`operator_new(0x11b0)`, kept vanilla-allocated here) plus
+    /// [`Self::init_fields`]. Used only by the standalone-instance test harness
+    /// (`live_support::construct_standalone_via_rust`) - the production address is the
+    /// `CREATE_ZTGAME_MGR` detour in `gamemgr_allocator_detours`, which allocates via `Box` instead.
+    /// Returns null on allocation failure, matching the real body's own null propagation.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn construct() -> *mut Self {
+        let block = unsafe { OPERATOR_NEW.original()(0x11b0) };
+        if block.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let this = block as *mut Self;
+        unsafe { Self::init_fields(this) };
+        this
+    }
+
+    /// Test-only accessor for `ZTGAMEMGR_DESTRUCT`, letting it populate `menu_music_handler_ptr` on a
+    /// standalone instance directly - `start()`/`set_new_game_defaults()` never touch this field
+    /// (`initMenuMusic`/`startMenuMusic*` stay un-detoured, real vanilla-only, per the module doc
+    /// comment's "Methods deliberately not detoured" section), so there's no other way to exercise
+    /// [`Self::destruct`]'s non-null handler branch from a synthetic instance.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn set_menu_music_handler_ptr(&mut self, value: u32) {
+        self.menu_music_handler_ptr = value;
+    }
+
+    /// Ports `~ZTGameMgr` (`ztgamemgr::DESTRUCTOR_0`/`DESTRUCTOR_1`'s shared body). Still leaves the
+    /// block itself vanilla-owned - freeing `self` is the caller's job, mirroring
+    /// `live_support::destroy_standalone_mgr`'s existing `bDelete`-gated shape and `~ZTGameMgr_0` vs
+    /// `_1`'s own split.
+    ///
+    /// Confirmed against `ZTGameMgr_~ZTGameMgr_0.asm`/`.c` directly, in order:
+    /// 1. Entry vtable self-stamp to `ZTGameMgr`'s own vtable ([`ZTGAMEMGR_VTABLE`]) - genuine,
+    ///    unconditional MSVC destructor codegen (the standard "restamp to this level's vtable at entry,
+    ///    then to the base vtable before chaining to the base destructor" idiom), executed before either
+    ///    pointer below is even tested. A no-op for this port (nothing here dispatches virtually through
+    ///    `self`), reproduced for byte-for-byte fidelity with vanilla's memory shape.
+    /// 2. If `soundscape_ptr != 0`: the reimplemented [`ZTSoundscape::destruct`], then free the block
+    ///    (`standalone::OPERATOR_DELETE`), then zero the pointer.
+    /// 3. If `menu_music_handler_ptr != 0`: the real body tail-jumps into `MenuMusicHandler`'s own
+    ///    destructor address (`generated.rs`'s `MENU_MUSIC_HANDLER_0`, which is actually this tail-merge
+    ///    block viewed from the other side - see the module's migration plan's re-verification section)
+    ///    - whose body does the handler's own [`MenuMusicHandler::destruct`] sound teardown,
+    ///      `operator_delete`s the handler block, *and* writes the final `BFMgr` vtable itself, returning
+    ///      without this function ever reaching step 4. Reproduced here as three explicit steps instead of
+    ///      a tail-call, since this port never calls that misattributed address directly.
+    /// 4. `self.vtable = BFMGR_VTABLE` - the real body's own direct write when `menu_music_handler_ptr ==
+    ///    0` (`ZTGameMgr_~ZTGameMgr_0.c`'s final line); when the handler branch *is* taken, the real
+    ///    tail-merged callee performs the equivalent write instead (see step 3) - either way `self`'s
+    ///    vtable ends up here, so this write stays unconditional rather than gated on the branch not
+    ///    being taken.
+    ///
+    /// Called from both `gamemgr_allocator_detours`' `DESTRUCTOR_0`/`DESTRUCTOR_1` detours (Stage 5's
+    /// production wiring) and the standalone-instance test harness.
+    pub(crate) fn destruct(&mut self) {
+        self.vtable = ZTGAMEMGR_VTABLE;
+
+        if self.soundscape_ptr != 0 {
+            unsafe { mut_from_memory::<ZTSoundscape>(self.soundscape_ptr) }.destruct();
+            unsafe { OPERATOR_DELETE.original()(self.soundscape_ptr) };
+            self.soundscape_ptr = 0;
+        }
+
+        if self.menu_music_handler_ptr != 0 {
+            unsafe { mut_from_memory::<MenuMusicHandler>(self.menu_music_handler_ptr) }.destruct();
+            unsafe { OPERATOR_DELETE.original()(self.menu_music_handler_ptr) };
+            self.menu_music_handler_ptr = 0;
+        }
+
+        self.vtable = BFMGR_VTABLE;
+    }
+
     /// Ports `ZTGameMgr::start` (`ZTGameMgr_start.c`/`.asm`, both agree cleanly - unlike [`Self::stop`],
     /// no decompiler corruption here). Per the real body, in order:
     /// 1. If already `started`: call [`Self::stop`] first (the real body's `stop(this)` recursive call -
@@ -758,9 +880,7 @@ impl ZTGameMgr {
     ///
     /// Real body, in order:
     /// 1. If `soundscape_ptr != 0`: real vanilla destructor call-through (`ZTSoundscape::~ZTSoundscape`,
-    ///    `generated.rs`'s misleadingly-named `ztsoundscape::ZTSOUNDSCAPE` entry - confirmed to actually be
-    ///    the destructor, not the constructor, via `ZTSoundscape_~ZTSoundscape.meta`'s matching address;
-    ///    left un-renamed since it's an existing, non-hand-added `generated.rs` entry - see `CLAUDE.md`),
+    ///    `generated.rs`'s `ztsoundscape::DESTRUCTOR` entry, imported here as [`ZTSOUNDSCAPE_DESTRUCTOR`]),
     ///    then free the block (`standalone::OPERATOR_DELETE`, typed `u32` in `generated.rs`), then zero the
     ///    pointer.
     /// 2. `started = false`.
@@ -879,6 +999,10 @@ pub fn init() {
 
     if let Err(e) = unsafe { gamemgr_finance_detours::init_detours() } {
         error!("Failed to initialise ZTGameMgr finance/date detours: {e:?}");
+    }
+
+    if let Err(e) = unsafe { gamemgr_allocator_detours::init_detours() } {
+        error!("Failed to initialise ZTGameMgr allocator detours: {e:?}");
     }
 }
 
@@ -1000,6 +1124,69 @@ mod gamemgr_finance_detours {
     }
 }
 
+/// Stage 5 of `plans/ztgamemgr-vanilla-storage-migration-plan.md`: swaps `ZTGameMgr`'s own allocator
+/// from vanilla `operator_new`/`operator_delete` to Rust's global allocator (`Box`) - the change that
+/// actually moves `GLOBAL_ZTGameMgr` off vanilla storage, rather than porting equivalent logic that
+/// still runs on top of it (Stages 1-4). Confirmed safe to pursue before landing this: a full static
+/// sweep of the decompile corpus plus two independent live `cdb` traces (breakpoints on
+/// `CREATE_ZTGAME_MGR`/`DESTRUCTOR_0`/`DESTRUCTOR_1` across full launch-to-close sessions) each found
+/// exactly one construct and one destroy per process, both inside `ZTApp`'s own one-shot init/
+/// exit_override path - see the plan's own "go/no-go" section for the full evidence.
+///
+/// `CREATE_ZTGAME_MGR`'s real body (`operator_new(0x11b0)` then [`ZTGameMgr::init_fields`]) is replaced
+/// with a `Box`-allocated equivalent; `DESTRUCTOR_0`/`DESTRUCTOR_1` are replaced with [`ZTGameMgr::destruct`]
+/// followed by a `Box::from_raw` + `drop` in place of vanilla's own `operator_delete` (gated on
+/// `DESTRUCTOR_1`'s `bDelete` byte, matching vanilla's own non-deleting/deleting split). A zeroed initial
+/// value (`std::mem::zeroed`) is used rather than genuinely uninitialized memory - unlike [`ZTGameMgr::construct`]'s
+/// vanilla-allocated pole (which deliberately leaves fields `CreateZTGameMgr` never writes as real heap
+/// leftover, for `ZTGAMEMGR_CONSTRUCT`'s byte-diff fidelity), the production singleton is never byte-diffed
+/// against real vanilla, and a zeroed `bool` field (`day_changed_flag`) is the only way to avoid genuine
+/// undefined-behavior on an eventual read - see that field's own doc comment.
+#[detour_mod]
+mod gamemgr_allocator_detours {
+    use super::*;
+
+    #[detour(CREATE_ZTGAME_MGR)]
+    unsafe extern "stdcall" fn create_zt_game_mgr() -> *const u32 {
+        let this = Box::into_raw(Box::new(unsafe { std::mem::zeroed::<ZTGameMgr>() }));
+        unsafe { ZTGameMgr::init_fields(this) };
+        this as *const u32
+    }
+
+    #[detour(DESTRUCTOR_0)]
+    unsafe extern "thiscall" fn destructor_0(this: *const u32) -> *const u32 {
+        unsafe { mut_from_memory::<ZTGameMgr>(this) }.destruct();
+        this
+    }
+
+    #[detour(DESTRUCTOR_1)]
+    unsafe extern "thiscall" fn destructor_1(this: *const u32, delete_flag: u8) -> *const u32 {
+        unsafe { mut_from_memory::<ZTGameMgr>(this) }.destruct();
+        if delete_flag != 0 {
+            drop(unsafe { Box::from_raw(this as *mut ZTGameMgr) });
+        }
+        this
+    }
+
+    /// Trampolines to the real vanilla bodies for the reimplementation-test battery's "real vanilla"
+    /// pole, once `init_detours()` has patched these three addresses: `.original()` on them is a raw
+    /// address cast in release builds, so it would re-enter the Rust detours above instead of reaching
+    /// vanilla (debug builds route `.original()` through the registry's trampolines correctly, but the
+    /// battery's vanilla pole must stay genuine in **every** profile - same reasoning as
+    /// `ztgamemgr_menumusichandler.rs`'s own `test_real` module). Lives inside the detour module because
+    /// the generated `*_DETOUR` statics are module-private.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) mod test_real {
+        pub(crate) fn create_zt_game_mgr() -> *const u32 {
+            unsafe { super::CREATE_ZTGAME_MGR_DETOUR.call() }
+        }
+
+        pub(crate) fn destructor_1(this: *const u32, delete_flag: u8) -> *const u32 {
+            unsafe { super::DESTRUCTOR_1_DETOUR.call(this, delete_flag) }
+        }
+    }
+}
+
 /// Live-comparison test support for `reimplementation_tests`. Unlike `ZTAwardMgr` (fixed global
 /// address, no standalone-instance capability), `ZTGameMgr` has a genuine free-function constructor
 /// (`standalone::CREATE_ZTGAME_MGR`) that `operator_new`s a fresh `0x11b0`-byte block and returns it,
@@ -1016,20 +1203,47 @@ pub(crate) mod live_support {
     /// not guarantee zeroed memory, so any *other* field a later test reads must either be
     /// confirmed as genuinely initialized by this constructor plus `set_new_game_defaults`, or
     /// the block explicitly `memset` to `0` first.
+    ///
+    /// Routes through `gamemgr_allocator_detours::test_real` rather than `CREATE_ZTGAME_MGR.original()`
+    /// directly - Stage 5 detours that address, so a raw `.original()` call would re-enter our own
+    /// `Box`-allocated detour in release builds instead of reaching real vanilla (see that module's own
+    /// `test_real` doc comment).
     pub(crate) fn build_standalone_mgr() -> *mut ZTGameMgr {
-        unsafe { CREATE_ZTGAME_MGR.original()() as *mut ZTGameMgr }
+        gamemgr_allocator_detours::test_real::create_zt_game_mgr() as *mut ZTGameMgr
     }
 
-    /// Tears down a standalone instance built by [`build_standalone_mgr`] via the real vanilla deleting
-    /// destructor (`ZTGAME_MGR_1`, `bDelete=1`) - safe here since this reimplementation stays
-    /// vanilla-layout-compatible with no independent Rust-owned heap state to worry about
-    /// double-freeing, unlike `ztthoughtmgr`'s intrusive list nodes (see `CLAUDE.md`'s cross-allocator
-    /// warning).
+    /// Real-vanilla-reaching trampoline for `ZTGAMEMGR_DESTRUCT`'s own real pole - see
+    /// `gamemgr_allocator_detours::test_real`'s doc comment for why a raw `DESTRUCTOR_1.original()` call
+    /// isn't safe once that address is detoured (Stage 5).
+    pub(crate) fn real_destructor_1(this: *const u32, delete_flag: u8) -> *const u32 {
+        gamemgr_allocator_detours::test_real::destructor_1(this, delete_flag)
+    }
+
+    /// Tears down a standalone instance built by [`build_standalone_mgr`] via the new Rust-native
+    /// [`ZTGameMgr::destruct`] followed by a matching `OPERATOR_DELETE` - the migration plan's Stage 4,
+    /// confirmed equivalent to the real vanilla deleting destructor (`DESTRUCTOR_1`, `bDelete=1`) by
+    /// `ZTGAMEMGR_DESTRUCT`'s own dedicated live test before this switch was made. Safe here since this
+    /// reimplementation stays vanilla-layout-compatible with no independent Rust-owned heap state to
+    /// worry about double-freeing, unlike `ztthoughtmgr`'s intrusive list nodes (see `CLAUDE.md`'s
+    /// cross-allocator warning). `ptr` itself is always a real vanilla-`operator_new`-allocated block
+    /// (from [`build_standalone_mgr`]), never a `Box`-allocated one, so freeing it via vanilla
+    /// `OPERATOR_DELETE` here stays correct regardless of Stage 5's production allocator swap.
     pub(crate) fn destroy_standalone_mgr(ptr: *mut ZTGameMgr) {
         if ptr.is_null() {
             return;
         }
-        unsafe { ZTGAME_MGR_1.original()(ptr as *const u32, 1) };
+        unsafe {
+            (*ptr).destruct();
+            OPERATOR_DELETE.original()(ptr as u32);
+        }
+    }
+
+    /// Builds a standalone `ZTGameMgr` via the new Rust-native [`ZTGameMgr::construct`], for
+    /// `ZTGAMEMGR_CONSTRUCT`'s comparison against [`build_standalone_mgr`]'s real vanilla pole. Torn down
+    /// the same way as `build_standalone_mgr` (both still vanilla-allocated in this stage) via
+    /// `destroy_standalone_mgr`.
+    pub(crate) fn construct_standalone_via_rust() -> *mut ZTGameMgr {
+        ZTGameMgr::construct()
     }
 }
 

@@ -73,6 +73,12 @@ pub(crate) fn run_ztshow_get_show_script_state_test(failure_log: &mut Option<std
         if real_ret != expected {
             failures.push(format!("{label}: real pole should return {expected:#010x}, got {real_ret:#010x}"));
         }
+        // Confirms the now-hooked real address itself (not just the internal helper directly) matches -
+        // catches `ztshow::init()` going missing before it could produce a silent false positive above.
+        let hooked_ret = unsafe { GET_SHOW_SCRIPT_STATE.hooked()(ztshow_ptr as *const u32, key) };
+        if hooked_ret != expected {
+            failures.push(format!("{label}: hooked address should return {expected:#010x}, got {hooked_ret:#010x}"));
+        }
     }
 
     // Empty tree: the header field doubles as the header node itself (self-referential), so its
@@ -679,6 +685,29 @@ pub(crate) fn find_real_trick_eligible_unit() -> Option<(u32, u32)> {
         if unsafe { crate::ztmegatilemgr::entity_type_matches(entity_ptr, ztshow::RVA_SHOW_TRICK_TYPE_CHECK) } {
             let id = get_from_memory::<u32>(entity_ptr + 0x124);
             return Some((entity_ptr, id));
+        }
+    }
+    None
+}
+
+/// The inverse of [`find_real_trick_eligible_unit`] - scans the same real entity array for one whose type
+/// *fails* `ztshow::RVA_SHOW_TRICK_TYPE_CHECK` (e.g. a guest or staff member, not an animal) - for
+/// `ZTSHOWINFO_CHECK_UNIT_LIVE`'s own coverage of `checkUnit`'s ineligible-type return branch. Returns just
+/// the entity's own numeric id (`+0x124`), matching that test's own `unit_id`-shaped inputs.
+pub(crate) fn find_real_non_trick_eligible_unit() -> Option<u32> {
+    let world = globals().ztworldmgr();
+    let start = world.entity_array_start();
+    let end = world.entity_array_end();
+    let mut i = start;
+    while i < end {
+        let entity_ptr = get_from_memory::<u32>(i);
+        i += 0x4;
+        if entity_ptr == 0 {
+            continue;
+        }
+        if !unsafe { crate::ztmegatilemgr::entity_type_matches(entity_ptr, ztshow::RVA_SHOW_TRICK_TYPE_CHECK) } {
+            let id = get_from_memory::<u32>(entity_ptr + 0x124);
+            return Some(id);
         }
     }
     None

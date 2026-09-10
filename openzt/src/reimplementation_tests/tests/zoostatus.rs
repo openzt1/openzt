@@ -18,7 +18,7 @@ use openzt_detour::generated::bfconfigfile::{
 use openzt_detour::generated::zoostatus::{
     BUY_ANIMAL as ZOOSTATUS_BUY_ANIMAL, BUY_PEOPLE_FOOD as ZOOSTATUS_BUY_PEOPLE_FOOD,
     CALCULATE_SUMS as ZOOSTATUS_CALCULATE_SUMS, CHANGE_ENDOWMENT_MEMBERS as ZOOSTATUS_CHANGE_ENDOWMENT_MEMBERS,
-    F_GRANT_DONATION as ZOOSTATUS_F_GRANT_DONATION, HEAL_ANIMAL as ZOOSTATUS_HEAL_ANIMAL,
+    F_GRANT_DONATION as ZOOSTATUS_F_GRANT_DONATION, GET_STATUS as ZOOSTATUS_GET_STATUS, HEAL_ANIMAL as ZOOSTATUS_HEAL_ANIMAL,
     INCREASE_ADMISSIONS as ZOOSTATUS_INCREASE_ADMISSIONS,
     INCREASE_ADMISSIONS_INCOME as ZOOSTATUS_INCREASE_ADMISSIONS_INCOME,
     INCREASE_DONATIONS as ZOOSTATUS_INCREASE_DONATIONS, INCREASE_ENDOWMENT as ZOOSTATUS_INCREASE_ENDOWMENT,
@@ -40,7 +40,7 @@ use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, save_to_memory};
 use crate::ztgamemgr::live_support as gamemgr_live_support;
 use crate::ztmarketing::live_support as marketing_live_support;
-use crate::zoostatus::{live_support as zoostatus_live_support, ZooStatus, GET_STATUS_FIXED};
+use crate::zoostatus::{live_support as zoostatus_live_support, ZooStatus};
 
 /// `ZOOSTATUS_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
 /// `zoostatus::init()`, and this asserts all 36 of its detours actually report enabled (see
@@ -134,7 +134,7 @@ pub(crate) fn run_zoostatus_original_routes_to_trampoline_test(failure_log: &mut
         ("PURCHASE_FOOD", zs::PURCHASE_FOOD.address, original_ptr(&zs::PURCHASE_FOOD)),
         ("INCREASE_ADMISSIONS_INCOME", zs::INCREASE_ADMISSIONS_INCOME.address, original_ptr(&zs::INCREASE_ADMISSIONS_INCOME)),
         ("INCREASE_ADMISSIONS", zs::INCREASE_ADMISSIONS.address, original_ptr(&zs::INCREASE_ADMISSIONS)),
-        ("GET_STATUS_FIXED", GET_STATUS_FIXED.address, original_ptr(&GET_STATUS_FIXED)),
+        ("GET_STATUS", zs::GET_STATUS.address, original_ptr(&zs::GET_STATUS)),
     ];
 
     let mut failures: Vec<String> = Vec::new();
@@ -181,11 +181,6 @@ pub(crate) fn run_zoostatus_original_routes_to_trampoline_test(failure_log: &mut
 /// `ZTGAMEMGR_SET_NEW_GAME_DEFAULTS` needs one.
 ///
 /// Masked byte ranges (documented, not silently swallowed):
-/// - `+0x68..+0x6c` (`max_guests`): `ZooStatus::init`'s own `BFIniFile::read` of `AI`/`maxGuests` is
-///   a real, untouched dependency (constructing its `std::string` arguments - see `ztgamemgr.rs`'s
-///   `initMenuMusic` doc comment for the same class of gap) - [`ZooStatus::init`] hardcodes the
-///   vanilla default (`1000`) instead. Masked defensively; in practice the real pole should read the
-///   same default unless the live environment's ini actually overrides this key.
 /// - `+0x1178..+0x1180` (`last_animal_escape_timestamp_*`): both poles call the real
 ///   [`GET_OLD_DATE`](openzt_detour::generated::standalone::GET_OLD_DATE) independently, a couple of
 ///   CPU cycles apart - genuinely time-dependent, not a porting bug.
@@ -223,7 +218,8 @@ pub(crate) fn run_zoostatus_init_test(failure_log: &mut Option<std::fs::File>) -
     let real_bytes = unsafe { std::slice::from_raw_parts(real_zoostatus_ptr as *const u8, zoostatus_size) };
     let reimpl_bytes = unsafe { std::slice::from_raw_parts(reimpl_zoostatus_ptr as *const u8, zoostatus_size) };
 
-    let excluded_ranges: [std::ops::Range<usize>; 2] = [0x68..0x6c, 0x1178..0x1180];
+    #[allow(clippy::single_range_in_vec_init)]
+    let excluded_ranges: [std::ops::Range<usize>; 1] = [0x1178..0x1180];
 
     let mismatches: Vec<(usize, u8, u8)> = (0..zoostatus_size)
         .filter(|i| !excluded_ranges.iter().any(|r| r.contains(i)))
@@ -381,8 +377,7 @@ pub(crate) fn run_zoostatus_accumulators_test(failure_log: &mut Option<std::fs::
 /// matching `ZOOSTATUS_ACCUMULATORS`' own convention) to exercise the `index == -1` default-cursor
 /// path for real.
 ///
-/// Calls real vanilla [`GET_STATUS_FIXED`] (the locally-corrected `FunctionDef` - see its own doc
-/// comment for why `generated.rs`'s own `GET_STATUS` entry can't be used) and [`ZooStatus::get_status`]
+/// Calls real vanilla `generated.rs`'s `zoostatus::GET_STATUS` and [`ZooStatus::get_status`]
 /// against the *same* memory for a spread of `(category, when, index)` triples: monthly (`when = 0`)
 /// and yearly (`when = 1`) each with an explicit `index` and with `index = -1` (default-cursor), at
 /// category `0` (the row-0 discrepancy case - see [`ZooStatus::get_status`]'s own doc comment), a
@@ -433,7 +428,7 @@ pub(crate) fn run_zoostatus_get_status_test(failure_log: &mut Option<std::fs::Fi
 
     let mut mismatches: Vec<(i32, i32, i32, f32, f32)> = Vec::new();
     for &(category, when, index) in cases {
-        let real = unsafe { GET_STATUS_FIXED.original()(zoostatus_ptr as *const u32, category, when, index) };
+        let real = unsafe { ZOOSTATUS_GET_STATUS.original()(zoostatus_ptr as *const u32, category, when, index) };
         let reimpl = unsafe { (*zoostatus_ptr).get_status(category, when, index) };
         if real != reimpl {
             mismatches.push((category, when, index, real, reimpl));

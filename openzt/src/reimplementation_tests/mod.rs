@@ -112,6 +112,12 @@ pub fn init() {
         // ztgamemgr_menumusichandler's menu_music_handler_detours::test_real doc comment).
         crate::ztgamemgr_menumusichandler::init();
 
+        // Ambients/AmbientsGroup: installs the two classes' five detours (same rationale as the
+        // MenuMusicHandler/ZTSoundscape blocks above) so AMBIENTS_DETOURS_ENABLED can assert the wiring
+        // itself. Installed before ZTSoundscape::init() below since that class's own init/update now
+        // call these Rust methods directly rather than through the detoured addresses.
+        crate::ambients::init();
+
         // ZTSoundscape: installs the class's three detours so the ZTSOUNDSCAPE_* tests exercise the
         // actual hooked path and ZTSOUNDSCAPE_DETOURS_ENABLED can assert the wiring itself (same
         // rationale as the MenuMusicHandler block above). Those tests' "real vanilla" poles therefore

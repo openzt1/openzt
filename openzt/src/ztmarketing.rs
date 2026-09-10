@@ -847,8 +847,8 @@ mod marketing_config_reimplementation {
 }
 
 /// Detours `ZTMarketingMgr`'s vtable destructor slot - the scalar deleting destructor at `0x00504f89`
-/// (`ZTMARKETING_MGR_1` in `generated.rs`) - onto [`ZTMarketingMgr::destroy`]. Vanilla's own version of
-/// this function calls the real destructor body (`ZTMARKETING_MGR_0`, `0x00504f73`), then conditionally
+/// (`ztmarketingmgr::DESTRUCTOR_1` in `generated.rs`) - onto [`ZTMarketingMgr::destroy`]. Vanilla's own version of
+/// this function calls the real destructor body (`ztmarketingmgr::DESTRUCTOR_0`, `0x00504f73`), then conditionally
 /// calls `operator delete` on `this` if the caller-supplied flag byte's low bit is set. Left undetoured,
 /// that real body runs `operator delete` on `marketing_ptr` - the funding-table buffer and `ZTMarketing`
 /// struct our own `marketing_config_reimplementation` allocates through Rust's global allocator - the
@@ -856,10 +856,10 @@ mod marketing_config_reimplementation {
 /// for `ZTThoughtMgr`. Since `ZTMarketingMgr` is a process-lifetime singleton and no address for the real
 /// vanilla `operator delete` this class would use is known or needed, this reimplementation only ever
 /// frees the funding table and the `Box`-allocated `ZTMarketing`, never the flag-gated `this` itself.
-/// `ZTMARKETING_MGR_0` (the real destructor body's own address, only ever reached indirectly through
+/// `ztmarketingmgr::DESTRUCTOR_0` (the real destructor body's own address, only ever reached indirectly through
 /// this wrapper) is intentionally left un-detoured: nothing else in vanilla calls it directly.
 mod marketing_dtor_detour {
-    use openzt_detour::generated::ztmarketingmgr::ZTMARKETING_MGR_1;
+    use openzt_detour::generated::ztmarketingmgr::DESTRUCTOR_1 as ZTMARKETINGMGR_DESTRUCTOR;
     use openzt_detour_macro::detour_mod;
     use tracing::error;
 
@@ -870,7 +870,7 @@ mod marketing_dtor_detour {
     mod detours {
         use super::*;
 
-        #[detour(ZTMARKETING_MGR_1)]
+        #[detour(ZTMARKETINGMGR_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztmarketingmgr_dtor(this: *const u32, _flags: u8) -> *const u32 {
             unsafe { mut_from_memory::<ZTMarketingMgr>(this) }.destroy();
             this

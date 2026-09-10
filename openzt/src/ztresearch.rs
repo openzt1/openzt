@@ -2155,7 +2155,7 @@ mod research_config_reimplementation {
     use tracing::{debug, error, info};
 
     use super::*;
-    use crate::{encoding_utils::decode_game_text, resource_manager::lazyresourcemap::get_file};
+    use crate::bfconfigfile::ini_compat::{first, first_parse, read_cfg, values};
 
     #[derive(Debug, Default)]
     struct ReimplementedProgram {
@@ -2196,47 +2196,6 @@ mod research_config_reimplementation {
         noprogicon: Option<String>,
         funding: Vec<ReimplementedFundingLevel>,
         categories: Vec<ReimplementedCategory>,
-    }
-
-    /// Loads and parses a resource-relative `.cfg` path the same way `legacy_loading.rs` does for
-    /// mod `.cfg` files, except with vanilla's actual comment convention (`;` only - `BFConfigFile::parse`
-    /// never treats `#`/`:` as comments, unlike the leniency OpenZT's own mod loader allows).
-    fn read_cfg(path: &str) -> Option<Ini> {
-        let Some((_, data)) = get_file(path) else {
-            error!("research-config-reimplementation: resource '{path}' not found");
-            return None;
-        };
-        let text = decode_game_text(&data);
-        let mut ini = Ini::new_cs();
-        ini.set_comment_symbols(&[';']);
-        match ini.read(text) {
-            Ok(_) => Some(ini),
-            Err(e) => {
-                error!("research-config-reimplementation: failed to parse '{path}': {e}");
-                None
-            }
-        }
-    }
-
-    /// All values for a repeated key, dropping any that trim to empty. Confirmed against the vanilla
-    /// `.cfg` source (e.g. `icon=` with nothing after it in `research/branres.cfg`) and
-    /// `BFConfigFile::addKeyVal` (`BFConfigFile_addKeyVal.c`): a value that trims to nothing is never
-    /// pushed onto the key's value vector at all, so from `getString`/`getStringList`'s perspective an
-    /// empty `icon=` line is indistinguishable from no `icon=` line - both leave the vector empty.
-    /// `Ini::get_vec` keeps the empty string, so this filters it back out to match.
-    fn values(ini: &Ini, section: &str, key: &str) -> Vec<String> {
-        ini.get_vec(section, key).unwrap_or_default().into_iter().filter(|v| !v.trim().is_empty()).collect()
-    }
-
-    /// `BFConfigFile::getString`/`getInt`/`getFloat` all return the *first* value for a repeated key
-    /// (see `BFConfigFile_getString.c`); `Ini::get` returns the *last* one instead, so pull from
-    /// `values` directly to match vanilla.
-    fn first(ini: &Ini, section: &str, key: &str) -> Option<String> {
-        values(ini, section, key).into_iter().next()
-    }
-
-    fn first_parse<T: std::str::FromStr>(ini: &Ini, section: &str, key: &str) -> Option<T> {
-        first(ini, section, key)?.parse().ok()
     }
 
     fn load_program(path: &str) -> Option<ReimplementedProgram> {
@@ -3104,10 +3063,10 @@ mod research_config_reimplementation {
         use std::{collections::HashSet, ffi::CStr};
 
         use openzt_detour::generated::{
-            ztresearchbranch::{CLEAR_BRANCH, ZTRESEARCH_BRANCH},
-            ztresearchcategory::{CLEAR_CATEGORY, ZTRESEARCH_CATEGORY},
+            ztresearchbranch::{CLEAR_BRANCH, DESTRUCTOR as ZTRESEARCHBRANCH_DESTRUCTOR},
+            ztresearchcategory::{CLEAR_CATEGORY, DESTRUCTOR as ZTRESEARCHCATEGORY_DESTRUCTOR},
             ztresearchmgr::{CLEAR_BRANCHES, LOAD_BRANCHES},
-            ztresearchprogram::ZTRESEARCH_PROGRAM,
+            ztresearchprogram::DESTRUCTOR as ZTRESEARCHPROGRAM_DESTRUCTOR,
         };
 
         use super::*;
@@ -3175,9 +3134,9 @@ mod research_config_reimplementation {
             unsafe { CLEAR_BRANCH_DETOUR.call(this) }
         }
 
-        #[detour(ZTRESEARCH_BRANCH)]
+        #[detour(ZTRESEARCHBRANCH_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztresearch_branch_dtor(this: *const u32) {
-            unsafe { ZTRESEARCH_BRANCH_DETOUR.call(this) }
+            unsafe { ZTRESEARCHBRANCH_DESTRUCTOR_DETOUR.call(this) }
         }
 
         #[detour(CLEAR_CATEGORY)]
@@ -3185,14 +3144,14 @@ mod research_config_reimplementation {
             unsafe { CLEAR_CATEGORY_DETOUR.call(this) }
         }
 
-        #[detour(ZTRESEARCH_CATEGORY)]
+        #[detour(ZTRESEARCHCATEGORY_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztresearch_category_dtor(this: *const u32) {
-            unsafe { ZTRESEARCH_CATEGORY_DETOUR.call(this) }
+            unsafe { ZTRESEARCHCATEGORY_DESTRUCTOR_DETOUR.call(this) }
         }
 
-        #[detour(ZTRESEARCH_PROGRAM)]
+        #[detour(ZTRESEARCHPROGRAM_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztresearch_program_dtor(this: *const u32) {
-            unsafe { ZTRESEARCH_PROGRAM_DETOUR.call(this) }
+            unsafe { ZTRESEARCHPROGRAM_DESTRUCTOR_DETOUR.call(this) }
         }
     }
 
@@ -3203,10 +3162,10 @@ mod research_config_reimplementation {
         use std::{ffi::CStr, panic::AssertUnwindSafe};
 
         use openzt_detour::generated::{
-            ztresearchbranch::{CLEAR_BRANCH, ZTRESEARCH_BRANCH},
-            ztresearchcategory::{CLEAR_CATEGORY, ZTRESEARCH_CATEGORY},
+            ztresearchbranch::{CLEAR_BRANCH, DESTRUCTOR as ZTRESEARCHBRANCH_DESTRUCTOR},
+            ztresearchcategory::{CLEAR_CATEGORY, DESTRUCTOR as ZTRESEARCHCATEGORY_DESTRUCTOR},
             ztresearchmgr::{CLEAR_BRANCHES, LOAD_BRANCHES},
-            ztresearchprogram::ZTRESEARCH_PROGRAM,
+            ztresearchprogram::DESTRUCTOR as ZTRESEARCHPROGRAM_DESTRUCTOR,
         };
 
         use super::*;
@@ -3259,7 +3218,7 @@ mod research_config_reimplementation {
             }
         }
 
-        #[detour(ZTRESEARCH_BRANCH)]
+        #[detour(ZTRESEARCHBRANCH_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztresearch_branch_dtor(this: *const u32) {
             let ptr = this as *mut ZTResearchBranch;
             if std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { super::destruction::destroy_branch(ptr) })).is_err() {
@@ -3275,7 +3234,7 @@ mod research_config_reimplementation {
             }
         }
 
-        #[detour(ZTRESEARCH_CATEGORY)]
+        #[detour(ZTRESEARCHCATEGORY_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztresearch_category_dtor(this: *const u32) {
             let ptr = this as *mut ZTResearchCategory;
             if std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { super::destruction::destroy_category(ptr) })).is_err() {
@@ -3283,7 +3242,7 @@ mod research_config_reimplementation {
             }
         }
 
-        #[detour(ZTRESEARCH_PROGRAM)]
+        #[detour(ZTRESEARCHPROGRAM_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztresearch_program_dtor(this: *const u32) {
             let ptr = this as *mut ZTResearchProgram;
             if std::panic::catch_unwind(AssertUnwindSafe(|| unsafe { super::destruction::destroy_program(ptr) })).is_err() {

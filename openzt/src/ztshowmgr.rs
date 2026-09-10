@@ -122,14 +122,13 @@
 
 use std::{
     collections::BTreeMap,
-    mem::MaybeUninit,
     sync::{LazyLock, Mutex},
 };
 
+use crate::bfconfigfile;
 use crate::globals::get_module_base;
 use crate::util::{get_from_memory, mut_from_memory};
 use openzt_detour::generated::bfapp::GET_INSTALLED_EXPANSION;
-use openzt_detour::generated::bfconfigfile::{CONSTRUCTOR_0, GET_INT, RELEASE};
 use openzt_detour::generated::standalone::{DEALLOCATE, WRITE_BYTES_TO_FILE};
 use openzt_detour::generated::ztshow::CLEAR_SHOW_SCRIPT_STATES;
 use openzt_detour::generated::ztshowmgr::{
@@ -145,30 +144,6 @@ use tracing::error;
 /// Re-declared per-file after `ztgamemgr.rs`'s own private `GLOBAL_ZTAPP_RVA` (same value, same
 /// one-level-of-indirection shape) per the repo's no-shared-consts convention.
 const GLOBAL_ZTAPP_RVA: u32 = 0x00638154 - 0x400000;
-
-/// `.rdata` literals `init_show_params` passes to the real `BFConfigFile` functions
-/// (`ZTShowMgr_initShowParams.asm`'s `PUSH s_*` targets, string contents confirmed by reading them
-/// out of zoo.exe's `.rdata`). Data addresses, so each is stored as its Ghidra VA minus the
-/// preferred base and resolved at runtime as `get_module_base("zoo.exe") + RVA` (CLAUDE.md's
-/// data-address rule - see `ztsoundscape.rs`'s `CROWD_KEY_RVAS` for the same convention).
-const SHOWS_CFG_FILENAME_RVA: u32 = 0x0063e488 - 0x400000; // "shows.cfg"
-const TRICK_SATISFACTION_SECTION_RVA: u32 = 0x00642b38 - 0x400000; // "trickSatisfactionThresholds"
-const SHOW_SECTION_RVA: u32 = 0x0063e494 - 0x400000; // "show"
-const SHOW_SATISFACTION_SECTION_RVA: u32 = 0x00642adc - 0x400000; // "showSatisfactionThresholds"
-const BAD_TRICK_KEY_RVA: u32 = 0x00642b54 - 0x400000;
-const GOOD_TRICK_KEY_RVA: u32 = 0x00642b2c - 0x400000;
-const GREAT_TRICK_KEY_RVA: u32 = 0x00642b20 - 0x400000;
-const MIN_IDEAL_LENGTH_KEY_RVA: u32 = 0x00642b10 - 0x400000;
-const MAX_IDEAL_LENGTH_KEY_RVA: u32 = 0x00642b00 - 0x400000;
-const BAD_SHOW_KEY_RVA: u32 = 0x00642af8 - 0x400000;
-const GOOD_SHOW_KEY_RVA: u32 = 0x00642ad0 - 0x400000;
-const GREAT_SHOW_KEY_RVA: u32 = 0x00642ac4 - 0x400000;
-
-/// The shared small-object freelist head (`DAT_0063800c`) that vanilla's inlined `~BFConfigFile`
-/// tail returns the config's tree-root node to (see [`ZTShowMgr::init_show_params`]'s doc comment).
-/// Note this is a *different* head from the `DAT_00638008` freelist backing `ZTShowMgr`'s own map
-/// nodes - matching free idiom, different size class.
-const CONFIG_FREELIST_HEAD_RVA: u32 = 0x0063800c - 0x400000;
 
 /// `DAT_0063e480` - the vanilla show-id counter global behind `registerShow`'s inlined `makeID`
 /// logic (16-bit `INC`, assigned id = `(u16)counter % 0xffff`, so `0xffff` is never assigned).
@@ -303,9 +278,7 @@ impl ZTShowMgr {
     }
 
     /// Reimplementation of `ZTShowMgr::initShowParams` (`0x0051f59b`), per
-    /// `ZTShowMgr_initShowParams.asm` (call targets confirmed against the binary itself: the ctor
-    /// call lands on `bfconfigfile::CONSTRUCTOR_0` at `0x004b4516`, all eight key lookups on
-    /// `GET_INT` at `0x00409c14`, and the teardown on `RELEASE` at `0x0040a5bc`):
+    /// `ZTShowMgr_initShowParams.asm`:
     ///
     /// 1. Write the eight config defaults (same values [`ZTShowMgr::construct`] writes - vanilla
     ///    writes them here too, so the defaults survive untouched whenever the config half is
@@ -319,19 +292,23 @@ impl ZTShowMgr {
     ///    reproduced, same precedent as `ztgamemgr.rs`'s `stop` (a null app global here means
     ///    "app not ready"; this port treats that as "skip the config override" rather than writing
     ///    a code address into live global state to match a never-taken vanilla path).
-    /// 3. If gated in: construct a **stack-local** real `BFConfigFile` over `shows.cfg` (the same
-    ///    `CONSTRUCTOR_0`/`RELEASE` pair the live-test harness already uses), and only if it loaded,
-    ///    run all eight `GET_INT` lookups in vanilla's exact call order into the eight threshold
-    ///    fields.
-    /// 4. Release the config, then reproduce `~BFConfigFile`'s inlined dtor tail
-    ///    (`ZTShowMgr_initShowParams.asm`'s `.180` block): return the config ctor's tree-root node
-    ///    to the shared small-object freelist it came from (`DAT_0063800c`, plain
-    ///    `*node = head; head = node`). Skipping this would leak that node every call; the push is
-    ///    vanilla's own free idiom on a vanilla-allocated node, so no cross-allocator hazard (see
-    ///    the module doc - the hazard this module avoids is *allocating* Rust objects into a
-    ///    freelist, never returning vanilla's own nodes through vanilla's own stores). The asm's
-    ///    post-release key-list walk is dead code (its flag was already cleared by `release`'s own
-    ///    walk, which `BFConfigFile_release.c` shows frees that same list) and is not reproduced.
+    /// 3. If gated in: load `shows.cfg` through `bfconfigfile::ini_compat` (see that module's doc
+    ///    comment) instead of a real vanilla `BFConfigFile` - this scratch config is never shared
+    ///    with any other code (no other reimplemented or un-ported caller reads it), so nothing
+    ///    requires it to be real vanilla memory. Each of the eight keys, read in vanilla's exact
+    ///    section/key naming (`ZTShowMgr_initShowParams.asm`'s own `PUSH s_*` literals -
+    ///    `[trickSatisfactionThresholds] badTrick`/`goodTrick`/`greatTrick`,
+    ///    `[show] minIdealLength`/`maxIdealLength`,
+    ///    `[showSatisfactionThresholds] badShow`/`goodShow`/`greatShow`), only overwrites its field
+    ///    when present and parseable - matching real `BFConfigFile::getInt`'s "leave the caller's
+    ///    existing value untouched on a missing/bad key" behavior - and a missing/unparseable
+    ///    `shows.cfg` itself leaves every field at its step-1 default, matching vanilla's own
+    ///    "skip every lookup when the file didn't load" gate.
+    ///
+    /// This also retires the local-scratch-`BFConfigFile` freelist-node-return dance the real
+    /// vanilla-call version of this method needed (see `git blame` for that prior shape, or
+    /// `ambients.rs`'s `Ambients::construct` for the still-live version of the same pattern) - there
+    /// is no vanilla allocation here to hand back.
     ///
     /// Returns `1` - the real body's only return write is `MOV AL, 0x1` (upper EAX bits are leftover
     /// register garbage there; this port returns a clean `1`, which no caller distinguishes - its one
@@ -351,81 +328,18 @@ impl ZTShowMgr {
         let expansion_2_installed =
             ztapp_ptr != 0 && unsafe { GET_INSTALLED_EXPANSION.original()(ztapp_ptr as *const u32, 2) } != 0;
 
-        if expansion_2_installed {
-            let config = MaybeUninit::<crate::bfconfigfile::BFConfigFile>::uninit();
-            let config_ptr = config.as_ptr() as *const u32;
-            unsafe {
-                CONSTRUCTOR_0.original()(config_ptr, (base + SHOWS_CFG_FILENAME_RVA) as *const u8);
-            }
-
-            // `BFConfigFile`'s "has data" flag at +0x4 (see `crate::bfconfigfile::BFConfigFile`) -
-            // vanilla skips every lookup when the file didn't load.
-            if get_from_memory::<i32>(config_ptr as u32 + 0x4) != 0 {
-                unsafe {
-                    GET_INT.original()(
-                        config_ptr,
-                        base + TRICK_SATISFACTION_SECTION_RVA,
-                        base + BAD_TRICK_KEY_RVA,
-                        &raw mut self.threshold_a as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + TRICK_SATISFACTION_SECTION_RVA,
-                        base + GOOD_TRICK_KEY_RVA,
-                        &raw mut self.threshold_b as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + TRICK_SATISFACTION_SECTION_RVA,
-                        base + GREAT_TRICK_KEY_RVA,
-                        &raw mut self.threshold_c as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SECTION_RVA,
-                        base + MIN_IDEAL_LENGTH_KEY_RVA,
-                        &raw mut self.min_ideal_length as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SECTION_RVA,
-                        base + MAX_IDEAL_LENGTH_KEY_RVA,
-                        &raw mut self.max_ideal_length as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SATISFACTION_SECTION_RVA,
-                        base + BAD_SHOW_KEY_RVA,
-                        &raw mut self.bad_show as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SATISFACTION_SECTION_RVA,
-                        base + GOOD_SHOW_KEY_RVA,
-                        &raw mut self.good_show as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SATISFACTION_SECTION_RVA,
-                        base + GREAT_SHOW_KEY_RVA,
-                        &raw mut self.great_show as *const u32,
-                    );
-                }
-            }
-
-            unsafe { RELEASE.original()(config_ptr) };
-
-            // ~BFConfigFile's inlined dtor tail: hand the ctor's tree-root node back to the
-            // freelist head it was popped from (see this method's doc comment).
-            let tree_root: u32 = get_from_memory(config_ptr as u32);
-            if tree_root != 0 {
-                let freelist_head = (base + CONFIG_FREELIST_HEAD_RVA) as *mut u32;
-                unsafe {
-                    let head = *freelist_head;
-                    *(tree_root as *mut u32) = head;
-                    *freelist_head = tree_root;
-                }
-            }
+        if expansion_2_installed
+            && let Some(ini) = bfconfigfile::ini_compat::read_cfg("shows.cfg")
+        {
+            use bfconfigfile::ini_compat::first_parse;
+            self.threshold_a = first_parse(&ini, "trickSatisfactionThresholds", "badTrick").unwrap_or(self.threshold_a);
+            self.threshold_b = first_parse(&ini, "trickSatisfactionThresholds", "goodTrick").unwrap_or(self.threshold_b);
+            self.threshold_c = first_parse(&ini, "trickSatisfactionThresholds", "greatTrick").unwrap_or(self.threshold_c);
+            self.min_ideal_length = first_parse(&ini, "show", "minIdealLength").unwrap_or(self.min_ideal_length);
+            self.max_ideal_length = first_parse(&ini, "show", "maxIdealLength").unwrap_or(self.max_ideal_length);
+            self.bad_show = first_parse(&ini, "showSatisfactionThresholds", "badShow").unwrap_or(self.bad_show);
+            self.good_show = first_parse(&ini, "showSatisfactionThresholds", "goodShow").unwrap_or(self.good_show);
+            self.great_show = first_parse(&ini, "showSatisfactionThresholds", "greatShow").unwrap_or(self.great_show);
         }
 
         1

@@ -145,6 +145,11 @@ mod ztguest;
 /// openzt/plans/ztsoundscape-implementation-plan.md).
 mod ztsoundscape;
 
+/// ambients module reimplements the vanilla Ambients/AmbientsGroup classes ZTSoundscape (and,
+/// independently, ZTViewingArea/ZTHabitat) own - structs + constructor + destructor + play, plus the
+/// CONSTRUCTOR/PLAY/DESTRUCTOR detours; see openzt/plans/ztsoundscape-ambients-full-port-plan.md.
+mod ambients;
+
 mod experimental;
 
 /// Roof tag extension for scenery entities
@@ -169,6 +174,10 @@ mod mods;
 /// Utility functions for working with the game's memory, including reading and writing memory, and patching the game's assembly.
 /// Common structs like ZTString are also defined here
 mod util;
+
+/// A shared, vanilla-allocator-owned `std::string` helper for class-reimplementation modules that need
+/// to build temporary vanilla string arguments or receive one via the RVO convention.
+mod vanilla_string;
 
 /// Loads settings from the zoo.ini file and commands/functions for reading and writing settings during runtime
 mod settings;
@@ -269,6 +278,7 @@ mod zoo_init {
             ztshowmgr::init();
             ztshowui::init();
             ztguest::init();
+            ambients::init();
             ztsoundscape::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }

@@ -557,6 +557,13 @@ pub fn init() {
 /// which only reads `this`'s own `sentinel_ptr` - still a genuine, permanently self-referencing (i.e.
 /// permanently empty) sentinel node. Worst case, an undiscovered caller sees an always-empty result - a
 /// cosmetic gap, never a crash.
+///
+/// **Flagged for deletion once confident.** This module exists purely to catch a caller the Windows
+/// decompile-corpus grep above might have missed (it wasn't cross-checked against the macOS corpus, and a
+/// grep can't see a computed/indirect call). If the `error!` in each detour below never fires across
+/// enough real play/testing to trust that absence, delete this module (and its `init()` call) entirely -
+/// three plain, un-detoured addresses are strictly simpler than three detours that only log and call
+/// through, for the same runtime behavior either way.
 mod thought_accessor_detours {
     use openzt_detour::generated::ztthoughtmgr::{GET_THOUGHTS_BY_HABITAT, GET_THOUGHTS_BY_OBJECT, GET_THOUGHTS_BY_THINKER};
     use openzt_detour_macro::detour_mod;
@@ -850,16 +857,16 @@ mod thought_save_detours {
 }
 
 /// Detours `ZTThoughtMgr`'s vtable destructor slot - the scalar deleting destructor at `0x0057d852`
-/// (`ZTTHOUGHT_MGR_1` in `generated.rs`) - onto [`ZTThoughtMgr::clear`]. Vanilla's own version of this
+/// (`ztthoughtmgr::DESTRUCTOR_1` in `generated.rs`) - onto [`ZTThoughtMgr::clear`]. Vanilla's own version of this
 /// function calls the real destructor body, then conditionally calls `operator delete` on `this` if the
 /// caller-supplied flag byte's low bit is set. Since `ZTThoughtMgr` is a process-lifetime singleton and
 /// no address for the real vanilla `operator delete` this class would use is known or needed, this
 /// reimplementation only ever frees the list's own `Box`-allocated nodes and never the flag-gated
-/// `this` itself. `ZTTHOUGHT_MGR_0` (`0x0057d815`, the real destructor's own address, only ever reached
+/// `this` itself. `ztthoughtmgr::DESTRUCTOR_0` (`0x0057d815`, the real destructor's own address, only ever reached
 /// indirectly through this wrapper) is intentionally left un-detoured: nothing else in vanilla calls it
 /// directly.
 mod thought_dtor_detour {
-    use openzt_detour::generated::ztthoughtmgr::ZTTHOUGHT_MGR_1;
+    use openzt_detour::generated::ztthoughtmgr::DESTRUCTOR_1 as ZTTHOUGHTMGR_DESTRUCTOR;
     use openzt_detour_macro::detour_mod;
     use tracing::error;
 
@@ -870,7 +877,7 @@ mod thought_dtor_detour {
     mod detours {
         use super::*;
 
-        #[detour(ZTTHOUGHT_MGR_1)]
+        #[detour(ZTTHOUGHTMGR_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztthoughtmgr_dtor(this: *const u32, _flags: u8) -> *const u32 {
             unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.clear();
             this

@@ -122,11 +122,13 @@ pub(super) mod detour_zoo_main {
         // module doc comment on `.original()`'s per-profile routing.
         #[cfg(debug_assertions)]
         tests.extend([RegisteredTest { name: "MENUMUSICHANDLER_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_original_routes_to_trampoline_test }]);
+        tests.push(RegisteredTest { name: "AMBIENTS_DETOURS_ENABLED", run: tests::ambients::run_ambients_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
         #[cfg(debug_assertions)]
         tests.extend([RegisteredTest { name: "ZTSOUNDSCAPE_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztsoundscape::run_ztsoundscape_original_routes_to_trampoline_test }]);
         tests.extend([
             RegisteredTest { name: "MENUMUSICHANDLER_STANDALONE_ROUNDTRIP", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_standalone_roundtrip_test },
+            RegisteredTest { name: "AMBIENTS_STANDALONE_ROUNDTRIP", run: tests::ambients::run_ambients_standalone_roundtrip_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_STANDALONE_ROUNDTRIP", run: tests::ztsoundscape::run_ztsoundscape_standalone_roundtrip_test },
             RegisteredTest { name: "ZTSHOWMGR_STANDALONE_ROUNDTRIP", run: tests::ztshowmgr::run_ztshowmgr_standalone_roundtrip_test },
             RegisteredTest { name: "ZTSHOWMGR_INIT_SHOW_PARAMS", run: tests::ztshowmgr::run_ztshowmgr_init_show_params_test },
@@ -151,12 +153,14 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSHOWINFO_REMOVE_UNIT_LIVE", run: tests::ztshowinfo::run_ztshowinfo_remove_unit_live_test },
             RegisteredTest { name: "ZTSHOWINFO_SET_SHOW_INFO_ID_LIVE", run: tests::ztshowinfo::run_ztshowinfo_set_show_info_id_live_test },
             RegisteredTest { name: "ZTSHOWINFO_SAVE_LOAD_ROUNDTRIP", run: tests::ztshowinfo::run_ztshowinfo_save_load_roundtrip_test },
+            RegisteredTest { name: "ZTSHOWINFO_UPDATE_FROM_LOAD_LIVE", run: tests::ztshowinfo::run_ztshowinfo_update_from_load_live_test },
             RegisteredTest { name: "ZTSHOWINFO_STANDALONE_ROUNDTRIP", run: tests::ztshowinfo::run_ztshowinfo_standalone_roundtrip_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_FADE_CONSTANTS", run: tests::ztsoundscape::run_ztsoundscape_fade_constants_test },
             RegisteredTest { name: "MENUMUSICHANDLER_INIT", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_init_test },
             RegisteredTest { name: "MENUMUSICHANDLER_START_PLAY", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_start_play_test },
             RegisteredTest { name: "MENUMUSICHANDLER_START_FADE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_start_fade_test },
             RegisteredTest { name: "MENUMUSICHANDLER_UPDATE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_update_test },
+            RegisteredTest { name: "ZTGAMEMGR_CONSTRUCT", run: tests::ztgamemgr::run_gamemgr_construct_test },
             RegisteredTest { name: "ZTGAMEMGR_SET_NEW_GAME_DEFAULTS", run: tests::ztgamemgr::run_gamemgr_set_new_game_defaults_test },
             RegisteredTest { name: "ZOOSTATUS_DETOURS_ENABLED", run: tests::zoostatus::run_zoostatus_detours_enabled_test },
         ]);
@@ -245,6 +249,9 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSHOWINFO_KEEPER_PREDICATES_LIVE", run: tests::ztshowinfo::run_ztshowinfo_keeper_predicates_live_test },
             RegisteredTest { name: "ZTSHOWINFO_CREATE_DEFAULT_SCRIPT_LIVE", run: tests::ztshowinfo::run_ztshowinfo_create_default_script_live_test },
             RegisteredTest { name: "ZTSHOWINFO_CHECK_UNIT_LIVE", run: tests::ztshowinfo::run_ztshowinfo_check_unit_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_CLEAR_PENDING_SCRIPT_TREE_LIVE", run: tests::ztshowinfo::run_ztshowinfo_clear_pending_script_tree_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_ADD_UNIT_LIVE", run: tests::ztshowinfo::run_ztshowinfo_add_unit_live_test },
+            RegisteredTest { name: "ZTSHOWINFO_GATHER_UNITS_LIVE", run: tests::ztshowinfo::run_ztshowinfo_gather_units_live_test },
             RegisteredTest { name: "ZTSHOWINFO_ENTER_NEW_MONTH_LIVE", run: tests::ztshowinfo::run_ztshowinfo_enter_new_month_live_test },
             RegisteredTest { name: "ZTSHOWINFO_UPDATE_LIVE", run: tests::ztshowinfo::run_ztshowinfo_update_live_test },
             RegisteredTest { name: "ZTSHOW_GROUP3_TRICK_LIVE", run: tests::ztshow::run_ztshow_group3_trick_live_test },
@@ -259,15 +266,26 @@ pub(super) mod detour_zoo_main {
             // non-null-but-uninitialized and both BFConfigFile::attempt calls would fail, silently
             // leaving the tests covering only init's defaults/tail while looking green.
             // ZTSOUNDSCAPE_UPDATE and ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE additionally need the live
-            // GLOBAL_ZTGameMgr guest count.
+            // GLOBAL_ZTGameMgr guest count. AMBIENTS_LIVE_GROUP_COMPARE and AMBIENTSGROUP_STANDALONE_COMPARE
+            // need the same live scenario registry (for a real ambients config to open) and run first
+            // since they're independent of ZTSoundscape's own state. AMBIENTSGROUP_STANDALONE_COMPARE
+            // doesn't touch `Ambients` at all - it builds `AmbientsGroup` blocks directly against the
+            // same config, independently verifying the construction logic AMBIENTS_LIVE_GROUP_COMPARE's
+            // own real-vanilla pole can't (see that test's own doc comment for why).
+            RegisteredTest { name: "AMBIENTS_LIVE_GROUP_COMPARE", run: tests::ambients::run_ambients_live_group_compare_test },
+            RegisteredTest { name: "AMBIENTSGROUP_STANDALONE_COMPARE", run: tests::ambients::run_ambientsgroup_standalone_compare_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_INIT", run: tests::ztsoundscape::run_ztsoundscape_init_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE", run: tests::ztsoundscape::run_ztsoundscape_update_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE", run: tests::ztsoundscape::run_ztsoundscape_update_attempt_failure_test },
+            RegisteredTest { name: "ZTSOUNDSCAPE_DESTRUCT", run: tests::ztsoundscape::run_ztsoundscape_destruct_test },
             // Run last (see this test's own doc comment): a one-shot wiring smoke test for start()/stop(),
             // which read the live GLOBAL_ZTScenarioMgr/GLOBAL_ZTApp singletons, run the Rust
             // soundscape ctor/init + vanilla destructor end to end, and call through to real vanilla
             // unpauseGame.
             RegisteredTest { name: "ZTGAMEMGR_START_STOP_SMOKE", run: tests::ztgamemgr::run_gamemgr_start_stop_smoke_test },
+            // openzt/plans/ztgamemgr-vanilla-storage-migration-plan.md's Stage 4 live test: also needs
+            // start() (see ZTGAMEMGR_START_STOP_SMOKE's own note above), so stays right after it.
+            RegisteredTest { name: "ZTGAMEMGR_DESTRUCT", run: tests::ztgamemgr::run_gamemgr_destruct_test },
             // openzt/plans/real-zoo-save-load-roundtrip-tests-plan.md's ZTGameMgr item: mutates the live
             // singleton's cash/date/elapsed_sim_ticks in place (there's no cheap standalone copy of a
             // fully-populated real ZTGameMgr to load into instead) - run genuinely last so nothing above

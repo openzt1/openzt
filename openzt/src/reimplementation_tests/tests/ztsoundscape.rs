@@ -7,6 +7,7 @@ use openzt_detour::FunctionDef;
 use openzt_detour::generated::bfscenariomgr::{
     GET_CROWD_AMBIENTS_NAME, GET_CROWD_CONFIG_NAME, GET_WORLD_AMBIENTS_NAME, GET_WORLD_CONFIG_NAME,
 };
+use openzt_detour::generated::ztsoundscape::DESTRUCTOR;
 use std::ffi::{c_void, CStr};
 use std::io::Write;
 use std::mem::size_of;
@@ -944,5 +945,190 @@ pub(crate) fn run_ztsoundscape_update_attempt_failure_test(failure_log: &mut Opt
 
     soundscape_live_support::destroy_standalone_after_init(vanilla_a);
     soundscape_live_support::destroy_standalone_after_init(reimpl_b);
+    !mismatches.is_empty()
+}
+
+/// `SNDSoundBase`'s vtable VA - the destructor's terminal vtable value for each embedded slot.
+/// Re-declared locally per the repo's no-shared-consts precedent (like the `FADE_DAT_*` consts
+/// above), pointing at `ztsoundscape.rs`'s own const of the same name.
+const SNDSOUNDBASE_VTABLE: u32 = 0x00635268;
+
+/// `ZTSOUNDSCAPE_DESTRUCT` - verifies the ported [`ZTSoundscape::destruct`] against the real vanilla
+/// destructor. Unlike every other vanilla pole in the `ZTSOUNDSCAPE_*` tests, this one needs no
+/// trampoline dance: `ztsoundscape::DESTRUCTOR` (`0x005003e2`) is deliberately un-detoured (see
+/// `ztsoundscape.rs`'s module doc), so a plain `.original()` on it is the real vanilla body in
+/// **every** profile - the release-build raw-cast re-entry trap only applies to hooked addresses.
+///
+/// Gate/skip like `ZTSOUNDSCAPE_INIT` (the four `GLOBAL_ZTScenarioMgr` getter captures need the live
+/// zoo-loaded registry); no `GLOBAL_ZTGameMgr` gate - neither `init` nor `destruct` reads the guest
+/// count.
+///
+/// **Phase 1 - two-pole byte-diff** (the strong half): twins A (vanilla) / B (Rust) built exactly as
+/// `ZTSOUNDSCAPE_INIT` builds its pair (`allocate_uninitialized` -> `0xAA` fill -> ctor -> `init`
+/// with the same four captured getter strings), pointer-valued fields pre-equalized from B into A
+/// (`0x1c..0x3c`, `0x44`, `0x48` - the same copy loop `ZTSOUNDSCAPE_UPDATE` uses; both poles' `init`
+/// re-parse the shared global `BFConfigFile` instances, so those fields legitimately drift).
+/// `fade_step_in` (+0x09) stays 0xAA filler on both - `destruct` never touches it. The vanilla pole
+/// runs first, then the Rust pole, then a full byte-diff masking **only** `0x4c..=0x53`: both
+/// `Ambients` pointers are deliberately left dangling/untouched by the destructor
+/// (vanilla-faithfully not zeroed) and differ per-instance, so they get a null-ness-parity check
+/// instead; everything else must be byte-equal - three vtables at `SNDSOUNDBASE_VTABLE`, three zeroed
+/// `inner` dwords, every scalar/table byte untouched. This test world's save has a configured world
+/// sound, so the world slot's real inner handle exercises the valid→release and inner-release paths
+/// for real on both poles.
+///
+/// **Phase 2 - repetition** (8 cycles of the Rust path alone): fresh `allocate_uninitialized` ->
+/// `construct` -> `init` (Rust), assert both `Ambients` pointers non-null (else the free branches
+/// never ran - same shape as `MENUMUSICHANDLER_INIT`'s phase-3 `sound_ptr` check), `destruct()`,
+/// sanity asserts (each slot's vtable dword == `SNDSOUNDBASE_VTABLE`, each `inner` dword == 0), then
+/// plain `destroy_standalone`. A wrong free path or a dangling `Ambients`/inner crashes or corrupts
+/// the heap within a few iterations (same confidence argument as `MENUMUSICHANDLER_INIT` phase 3 and
+/// `ztthoughtmgr`'s leak-only teardown tests). Runs regardless of phase 1's result - a behavioral
+/// divergence and a heap-safety break are independent findings.
+///
+/// Audible caveat: ~10 real world-sound attempt+release cycles across the test (one comparison pair
+/// plus 8 repetitions) - same "audible, not a failure" note the other `ZTSOUNDSCAPE_*` tests carry.
+///
+/// Teardown: every block this test destructs owns nothing afterward, so plain `destroy_standalone`
+/// throughout (the `destroy_standalone_after_init` path would run the vanilla dtor a second time
+/// over already-swapped-down slots).
+pub(crate) fn run_ztsoundscape_destruct_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSOUNDSCAPE_DESTRUCT";
+
+    let scenariomgr_ptr: u32 = get_from_memory(get_module_base("zoo.exe") as u32 + GLOBAL_ZTSCENARIOMGR_RVA);
+    if scenariomgr_ptr == 0 {
+        info!("Skipping {}: GLOBAL_ZTScenarioMgr not initialized at this injection point", test_name);
+        write_success_line(failure_log, &format!("{} (skipped: ZTScenarioMgr not initialized)", test_name));
+        return false;
+    }
+
+    let crowd_ambients = unsafe { GET_CROWD_AMBIENTS_NAME.original()(scenariomgr_ptr as i32) };
+    let world_ambients = unsafe { GET_WORLD_AMBIENTS_NAME.original()(scenariomgr_ptr as i32) };
+    let crowd_config = unsafe { GET_CROWD_CONFIG_NAME.original()(scenariomgr_ptr as i32) };
+    let world_config = unsafe { GET_WORLD_CONFIG_NAME.original()(scenariomgr_ptr as i32) };
+
+    let struct_size = size_of::<ZTSoundscape>();
+    let dword = |bytes: &[u8], off: usize| u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let vanilla_a = soundscape_live_support::allocate_uninitialized();
+    let reimpl_b = soundscape_live_support::allocate_uninitialized();
+    if vanilla_a.is_null() || reimpl_b.is_null() {
+        error!("{}: OPERATOR_NEW returned null (a={:?}, b={:?})", test_name, vanilla_a, reimpl_b);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(
+                format!("Test Failed {}: OPERATOR_NEW returned null (a={:?}, b={:?})\n", test_name, vanilla_a, reimpl_b).as_bytes(),
+            );
+        }
+        // Nothing was constructed or destructed on this path, so a plain free is complete.
+        for ptr in [vanilla_a, reimpl_b] {
+            if !ptr.is_null() {
+                soundscape_live_support::destroy_standalone(ptr);
+            }
+        }
+        return true;
+    }
+
+    unsafe {
+        // Phase 1: build both twins exactly as ZTSOUNDSCAPE_INIT does.
+        std::ptr::write_bytes(vanilla_a as *mut u8, 0xAA, struct_size);
+        std::ptr::write_bytes(reimpl_b as *mut u8, 0xAA, struct_size);
+
+        soundscape_live_support::real_constructor(vanilla_a as *const c_void);
+        (*reimpl_b).construct();
+
+        // Generated INIT's params 2/3 carry a `*const u32` wart - cast here, in the test, not
+        // inside the port (see `ZTSoundscape::init`'s doc comment).
+        soundscape_live_support::real_init(
+            vanilla_a as *const c_void,
+            crowd_ambients as *const u32,
+            world_ambients as *const u32,
+            crowd_config,
+            world_config,
+        );
+        (*reimpl_b).init(crowd_ambients, world_ambients, crowd_config, world_config);
+
+        // Pre-equalization: B's freshest live parse into A, same shape as ZTSOUNDSCAPE_UPDATE's
+        // (both poles' `init` re-parse the shared global config instances - see that test's doc
+        // comment).
+        for off in (0x1c..0x3c).step_by(4) {
+            // crowd_filename[4] + crowd_atten[4]
+            let v: u32 = get_from_memory(reimpl_b as u32 + off);
+            save_to_memory(vanilla_a as u32 + off, v);
+        }
+        for off in [0x44, 0x48] {
+            // world_name, world_atten
+            let v: u32 = get_from_memory(reimpl_b as u32 + off);
+            save_to_memory(vanilla_a as u32 + off, v);
+        }
+
+        // Vanilla pole first (plain .original() - un-detoured, real vanilla in every profile; see
+        // this test's doc comment), then the Rust pole.
+        DESTRUCTOR.original()(vanilla_a as *const c_void);
+        (*reimpl_b).destruct();
+
+        // Full byte-diff masking only the two dangling Ambients pointers (null-ness parity below).
+        let a = std::slice::from_raw_parts(vanilla_a as *const u8, struct_size);
+        let b = std::slice::from_raw_parts(reimpl_b as *const u8, struct_size);
+        for i in 0..struct_size {
+            if (0x4c..=0x53).contains(&i) || a[i] == b[i] {
+                continue;
+            }
+            mismatches.push(format!("byte +{i:#04x}: vanilla={:#04x}, reimpl={:#04x}", a[i], b[i]));
+        }
+        for (name, off) in [("crowd_ambients", 0x4c), ("world_ambients", 0x50)] {
+            let (x, y) = (dword(a, off), dword(b, off));
+            if (x != 0) != (y != 0) {
+                mismatches.push(format!("{name} null-ness: vanilla={x:#010x}, reimpl={y:#010x}"));
+            }
+        }
+
+        // Phase 2: repetition (see this test's doc comment) - independent of phase 1's result.
+        for iteration in 0..8 {
+            let ptr = soundscape_live_support::allocate_uninitialized();
+            if ptr.is_null() {
+                mismatches.push(format!("iteration {iteration}: OPERATOR_NEW returned null"));
+                continue;
+            }
+            std::ptr::write_bytes(ptr as *mut u8, 0xAA, struct_size);
+            (*ptr).construct();
+            (*ptr).init(crowd_ambients, world_ambients, crowd_config, world_config);
+
+            let crowd_amb: u32 = get_from_memory(ptr as u32 + 0x4c);
+            let world_amb: u32 = get_from_memory(ptr as u32 + 0x50);
+            if crowd_amb == 0 || world_amb == 0 {
+                mismatches.push(format!(
+                    "iteration {iteration}: ambients pointer null after init (crowd={crowd_amb:#010x}, world={world_amb:#010x}) - destruct's free branches not exercised"
+                ));
+            } else {
+                (*ptr).destruct();
+            }
+            for off in [0x0c, 0x14, 0x3c] {
+                let v: u32 = get_from_memory(ptr as u32 + off);
+                if v != SNDSOUNDBASE_VTABLE {
+                    mismatches.push(format!("iteration {iteration}: vtable dword at +{off:#x} = {v:#010x} (expected SNDSOUNDBASE_VTABLE)"));
+                }
+            }
+            for off in [0x10, 0x18, 0x40] {
+                let v: u32 = get_from_memory(ptr as u32 + off);
+                if v != 0 {
+                    mismatches.push(format!("iteration {iteration}: inner dword at +{off:#x} = {v:#010x} (expected 0)"));
+                }
+            }
+            soundscape_live_support::destroy_standalone(ptr);
+        }
+    }
+
+    if !mismatches.is_empty() {
+        error!("{}: mismatch(es): {:?}", test_name, mismatches);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: mismatch(es): {:?}\n", test_name, mismatches).as_bytes());
+        }
+    } else {
+        write_success_line(failure_log, test_name);
+    }
+
+    soundscape_live_support::destroy_standalone(vanilla_a);
+    soundscape_live_support::destroy_standalone(reimpl_b);
     !mismatches.is_empty()
 }

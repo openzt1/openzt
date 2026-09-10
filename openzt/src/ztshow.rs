@@ -22,7 +22,7 @@ use openzt_detour::generated::{
     ztgamemgr::GET_DATE,
     ztshow::{
         CALCULATE_PERCENT_ADJUSTMENT, CHECK_SCRIPT, CLEAR_SHOW_SCRIPT_STATES, DO_CURRENT_ITEM, DO_KEEPER_EVENT, DO_TRICK_EVENT,
-        GATHER_UNITS, REINIT, RESOLVE_NEXT_SCHEDULED_SCRIPT_ID, START, STOP_0, VALIDATE, VALIDATE_ITEM,
+        GATHER_UNITS, GET_SHOW_SCRIPT_STATE, REINIT, RESOLVE_NEXT_SCHEDULED_SCRIPT_ID, START, STOP_0, VALIDATE, VALIDATE_ITEM,
     },
     ztshowinfo::{
         ADD_SCRIPT, ADD_SHOW, CHECK_PENDING_SCRIPTS, CHECK_UNIT, CHECK_UNIT_TYPE, GET_NUM_UNITS, GET_SHOW_UNIT_LIST, IS_STARTED,
@@ -105,12 +105,14 @@ fn find_script_state_node(header: u32, key: u32) -> u32 {
 }
 
 /// Reimplementation of `ZTShow::getShowScriptState` (`ztshow::GET_SHOW_SCRIPT_STATE`, `0x0059eb99`,
-/// deliberately left un-detoured - nothing needs interception, and external un-decompiled callers keep
-/// working unchanged): a plain, read-only lookup in the `std::map<u32, ZTShowScriptState*>` whose
-/// header lives at `ztshow+0x34` (`show_info+0x38`, per `ztshowmgr.rs`'s `is_doing_show`/
-/// `is_show_script_done` callers). Reads vanilla's still-vanilla-owned, vanilla-written, vanilla-freed
-/// tree directly in place - no ownership claim, no allocator interaction, same "narrow vanilla-memory
-/// carve-out" this file's other tree readers already rely on.
+/// now detoured - see the module's own detour list): a plain, read-only lookup in the
+/// `std::map<u32, ZTShowScriptState*>` whose header lives at `ztshow+0x34` (`show_info+0x38`, per
+/// `ztshowmgr.rs`'s `is_doing_show`/`is_show_script_done` callers). Reads vanilla's still-vanilla-owned,
+/// vanilla-written, vanilla-freed tree directly in place - no ownership claim, no allocator interaction,
+/// same "narrow vanilla-memory carve-out" this file's other tree readers already rely on. Its own logic
+/// was already ported/unit-tested internally (any caller reaching this address already ran through this
+/// exact function via a direct Rust call) - detouring the real address just extends the same behavior to
+/// real, un-decompiled-by-us vanilla callers that invoke it through the vtable/address directly instead.
 pub fn get_show_script_state(ztshow: u32, key: u32) -> u32 {
     let header = get_from_memory::<u32>(ztshow + 0x34);
     let candidate = find_script_state_node(header, key);
@@ -998,6 +1000,11 @@ mod detours {
     #[detour(CHECK_UNIT_TYPE)]
     unsafe extern "thiscall" fn check_unit_type_detour(this: *const u32, unit_type: u32) -> u32 {
         check_unit_type(this as u32, unit_type)
+    }
+
+    #[detour(GET_SHOW_SCRIPT_STATE)]
+    unsafe extern "thiscall" fn get_show_script_state_detour(this: *const u32, key: u32) -> u32 {
+        get_show_script_state(this as u32, key)
     }
 
     #[detour(DO_CURRENT_ITEM)]

@@ -9,7 +9,7 @@ use openzt_detour::generated::standalone;
 use openzt_detour::generated::ztmarketing;
 use openzt_detour::generated::ztmarketingmgr::{
     CLEAR_CONFIGURATIONS as ZTMARKETINGMGR_CLEAR_CONFIGURATIONS, UPDATE as ZTMARKETINGMGR_UPDATE,
-    ZTMARKETING_MGR_1 as ZTMARKETINGMGR_DTOR,
+    DESTRUCTOR_1 as ZTMARKETINGMGR_DTOR,
 };
 use proptest::prelude::*;
 use std::io::Write;
@@ -678,7 +678,7 @@ pub(crate) fn run_marketingmgr_clear_configurations_test(failure_log: &mut Optio
 }
 
 /// ZTMARKETINGMGR_DTOR: exercises the teardown hazard `ztmarketing.rs`'s `marketing_dtor_detour`
-/// module doc comment describes - vanilla's own `ZTMARKETING_MGR_1` scalar-deleting destructor, if
+/// module doc comment describes - vanilla's own `ztmarketingmgr::DESTRUCTOR_1` scalar-deleting destructor, if
 /// ever allowed to run over a Rust-`Vec`-allocated funding table, would call `operator delete` on
 /// memory Rust's global allocator owns (the same cross-allocator hazard CLAUDE.md's "Live
 /// Reimplementation-Comparison Tests" section documents for `ZTThoughtMgr`). This deliberately never
@@ -687,7 +687,7 @@ pub(crate) fn run_marketingmgr_clear_configurations_test(failure_log: &mut Optio
 ///
 /// Two independent halves, like `run_marketingmgr_clear_configurations_test` above:
 /// - **Real**: a fresh, genuinely vanilla-allocated `ZTMarketingMgr`+`ZTMarketing` (empty funding
-///   table, same as that test's real side), torn down via `ZTMARKETING_MGR_1.original()` with
+///   table, same as that test's real side), torn down via `ZTMARKETINGMGR_DTOR.original()` with
 ///   `flags=0` (never deletes `this`) - real-allocated, real-freed, so this is safe regardless of the
 ///   fix and just confirms the real destructor is still callable/well-behaved and returns `this`.
 /// - **Reimplemented**: a standalone, Rust-`Vec`-allocated non-empty funding table (via

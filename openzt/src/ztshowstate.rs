@@ -63,13 +63,12 @@
 //!   genuinely different, simpler allocator than the tree nodes that hold them - per `CLAUDE.md`'s
 //!   cross-allocator rule, never mixed with the freelist above.
 //!
-//! `FUN_00402f85` (the freelist's own growth/refill helper, called only when the freelist head is null)
-//! has no `generated.rs` entry of its own - flagged here for a future regen to give it a real
-//! `standalone::` name; declared locally as [`ALLOCATE_SMALL_OBJECT_SLOW`] per `zoostatus.rs`'s own
-//! established `FunctionDef::new()` precedent for a confirmed-but-unclaimed address, not a
-//! `generated.rs` hand-edit. In practice this freelist is shared, pervasively used, and essentially
-//! never empty during real gameplay, so the fast inline-pop path (mirroring the constructor's own logic
-//! exactly) is expected to be the overwhelmingly common case.
+//! The freelist's own growth/refill helper (called only when the freelist head is null) is
+//! `generated.rs`'s `poolalloc::REFILL` (`0x00402f85`, confirmed the same STL pool-allocator refill call
+//! `ZTShowState_ZTShowState.asm`'s constructor uses on its own freelist-empty branch). In practice this
+//! freelist is shared, pervasively used, and essentially never empty during real gameplay, so the fast
+//! inline-pop path (mirroring the constructor's own logic exactly) is expected to be the overwhelmingly
+//! common case.
 //!
 //! ## Scope: `CONSTRUCTOR` stays real, un-detoured; `ZTShow`'s own destructor is out of this module's
 //! scope entirely
@@ -96,15 +95,11 @@
 //! destructor tail that are meaningful for a bare `ZTShowState`. Real gameplay is unaffected either way -
 //! real `ZTShow` teardown always reaches `ztshow::ZTSHOW_0` with a real, fully-formed `ZTShow*`.
 
-use std::ffi::c_void;
-
-use openzt_detour::{
-    generated::{
-        standalone::{DEALLOCATE, OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
-        ztshowscriptstate::{LOAD as SCRIPT_STATE_LOAD, SAVE as SCRIPT_STATE_SAVE},
-        ztshowstate::{CLEAR, INIT, LOAD, SAVE},
-    },
-    FunctionDef,
+use openzt_detour::generated::{
+    poolalloc::REFILL as ALLOCATE_SMALL_OBJECT_SLOW,
+    standalone::{DEALLOCATE, OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
+    ztshowscriptstate::{LOAD as SCRIPT_STATE_LOAD, SAVE as SCRIPT_STATE_SAVE},
+    ztshowstate::{CLEAR, INIT, LOAD, SAVE},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -126,12 +121,6 @@ const TREE_NODE_SIZE: u32 = 0x18;
 /// matching real vanilla's own `ZTShowState_load.c`.
 const RVA_SCRIPT_STATE_VTABLE: u32 = 0x0023_502c;
 
-/// Growth fallback for a genuinely empty freelist bucket - `FUN_00402f85`, confirmed real and called
-/// with exactly this literal argument (`0x18`) by `ZTShowState_ZTShowState.asm`'s own constructor
-/// (`PUSH 0x18; CALL FUN_00402f85`) on its own freelist-empty branch. See the module doc comment's
-/// Allocator section for why this is declared locally rather than added to `generated.rs`.
-const ALLOCATE_SMALL_OBJECT_SLOW: FunctionDef<unsafe extern "cdecl" fn(u32) -> *const c_void> = FunctionDef::new(0x0040_2f85);
-
 fn small_object_freelist_head_addr() -> u32 {
     get_module_base("zoo.exe") as u32 + RVA_SMALL_OBJECT_FREELIST_HEAD
 }
@@ -144,7 +133,7 @@ fn allocate_tree_node() -> u32 {
     let head_addr = small_object_freelist_head_addr();
     let head = get_from_memory::<u32>(head_addr);
     let node = if head == 0 {
-        unsafe { ALLOCATE_SMALL_OBJECT_SLOW.original()(TREE_NODE_SIZE) as u32 }
+        unsafe { ALLOCATE_SMALL_OBJECT_SLOW.original()(TREE_NODE_SIZE as i32) as u32 }
     } else {
         let next = get_from_memory::<u32>(head);
         save_to_memory(head_addr, next);
@@ -173,7 +162,7 @@ fn release_tree_node(node: u32) {
 /// Recursive in-order collection of every node in the script-state tree rooted at `node` - same
 /// technique as `ztshow.rs`'s own `collect_pending_script_nodes` for a sibling tree (a real red-black
 /// tree here is never more than a few dozen nodes deep, so recursion depth is a non-concern).
-fn collect_tree_nodes(node: u32, out: &mut Vec<u32>) {
+pub(crate) fn collect_tree_nodes(node: u32, out: &mut Vec<u32>) {
     if node == 0 {
         return;
     }
