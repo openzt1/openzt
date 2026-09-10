@@ -233,7 +233,7 @@ fn load_display_string(string_id: u16) -> [u8; 512] {
 /// walks real nodes forever without ever matching that address - confirmed live via
 /// `ZTSHOWUI_FILL_TRICK_LISTS_LIVE`'s bounded-iteration diagnostic, which caught the one-level version
 /// cycling through the same ~11 real node addresses for 1,000,000+ iterations without terminating.
-fn find_trick_by_id(unit_type_ptr: u32, target_id: u16) -> Option<u32> {
+pub(crate) fn find_trick_by_id(unit_type_ptr: u32, target_id: u16) -> Option<u32> {
     let dummy_head = get_from_memory::<u32>(unit_type_ptr + 0x1ac);
     let mut node = get_from_memory::<u32>(dummy_head);
     while node != dummy_head {
@@ -249,7 +249,7 @@ fn find_trick_by_id(unit_type_ptr: u32, target_id: u16) -> Option<u32> {
 /// Every node in `unit_type_ptr`'s own real trick list, as item pointers (`node+8`) - see
 /// [`find_trick_by_id`] for the walk/offset justification (including the dummy-head double-indirection).
 /// Used by [`fill_trick_lists`]'s first half to populate the "available tricks" listbox in one pass.
-fn walk_trick_list(unit_type_ptr: u32) -> Vec<u32> {
+pub(crate) fn walk_trick_list(unit_type_ptr: u32) -> Vec<u32> {
     let dummy_head = get_from_memory::<u32>(unit_type_ptr + 0x1ac);
     let mut items = Vec::new();
     let mut node = get_from_memory::<u32>(dummy_head);
@@ -420,7 +420,7 @@ pub fn fill_trick_lists() {
     if !script_exists || item_count == 0 {
         let flag = get_from_memory::<u8>(node + 0x20);
         if flag != 0 {
-            let new_script_ptr = unsafe { CREATE_DEFAULT_SCRIPT.original()(show_info as *const u32, unit_type_id as i32) } as u32;
+            let new_script_ptr = unsafe { CREATE_DEFAULT_SCRIPT.hooked()(show_info as *const u32, unit_type_id as i32) } as u32;
             if new_script_ptr == 0 {
                 recalc_show_stats(0);
                 return;
@@ -498,7 +498,17 @@ fn add_assigned_trick(list_element: u32, item: &crate::ztshowscriptmgr::ShowScri
 /// `generated.rs` - see that entry's own comment) against a *real* item pointer - safe per the module
 /// doc comment's final bullet (never called with a store-owned item from this module). Return
 /// convention matches every other caller in this codebase: non-zero low byte means valid.
-fn validate_trick(show_info: u32, real_item_ptr: u32) -> bool {
+///
+/// **Deliberately left un-detoured** (see `ztshowinfo.rs`'s own module doc comment's Stage 5 section):
+/// its `item->building != 0` sub-path constructs a temporary real STL container via an uncharacterized
+/// helper (`BFTile::cls_0x40143b`, almost certainly a mislabeled generic list constructor per this
+/// codebase's own generator-pass-mislabeling precedent) and tears it down onto a freelist head
+/// (`DAT_00638004`) whose allocate-side refill protocol has no confirmed evidence anywhere in this
+/// corpus - reproducing it would risk exactly the cross-allocator corruption class CLAUDE.md warns
+/// about, for a function every consumer already reaches safely via `.original()`. `pub(crate)` so
+/// `ztshowinfo.rs`'s `create_default_script` can reuse this exact call-through rather than duplicating
+/// it.
+pub(crate) fn validate_trick(show_info: u32, real_item_ptr: u32) -> bool {
     (unsafe { VALIDATE_TRICK.original()(show_info as *const u32, real_item_ptr as *const u32) } & 0xff) != 0
 }
 

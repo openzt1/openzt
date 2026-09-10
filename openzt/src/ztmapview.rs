@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::bfentitytype::{BFEntityType, ZTAnimalType, ZTEntityTypeClass, ZTSceneryType, ZTUnitType, zt_entity_type_class_is};
 use crate::globals::globals;
-use crate::util::{get_from_memory, ref_from_memory, Addr, MemAddr};
+use crate::util::{get_from_memory, ref_from_memory, MemAddr};
 use crate::zthabitatmgr::ZTTankExhibit;
 use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal};
 // use crate::{
@@ -217,7 +217,7 @@ impl BFTile {
 
 #[detour_mod]
 pub mod zoo_ztmapview {
-    use tracing::{info, error};
+    use tracing::error;
 
     use crate::util::{get_from_memory, ref_from_memory, save_to_memory};
     use crate::ztmapview::{BFTile, ZTMapView};
@@ -233,7 +233,7 @@ pub mod zoo_ztmapview {
     //004df688
     #[detour(CHECK_TANK_PLACEMENT)]
     // fn check_tank_placement(ZTMapView *other_this, BFEntity *param_2, BFTile *param_3, int *param_4)
-    unsafe extern "stdcall" fn check_tank_placement(temp_entity_ptr: *const u32, tile: *const u32, response_ptr: *const u32) -> bool {
+    unsafe extern "stdcall" fn check_tank_placement(temp_entity_ptr: *const u32, tile: *const u32, response_ptr: *mut u32) -> bool {
         let _result = unsafe { CHECK_TANK_PLACEMENT_DETOUR.call(temp_entity_ptr, tile, response_ptr) };
 
         // let entity = get_from_memory(temp_entity);
@@ -325,11 +325,11 @@ impl ZTMapView {
         // off an arbitrary, possibly-plain-`ZTHabitat` (0x178 bytes) pointer would over-read.
         let tank = get_from_memory::<ZTTankExhibit>(habitat_ptr);
         let entity_type_class = temp_entity.entity_type_class();
-        if !zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Keeper) {
-            if let Some(t) = habitat.get_gate_tile_in()
-                && temp_entity.is_on_tile(&t) {
-                    return Err(ErrorStringId::ObjectTooCloseToLadderOrPlatform);
-                }
+        if !zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Keeper)
+            && let Some(t) = habitat.get_gate_tile_in()
+            && temp_entity.is_on_tile(&t)
+        {
+            return Err(ErrorStringId::ObjectTooCloseToLadderOrPlatform);
         }
         if zt_entity_type_class_is(&entity_type_class, &ZTEntityTypeClass::Scenery) {
             let scenery_entity_type = unsafe { ref_from_memory::<ZTSceneryType>(*temp_entity.inner_class_ptr()) };

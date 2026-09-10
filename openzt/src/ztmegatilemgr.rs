@@ -1,18 +1,18 @@
 //! Structs and methods for the vanilla `ZTMegatileMgr`/`ZTMegatile` classes: terrain "megatile" (5x5
 //! tile block) characteristic recalculation - guest density, a per-tile `stink` scalar, and per-
 //! `BFCategory` "esthetic" averages, consumed by `ZTGuest::fCrowdDensityMegatile`/`fStinkyMegatile`/
-//! `fEstheticBonusMegatile` (now detoured in `ztguest.rs` onto Rust reimplementations that call this
-//! file's own accessors - see that module's doc comment). The struct layout below must still stay
+//! `fEstheticBonusMegatile`, detoured in `ztguest.rs` onto Rust reimplementations that call this
+//! file's accessors (see that module's doc comment). The struct layout below must still stay
 //! byte-exact rather than merely behaviorally equivalent: those accessors still read vanilla's own
-//! live-owned memory directly, not a migrated Rust store (see `native-data-structures-plan.md`'s Module 2).
+//! live-owned memory directly, not a migrated Rust store.
 //!
-//! Allocator strategy: **100% vanilla-owned, everywhere in this file.** This module never allocates a
-//! single byte of its own. The outer `vector<vector<ZTMegatile>>` grid and every embedded
-//! `std::map<int,float>` stay allocated and mutated through vanilla's own resolved-address STL helpers
-//! (see the raw-address consts below); any write that could allocate/free (`vector::resize`,
-//! `map::insert`, `map::clear`) is call-through only. See `CLAUDE.md`'s warning about mixing `Box` and
-//! vanilla's freelist - it doesn't apply here since there is no `Box` on either side of any mutation in
-//! this file.
+//! Allocator strategy: the outer `vector<vector<ZTMegatile>>` grid and every embedded
+//! `std::map<int,float>` stay vanilla-owned, allocated and mutated through vanilla's own
+//! resolved-address STL helpers (see the raw-address consts below); any write that could allocate/free
+//! (`vector::resize`, `map::insert`, `map::clear`) is call-through only. The one Rust allocation is
+//! [`empty_category_map_sentinel`]'s leaked, read-only sentinel node - handed to vanilla to copy
+//! *from* and never freed by either side, so `CLAUDE.md`'s Box-vs-vanilla-freelist warning has no
+//! bite here.
 //!
 //! `update()`/`recalculate_characteristics()` never resize the outer vectors; `init()` is the only
 //! vector-resize/allocation path. STL helper signatures are inferred from decompiled call sites rather
@@ -78,17 +78,16 @@ impl MegatileRow {
 
 /// One 5x5-tile-block's worth of recalculated characteristics. Size `0x14` confirmed twice
 /// independently on Windows (`init.c`'s `/0x14` element-count division,
-/// `recalculateCharacteristics.c`'s `*0x14` per-column stride) - the macOS build shows a 24-byte
-/// (`0x18`) struct with an extra vtable-like field at `+0x14`, a platform discrepancy left unresolved
-/// since Windows evidence is authoritative for this Windows-only build.
+/// `recalculateCharacteristics.c`'s `*0x14` per-column stride); the macOS build shows a 24-byte
+/// (`0x18`) struct with an extra vtable-like field at `+0x14`, but Windows evidence is authoritative
+/// for this Windows-only build.
 #[derive(Debug)]
 #[repr(C)]
 pub struct ZTMegatile {
     guest_count: i32,        // 0x0 - zeroed then incremented per resident guest in recalc
     category_map: MapHeader, // 0x4-0xf - std::map<int,float>, see MapHeader/TreeNode below
-    stink: f32,              // 0x10 - running per-tile stink accumulator (formerly mislabeled
-                              // `esthetic_bonus` - see ztmegatilemgr-review-findings.md finding 2; the
-                              // real esthetic-bonus data is `category_map`/`category_value()`)
+    stink: f32,              // 0x10 - running per-tile stink accumulator; the "esthetic" data is
+                              // `category_map`, read via `category_value()`
 }
 
 const _: () = assert!(mem::size_of::<ZTMegatile>() == 0x14);

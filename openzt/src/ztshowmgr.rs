@@ -110,25 +110,27 @@
 //! `registerShow`'s increment, `save`'s write, `load`'s read) are all this module's detoured
 //! addresses now, and stage 6's save/load were repointed at the store's field in the same change
 //! so the persisted counter never has two owners at any buildable midpoint. The fresh-id write
-//! goes through a Rust reimplementation of `ZTShowInfo::setShowInfoID`
-//! ([`ZTShowMgr::set_show_info_id`]) - not a plain `field_0x70` store, because the real setter
-//! also keeps the embedded `ZTShow`'s `+0x10` back-pointer and `+0x6` id copy in sync. Behavior
-//! in-game is unchanged by any of this; the stage exists to retire the permanent store-tree sync
-//! obligation of the shadow phase.
+//! goes through a Rust reimplementation of `ZTShowInfo::setShowInfoID` - not a plain `field_0x70`
+//! store, because the real setter also keeps the embedded `ZTShow`'s `+0x10` back-pointer and
+//! `+0x6` id copy in sync. Behavior in-game is unchanged by any of this; the stage exists to
+//! retire the permanent store-tree sync obligation of the shadow phase.
+//!
+//! **Stage 10** (`ztshowinfo-implementation-plan.md`) moves that reimplementation into
+//! [`crate::ztshowinfo::set_show_info_id`] and detours the real `setShowInfoID` address too, so
+//! [`ZTShowMgr::register_show`] now calls the shared function directly rather than keeping its
+//! own private copy.
 
 use std::{
     collections::BTreeMap,
-    mem::MaybeUninit,
     sync::{LazyLock, Mutex},
 };
 
+use crate::bfconfigfile;
 use crate::globals::get_module_base;
-use crate::util::{get_from_memory, mut_from_memory, save_to_memory};
+use crate::util::{get_from_memory, mut_from_memory};
 use openzt_detour::generated::bfapp::GET_INSTALLED_EXPANSION;
-use openzt_detour::generated::bfconfigfile::{CONSTRUCTOR_0, GET_INT, RELEASE};
 use openzt_detour::generated::standalone::{DEALLOCATE, WRITE_BYTES_TO_FILE};
 use openzt_detour::generated::ztshow::CLEAR_SHOW_SCRIPT_STATES;
-use openzt_detour::generated::ztshowinfo::ENTER_NEW_MONTH as ZTSHOWINFO_ENTER_NEW_MONTH;
 use openzt_detour::generated::ztshowmgr::{
     ENTER_NEW_MONTH, GET_SCRIPT_ID, GET_SHOW_INFO, INIT_SHOW_PARAMS, IS_DOING_SHOW, IS_SHOW_SCRIPT_DONE, LOAD, REGISTER_SHOW, SAVE,
     UNREGISTER_SHOW, UPDATE,
@@ -142,30 +144,6 @@ use tracing::error;
 /// Re-declared per-file after `ztgamemgr.rs`'s own private `GLOBAL_ZTAPP_RVA` (same value, same
 /// one-level-of-indirection shape) per the repo's no-shared-consts convention.
 const GLOBAL_ZTAPP_RVA: u32 = 0x00638154 - 0x400000;
-
-/// `.rdata` literals `init_show_params` passes to the real `BFConfigFile` functions
-/// (`ZTShowMgr_initShowParams.asm`'s `PUSH s_*` targets, string contents confirmed by reading them
-/// out of zoo.exe's `.rdata`). Data addresses, so each is stored as its Ghidra VA minus the
-/// preferred base and resolved at runtime as `get_module_base("zoo.exe") + RVA` (CLAUDE.md's
-/// data-address rule - see `ztsoundscape.rs`'s `CROWD_KEY_RVAS` for the same convention).
-const SHOWS_CFG_FILENAME_RVA: u32 = 0x0063e488 - 0x400000; // "shows.cfg"
-const TRICK_SATISFACTION_SECTION_RVA: u32 = 0x00642b38 - 0x400000; // "trickSatisfactionThresholds"
-const SHOW_SECTION_RVA: u32 = 0x0063e494 - 0x400000; // "show"
-const SHOW_SATISFACTION_SECTION_RVA: u32 = 0x00642adc - 0x400000; // "showSatisfactionThresholds"
-const BAD_TRICK_KEY_RVA: u32 = 0x00642b54 - 0x400000;
-const GOOD_TRICK_KEY_RVA: u32 = 0x00642b2c - 0x400000;
-const GREAT_TRICK_KEY_RVA: u32 = 0x00642b20 - 0x400000;
-const MIN_IDEAL_LENGTH_KEY_RVA: u32 = 0x00642b10 - 0x400000;
-const MAX_IDEAL_LENGTH_KEY_RVA: u32 = 0x00642b00 - 0x400000;
-const BAD_SHOW_KEY_RVA: u32 = 0x00642af8 - 0x400000;
-const GOOD_SHOW_KEY_RVA: u32 = 0x00642ad0 - 0x400000;
-const GREAT_SHOW_KEY_RVA: u32 = 0x00642ac4 - 0x400000;
-
-/// The shared small-object freelist head (`DAT_0063800c`) that vanilla's inlined `~BFConfigFile`
-/// tail returns the config's tree-root node to (see [`ZTShowMgr::init_show_params`]'s doc comment).
-/// Note this is a *different* head from the `DAT_00638008` freelist backing `ZTShowMgr`'s own map
-/// nodes - matching free idiom, different size class.
-const CONFIG_FREELIST_HEAD_RVA: u32 = 0x0063800c - 0x400000;
 
 /// `DAT_0063e480` - the vanilla show-id counter global behind `registerShow`'s inlined `makeID`
 /// logic (16-bit `INC`, assigned id = `(u16)counter % 0xffff`, so `0xffff` is never assigned).
@@ -300,9 +278,7 @@ impl ZTShowMgr {
     }
 
     /// Reimplementation of `ZTShowMgr::initShowParams` (`0x0051f59b`), per
-    /// `ZTShowMgr_initShowParams.asm` (call targets confirmed against the binary itself: the ctor
-    /// call lands on `bfconfigfile::CONSTRUCTOR_0` at `0x004b4516`, all eight key lookups on
-    /// `GET_INT` at `0x00409c14`, and the teardown on `RELEASE` at `0x0040a5bc`):
+    /// `ZTShowMgr_initShowParams.asm`:
     ///
     /// 1. Write the eight config defaults (same values [`ZTShowMgr::construct`] writes - vanilla
     ///    writes them here too, so the defaults survive untouched whenever the config half is
@@ -316,19 +292,23 @@ impl ZTShowMgr {
     ///    reproduced, same precedent as `ztgamemgr.rs`'s `stop` (a null app global here means
     ///    "app not ready"; this port treats that as "skip the config override" rather than writing
     ///    a code address into live global state to match a never-taken vanilla path).
-    /// 3. If gated in: construct a **stack-local** real `BFConfigFile` over `shows.cfg` (the same
-    ///    `CONSTRUCTOR_0`/`RELEASE` pair the live-test harness already uses), and only if it loaded,
-    ///    run all eight `GET_INT` lookups in vanilla's exact call order into the eight threshold
-    ///    fields.
-    /// 4. Release the config, then reproduce `~BFConfigFile`'s inlined dtor tail
-    ///    (`ZTShowMgr_initShowParams.asm`'s `.180` block): return the config ctor's tree-root node
-    ///    to the shared small-object freelist it came from (`DAT_0063800c`, plain
-    ///    `*node = head; head = node`). Skipping this would leak that node every call; the push is
-    ///    vanilla's own free idiom on a vanilla-allocated node, so no cross-allocator hazard (see
-    ///    the module doc - the hazard this module avoids is *allocating* Rust objects into a
-    ///    freelist, never returning vanilla's own nodes through vanilla's own stores). The asm's
-    ///    post-release key-list walk is dead code (its flag was already cleared by `release`'s own
-    ///    walk, which `BFConfigFile_release.c` shows frees that same list) and is not reproduced.
+    /// 3. If gated in: load `shows.cfg` through `bfconfigfile::ini_compat` (see that module's doc
+    ///    comment) instead of a real vanilla `BFConfigFile` - this scratch config is never shared
+    ///    with any other code (no other reimplemented or un-ported caller reads it), so nothing
+    ///    requires it to be real vanilla memory. Each of the eight keys, read in vanilla's exact
+    ///    section/key naming (`ZTShowMgr_initShowParams.asm`'s own `PUSH s_*` literals -
+    ///    `[trickSatisfactionThresholds] badTrick`/`goodTrick`/`greatTrick`,
+    ///    `[show] minIdealLength`/`maxIdealLength`,
+    ///    `[showSatisfactionThresholds] badShow`/`goodShow`/`greatShow`), only overwrites its field
+    ///    when present and parseable - matching real `BFConfigFile::getInt`'s "leave the caller's
+    ///    existing value untouched on a missing/bad key" behavior - and a missing/unparseable
+    ///    `shows.cfg` itself leaves every field at its step-1 default, matching vanilla's own
+    ///    "skip every lookup when the file didn't load" gate.
+    ///
+    /// This also retires the local-scratch-`BFConfigFile` freelist-node-return dance the real
+    /// vanilla-call version of this method needed (see `git blame` for that prior shape, or
+    /// `ambients.rs`'s `Ambients::construct` for the still-live version of the same pattern) - there
+    /// is no vanilla allocation here to hand back.
     ///
     /// Returns `1` - the real body's only return write is `MOV AL, 0x1` (upper EAX bits are leftover
     /// register garbage there; this port returns a clean `1`, which no caller distinguishes - its one
@@ -348,81 +328,18 @@ impl ZTShowMgr {
         let expansion_2_installed =
             ztapp_ptr != 0 && unsafe { GET_INSTALLED_EXPANSION.original()(ztapp_ptr as *const u32, 2) } != 0;
 
-        if expansion_2_installed {
-            let config = MaybeUninit::<crate::bfconfigfile::BFConfigFile>::uninit();
-            let config_ptr = config.as_ptr() as *const u32;
-            unsafe {
-                CONSTRUCTOR_0.original()(config_ptr, (base + SHOWS_CFG_FILENAME_RVA) as *const u8);
-            }
-
-            // `BFConfigFile`'s "has data" flag at +0x4 (see `crate::bfconfigfile::BFConfigFile`) -
-            // vanilla skips every lookup when the file didn't load.
-            if get_from_memory::<i32>(config_ptr as u32 + 0x4) != 0 {
-                unsafe {
-                    GET_INT.original()(
-                        config_ptr,
-                        base + TRICK_SATISFACTION_SECTION_RVA,
-                        base + BAD_TRICK_KEY_RVA,
-                        &raw mut self.threshold_a as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + TRICK_SATISFACTION_SECTION_RVA,
-                        base + GOOD_TRICK_KEY_RVA,
-                        &raw mut self.threshold_b as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + TRICK_SATISFACTION_SECTION_RVA,
-                        base + GREAT_TRICK_KEY_RVA,
-                        &raw mut self.threshold_c as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SECTION_RVA,
-                        base + MIN_IDEAL_LENGTH_KEY_RVA,
-                        &raw mut self.min_ideal_length as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SECTION_RVA,
-                        base + MAX_IDEAL_LENGTH_KEY_RVA,
-                        &raw mut self.max_ideal_length as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SATISFACTION_SECTION_RVA,
-                        base + BAD_SHOW_KEY_RVA,
-                        &raw mut self.bad_show as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SATISFACTION_SECTION_RVA,
-                        base + GOOD_SHOW_KEY_RVA,
-                        &raw mut self.good_show as *const u32,
-                    );
-                    GET_INT.original()(
-                        config_ptr,
-                        base + SHOW_SATISFACTION_SECTION_RVA,
-                        base + GREAT_SHOW_KEY_RVA,
-                        &raw mut self.great_show as *const u32,
-                    );
-                }
-            }
-
-            unsafe { RELEASE.original()(config_ptr) };
-
-            // ~BFConfigFile's inlined dtor tail: hand the ctor's tree-root node back to the
-            // freelist head it was popped from (see this method's doc comment).
-            let tree_root: u32 = get_from_memory(config_ptr as u32);
-            if tree_root != 0 {
-                let freelist_head = (base + CONFIG_FREELIST_HEAD_RVA) as *mut u32;
-                unsafe {
-                    let head = *freelist_head;
-                    *(tree_root as *mut u32) = head;
-                    *freelist_head = tree_root;
-                }
-            }
+        if expansion_2_installed
+            && let Some(ini) = bfconfigfile::ini_compat::read_cfg("shows.cfg")
+        {
+            use bfconfigfile::ini_compat::first_parse;
+            self.threshold_a = first_parse(&ini, "trickSatisfactionThresholds", "badTrick").unwrap_or(self.threshold_a);
+            self.threshold_b = first_parse(&ini, "trickSatisfactionThresholds", "goodTrick").unwrap_or(self.threshold_b);
+            self.threshold_c = first_parse(&ini, "trickSatisfactionThresholds", "greatTrick").unwrap_or(self.threshold_c);
+            self.min_ideal_length = first_parse(&ini, "show", "minIdealLength").unwrap_or(self.min_ideal_length);
+            self.max_ideal_length = first_parse(&ini, "show", "maxIdealLength").unwrap_or(self.max_ideal_length);
+            self.bad_show = first_parse(&ini, "showSatisfactionThresholds", "badShow").unwrap_or(self.bad_show);
+            self.good_show = first_parse(&ini, "showSatisfactionThresholds", "goodShow").unwrap_or(self.good_show);
+            self.great_show = first_parse(&ini, "showSatisfactionThresholds", "greatShow").unwrap_or(self.great_show);
         }
 
         1
@@ -441,8 +358,8 @@ impl ZTShowMgr {
     /// only then does the force flag **or** `field_0x70 == 0` assign a fresh id (`INC word ptr
     /// DAT_0063e480`, id = `(u16)counter % 0xffff` - so `0xffff` is never assigned, and the
     /// counter's `0xffff` and wrapped-to-`0` states both yield id `0`) written through the real
-    /// `ZTShowInfo::setShowInfoID`, reimplemented as [`ZTShowMgr::set_show_info_id`]; the final
-    /// tree write is insert-or-assign, so a force-assigned id colliding with a registered id
+    /// `ZTShowInfo::setShowInfoID`, reimplemented as [`crate::ztshowinfo::set_show_info_id`]; the
+    /// final tree write is insert-or-assign, so a force-assigned id colliding with a registered id
     /// steals that slot in place, which `BTreeMap::insert` reproduces exactly. The real body
     /// reports success in `AL` only (upper EAX bits are leftover register garbage there, its
     /// `MOV %AL,%BL` exit); this returns a clean `1`, which every caller observes through the
@@ -470,41 +387,13 @@ impl ZTShowMgr {
         };
         let id = match fresh_id {
             Some(id) => {
-                Self::set_show_info_id(show_addr, id);
+                crate::ztshowinfo::set_show_info_id(show_addr, id);
                 id
             }
             None => current_id,
         };
         SHOW_STORE.lock().unwrap().registered_shows.insert(id, show_addr);
         1
-    }
-
-    /// Rust reimplementation of `ZTShowInfo::setShowInfoID` (`0x005ab8c3`, per
-    /// `ZTShowInfo_setShowInfoID.asm`; macOS symbolizes the same address split across
-    /// `ZTShowInfo_setShowInfoID.c` + `ZTShow_setShowInfoID.c`), reached from
-    /// [`ZTShowMgr::register_show`]'s fresh-id branch. The real setter is not a trivial
-    /// `field_0x70` store: after `show->field_0x70 = id`, it re-points the embedded `ZTShow`'s
-    /// (`show+0x4`) `+0x10` back-pointer at `show` unless it already points at an object whose
-    /// own `field_0x70` equals the new id, and always refreshes the `ZTShow`'s `+0x6` u16 id
-    /// copy - all four writes reproduced here, in the real order, so a plain `field_0x70` store
-    /// could not leave the embedded mirror fields stale.
-    ///
-    /// Not reproduced: the real body's return-0 path ("outer show's `field_0x70` != the new id";
-    /// macOS's `ZTShow::setShowInfoID` returns 0 there explicitly) - the guard compares the field
-    /// this port's first write just set, so through [`ZTShowMgr::register_show`] it is
-    /// unreachable and the real body always exits `AL=1`; and the `.asm`'s null-`show` guard
-    /// (`TEST %EDX,%EDX; JZ`), which [`ZTShowMgr::register_show`]'s own null check already
-    /// excludes. Reading traps honored: the Windows `.c` renders the embedded-`ZTShow` half with
-    /// confusing flattened offsets - trust the `.asm`'s `ADD %ECX, 0x4` (the offsets here), not
-    /// the decompile's `this->field_0x14`/`this->field_0xa` renderings.
-    fn set_show_info_id(show: u32, id: u16) {
-        save_to_memory(show + 0x70, id);
-        let ztshow = show + 0x4;
-        let back_pointer: u32 = get_from_memory(ztshow + 0x10);
-        if back_pointer == 0 || get_from_memory::<u16>(back_pointer + 0x70) != id {
-            save_to_memory(ztshow + 0x10, show);
-        }
-        save_to_memory(ztshow + 0x6, id);
     }
 
     /// Stage 9 full port of `ZTShowMgr::unregisterShow` (`0x005aaa95`, per
@@ -585,23 +474,22 @@ impl ZTShowMgr {
     }
 
     /// Stage 5 port of `ZTShowMgr::enterNewMonth` (`0x004842a2`, per `ZTShowMgr_enterNewMonth.asm`/
-    /// `.c`): the monthly tick (`ZooStatus::financeChecks` is the corpus's one caller) running real,
-    /// untouched `ZTShowInfo::enterNewMonth` (`0x0048b57e`) on every registered, non-null show.
-    /// Vanilla traverses its `+0x28` tree with the standard `_Tree::_Inc` successor walk starting at
-    /// the leftmost node; iterating [`SHOW_STORE`]'s `BTreeMap` yields that same in-order sequence
+    /// `.c`): the monthly tick (`ZooStatus::financeChecks` is the corpus's one caller) running
+    /// `ZTShowInfo::enterNewMonth` (`0x0048b57e`) on every registered, non-null show. Vanilla
+    /// traverses its `+0x28` tree with the standard `_Tree::_Inc` successor walk starting at the
+    /// leftmost node; iterating [`SHOW_STORE`]'s `BTreeMap` yields that same in-order sequence
     /// (ascending unsigned `u16` key - the property that made it a stage-4 drop-in), with vanilla's
     /// `left == header` empty case covered by the empty vector.
     ///
-    /// The callee call reproduces vanilla's direct `CALL ZTShowInfo::enterNewMonth` via `.hooked()`
-    /// rather than `.original()`: a direct CALL executes whatever sits at the raw address, so this
-    /// walk must route like vanilla's own callers in every build profile - identical today (the
-    /// address is un-detoured; `.original()` is also a raw cast here in release), and correctly
-    /// re-routed through the detour everywhere if `ztshowinfo::ENTER_NEW_MONTH` is ever hooked
-    /// (`.original()`'s debug-build trampoline routing would silently diverge from vanilla callers).
+    /// **Stage 9 of `ztshowinfo-implementation-plan.md` ported `ZTShowInfo::enterNewMonth`
+    /// ([`crate::ztshowinfo::enter_new_month`]) - this now calls it directly** rather than through
+    /// `ztshowinfo::ENTER_NEW_MONTH.hooked()`: a same-module Rust call is both simpler and, unlike a
+    /// raw address cast, immune to the release-profile re-entry hazard `.hooked()`/`.original()`
+    /// have to route around for an address whose behavior lives in this crate now.
     pub fn enter_new_month() {
         for show in Self::registered_show_values() {
             if show != 0 {
-                unsafe { ZTSHOWINFO_ENTER_NEW_MONTH.hooked()(show as *const u32) };
+                crate::ztshowinfo::enter_new_month(show);
             }
         }
     }

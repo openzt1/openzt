@@ -123,6 +123,15 @@ mod ztshowmgr;
 /// reimplementation, see openzt/plans/ztshowscriptmgr-implementation-plan.md.
 mod ztshow;
 
+/// ztshowstate module - Stage 1 (full ZTShowState port: init/clear/save/load) of the ZTShowInfo +
+/// ZTShowState reimplementation, see openzt/plans/ztshowinfo-implementation-plan.md.
+mod ztshowstate;
+
+/// ztshowinfo module - Stage 2 (status predicates: isReady/isStarted/isStopped/hasKeeper/needsKeeper/
+/// getScheduledShowKeeperType/getScheduledShowScript) of the ZTShowInfo + ZTShowState reimplementation,
+/// see openzt/plans/ztshowinfo-implementation-plan.md.
+mod ztshowinfo;
+
 /// ztshowui module - Stage 4 (UI consumers: showpanel_fillTrickLists/_copyListToScript) of the
 /// show-script reimplementation, see openzt/plans/ztshowscriptmgr-implementation-plan.md.
 mod ztshowui;
@@ -135,6 +144,11 @@ mod ztguest;
 /// class (structs + constructor + init + update, plus the CONSTRUCTOR/INIT/UPDATE detours; see
 /// openzt/plans/ztsoundscape-implementation-plan.md).
 mod ztsoundscape;
+
+/// ambients module reimplements the vanilla Ambients/AmbientsGroup classes ZTSoundscape (and,
+/// independently, ZTViewingArea/ZTHabitat) own - structs + constructor + destructor + play, plus the
+/// CONSTRUCTOR/PLAY/DESTRUCTOR detours; see openzt/plans/ztsoundscape-ambients-full-port-plan.md.
+mod ambients;
 
 mod experimental;
 
@@ -160,6 +174,10 @@ mod mods;
 /// Utility functions for working with the game's memory, including reading and writing memory, and patching the game's assembly.
 /// Common structs like ZTString are also defined here
 mod util;
+
+/// A shared, vanilla-allocator-owned `std::string` helper for class-reimplementation modules that need
+/// to build temporary vanilla string arguments or receive one via the RVO convention.
+mod vanilla_string;
 
 /// Loads settings from the zoo.ini file and commands/functions for reading and writing settings during runtime
 mod settings;
@@ -209,10 +227,10 @@ mod zoo_init {
 
         // Initialize TUI if enabled
         #[cfg(feature = "tui")]
-        if config.tui.enabled {
-            if let Err(e) = tui_console::init(&config.tui) {
-                info!("Failed to initialize TUI: {}", e);
-            }
+        if config.tui.enabled
+            && let Err(e) = tui_console::init(&config.tui)
+        {
+            info!("Failed to initialize TUI: {}", e);
         }
 
         // Command console is broken on latest stable Rust so we disable it by default.
@@ -255,9 +273,12 @@ mod zoo_init {
             ztawardmgr::init();
             ztshowscriptmgr::init();
             ztshow::init();
+            ztshowstate::init();
+            ztshowinfo::init();
             ztshowmgr::init();
             ztshowui::init();
             ztguest::init();
+            ambients::init();
             ztsoundscape::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }

@@ -5,7 +5,7 @@
 //!
 //! The persistent list itself lives in a plain Rust `VecDeque<ZTThought>`, held in the process-global
 //! [`THOUGHT_STORES`] registry keyed by each `ZTThoughtMgr` instance's own `sentinel_ptr` field.
-//! `sentinel_ptr` is never repurposed or dereferenced by our own code anymore - it's left exactly as
+//! `sentinel_ptr` is never repurposed or dereferenced by our own code - it's left exactly as
 //! vanilla's `CreateZTThoughtMgr` constructor set it, purely so its value stays a stable, unique
 //! per-instance key (real singleton or test standalone alike) without needing a second identity
 //! mechanism. All four mutators (`addThought`/`removeThoughtsBy{Thinker,Object,Habitat}`), save/load, and
@@ -13,8 +13,8 @@
 //!
 //! The three read-only accessors (`getThoughtsBy{Thinker,Object,Habitat}`) are also detoured - see
 //! [`thought_accessor_detours`] - but only to log an error if they're ever actually invoked (no known
-//! caller reaches them) before falling through to the real vanilla body via `.original()`. That fallback
-//! stays safe post-migration specifically *because* `sentinel_ptr` is left untouched: vanilla reads a
+//! caller reaches them) before falling through to the real vanilla body via the `<NAME>_DETOUR.call(...)`
+//! trampoline. That fallback stays safe specifically *because* `sentinel_ptr` is left untouched: vanilla
 //! genuine, permanently self-referencing (i.e. permanently empty) sentinel node, so the fallback can only
 //! ever report zero matches, never dereference stale or incompatible memory.
 
@@ -117,15 +117,15 @@ impl ZTThought {
         self.thinker_ptr = world_mgr.resolve_entity_by_id(self.thinker_id) as u32;
         self.object_ptr = world_mgr.resolve_entity_by_id(self.object_id) as u32;
 
-        if self.object_ptr != 0 {
-            if let Some(habitat_ptr) = resolve_object_own_habitat_ptr(self.object_ptr) {
-                self.habitat_ptr = habitat_ptr;
-                if self.habitat_ptr != 0 {
-                    let habitat = unsafe { ref_from_memory::<ZTHabitat>(self.habitat_ptr) };
-                    if let Some(tile) = habitat.get_gate_tile_in() {
-                        self.tile_x = tile.pos.x;
-                        self.tile_y = tile.pos.y;
-                    }
+        if self.object_ptr != 0
+            && let Some(habitat_ptr) = resolve_object_own_habitat_ptr(self.object_ptr)
+        {
+            self.habitat_ptr = habitat_ptr;
+            if self.habitat_ptr != 0 {
+                let habitat = unsafe { ref_from_memory::<ZTHabitat>(self.habitat_ptr) };
+                if let Some(tile) = habitat.get_gate_tile_in() {
+                    self.tile_x = tile.pos.x;
+                    self.tile_y = tile.pos.y;
                 }
             }
         }
@@ -156,11 +156,11 @@ impl ZTThought {
             if *habitat.unknown_flag_0x2c() == 0 {
                 thought.habitat_ptr = habitat_arg;
             }
-            if thought.habitat_ptr != 0 {
-                if let Some(tile) = unsafe { ref_from_memory::<ZTHabitat>(thought.habitat_ptr) }.get_gate_tile_in() {
-                    thought.tile_x = tile.pos.x;
-                    thought.tile_y = tile.pos.y;
-                }
+            if thought.habitat_ptr != 0
+                && let Some(tile) = unsafe { ref_from_memory::<ZTHabitat>(thought.habitat_ptr) }.get_gate_tile_in()
+            {
+                thought.tile_x = tile.pos.x;
+                thought.tile_y = tile.pos.y;
             }
         }
         thought
@@ -542,25 +542,28 @@ pub fn init() {
 
 /// Detours `ZTThoughtMgr`'s three read-only accessors - `getThoughtsBy{Thinker,Object,Habitat}` - purely
 /// for observability, not behavior. An exhaustive search of the decompiled call-graph corpus in
-/// `private/resources/decompiles` found exactly three callers of these three addresses:
-/// `_fillListBox_0`/`_fillListBox_1`/`_refillThoughtsList` - and all three are already fully replaced by
-/// [`thought_ui_detours`], which calls the `Vec`-returning `get_thoughts_by_*` methods directly and never
-/// invokes `.original()` on any of these three. So as far as this codebase can confirm, nothing live ever
-/// reaches these detours at all.
+/// `private/resources/decompiles` found exactly three callers of these three addresses -
+/// `_fillListBox_0`/`_fillListBox_1`/`_refillThoughtsList` - all three fully replaced by
+/// [`thought_ui_detours`], which calls the `Vec`-returning `get_thoughts_by_*` methods directly - so
+/// nothing known ever reaches these detours at all.
 ///
-/// If some other, undiscovered caller *does* still exist, reimplementing these accessors properly would
-/// mean synthesizing a vanilla-shaped output `std::list<ZTThought>` into the caller's out-param - but the
-/// caller itself (per `_fillListBox_0.c`/`_fillListBox_1.c`/`_refillThoughtsList.c`) tears that list down
-/// afterward using vanilla's own *inlined* freelist push, not a call we could intercept. Any output list
-/// we built via `Box` would then be freed through vanilla's freelist - the exact cross-allocator heap
-/// corruption CLAUDE.md warns about - and there's no confirmed Windows address for the generic small-object
-/// allocator that would let us build a genuinely vanilla-freeable list instead. Given zero known callers,
-/// that work isn't justified: each detour here just logs (so a real hit would actually get noticed) and
-/// falls through to the real vanilla body via the `<NAME>_DETOUR.call(...)` trampoline (calling
-/// `.original()` from inside these detours would recurse into the detour itself), which only reads
-/// `this`'s own `sentinel_ptr` - left pointing at a genuine, permanently self-referencing (i.e.
-/// permanently empty) vanilla sentinel node by the module's `VecDeque` migration. Worst case, an
-/// undiscovered caller sees an always-empty result - a cosmetic gap, never a crash.
+/// Reimplementing these accessors properly would mean synthesizing a vanilla-shaped output
+/// `std::list<ZTThought>` into the caller's out-param, which the caller tears down afterward with
+/// vanilla's own *inlined* freelist push - a cross-allocator heap corruption if we built the list with
+/// `Box` - and there's no confirmed Windows address for the generic small-object allocator that would
+/// let us build a genuinely vanilla-freeable list. With zero known callers, that work isn't justified:
+/// each detour just logs (so a real hit gets noticed) and falls through to the real vanilla body via the
+/// `<NAME>_DETOUR.call(...)` trampoline (`.original()` would recurse into the detour itself in release),
+/// which only reads `this`'s own `sentinel_ptr` - still a genuine, permanently self-referencing (i.e.
+/// permanently empty) sentinel node. Worst case, an undiscovered caller sees an always-empty result - a
+/// cosmetic gap, never a crash.
+///
+/// **Flagged for deletion once confident.** This module exists purely to catch a caller the Windows
+/// decompile-corpus grep above might have missed (it wasn't cross-checked against the macOS corpus, and a
+/// grep can't see a computed/indirect call). If the `error!` in each detour below never fires across
+/// enough real play/testing to trust that absence, delete this module (and its `init()` call) entirely -
+/// three plain, un-detoured addresses are strictly simpler than three detours that only log and call
+/// through, for the same runtime behavior either way.
 mod thought_accessor_detours {
     use openzt_detour::generated::ztthoughtmgr::{GET_THOUGHTS_BY_HABITAT, GET_THOUGHTS_BY_OBJECT, GET_THOUGHTS_BY_THINKER};
     use openzt_detour_macro::detour_mod;
@@ -577,9 +580,8 @@ mod thought_accessor_detours {
         #[detour(GET_THOUGHTS_BY_OBJECT)]
         unsafe extern "thiscall" fn get_thoughts_by_object(this: *const u32, out: *const i32, object_ptr: *const i32, max_count: *const i32) -> *const i32 {
             error!(
-                "GET_THOUGHTS_BY_OBJECT invoked directly (this={this:p}, object_ptr={object_ptr:p}, max_count={}) - no known caller should reach \
-                 this anymore now that ZTThoughtMgr's persistent list lives in a Rust-side store; falling through to the real vanilla body, which \
-                 will report zero matches against the permanently-empty sentinel it still reads",
+                "GET_THOUGHTS_BY_OBJECT invoked directly (this={this:p}, object_ptr={object_ptr:p}, max_count={}) - no known caller; falling \
+                 through to vanilla, which reads the permanently-empty sentinel and returns zero matches",
                 max_count as i32
             );
             unsafe { GET_THOUGHTS_BY_OBJECT_DETOUR.call(this, out, object_ptr, max_count) }
@@ -589,9 +591,8 @@ mod thought_accessor_detours {
         #[detour(GET_THOUGHTS_BY_HABITAT)]
         unsafe extern "thiscall" fn get_thoughts_by_habitat(this: *const u32, out: *const i32, habitat_ptr: *const i32, max_count: *const i32) -> *const i32 {
             error!(
-                "GET_THOUGHTS_BY_HABITAT invoked directly (this={this:p}, habitat_ptr={habitat_ptr:p}, max_count={}) - no known caller should \
-                 reach this anymore now that ZTThoughtMgr's persistent list lives in a Rust-side store; falling through to the real vanilla body, \
-                 which will report zero matches against the permanently-empty sentinel it still reads",
+                "GET_THOUGHTS_BY_HABITAT invoked directly (this={this:p}, habitat_ptr={habitat_ptr:p}, max_count={}) - no known caller; falling \
+                 through to vanilla, which reads the permanently-empty sentinel and returns zero matches",
                 max_count as i32
             );
             unsafe { GET_THOUGHTS_BY_HABITAT_DETOUR.call(this, out, habitat_ptr, max_count) }
@@ -600,9 +601,8 @@ mod thought_accessor_detours {
         #[detour(GET_THOUGHTS_BY_THINKER)]
         unsafe extern "thiscall" fn get_thoughts_by_thinker(this: *const u32, out: *const i32, thinker_ptr: *const i32, max_count: i32) -> *const i32 {
             error!(
-                "GET_THOUGHTS_BY_THINKER invoked directly (this={this:p}, thinker_ptr={thinker_ptr:p}, max_count={max_count}) - no known caller \
-                 should reach this anymore now that ZTThoughtMgr's persistent list lives in a Rust-side store; falling through to the real vanilla \
-                 body, which will report zero matches against the permanently-empty sentinel it still reads"
+                "GET_THOUGHTS_BY_THINKER invoked directly (this={this:p}, thinker_ptr={thinker_ptr:p}, max_count={max_count}) - no known caller; \
+                 falling through to vanilla, which reads the permanently-empty sentinel and returns zero matches"
             );
             unsafe { GET_THOUGHTS_BY_THINKER_DETOUR.call(this, out, thinker_ptr, max_count) }
         }
@@ -615,13 +615,13 @@ mod thought_accessor_detours {
     }
 }
 
-/// Detours the three UI functions that used to be `getThoughtsBy*`'s only consumers of the vanilla
-/// `std::list` those built - `_fillListBox` (both instantiations) and `_refillThoughtsList`. Rewritten
-/// to call the `Vec`-returning accessors above directly and drive
+/// Detours the three UI functions that are `getThoughtsBy*`'s only consumers of the vanilla `std::list`
+/// it builds - `_fillListBox` (both instantiations) and `_refillThoughtsList`. Each calls the
+/// `Vec`-returning accessors above directly and drives
 /// `BFUIMgr::getElement`/`UIListBox::clear`/`addString`/`restoreState` (all real vanilla functions,
 /// called via `.original()`, never detoured themselves) in a loop instead. This is what makes the
-/// `Vec` return type viable: once these three are detoured, nothing vanilla-side ever constructs or
-/// walks a `getThoughtsBy*` result as a real intrusive list again.
+/// `Vec` return type viable: with these three detoured, nothing vanilla-side ever constructs or walks a
+/// `getThoughtsBy*` result as a real intrusive list.
 mod thought_ui_detours {
     use openzt_detour::generated::{
         bfuimgr::GET_ELEMENT_0,
@@ -857,16 +857,16 @@ mod thought_save_detours {
 }
 
 /// Detours `ZTThoughtMgr`'s vtable destructor slot - the scalar deleting destructor at `0x0057d852`
-/// (`ZTTHOUGHT_MGR_1` in `generated.rs`) - onto [`ZTThoughtMgr::clear`]. Vanilla's own version of this
+/// (`ztthoughtmgr::DESTRUCTOR_1` in `generated.rs`) - onto [`ZTThoughtMgr::clear`]. Vanilla's own version of this
 /// function calls the real destructor body, then conditionally calls `operator delete` on `this` if the
 /// caller-supplied flag byte's low bit is set. Since `ZTThoughtMgr` is a process-lifetime singleton and
 /// no address for the real vanilla `operator delete` this class would use is known or needed, this
 /// reimplementation only ever frees the list's own `Box`-allocated nodes and never the flag-gated
-/// `this` itself. `ZTTHOUGHT_MGR_0` (`0x0057d815`, the real destructor's own address, only ever reached
+/// `this` itself. `ztthoughtmgr::DESTRUCTOR_0` (`0x0057d815`, the real destructor's own address, only ever reached
 /// indirectly through this wrapper) is intentionally left un-detoured: nothing else in vanilla calls it
 /// directly.
 mod thought_dtor_detour {
-    use openzt_detour::generated::ztthoughtmgr::ZTTHOUGHT_MGR_1;
+    use openzt_detour::generated::ztthoughtmgr::DESTRUCTOR_1 as ZTTHOUGHTMGR_DESTRUCTOR;
     use openzt_detour_macro::detour_mod;
     use tracing::error;
 
@@ -877,7 +877,7 @@ mod thought_dtor_detour {
     mod detours {
         use super::*;
 
-        #[detour(ZTTHOUGHT_MGR_1)]
+        #[detour(ZTTHOUGHTMGR_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztthoughtmgr_dtor(this: *const u32, _flags: u8) -> *const u32 {
             unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.clear();
             this
@@ -891,13 +891,13 @@ mod thought_dtor_detour {
     }
 }
 
-/// Live-comparison test support for `reimplementation_tests`. Since the production `ZTThoughtMgr`
-/// methods no longer touch `sentinel_ptr`'s raw memory at all (the persistent list lives in
-/// [`THOUGHT_STORES`] instead), the live-comparison suite needs a *separate*, explicit way to drive and
-/// read a genuine vanilla-shaped `ThoughtNode` chain - this module provides both: the registry-based
-/// helpers production code also uses (`build_standalone_mgr`/`destroy_standalone_mgr`), and a set of
-/// `*_raw_chain*` helpers that operate directly on `sentinel_ptr`'s intrusive chain, for seeding/reading
-/// instances a test drives through a real, undetoured `.original()` call.
+/// Live-comparison test support for `reimplementation_tests`. Production `ZTThoughtMgr` methods never
+/// touch `sentinel_ptr`'s raw memory (the persistent list lives in [`THOUGHT_STORES`]), so the
+/// live-comparison suite needs explicit helpers to drive and read a genuine vanilla-shaped `ThoughtNode`
+/// chain: the registry-based helpers production code also uses
+/// (`build_standalone_mgr`/`destroy_standalone_mgr`), plus `*_raw_chain*` helpers that operate directly
+/// on `sentinel_ptr`'s intrusive chain, for seeding/reading instances a test drives through a real,
+/// undetoured `.original()` call.
 ///
 /// Nothing here ever frees vanilla-allocated memory through `Box`, or `Box`-allocated memory through
 /// vanilla's own freelist - see each function's own doc comment for which allocator it assumes.
@@ -907,7 +907,7 @@ pub(crate) mod live_support {
 
     /// A persistent-list node: 8 bytes of intrusive links followed by the `ZTThought` payload at `+0x8`.
     /// The sentinel node vanilla allocates at startup shares this same link layout (its `data` is never
-    /// read). Test-only: no production code walks this layout anymore.
+    /// read). Test-only: no production code walks this layout.
     #[repr(C)]
     pub(crate) struct ThoughtNode {
         next: *mut ThoughtNode,
@@ -924,6 +924,9 @@ pub(crate) mod live_support {
     /// `0`: `ZTThoughtMgr::save` dispatches through each node's own `data.vtable` slot 0 rather than
     /// calling `ZTThought::save` directly, so every node reachable from a real vanilla call needs a
     /// genuinely valid vtable, not just correct data fields.
+    // The args are `ZTThought`'s own flat field list in declaration order (minus `vtable`, which this
+    // sets itself) - a params struct would just wrap the same eight values.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_thought(
         string_id: u32,
         thinker_id: u32,
@@ -1104,12 +1107,11 @@ mod tests {
     }
 
     /// Builds a standalone `ZTThoughtMgr` backed by its own entry in [`THOUGHT_STORES`] - never spliced
-    /// into the real singleton. `sentinel_ptr` is never dereferenced by any production method anymore;
-    /// it's just a unique registry key here, so a plain leaked one-byte allocation is enough (no need
-    /// for a real `ThoughtNode`-shaped placeholder, which is test-only harness scoped to the
-    /// `reimplementation-tests` feature these plain unit tests don't enable). Leaks that placeholder
-    /// (acceptable for short-lived unit tests, and guarantees the key is never reused across tests
-    /// sharing a stack slot).
+    /// into the real singleton. `sentinel_ptr` is never dereferenced by any production method; it's just
+    /// a unique registry key, so a plain leaked one-byte allocation is enough (a real `ThoughtNode`-shaped
+    /// placeholder isn't needed here - that lives in `live_support`, behind the `reimplementation-tests`
+    /// feature these plain unit tests don't enable). Leaks that placeholder (acceptable for short-lived
+    /// unit tests, and guarantees the key is never reused across tests sharing a stack slot).
     fn build_test_mgr(max_thoughts: u32) -> ZTThoughtMgr {
         let sentinel_ptr = Box::into_raw(Box::new(0u8)) as u32;
         ZTThoughtMgr { vtable: 0, flag: 0, _pad: [0; 3], sentinel_ptr, max_thoughts }

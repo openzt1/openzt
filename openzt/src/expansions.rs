@@ -10,6 +10,7 @@ use std::{
 use anyhow::{anyhow, Context};
 use maplit::hashset;
 use openzt_configparser::ini::Ini;
+use openzt_detour::generated::standalone::{OPERATOR_DELETE, OPERATOR_NEW};
 use openzt_detour_macro::detour_mod;
 use std::sync::LazyLock;
 use tracing::{debug, error, info, warn};
@@ -260,20 +261,54 @@ fn save_mutex() {
     inner_save_mutex(data_mutex)
 }
 
-fn inner_save_mutex(mut mutex_guard: MutexGuard<Vec<Expansion>>) {
-    let array_ptr = mutex_guard.as_mut_ptr();
-    let array_end_ptr = unsafe { array_ptr.offset(isize::try_from(mutex_guard.len()).unwrap()) };
-    let array_buffer_end_ptr = unsafe { array_ptr.offset(isize::try_from(mutex_guard.capacity()).unwrap()) };
-    info!(
-        "Saving expansions to {:#x} to {:#x}; {:#x}",
-        array_ptr as u32, array_end_ptr as u32, array_buffer_end_ptr as u32
-    );
+/// Tracks whatever vanilla-owned buffer is currently installed at `EXPANSION_LIST_START`, so a later
+/// call can free it before overwriting the global with a fresh one - see [`inner_save_mutex`]'s own doc
+/// comment for why this needs to be a real vanilla allocation at all.
+static PREVIOUS_VANILLA_EXPANSION_BUFFER: LazyLock<Mutex<Option<u32>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Publishes the current `EXPANSION_ARRAY` contents to vanilla at `EXPANSION_LIST_START`. Vanilla code
+/// reads this global as an owned array and, confirmed live (a real `operator_delete` call on this exact
+/// buffer, caught mid-app-exit-teardown under a debugger's heap validation), eventually frees it through
+/// its own allocator - so the buffer handed out here must itself be a genuine vanilla `operator_new`
+/// allocation, never `EXPANSION_ARRAY`'s own Rust-allocated `Vec` buffer (see `CLAUDE.md`'s
+/// cross-allocator memory safety section). Called more than once per session (whenever the expansion
+/// select UI initializes, via `custom_expansion::ztui_expansionselect_setup`), so each call also frees
+/// whichever vanilla buffer it previously installed - safe because every real reader re-reads
+/// `EXPANSION_LIST_START` fresh each time rather than caching the pointer (confirmed against the
+/// decompiles), so nothing should still reference the old buffer once the global below has moved on.
+fn inner_save_mutex(mutex_guard: MutexGuard<Vec<Expansion>>) {
+    let byte_len = mutex_guard.len() as u32 * EXPANSION_SIZE;
+
+    let new_block = if byte_len == 0 {
+        0
+    } else {
+        let block = unsafe { OPERATOR_NEW.original()(byte_len) } as u32;
+        if block == 0 {
+            error!("Failed to allocate vanilla-owned expansion buffer ({} bytes)", byte_len);
+        } else {
+            for (i, expansion) in mutex_guard.iter().enumerate() {
+                save_to_memory(block + i as u32 * EXPANSION_SIZE, expansion.clone());
+            }
+        }
+        block
+    };
+    drop(mutex_guard);
+
+    let array_end = if new_block == 0 { 0 } else { new_block + byte_len };
+    info!("Saving expansions to vanilla-owned buffer {:#x} to {:#x}", new_block, array_end);
 
     save_expansion_list_to_memory(ExpansionList {
-        array_start: array_ptr as u32,
-        array_end: array_end_ptr as u32,
-        buffer_end: array_end_ptr as u32,
+        array_start: new_block,
+        array_end,
+        buffer_end: array_end,
     });
+
+    let mut previous = PREVIOUS_VANILLA_EXPANSION_BUFFER.lock().unwrap();
+    if let Some(old_block) = previous.replace(new_block)
+        && old_block != 0
+    {
+        unsafe { OPERATOR_DELETE.original()(old_block) };
+    }
 }
 
 fn get_expansions() -> Vec<Expansion> {

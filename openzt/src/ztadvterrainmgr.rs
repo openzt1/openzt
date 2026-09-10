@@ -54,30 +54,23 @@ const RVA_BFPOS_NODE_FREELIST_HEAD: u32 = 0x0023_8008;
 #[repr(C)]
 pub struct ZTAdvTerrainMgr_raw {
     vtable: u32,
-    /// `0x4` - was `unknown_u32_1`. A single **byte**, not a dword - confirmed from
-    /// `BFTerrainMgr_BFTerrainMgr.asm`'s `MOV byte ptr [ESI+0x4], AL` (zeroed at construction). Same
-    /// shape as `ztmegatilemgr.rs`'s own `flag: u8 @ 0x4` (also zeroed by its ctor) - two independently
-    /// reimplemented `BFMgr` subclasses putting a lone byte flag right after the vtable pointer is strong
-    /// evidence this is a `BFMgr`-inherited field, not `ZTAdvTerrainMgr`-specific. No decompiled call
-    /// site in the corpus reads it back; not behaviorally relevant to this thin-shell scope.
+    /// `0x4` - a single **byte**, not a dword - confirmed from `BFTerrainMgr_BFTerrainMgr.asm`'s
+    /// `MOV byte ptr [ESI+0x4], AL` (zeroed at construction). Same shape as `ztmegatilemgr.rs`'s own
+    /// `flag: u8 @ 0x4` (also zeroed by its ctor) - two independently reimplemented `BFMgr` subclasses
+    /// putting a lone byte flag right after the vtable pointer is strong evidence this is a
+    /// `BFMgr`-inherited field, not `ZTAdvTerrainMgr`-specific. No decompiled call site in the corpus
+    /// reads it back; not behaviorally relevant to this thin-shell scope.
     flag: u8,
     _pad0: [u8; 3],
-    /// `0x8` - was `unknown_u32_2`. A debug/dev-mode toggle, confirmed flipped by a debug hotkey in
-    /// `ZTMapView::handleChar`'s `case 7` (a cheat-key dispatch branch, sibling to `addCash`/
-    /// `increaseDonations` in the same handler):
-    /// ```c
-    /// uVar6 = (uint)(GLOBAL_ZTAdvTerrainMgr->mbr_0x8 == 0);   // toggle
-    /// GLOBAL_ZTAdvTerrainMgr->mbr_0x8 = uVar6;
-    /// DAT_00638064 = uVar6 != 0;                              // mirrored into a global
-    /// (this->cls_0x6314c8).cls_0x6313e4.field_0x44c = pZVar3->mbr_0x8 != 0;  // mirrored into a UI bool
-    /// ```
-    /// `BFTerrainMgr`'s constructor also zeroes it while computing that same `DAT_00638064` global from
-    /// it, confirming both the field and the mirror are kept in sync from construction onward. What it
-    /// visually toggles isn't confirmed (no string/comment names it, and the corpus doesn't include
-    /// whatever reads `field_0x44c`) - plausibly a wireframe/grid/debug-overlay switch given the class's
-    /// purpose, but that specific label is a guess. Not read/written anywhere in this thin-shell scope.
+    /// `0x8` - a debug/dev-mode toggle, flipped by a debug hotkey in `ZTMapView::handleChar`'s `case 7`
+    /// (a cheat-key dispatch branch, sibling to `addCash`/`increaseDonations` in the same handler),
+    /// which mirrors the new value into the `DAT_00638064` global and a UI bool at
+    /// `cls_0x6313e4.field_0x44c`. `BFTerrainMgr`'s constructor zeroes it while computing that same
+    /// global from it, so field and mirror stay in sync from construction onward. What it visually
+    /// toggles isn't confirmed (no string/comment names it, and the corpus doesn't include whatever
+    /// reads `field_0x44c`). Not read/written anywhere in this thin-shell scope.
     debug_toggle: u32,
-    /// `0xc` - was `unknown_u32_3`. Written `2` by `start()`; read by `setImage()` (`state > 1`) and
+    /// `0xc` - written `2` by `start()`; read by `setImage()` (`state > 1`) and
     /// `update()`'s time-budget switch. Confirmed identical on both platforms. Independently corroborated
     /// as the terrain-quality options-menu setting by `_checkTerrainOptions.c`: menu item ids
     /// `0x636`-`0x639` map to `state` values `0`-`3` (selected from a UI dropdown at element `0x635`).
@@ -178,7 +171,7 @@ impl ZTAdvTerrainMgr_raw {
         }
     }
 
-    /// Straight-line 4-stage bring-up pipeline with short-circuit-on-failure, per
+    /// Straight-line 4-call bring-up pipeline with short-circuit-on-failure, per
     /// `ZTAdvTerrainMgr_start.c`: `start2D()` -> `startD3D()` -> `loadTextures()` -> `setupRender()`,
     /// `true` only if all four succeed. `this->state = 2` is a plain field write with no other side
     /// effects (the mac build calls `BFTerrainMgr::setPerfBias(this, 2)` for the same effect).
@@ -342,7 +335,6 @@ mod ztadvterrainmgr_detours {
 /// Registers this module's live detours. Deliberately does **not** detour `stop()` or the destructor -
 /// see the module doc comment.
 pub fn init() {
-    // list_bfterraintypeinfo() - no args
     lua_fn!("list_bfterraintypeinfo", "Lists terrain type info", "list_bfterraintypeinfo()", || {
         match command_get_bfterraintypeinfo(vec![]) {
             Ok(result) => Ok((Some(result), None::<String>)),

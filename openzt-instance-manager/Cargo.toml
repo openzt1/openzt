@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 # API server dependencies
 axum = "0.8"
-bollard = "0.18"
+bollard = "0.21.1"
 tokio = { version = "1.42", features = ["full"] }
 tokio-stream = "0.1"
 futures-util = "0.3"
@@ -15,20 +15,20 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+tower-http = { version = "0.7.1", features = ["cors", "trace", "limit"] }
 uuid = { version = "1.11", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-base64 = "0.22"
-toml = "0.8"
-anyhow = "1.0"
+base64 = "0.23.1"
+toml = "1.1.5"
+anyhow = "1.0.104"
 
 # CLI dependencies (optional)
 clap = { version = "4.5", features = ["derive"], optional = true }
-reqwest = { version = "0.12", features = ["json", "stream"], optional = true }
+reqwest = { version = "0.13.4", features = ["json", "stream"], optional = true }
 miette = { version = "7.4", features = ["fancy"], optional = true }
-console = "0.15"
-tabled = "0.17"
-directories = "5.0"
+console = "0.16.4"
+tabled = "0.22.0"
+directories = "6.0.0"
 
 [features]
 default = []

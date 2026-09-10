@@ -25,34 +25,35 @@
 
 use std::{ffi::{c_void, CStr}, mem};
 
-use openzt_detour::FunctionDef;
 use openzt_detour::generated::{
     bfapp::LOAD_STRING,
-    bfconfigfile::{GET_FLOAT, GET_INT},
-    bfinternat::{GET_MONEY_TEXT_0, SET_MONEY_TEXT_0},
+    bfconfigfile::{GET_FLOAT, GET_FLOAT_LIST, GET_INT},
+    bfinternat::{GET_MONEY_TEXT_0, SET_MONEY_TEXT_1},
     bfuimgr::{DISPLAY_MESSAGE_0, DISPLAY_MESSAGE_1, GET_ELEMENT_0},
     msvc_std::RAND,
-    msvc_std_basic_string::{BASIC_STRING_0, BASIC_STRING_2},
     standalone::{DEALLOCATE, GET_OLD_DATE, WRITE_BYTES_TO_FILE},
     uielement::{DISABLE, ENABLE},
     zoostatus::{
         ADMISSION_MESSAGE, ANIMAL_ESCAPED, BUY_ANIMAL, BUY_PEOPLE_FOOD, CALCULATE_SUMS, CHANGE_ENDOWMENT_MEMBERS, F_CHANCE, F_CREATE_GUEST,
-        F_GRANT_DONATION, F_ZOO_MESSAGE, FINANCE_CHECKS, HEAL_ANIMAL, INCREASE_ADMISSIONS, INCREASE_ADMISSIONS_INCOME, INCREASE_DONATIONS,
-        INCREASE_ENDOWMENT, INCREASE_SHOW_ADMISSION, INIT, LOAD, MESSAGE_CHECKS, NEWGUEST_CHECKS, OVERRIDE, PURCHASE_FOOD, RATING_CHECKS,
-        REFUND_ANIMAL_COST, REFUND_CONSTRUCTION, RESET_FINANCE_INFO, SAVE, SET_ADULT_ADMISSION_PRICE, SHOW_PRICES, SPEND_BUILDING_UPKEEP,
-        SPEND_CONSTRUCTION, SPEND_GUIDE_WAGES, SPEND_KEEPER_WAGES, SPEND_MAINT_WAGES, SPEND_MARKETING, SPEND_RESEARCH, UPDATE,
+        F_GRANT_DONATION, F_ZOO_MESSAGE, FINANCE_CHECKS, GET_STATUS, HEAL_ANIMAL, INCREASE_ADMISSIONS, INCREASE_ADMISSIONS_INCOME,
+        INCREASE_DONATIONS, INCREASE_ENDOWMENT, INCREASE_SHOW_ADMISSION, INIT, LOAD, MESSAGE_CHECKS, NEWGUEST_CHECKS, OVERRIDE, PURCHASE_FOOD,
+        RATING_CHECKS, REFUND_ANIMAL_COST, REFUND_CONSTRUCTION, RESET_FINANCE_INFO, SAVE, SET_ADULT_ADMISSION_PRICE, SHOW_PRICES,
+        SPEND_BUILDING_UPKEEP, SPEND_CONSTRUCTION, SPEND_GUIDE_WAGES, SPEND_KEEPER_WAGES, SPEND_MAINT_WAGES, SPEND_MARKETING, SPEND_RESEARCH,
+        UPDATE,
     },
     ztapp::GET_APP,
     zthabitat::GET_NUM_ANIMALS,
     zthabitatmgr::GET_NUM_SPECIES,
 };
+use openzt_configparser::ini::Ini;
 use openzt_detour_macro::detour_mod;
 use tracing::error;
 
 use crate::{
     globals::{get_module_base, globals},
     lua_fn,
-    util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory},
+    util::{get_from_memory, get_ini_path, mut_from_memory, ref_from_memory, save_to_memory},
+    vanilla_string::VanillaString,
     ztworldmgr::IVec3,
 };
 
@@ -144,8 +145,7 @@ pub struct ZooStatus {
     /// not necessarily identical to a "total guests in the zoo" figure another system might expose.
     /// `messageChecks`/`admissionMessage` both compare it against the literal `10`. Not part of `save`'s
     /// field list (derived, not persisted).
-    pub(crate) guest_tile_count: u16, // 0x44
-    _pad_0x46: [u8; 2],
+    pub(crate) guest_tile_count: i32, // 0x44
     /// Saved/loaded (`save.c`'s `field_0x48`). `newguestChecks` also writes a `0`-`4` state-machine
     /// value at this same offset; whether that's the persisted field itself or a distinct transient
     /// use of the same bytes is unresolved (the plan's own narrative flags this as a to-be-reconciled
@@ -567,7 +567,7 @@ mod override_config_keys {
 
     /// "cAdultAdmission" - a real, always-present 5-`f32` list in the shipped `economy.cfg` (confirmed by
     /// inspecting the live game install locally, not committed anywhere in this repo). Read via
-    /// [`super::GET_FLOAT_LIST_FIXED`] and copied into [`super::raw_globals::PRICE_TIER_BOUNDARY_0_RVA`]`..`
+    /// [`super::GET_FLOAT_LIST`] and copied into [`super::raw_globals::PRICE_TIER_BOUNDARY_0_RVA`]`..`
     /// [`super::raw_globals::PRICE_TIER_BOUNDARY_4_RVA`] - see [`super::ZooStatus::override_config`]'s own
     /// doc comment for the full resolution of what was originally an opaque `FUN_00591c0f` tail-call.
     pub(super) const C_ADULT_ADMISSION_KEY_RVA: u32 = 0x00641b44 - 0x400000;
@@ -585,88 +585,8 @@ mod override_config_keys {
 /// previously forced every caller ([`ZooStatus::admission_message`], [`ZooStatus::message_checks`]) to
 /// stay a call-through to real vanilla `F_ZOO_MESSAGE` - see [`raw_globals::GLOBAL_BFUIMGR_RVA`]'s doc
 /// comment for where the address came from.
-/// A real, vanilla-allocator-owned `std::string` - `{char* ptr; u32 len; u32 capacity}`, 12 bytes, no
-/// small-string-optimization buffer (same confirmed layout as `ztgamemgr_menumusichandler.rs`'s own
-/// `VanillaString`, which this mirrors - not shared cross-module since each class-reimplementation file
-/// in this codebase stays otherwise self-contained). [`Self::new`] builds one via real vanilla
-/// `msvc_std_basic_string::BASIC_STRING_2` (iterator-range constructor); [`Self::rvo_target`] instead
-/// hands a zeroed instance to a vanilla function using the hidden-return-pointer (RVO) convention (e.g.
-/// [`GET_MONEY_TEXT_0`]) to construct into directly - either way, [`Drop`] always tears it down through
-/// the real vanilla destructor, never Rust's allocator (`CLAUDE.md`'s cross-allocator hazard).
-#[repr(C)]
-struct VanillaString {
-    ptr: *mut u8,
-    len: u32,
-    capacity: u32,
-}
-
-impl VanillaString {
-    fn new(s: &str) -> Self {
-        let mut this = VanillaString { ptr: std::ptr::null_mut(), len: 0, capacity: 0 };
-        let start = s.as_ptr();
-        let end = unsafe { start.add(s.len()) };
-        unsafe {
-            BASIC_STRING_2.original()(&mut this as *mut VanillaString as *const c_void, start as *const u32, end as i32, 0);
-        }
-        this
-    }
-
-    /// A zeroed instance suitable as an RVO out-parameter for a vanilla function that placement-constructs
-    /// its return value at the address it's given (the caller-supplies-uninitialized-destination-memory
-    /// convention MSVC uses for by-value `std::string` returns) - the callee never reads this memory
-    /// before writing it, so a zeroed instance is a safe destination.
-    fn rvo_target() -> Self {
-        VanillaString { ptr: std::ptr::null_mut(), len: 0, capacity: 0 }
-    }
-
-    fn as_ptr(&self) -> *const u32 {
-        self as *const VanillaString as *const u32
-    }
-
-    fn as_str(&self) -> std::borrow::Cow<'_, str> {
-        if self.ptr.is_null() || self.len == 0 {
-            return std::borrow::Cow::Borrowed("");
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(self.ptr, self.len as usize) };
-        String::from_utf8_lossy(bytes)
-    }
-}
-
-impl Drop for VanillaString {
-    fn drop(&mut self) {
-        unsafe { BASIC_STRING_0.original()(self as *mut VanillaString as *const c_void) };
-    }
-}
-
-/// Real vanilla `BFConfigFile::getFloatList` (`0x00591a5a`), corrected locally rather than via
-/// `generated.rs`'s own `bfconfigfile::GET_FLOAT_LIST` entry, which is missing a parameter.
-/// `generated.rs`'s entry declares `fn(this, section, key) -> *const u32` (2 explicit args), matching
-/// this decompile's own `.meta` (`getFloatList(BFConfigFile*, char*, char*)`) - but `ZooStatus_override.asm`'s
-/// raw push order for this exact call site (`PUSH key; PUSH section; PUSH <local-vector-address>; MOV
-/// ECX,this; CALL`, i.e. 3 real stack args, reversed for right-to-left push order into declaration order
-/// `(this, out_vector, section, key)`) proves a fourth argument - a hidden out-parameter pointer for the
-/// `std::vector<float>` return value, the standard MSVC ABI for a member function returning a non-POD by
-/// value - is real and the `.meta`/`generated.rs` 2-param shape simply dropped it. Per `CLAUDE.md`,
-/// `generated.rs` itself is never hand-edited for this - this local, corrected `FunctionDef` is the
-/// sanctioned workaround ([`FunctionDef::new`]) until a future regen fixes the real entry.
-const GET_FLOAT_LIST_FIXED: FunctionDef<unsafe extern "thiscall" fn(*const u32, *mut u32, u32, u32) -> *mut u32> = FunctionDef::new(0x00591a5a);
-
-/// Real vanilla `ZooStatus::getStatus` (`0x0041dd64`), corrected locally rather than via `generated.rs`'s
-/// own `zoostatus::GET_STATUS` entry, which declares the return type `*const f32`. `ZooStatus_getStatus.c`'s
-/// own `float10 *` return type is the same return-by-hidden-pointer decompiler artifact this plan's
-/// Status header already flagged when the regen first landed (an x87/`float10` scalar return rendered as
-/// a pointer) - but `ZooStatus_getStatus.asm` (read in full, the `.c` decompile itself is unusable, pure
-/// pointer-arithmetic noise on a `float10*`) settles it unambiguously: every path ends in a plain `FLD
-/// float ptr [...]` immediately before `RET 0xc`, the standard x87-register (`ST(0)`) scalar-float return
-/// convention every other `-> f32` `FunctionDef` in this codebase already uses (e.g. `ztguest.rs`'s
-/// `F_ESTHETIC_BONUS_MEGATILE`, already hooked live) - never a return-by-pointer/RVO convention. Per
-/// `CLAUDE.md`, `generated.rs` itself is never hand-edited for this - this local, corrected `FunctionDef`
-/// is the sanctioned workaround ([`FunctionDef::new`]) until a future regen fixes the real entry. `pub(crate)`
-/// so `reimplementation_tests` can drive the real vanilla pole directly for `ZOOSTATUS_GET_STATUS`.
-pub(crate) const GET_STATUS_FIXED: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, i32) -> f32> = FunctionDef::new(0x0041dd64);
-
 /// A real, vanilla-allocator-owned `std::vector<float>` - the standard MSVC 3-pointer layout
-/// (`{begin, end, cap_end}`, 12 bytes) [`GET_FLOAT_LIST_FIXED`] constructs into via the same
+/// (`{begin, end, cap_end}`, 12 bytes) [`GET_FLOAT_LIST`] constructs into via the same
 /// hidden-return-pointer (RVO) convention [`VanillaString::rvo_target`] uses.
 ///
 /// **Deliberately never freed.** `ZooStatus_override.c`'s own teardown for this exact buffer (read in
@@ -1086,14 +1006,14 @@ impl ZooStatus {
     /// (Stage 6), called exactly where vanilla's own `init` calls it, with exactly the same arguments -
     /// see that method's own doc comment.
     ///
-    /// Deliberately **not** reproduced: `init`'s own two `BFIniFile::read` calls for
-    /// `AI`/`cEscapedAnimalChange` and `AI`/`cEscapedAnimalTime` (write into process globals, not into
-    /// `this` - genuinely out of `ZooStatus`'s own scope) and the `AI`/`maxGuests` read that seeds
-    /// [`Self::max_guests`] (writes into `this`, but constructing the real `BFIniFile::read` call's
-    /// `std::string` arguments is an untouched dependency in this codebase - see `ztgamemgr.rs`'s
-    /// `initMenuMusic` doc comment for the same class of gap already flagged there). `max_guests` is
-    /// hardcoded to its vanilla default (`1000`) instead - see the live test's masked-byte-range note
-    /// for the resulting comparison caveat.
+    /// Rather than reproducing real vanilla `BFIniFile::read`'s C++ ABI (an untouched dependency in this
+    /// codebase - see `ztgamemgr.rs`'s `initMenuMusic` doc comment for the same class of gap), `init`
+    /// parses `zoo.ini` directly via [`openzt_configparser::ini::Ini`] (the same parser/pattern as
+    /// `resource_manager/hooks.rs` and `expansions.rs`) to read `AI`/`maxGuests` (seeds
+    /// [`Self::max_guests`]) and `AI`/`cEscapedAnimalChange`/`AI`/`cEscapedAnimalTime` (write into
+    /// process globals, not `this` - see [`raw_globals::ESCAPE_DECAY_BASELINE_RVA`]/
+    /// [`raw_globals::ESCAPE_DECAY_PER_DAY_RVA`]). Any missing file/section/key falls back to vanilla's
+    /// own defaults (`1000`/`50`/`2`), matching `BFIniFile::read`'s own default-value semantics.
     ///
     /// Byte-order-independent: every write here is either an unconditional constant or (for
     /// [`Self::admission_price`]) deliberately **not written at all**, matching vanilla exactly -
@@ -1133,8 +1053,17 @@ impl ZooStatus {
         self.current_month_index = 1;
         self.current_year_index = 0;
 
-        // AI/maxGuests config read skipped - see this method's doc comment.
-        self.max_guests = 1000;
+        let mut zoo_ini = Ini::new();
+        zoo_ini.set_comment_symbols(&['#']);
+        if let Err(e) = zoo_ini.load(get_ini_path()) {
+            error!("ZooStatus::init: failed to load zoo.ini, using AI-section defaults: {e}");
+        }
+        self.max_guests = zoo_ini.get_parse::<i32>("AI", "maxGuests").unwrap_or(Some(1000)).unwrap_or(1000);
+        let escape_decay_baseline = zoo_ini.get_parse::<i32>("AI", "cEscapedAnimalChange").unwrap_or(Some(50)).unwrap_or(50);
+        let escape_decay_per_day = zoo_ini.get_parse::<i32>("AI", "cEscapedAnimalTime").unwrap_or(Some(2)).unwrap_or(2);
+        let base = get_module_base("zoo.exe") as u32;
+        save_to_memory(base + raw_globals::ESCAPE_DECAY_BASELINE_RVA, escape_decay_baseline);
+        save_to_memory(base + raw_globals::ESCAPE_DECAY_PER_DAY_RVA, escape_decay_per_day);
 
         self.message_threshold_0x70 = 0.5;
         self.message_threshold_0x74 = 0.5;
@@ -1262,8 +1191,8 @@ impl ZooStatus {
     /// slot that method doesn't consume. So `cAdultAdmission`'s 5 config values
     /// (real `economy.cfg`: `49`/`29`/`19`/`9`/`0`) are genuinely the live source of `newguestChecks`'
     /// price-tier bucketing - not hardcoded constants, as this plan originally assumed when those globals
-    /// were first named. Implemented here via [`GET_FLOAT_LIST_FIXED`]/[`VanillaFloatVector`] (see their
-    /// own doc comments for the `generated.rs`-gap workaround and the deliberate-leak teardown choice) -
+    /// were first named. Implemented here via [`GET_FLOAT_LIST`]/[`VanillaFloatVector`] (see the latter's
+    /// own doc comment for the deliberate-leak teardown choice) -
     /// live-verified byte-identical against real vanilla by `ZOOSTATUS_OVERRIDE`
     /// (`reimplementation_tests/mod.rs`), which runs both poles against the same real, loaded
     /// `economy.cfg` and confirms this write lands in the same place real vanilla's does.
@@ -1293,11 +1222,11 @@ impl ZooStatus {
         // see raw_globals::PRICE_TIER_BOUNDARY_0_RVA..`_4_RVA`'s own doc comments.
         let mut admission_tiers = VanillaFloatVector::rvo_target();
         unsafe {
-            GET_FLOAT_LIST_FIXED.original()(
+            GET_FLOAT_LIST.original()(
                 config_ptr,
                 admission_tiers.as_ptr(),
-                base + CHARACTERISTICS_SECTION_RVA,
-                base + C_ADULT_ADMISSION_KEY_RVA,
+                (base + CHARACTERISTICS_SECTION_RVA) as *const i8,
+                (base + C_ADULT_ADMISSION_KEY_RVA) as *const i8,
             );
         }
         if admission_tiers.as_slice().len() == 5 {
@@ -1428,6 +1357,9 @@ impl ZooStatus {
     /// questions" section) - so this mirrors the real addressing mode directly instead of guessing a row
     /// index. [`Self::flat_totals`]' slots, by contrast, are never index-scaled (`.asm` addresses them as
     /// a bare `[ECX+<offset>]`), so `flat_own`/`flat_shared` are used as-is.
+    // The eight args mirror the six raw byte-offset literals `amount`/`shared_sign` are applied to
+    // (see above) - a params struct would obscure the 1:1 correspondence with the `.asm` addressing.
+    #[allow(clippy::too_many_arguments)]
     fn accumulate(&mut self, monthly_own: u32, monthly_shared: u32, yearly_own: u32, yearly_shared: u32, flat_own: u32, flat_shared: u32, amount: f32, shared_sign: f32) {
         let base = self as *mut Self as u32;
         let month_offset = self.current_month_index as u32 * 4;
@@ -1551,7 +1483,8 @@ impl ZooStatus {
     /// defaults to the region's own rolling write cursor ([`Self::current_month_index`]/
     /// [`Self::current_year_index`]) for the monthly/yearly cases. Derived directly from
     /// `ZooStatus_getStatus.asm` (read in full - the `.c` decompile is unusable, pure pointer-arithmetic
-    /// noise on a `float10*` return type, see [`GET_STATUS_FIXED`]'s own doc comment for that artifact).
+    /// noise on a `float10*` return type - `generated.rs`'s own `GET_STATUS` entry has since been
+    /// corrected to `-> f32` to match).
     ///
     /// **A genuine 4-byte discrepancy with this struct's own [`Self::monthly_history`] field is real, not
     /// a bug in this port**: `monthly_history` declares base `0x154` (from `init`'s zero-loop start), but
@@ -2159,6 +2092,21 @@ impl ZooStatus {
     /// other method in this file) there is no struct state for a live comparison test to diff against;
     /// see `ZOOSTATUS_SHOW_PRICES_SMOKE`'s own doc comment for how this is verified instead.
     ///
+    /// **Uses `bfinternat::setMoneyText`'s `_1` overload (`0x004ef5eb`), not `_0`
+    /// (`0x0040ed88`, [`SET_MONEY_TEXT_0`])** - confirmed by disassembling the live, running
+    /// `showPrices` (`u 0x00530329`): its three `CALL` targets all resolve to `0x004ef5eb`. The two
+    /// overloads are not interchangeable: `_0`'s own `getMoneyText` formats via `wsprintfA(buf, "%d",
+    /// param_2)` - genuinely integer-only (`wsprintfA` has no float-specifier support at all), correct
+    /// for [`format_money_text`]'s whole-dollar donation amounts but wrong here. `_1`'s `getMoneyText`
+    /// instead calls `BFLog::FormatLogMessage(buf, "%0.2f", param_2)` (format string confirmed live at
+    /// `0x0063ba34`) - genuinely float-aware. A prior version of this method called `_0` with the raw
+    /// `admission_price` float, which `_0`'s `"%d"` path reinterpreted as if it were an integer bit
+    /// pattern - e.g. `$22.00` (`0x41B00000`) printed as `"1101004800"` - the "ridiculously high
+    /// prices" bug this doc comment now records the fix for. `_1`'s own declared parameter is `u32`
+    /// (a `generated.rs` pointer-as-integer wart, not a real type difference - cdecl passes both by
+    /// raw 4-byte value identically), so each call site here passes [`f32::to_bits`] rather than the
+    /// float directly.
+    ///
     /// 1. If the `0x105e` UI element exists and its own state flag bit `9` (raw `+0x7c` read - `ztui.rs`'s
     ///    own `UIElement` struct doesn't model this particular bit) is clear, sets its money text to the
     ///    current admission price via real vanilla `bfinternat::setMoneyText`.
@@ -2185,14 +2133,14 @@ impl ZooStatus {
         if !element_105e.is_null() {
             let flags: u32 = get_from_memory(element_105e as u32 + 0x7c);
             if (flags >> 9) & 1 == 0 {
-                unsafe { SET_MONEY_TEXT_0.original()(0x105e, self.admission_price, 0) };
+                unsafe { SET_MONEY_TEXT_1.original()(0x105e, self.admission_price.to_bits(), 0) };
             }
         }
 
-        unsafe { SET_MONEY_TEXT_0.original()(0x1061, self.admission_price, 0) };
+        unsafe { SET_MONEY_TEXT_1.original()(0x1061, self.admission_price.to_bits(), 0) };
 
         let child_scale: f32 = get_from_memory(base + raw_globals::CHILD_ADMISSION_PRICE_SCALE_RVA);
-        unsafe { SET_MONEY_TEXT_0.original()(0x1062, self.admission_price * child_scale, 0) };
+        unsafe { SET_MONEY_TEXT_1.original()(0x1062, (self.admission_price * child_scale).to_bits(), 0) };
 
         let element_1063 = unsafe { GET_ELEMENT_0.original()(bfuimgr_ptr as *const u32, 0x1063) };
         if !element_1063.is_null() {
@@ -2411,7 +2359,7 @@ impl ZooStatus {
         save_to_memory(base_ptr + 0xc74 + year_offset, self.animal_rating_metric as f32);
         save_to_memory(base_ptr + 0x1118, self.animal_rating_metric as f32);
 
-        self.guest_rating_metric = if self.guest_tile_count > 0 { guest_score_sum / self.guest_tile_count as i32 } else { 0 };
+        self.guest_rating_metric = if self.guest_tile_count > 0 { guest_score_sum / self.guest_tile_count } else { 0 };
         save_to_memory(base_ptr + 0x4b0 + month_offset, self.guest_rating_metric as f32);
         save_to_memory(base_ptr + 0xcc4 + year_offset, self.guest_rating_metric as f32);
         save_to_memory(base_ptr + 0x111c, self.guest_rating_metric as f32);
@@ -2940,9 +2888,7 @@ impl ZooStatus {
 /// the macOS-only corpus (`GET_STATUS`/`HEAL_ANIMAL`/`PURCHASE_FOOD`/`INCREASE_ADMISSIONS`/
 /// `INCREASE_ADMISSIONS_INCOME`) and renamed [`BUY_ANIMAL`]'s detour function from its old, partly-wrong
 /// Stage 3 name (`spend_keeper_wages_0`) to [`ZooStatus::buy_animal`] - see that method's own doc comment
-/// for the mislabeling this corrects. `GET_STATUS`'s detour uses the locally-corrected
-/// [`GET_STATUS_FIXED`] `FunctionDef`, not `generated.rs`'s own entry (wrong return type) - see its doc
-/// comment.
+/// for the mislabeling this corrects.
 ///
 /// No destructor to worry about (see the module's "Style decision" - `ZooStatus` has no vtable, no
 /// separate constructor, and lives/dies with its enclosing `ZTGameMgr` block), so this is a single flat
@@ -3086,9 +3032,19 @@ mod zoostatus_detours {
         unsafe { mut_from_memory::<ZooStatus>(this) }.set_adult_admission_price(price);
     }
 
+    /// `ZooStatus_showPrices.asm` (read in full) never touches the incoming `this`/ECX past its
+    /// entry `PUSH %ECX` (pure stack-balancing, restored unused via the matching tail `POP %ECX`) -
+    /// it instead reloads `GLOBAL_ZTGameMgr` itself and computes `ESI = GLOBAL_ZTGameMgr + 0x10`, the
+    /// same "ignore `this`, use the live global" quirk [`ZooStatus::f_grant_donation`]'s own doc
+    /// comment already documents for its donation-grant branch. The real caller's ECX at this call
+    /// site is therefore never a `ZooStatus*` at all (observed live: an unrelated, non-pointer-aligned
+    /// value), so treating `this` as one - as the previous version of this detour did - reads/derefs
+    /// garbage and crashes. Match vanilla: derive the pointer from the global instead of from `this`.
     #[detour(SHOW_PRICES)]
-    unsafe extern "thiscall" fn show_prices(this: *const u32) {
-        unsafe { ref_from_memory::<ZooStatus>(this) }.show_prices();
+    unsafe extern "thiscall" fn show_prices(_this: *const u32) {
+        let ztgamemgr_ptr = globals().ztgamemgr_ptr();
+        let zoostatus_ptr = (ztgamemgr_ptr as u32 + 0x10) as *const ZooStatus;
+        unsafe { &*zoostatus_ptr }.show_prices();
     }
 
     #[detour(CALCULATE_SUMS)]
@@ -3133,9 +3089,7 @@ mod zoostatus_detours {
         unsafe { mut_from_memory::<ZooStatus>(this) }.increase_admissions(count);
     }
 
-    /// Uses [`GET_STATUS_FIXED`] (the locally-corrected `FunctionDef`), not `generated.rs`'s own
-    /// `GET_STATUS` entry - see its doc comment for why.
-    #[detour(GET_STATUS_FIXED)]
+    #[detour(GET_STATUS)]
     unsafe extern "thiscall" fn get_status(this: *const u32, category: i32, when: i32, index: i32) -> f32 {
         unsafe { ref_from_memory::<ZooStatus>(this) }.get_status(category, when, index)
     }
@@ -3188,7 +3142,7 @@ mod zoostatus_detours {
                 ("PURCHASE_FOOD", super::PURCHASE_FOOD_DETOUR.is_enabled()),
                 ("INCREASE_ADMISSIONS_INCOME", super::INCREASE_ADMISSIONS_INCOME_DETOUR.is_enabled()),
                 ("INCREASE_ADMISSIONS", super::INCREASE_ADMISSIONS_DETOUR.is_enabled()),
-                ("GET_STATUS_FIXED", super::GET_STATUS_FIXED_DETOUR.is_enabled()),
+                ("GET_STATUS", super::GET_STATUS_DETOUR.is_enabled()),
             ]
         }
     }

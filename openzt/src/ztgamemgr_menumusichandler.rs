@@ -1,6 +1,4 @@
-//! `ZTGameMgr::MenuMusicHandler` reimplementation - see
-//! `openzt/plans/menumusichandler-implementation-plan.md` for the full investigation. A **self-contained
-//! leaf class**: every method is called through a fixed address (there is no `MenuMusicHandler` vtable),
+//! `ZTGameMgr::MenuMusicHandler` reimplementation. A **self-contained leaf class**: every method is called through a fixed address (there is no `MenuMusicHandler` vtable),
 //! so detouring this class's own 6 addresses redirects every *non-inlined* caller - all in un-ported,
 //! un-detoured `ZTGameMgr` methods (`initMenuMusic`/`startMenuMusic`/`startMenuMusicFade_*`) that stay
 //! real vanilla code and never need to change. The exceptions are the sites where the compiler inlined a
@@ -17,12 +15,11 @@
 //! real, vanilla-allocated `SNDSound*` (or `0`), which falls out naturally as long as every mutator here
 //! writes through vanilla's own allocator/constructors rather than substituting Rust-owned state.
 //!
-//! All four in-scope stages (struct + constructor + `init` + `startPlay`/`startFade` + `update`); the
-//! destructor needs no port or detour - Stage 5 resolved that it is inlined into `~ZTGameMgr` (whose
-//! tail-merge block is what `generated.rs` mislabels `MENU_MUSIC_HANDLER_0`) and has no standalone Windows
-//! address, so there is nothing to hook.
-
-use std::ffi::c_void;
+//! The port covers the struct, constructor, `init`, `startPlay`/`startFade`, `update`, and the
+//! destructor's sound teardown ([`MenuMusicHandler::destruct`], direct-call only). The destructor itself
+//! has nothing to hook: it is inlined into `~ZTGameMgr` (whose tail-merge block is what `generated.rs`
+//! mislabels `MENU_MUSIC_HANDLER_0`) and has no standalone Windows address, so the outer block free
+//! stays with the caller, as it does in `~ZTGameMgr`'s own tail.
 
 use openzt_detour::generated::{
     bfinifile::READ,
@@ -32,10 +29,9 @@ use openzt_detour::generated::{
     // in `bfsndmgr` despite being the `DX8SndMgr` slot this code dispatches.
     bfsndmgr::ATTEMPT_0 as DX8SNDMGR_ATTEMPT,
     sndsound::{
-        IS_PLAYING, PLAY_LOOPED_1, SET_BASE_ATTENUATION, SET_FADE_ATTENUATION, SET_VOLUME,
-        SNDSOUND_1, STOP, VALID,
+        DESTRUCTOR_1 as SNDSOUND_DESTRUCTOR, IS_PLAYING, PLAY_LOOPED_1, SET_BASE_ATTENUATION, SET_FADE_ATTENUATION, SET_VOLUME,
+        STOP, VALID,
     },
-    msvc_std_basic_string::{BASIC_STRING_0, BASIC_STRING_2},
     standalone::OPERATOR_NEW,
     ztgamemgr_menumusichandler::{
         INIT, MENU_MUSIC_HANDLER_1 as CONSTRUCTOR, START_FADE, START_PLAY, UPDATE,
@@ -47,10 +43,11 @@ use tracing::error;
 use crate::{
     globals::get_module_base,
     util::{get_from_memory, mut_from_memory, save_to_memory},
+    vanilla_string::VanillaString,
 };
 
 /// `GLOBAL_DX8SndMgr`'s RVA - a raw pointer-typed global (one dereference gives the live `DX8SndMgr*`
-/// singleton), resolved by the user directly (`0x006380a8`). Used by [`MenuMusicHandler::init`] as the
+/// singleton) at `0x006380a8`. Used by [`MenuMusicHandler::init`] as the
 /// `this` for `DX8SndMgr::attempt` (`MenuMusicHandler_init.asm`'s `MOV ECX, dword ptr GLOBAL_DX8SndMgr`
 /// before that call) - same one-level-of-indirection shape as `ztgamemgr.rs`'s own
 /// `GLOBAL_ZTSCENARIOMGR_RVA`/`GLOBAL_ZTAPP_RVA`.
@@ -67,7 +64,7 @@ const SNDSOUND_VTABLE: u32 = 0x00630bc0;
 
 /// Real allocation size `0x14`, confirmed directly by `ZTGameMgr_initMenuMusic.c`'s
 /// `operator_new(0x14)` call (not merely inferred from the constructor's own field writes, which stop at
-/// offset `0x10`) - see the implementation plan's struct-layout table for the per-field evidence.
+/// offset `0x10`).
 #[repr(C)]
 pub struct MenuMusicHandler {
     sound_ptr: u32,               // 0x0 - SNDSound*, 0 when none
@@ -102,10 +99,9 @@ impl MenuMusicHandler {
 
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::init`, per `MenuMusicHandler_init.c`/`.asm`.
     ///
-    /// The real function takes two stack args (`RET 0x8`), not the one `generated.rs`'s auto-derived
-    /// `INIT` originally carried - surfaced for the generator pass, which now emits both: `filename`
-    /// (a real vanilla C string, typed `u32` in the generated entry, so cast at the detour boundary)
-    /// and `attenuation` (an `i32`, forwarded unchanged to `SNDSound::setBaseAttenuation` on success).
+    /// The real function takes two stack args (`RET 0x8`): `filename` (a real vanilla C string, typed
+    /// `u32` in the generated entry, so cast at the detour boundary) and `attenuation` (an `i32`,
+    /// forwarded unchanged to `SNDSound::setBaseAttenuation` on success).
     ///
     /// Faithfully reproduces one vanilla oddity: releasing an existing, currently-*playing* `sound_ptr`
     /// (`stop()` + slot-0 `release(1)`) does **not** clear `self.sound_ptr` afterwards - if
@@ -116,7 +112,7 @@ impl MenuMusicHandler {
         if self.sound_ptr != 0 && unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } != 0 {
             unsafe { STOP.original()(self.sound_ptr as *const u32) };
             if self.sound_ptr != 0 {
-                unsafe { SNDSOUND_1.original()(self.sound_ptr as *const u32, 1) };
+                unsafe { SNDSOUND_DESTRUCTOR.original()(self.sound_ptr as *const u32, 1) };
             }
         }
 
@@ -150,7 +146,7 @@ impl MenuMusicHandler {
     }
 
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::startPlay`, per
-    /// `MenuMusicHandler_startPlay.c`/`.asm` (vtable offsets per the implementation plan's call table).
+    /// `MenuMusicHandler_startPlay.c`/`.asm`.
     ///
     /// No-op when `ini_menu_music_disabled` is set or `sound_ptr` is null. Otherwise: if the `SNDSound` is
     /// still valid ([`VALID`], vtable `+0x14`) but not currently playing ([`IS_PLAYING`], `+0x50`),
@@ -193,8 +189,8 @@ impl MenuMusicHandler {
     }
 
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::update`, per `MenuMusicHandler_update.c`/`.asm`.
-    /// A no-op unless a fade is armed (`fading != 0` - the gate the plan's Stage-4 summary omits, but the
-    /// `.asm`'s very first test, `MOV AL,[ESI+4]` / `TEST AL,AL`) and a `SNDSound` is present. Then a
+    /// A no-op unless a fade is armed (`fading != 0` - the `.asm`'s very first test, `MOV AL,[ESI+4]` /
+    /// `TEST AL,AL`) and a `SNDSound` is present. Then a
     /// two-phase state machine:
     ///
     /// 1. A fixed 5-tick warm-up delay (`warmup_ticks < 5` -> increment and return, signed `JL`), matching
@@ -204,15 +200,15 @@ impl MenuMusicHandler {
     ///    signed `JG`) or push the updated counter through [`SET_FADE_ATTENUATION`] (`+0x4c`) plus a
     ///    constant `0` through [`SET_VOLUME`] (`+0x40`).
     ///
-    /// The completion branch is gated harder than the plan's Stage-4 summary states: **every** field clear
+    /// The completion branch is gated harder than it looks: **every** field clear
     /// and the sound teardown sit *inside* the [`IS_PLAYING`] check (`JZ` past the whole block in the
     /// `.asm`), not after it - if the sound reports not playing, a `fade_counter` past 3000 is left as-is
     /// and nothing at all happens. Only inside that gate: `fading` = 0, `fade_counter` = 0, [`STOP`]
     /// (`+0x60`), then - preserving vanilla's own redundant re-check of `sound_ptr`, exactly like
-    /// [`init`]'s release branch - the slot-0 [`SNDSOUND_1`] `release(1)` idiom, then `sound_ptr` = 0.
+    /// [`init`]'s release branch - the slot-0 [`SNDSOUND_DESTRUCTOR`] `release(1)` idiom, then `sound_ptr` = 0.
     /// That final gate is unreachable live in the test battery without genuinely playing audio (see
-    /// `MENUMUSICHANDLER_UPDATE`'s doc comment), but is the same [`SNDSOUND_1`] release shape
-    /// [`init`]/[`destroy_standalone_after_init`] already exercise for real.
+    /// `MENUMUSICHANDLER_UPDATE`'s doc comment), but is the same [`SNDSOUND_DESTRUCTOR`] release shape
+    /// [`init`]/[`destruct`] already exercise for real.
     pub fn update(&mut self, delta: u32) {
         if self.fading == 0 || self.sound_ptr == 0 {
             return;
@@ -233,7 +229,7 @@ impl MenuMusicHandler {
                 self.fade_counter = 0;
                 unsafe { STOP.original()(sound) };
                 if self.sound_ptr != 0 {
-                    unsafe { SNDSOUND_1.original()(sound, 1) };
+                    unsafe { SNDSOUND_DESTRUCTOR.original()(sound, 1) };
                 }
                 self.sound_ptr = 0;
             }
@@ -243,6 +239,25 @@ impl MenuMusicHandler {
         let sound = self.sound_ptr as *const u32;
         unsafe { SET_FADE_ATTENUATION.original()(sound, self.fade_counter) };
         unsafe { SET_VOLUME.original()(sound, 0) };
+    }
+
+    /// Ports the dtor Ghidra exports as `~MenuMusicHandler` (really `~ZTGameMgr`'s tail-merge block with
+    /// the dtor inlined - see the module doc comment; never call that address), per
+    /// `MenuMusicHandler_~MenuMusicHandler.asm`: stops `sound_ptr`'s `SNDSound` when it reports currently
+    /// playing ([`IS_PLAYING`], `+0x50`, then [`STOP`], `+0x60`), then the slot-0 [`SNDSOUND_DESTRUCTOR`]
+    /// `release(1)`. Same low-byte [`IS_PLAYING`] masking as [`start_play`] (`TEST %AL, %AL` in the
+    /// `.asm`), and the same redundant `sound_ptr` re-check before the release as [`init`]/[`update`]
+    /// render it. Leaves `sound_ptr` itself untouched, matching vanilla - the caller frees the block
+    /// right after (in `~ZTGameMgr`'s tail, via `operator_delete`).
+    pub fn destruct(&mut self) {
+        if self.sound_ptr != 0 {
+            if (unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } & 0xff) != 0 {
+                unsafe { STOP.original()(self.sound_ptr as *const u32) };
+            }
+            if self.sound_ptr != 0 {
+                unsafe { SNDSOUND_DESTRUCTOR.original()(self.sound_ptr as *const u32, 1) };
+            }
+        }
     }
 
     #[cfg(feature = "reimplementation-tests")]
@@ -282,49 +297,6 @@ impl MenuMusicHandler {
 /// result is far inside `i32` range).
 fn fade_increment(delta: u32) -> i32 {
     (delta as f64 * 0.5) as i32
-}
-
-/// A real, vanilla-allocator-owned `std::string` - `{char* ptr; u32 len; u32 capacity}`, 12 bytes. This
-/// build's std::string has no small-string-optimization buffer (confirmed directly from
-/// `MenuMusicHandler_MenuMusicHandler.asm`'s stack-slot accounting: each of the constructor's two
-/// temporary strings occupies exactly 3 stack dwords, matching this layout exactly), so it always
-/// allocates its character buffer on the heap - built and torn down through the real vanilla
-/// constructor/destructor (`std_basic_string::BASIC_STRING_2`/`BASIC_STRING_0`) rather than a hand-rolled
-/// stand-in, matching `ztgamemgr-implementation-plan.md`'s `VanillaTagString` precedent (live-tested, then
-/// reverted for unrelated reasons - see that plan's `removedZooDoo` section). Never write `ptr`/`len`/
-/// `capacity` directly from Rust: construction and destruction always go through vanilla's own allocator,
-/// so a Rust-side write here would risk exactly the cross-allocator hazard `CLAUDE.md` warns about.
-#[repr(C)]
-struct VanillaString {
-    ptr: *mut u8,
-    len: u32,
-    capacity: u32,
-}
-
-impl VanillaString {
-    /// Constructs from an iterator range `[str.as_ptr(), str.as_ptr() + str.len())`, matching
-    /// `BASIC_STRING_2`'s real vanilla calling convention exactly (`this, first, last, allocator` - the
-    /// trailing allocator argument is an uninitialized/unused stack slot in vanilla's own call site too,
-    /// passed as `0` here).
-    fn new(s: &str) -> Self {
-        let mut this = VanillaString { ptr: std::ptr::null_mut(), len: 0, capacity: 0 };
-        let start = s.as_ptr();
-        let end = unsafe { start.add(s.len()) };
-        unsafe {
-            BASIC_STRING_2.original()(&mut this as *mut VanillaString as *const c_void, start as *const u32, end as i32, 0);
-        }
-        this
-    }
-
-    fn as_ptr(&self) -> *const u32 {
-        self as *const VanillaString as *const u32
-    }
-}
-
-impl Drop for VanillaString {
-    fn drop(&mut self) {
-        unsafe { BASIC_STRING_0.original()(self as *mut VanillaString as *const c_void) };
-    }
 }
 
 #[detour_mod]
@@ -403,8 +375,8 @@ mod menu_music_handler_detours {
 
 /// Registers this module's live detours. Does **not** detour the destructor - there is no destructor
 /// function to detour: `MENU_MUSIC_HANDLER_0` in `generated.rs` (`0x00504e27`) is actually `~ZTGameMgr`'s
-/// tail-merge block containing the inlined dtor (see the module doc comment and the implementation plan's
-/// Stage 5), so hooking or calling it would run mid-`~ZTGameMgr` code under a wrong register contract.
+/// tail-merge block containing the inlined dtor (see the module doc comment), so hooking or calling it
+/// would run mid-`~ZTGameMgr` code under a wrong register contract.
 pub fn init() {
     if let Err(e) = unsafe { menu_music_handler_detours::init_detours() } {
         error!("Failed to initialise ztgamemgr_menumusichandler detours: {e:?}");
@@ -429,7 +401,7 @@ pub(crate) mod live_support {
     /// construction, **without calling any vanilla destructor path**. There is no real vanilla
     /// `MenuMusicHandler` destructor to call: the export Ghidra labels `~MenuMusicHandler`
     /// (`generated.rs`'s `MENU_MUSIC_HANDLER_0`, `0x00504e27`) is actually `~ZTGameMgr`'s tail-merge
-    /// block with the dtor inlined (plan Stage 5) - its first lines do the real, structurally-sound
+    /// block with the dtor inlined - its first lines do the real, structurally-sound
     /// `sound_ptr` teardown (`if (sound_ptr) { if (isPlaying()) stop(); release(); }`), but the rest is
     /// `~ZTGameMgr`'s own tail (`operator_delete` on `EDI` = the handler pointer, a `BFMgr` vtable store
     /// through `ESI` = `~ZTGameMgr`'s `this`, entered via `~ZTGameMgr`'s `JMP`/`JZ` with its own stack
@@ -447,20 +419,17 @@ pub(crate) mod live_support {
     }
 
     /// Frees a standalone instance built via [`allocate_uninitialized`] plus construction **and** a
-    /// successful call to [`MenuMusicHandler::init`] (real or reimplemented) - both sides allocate
-    /// `sound_ptr`'s `SNDSound` through the same real vanilla `OPERATOR_NEW`, so it's always safe to
-    /// release it through real vanilla `SNDSound`'s own slot-0 `release(1)` idiom (the same call
-    /// `MenuMusicHandler::init` itself uses to tear down a pre-existing sound) before freeing the outer
-    /// block - like [`destroy_standalone`], this never touches the misattributed `MENU_MUSIC_HANDLER_0`
-    /// export (really `~ZTGameMgr`'s tail-merge block - see [`destroy_standalone`]).
+    /// call to [`MenuMusicHandler::init`] (real or reimplemented) that allocated `sound_ptr`: tears the
+    /// `SNDSound` down through [`MenuMusicHandler::destruct`] - the real ported dtor logic, whose
+    /// release reaches real vanilla - then frees the outer block. Both sides allocate `sound_ptr`
+    /// through the same real vanilla `OPERATOR_NEW`, so releasing it through vanilla `SNDSound` is
+    /// always allocator-safe. Like [`destroy_standalone`], this never touches the misattributed
+    /// `MENU_MUSIC_HANDLER_0` export (really `~ZTGameMgr`'s tail-merge block - see [`destroy_standalone`]).
     pub(crate) fn destroy_standalone_after_init(ptr: *mut MenuMusicHandler) {
         if ptr.is_null() {
             return;
         }
-        let sound_ptr = unsafe { (*ptr).sound_ptr };
-        if sound_ptr != 0 {
-            unsafe { SNDSOUND_1.original()(sound_ptr as *const u32, 1) };
-        }
+        unsafe { (*ptr).destruct() };
         unsafe { OPERATOR_DELETE.original()(ptr as u32) };
     }
 

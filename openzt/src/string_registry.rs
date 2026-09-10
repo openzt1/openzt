@@ -199,7 +199,7 @@ fn parse_string_block(block_id: u32, data: &[u8]) -> Vec<(u32, String)> {
             continue;
         }
 
-        let utf16: Vec<u16> = raw.chunks_exact(2).map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]])).collect();
+        let utf16: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|chunk| u16::from_le_bytes(*chunk)).collect();
         let id = (block_id - 1) * 16 + index;
         strings.push((id, String::from_utf16_lossy(&utf16)));
     }

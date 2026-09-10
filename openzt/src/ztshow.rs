@@ -22,11 +22,11 @@ use openzt_detour::generated::{
     ztgamemgr::GET_DATE,
     ztshow::{
         CALCULATE_PERCENT_ADJUSTMENT, CHECK_SCRIPT, CLEAR_SHOW_SCRIPT_STATES, DO_CURRENT_ITEM, DO_KEEPER_EVENT, DO_TRICK_EVENT,
-        GATHER_UNITS, REINIT, RESOLVE_NEXT_SCHEDULED_SCRIPT_ID, START, STOP_0, VALIDATE, VALIDATE_ITEM,
+        GATHER_UNITS, GET_SHOW_SCRIPT_STATE, REINIT, RESOLVE_NEXT_SCHEDULED_SCRIPT_ID, START, STOP_0, VALIDATE, VALIDATE_ITEM,
     },
     ztshowinfo::{
         ADD_SCRIPT, ADD_SHOW, CHECK_PENDING_SCRIPTS, CHECK_UNIT, CHECK_UNIT_TYPE, GET_NUM_UNITS, GET_SHOW_UNIT_LIST, IS_STARTED,
-        RECALCULATE_SCHEDULE, REMOVE_SHOW, REMOVE_UNIT, SEND_EVENT,
+        RECALCULATE_SCHEDULE, REMOVE_SHOW, SEND_EVENT,
     },
     ztshowscriptstate::{CONSTRUCTOR as CREATE_SHOW_SCRIPT_STATE, GET_NUM_ITEMS},
     standalone::OPERATOR_NEW,
@@ -41,6 +41,7 @@ use crate::{
     globals::globals,
     util::{get_from_memory, save_to_memory},
     ztmegatilemgr::entity_type_matches,
+    ztshowinfo::remove_unit,
 };
 
 /// `DAT_006386b0`'s RVA - the same vtable-slot-`0x1c` "isKindOf"-style type-check argument used by
@@ -63,8 +64,12 @@ unsafe fn call_unit_vtable_u16_u16(unit_ptr: u32, slot_offset: u32, arg1: u16, a
 /// `private/docs/vtables/ZTShowInfo.md`'s slot `+0x0` = `0x0059f013`, exactly `SEND_EVENT`'s own address).
 /// `doTrickEvent` dispatches through `ZTShow`'s `+0x10` `ZTShowInfo*` back-pointer's vtable slot 0 rather
 /// than calling `SEND_EVENT` by name, but they're the same function, so this calls it directly.
+///
+/// `.hooked()`, not `.original()`, since Stage 6 (`ztshowinfo.rs`) now detours this address - see
+/// `CLAUDE.md`'s "every stage that ports a call-through-only method must also switch its own
+/// `.original()` call sites to `.hooked()`" rule.
 unsafe fn send_event(show_info: u32, event_id: u16, unused: u32, category: u8, value: u32, value2: u16, flag: u16) {
-    unsafe { SEND_EVENT.original()(show_info as *const u32, event_id, unused, category, value, value2, flag) };
+    unsafe { SEND_EVENT.hooked()(show_info as *const u32, event_id, unused, category, value, value2, flag) };
 }
 
 /// Reimplementation of `ZTShowInfo::checkUnitType`, per `ZTShowInfo_checkUnitType.c`/`.asm`. `this` is
@@ -100,12 +105,14 @@ fn find_script_state_node(header: u32, key: u32) -> u32 {
 }
 
 /// Reimplementation of `ZTShow::getShowScriptState` (`ztshow::GET_SHOW_SCRIPT_STATE`, `0x0059eb99`,
-/// deliberately left un-detoured - nothing needs interception, and external un-decompiled callers keep
-/// working unchanged): a plain, read-only lookup in the `std::map<u32, ZTShowScriptState*>` whose
-/// header lives at `ztshow+0x34` (`show_info+0x38`, per `ztshowmgr.rs`'s `is_doing_show`/
-/// `is_show_script_done` callers). Reads vanilla's still-vanilla-owned, vanilla-written, vanilla-freed
-/// tree directly in place - no ownership claim, no allocator interaction, same "narrow vanilla-memory
-/// carve-out" this file's other tree readers already rely on.
+/// now detoured - see the module's own detour list): a plain, read-only lookup in the
+/// `std::map<u32, ZTShowScriptState*>` whose header lives at `ztshow+0x34` (`show_info+0x38`, per
+/// `ztshowmgr.rs`'s `is_doing_show`/`is_show_script_done` callers). Reads vanilla's still-vanilla-owned,
+/// vanilla-written, vanilla-freed tree directly in place - no ownership claim, no allocator interaction,
+/// same "narrow vanilla-memory carve-out" this file's other tree readers already rely on. Its own logic
+/// was already ported/unit-tested internally (any caller reaching this address already ran through this
+/// exact function via a direct Rust call) - detouring the real address just extends the same behavior to
+/// real, un-decompiled-by-us vanilla callers that invoke it through the vtable/address directly instead.
 pub fn get_show_script_state(ztshow: u32, key: u32) -> u32 {
     let header = get_from_memory::<u32>(ztshow + 0x34);
     let candidate = find_script_state_node(header, key);
@@ -216,7 +223,7 @@ pub fn do_trick_event(this: u32, state_ptr: u32) {
                     } else {
                         send_event(show_info, 0x272b, 0, 0x57, mirror as u32, 0, 1);
                     }
-                    send_event(show_info, 0x271f, 0, 0x4b, 0, trick_index as u16, 1);
+                    send_event(show_info, 0x271f, 0, 0x4b, 0, trick_index, 1);
                 }
                 return;
             }
@@ -278,7 +285,10 @@ pub fn validate_item(this: u32, index: u16) -> i32 {
     }
     let show_info = get_from_memory::<u32>(this + 0x10);
     let unit_type_id = get_from_memory::<u32>(this + 0x8);
-    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.original()(show_info as *const u32, unit_type_id) } as u32;
+    // `.hooked()`: `GET_SHOW_UNIT_LIST` is now detoured by `ztshowinfo.rs` (Stage 7) - see `CLAUDE.md`'s
+    // "every stage that ports a call-through-only method must also switch its own `.original()` call
+    // sites to `.hooked()`" rule.
+    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.hooked()(show_info as *const u32, unit_type_id) } as u32;
     let sentinel = get_from_memory::<u32>(list_ptr);
     let first_node = get_from_memory::<u32>(sentinel);
     let unit_numeric_id = get_from_memory::<u32>(first_node + 0x8);
@@ -300,8 +310,10 @@ pub fn validate_item(this: u32, index: u16) -> i32 {
 
 /// Same mechanism as [`entity_type_matches`], for an *already-resolved* type pointer (e.g. `BFWorldMgr::
 /// getType`'s return) rather than a `BFEntity*` needing its own `+0x128` indirection first - `stop_with_id`/
-/// `start` both call `getType` directly and check its result's own vtable slot `0x1c`.
-unsafe fn type_check(type_ptr: u32, type_check_arg_rva: u32) -> bool {
+/// `start` both call `getType` directly and check its result's own vtable slot `0x1c`. `pub(crate)` since
+/// `ztshowinfo.rs`'s `get_scheduled_show_keeper_type` needs the exact same mechanism (per its own doc
+/// comment).
+pub(crate) unsafe fn type_check(type_ptr: u32, type_check_arg_rva: u32) -> bool {
     let vtable = get_from_memory::<u32>(type_ptr);
     let check_fn = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(get_from_memory::<u32>(vtable + 0x1c)) };
     let arg = crate::globals::get_module_base("zoo.exe") as u32 + type_check_arg_rva;
@@ -311,7 +323,8 @@ unsafe fn type_check(type_ptr: u32, type_check_arg_rva: u32) -> bool {
 /// `DAT_00638690`'s RVA - the same "is this an animal-ish type" check `ztthoughtmgr::
 /// resolve_object_own_habitat_ptr` already uses, reused here for `stop_with_id`/`start`'s own type check
 /// (distinct from [`RVA_SHOW_TRICK_TYPE_CHECK`] - a different sentinel, confirmed via each's own `.asm`).
-const RVA_ANIMAL_TYPE_CHECK: u32 = 0x0023_8690;
+/// `pub(crate)` - see [`type_check`]'s own doc comment.
+pub(crate) const RVA_ANIMAL_TYPE_CHECK: u32 = 0x0023_8690;
 
 /// Raw no-arg virtual dispatch through an object's own vtable at `slot_offset`, returning `bool` - the
 /// shape both the habitat's `+0x20` slot (`start`'s owning-habitat check) and a unit's `+0x22c` slot
@@ -368,7 +381,7 @@ pub fn stop_with_id(this: u32, new_script_id: u16) {
         }
         let show_info = get_from_memory::<u32>(this + 0x10);
         if show_info != 0 {
-            unsafe { RECALCULATE_SCHEDULE.original()(show_info as *const u32, 0) };
+            unsafe { RECALCULATE_SCHEDULE.hooked()(show_info as *const u32, 0) };
         }
     }
 }
@@ -416,7 +429,9 @@ pub fn validate(this: u32, check_units: bool) -> i32 {
     if check_units {
         let show_info = get_from_memory::<u32>(this + 0x10);
         let unit_type_id = get_from_memory::<u32>(this + 0x8);
-        let list_ptr = unsafe { GET_SHOW_UNIT_LIST.original()(show_info as *const u32, unit_type_id) } as u32;
+        // `.hooked()`: both `GET_SHOW_UNIT_LIST` and `CHECK_UNIT` are now detoured by `ztshowinfo.rs`
+        // (Stage 7) - see `validate_item`'s own comment above for the rule this follows.
+        let list_ptr = unsafe { GET_SHOW_UNIT_LIST.hooked()(show_info as *const u32, unit_type_id) } as u32;
         let sentinel = get_from_memory::<u32>(list_ptr);
 
         let mut unit_count = 0;
@@ -432,7 +447,7 @@ pub fn validate(this: u32, check_units: bool) -> i32 {
         node = get_from_memory::<u32>(sentinel);
         while node != sentinel {
             let unit_id = get_from_memory::<u32>(node + 0x8);
-            if unsafe { CHECK_UNIT.original()(show_info as *const u32, unit_id) } == 0 {
+            if unsafe { CHECK_UNIT.hooked()(show_info as *const u32, unit_id) } == 0 {
                 return 4;
             }
             node = get_from_memory::<u32>(node);
@@ -573,7 +588,9 @@ pub fn start(this: u32) {
     }
 
     let show_info = get_from_memory::<u32>(this + 0x10);
-    let unit_count = unsafe { GET_NUM_UNITS.original()(show_info as *const u32, script_type) };
+    // `.hooked()`: `GET_NUM_UNITS` is now detoured by `ztshowinfo.rs` (Stage 7) - see `validate_item`'s
+    // own comment above for the rule this follows.
+    let unit_count = unsafe { GET_NUM_UNITS.hooked()(show_info as *const u32, script_type) };
     if unit_count < 1 {
         return;
     }
@@ -601,7 +618,8 @@ pub fn start(this: u32) {
     unsafe { CLEAR_SHOW_SCRIPT_STATES.original()(this as *const u32) };
 
     let unit_type_for_list = get_from_memory::<u32>(this + 0x8);
-    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.original()(show_info as *const u32, unit_type_for_list) } as u32;
+    // `.hooked()`: see the other `GET_SHOW_UNIT_LIST` call site's own comment above.
+    let list_ptr = unsafe { GET_SHOW_UNIT_LIST.hooked()(show_info as *const u32, unit_type_for_list) } as u32;
     let sentinel = get_from_memory::<u32>(list_ptr);
     let mut node = get_from_memory::<u32>(sentinel);
     while node != sentinel {
@@ -610,7 +628,12 @@ pub fn start(this: u32) {
         let unit_ptr = globals().ztworldmgr().resolve_entity_by_id(unit_id) as u32;
         let eligible = unit_ptr != 0 && unsafe { entity_type_matches(unit_ptr, RVA_SHOW_TRICK_TYPE_CHECK) };
         if !eligible {
-            unsafe { REMOVE_UNIT.original()(show_info as *const u32, unit_type_for_list, &unit_id as *const u32 as *const i32) };
+            // Direct Rust call, not `.hooked()`/`.original()`: `ZTShowInfo::removeUnit` is now a real port
+            // (`ztshowinfo.rs` Stage 8) - see [`crate::ztshowinfo::remove_unit`]'s own doc comment for why
+            // this replaces a genuine bug this call site used to have (passing `&unit_id`, a *local's*
+            // address, where real vanilla's own un-dereferencing third-parameter comparison needed
+            // `unit_id` itself).
+            remove_unit(show_info, unit_type_for_list, unit_id);
         } else {
             let assigned_show_id = get_from_memory::<u16>(unit_ptr + 0x254);
             // `.hooked()`, not `.original()`: `ZTShowMgr::getShowInfo` is detoured onto the Rust
@@ -619,7 +642,10 @@ pub fn start(this: u32) {
             // in `ztshowui.rs`). A release build's raw-cast `.original()` would be an accidental
             // re-entry here while debug silently routed to vanilla's tree instead.
             let owning_show_info = unsafe { GET_SHOW_INFO.hooked()(globals().ztshowmgr_ptr() as *const u32, assigned_show_id) };
-            let needs_state = (owning_show_info != 0 && unsafe { IS_STARTED.original()(owning_show_info as *const u32) } == 0)
+            // `.hooked()`, not `.original()`: `IS_STARTED` is now detoured by `ztshowinfo.rs` (Stage 2 of
+            // `ztshowinfo-implementation-plan.md`) - see that plan's own "every stage that ports a
+            // call-through-only method must switch its `.original()` call sites to `.hooked()`" rule.
+            let needs_state = (owning_show_info != 0 && unsafe { IS_STARTED.hooked()(owning_show_info as *const u32) } == 0)
                 || !unsafe { call_entity_vtable_noargs(unit_ptr, 0x22c) };
             if needs_state {
                 let show_id = get_from_memory::<u16>(this + 0x6);
@@ -659,7 +685,7 @@ pub fn start(this: u32) {
 /// pointers, collecting every node upfront and processing them after is equivalent and sidesteps that risk
 /// entirely. A real red-black tree of unit types is never more than a few dozen nodes deep, so recursion
 /// depth is a non-concern (same reasoning `ztawardmgr.rs`'s own `walk_tree` already relies on).
-fn collect_pending_script_nodes(node: u32, out: &mut Vec<u32>) {
+pub(crate) fn collect_pending_script_nodes(node: u32, out: &mut Vec<u32>) {
     if node == 0 {
         return;
     }
@@ -709,9 +735,9 @@ pub fn check_pending_scripts(show_info: u32) {
                 crate::ztshowscriptmgr::script_exists_by_id(pending_id) && crate::ztshowscriptmgr::script_item_count_by_id(pending_id) > 0;
             unsafe {
                 if has_items {
-                    ADD_SHOW.original()(show_info as *const u32, unit_type_id);
+                    ADD_SHOW.hooked()(show_info as *const u32, unit_type_id);
                 } else {
-                    REMOVE_SHOW.original()(show_info as *const u32, unit_type_id);
+                    REMOVE_SHOW.hooked()(show_info as *const u32, unit_type_id);
                 }
             }
         }
@@ -943,7 +969,8 @@ pub fn add_script(show_info: u32, unit_type_id: u32, new_script_id: u16) -> bool
 
     save_to_memory(node + 0x1e, new_script_id);
 
-    let started = unsafe { IS_STARTED.original()(show_info as *const u32) } != 0;
+    // `.hooked()`: see the other `IS_STARTED` call site's own comment above (`ztshowinfo.rs` Stage 2).
+    let started = unsafe { IS_STARTED.hooked()(show_info as *const u32) } != 0;
     if !started {
         let old_current = get_from_memory::<u16>(node + 0x1c);
         save_to_memory(node + 0x1c, new_script_id);
@@ -958,9 +985,9 @@ pub fn add_script(show_info: u32, unit_type_id: u32, new_script_id: u16) -> bool
         crate::ztshowscriptmgr::script_exists_by_id(current_id) && crate::ztshowscriptmgr::script_item_count_by_id(current_id) > 0;
     unsafe {
         if has_items {
-            ADD_SHOW.original()(show_info as *const u32, unit_type_id);
+            ADD_SHOW.hooked()(show_info as *const u32, unit_type_id);
         } else {
-            REMOVE_SHOW.original()(show_info as *const u32, unit_type_id);
+            REMOVE_SHOW.hooked()(show_info as *const u32, unit_type_id);
         }
     }
     true
@@ -973,6 +1000,11 @@ mod detours {
     #[detour(CHECK_UNIT_TYPE)]
     unsafe extern "thiscall" fn check_unit_type_detour(this: *const u32, unit_type: u32) -> u32 {
         check_unit_type(this as u32, unit_type)
+    }
+
+    #[detour(GET_SHOW_SCRIPT_STATE)]
+    unsafe extern "thiscall" fn get_show_script_state_detour(this: *const u32, key: u32) -> u32 {
+        get_show_script_state(this as u32, key)
     }
 
     #[detour(DO_CURRENT_ITEM)]

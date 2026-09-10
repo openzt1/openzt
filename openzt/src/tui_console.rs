@@ -555,10 +555,10 @@ fn handle_key_event(key: ratatui::crossterm::event::KeyEvent) {
             };
 
             state.history_index = new_index;
-            if let Some(idx) = new_index {
-                if let Some(cmd) = state.command_history.get(idx) {
-                    state.input = cmd.clone();
-                }
+            if let Some(idx) = new_index
+                && let Some(cmd) = state.command_history.get(idx)
+            {
+                state.input = cmd.clone();
             }
         }
         KeyCode::Down => {

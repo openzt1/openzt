@@ -14,13 +14,14 @@ pub mod ai_cls_0x404fd6 {
     use super::*;
 
     pub const FIND: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const u32)> = FunctionDef{address: 0x004031b1, function_type: PhantomData};
+    pub const ERASE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32)> = FunctionDef{address: 0x005aae1f, function_type: PhantomData};
 }
 
 // Ambients class functions
 pub mod ambients {
     use super::*;
 
-    pub const AMBIENTS: FunctionDef<unsafe extern "fastcall" fn(*const c_void)> = FunctionDef{address: 0x0041e930, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "fastcall" fn(*const c_void)> = FunctionDef{address: 0x0041e930, function_type: PhantomData};
     pub const PLAY: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32)> = FunctionDef{address: 0x0043f445, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> *const u32> = FunctionDef{address: 0x004495a3, function_type: PhantomData};
 }
@@ -57,15 +58,15 @@ pub mod bfaimgr {
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x0047b081, function_type: PhantomData};
     pub const F_MOVE_MEDIUM_F: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, *const i32) -> u32> = FunctionDef{address: 0x004a31de, function_type: PhantomData};
     pub const F_MOVE_FAST_F: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, *const i32) -> u32> = FunctionDef{address: 0x004a5310, function_type: PhantomData};
-    pub const BFAIMGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050374b, function_type: PhantomData};
-    pub const BFAIMGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503857, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050374b, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503857, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00525e90, function_type: PhantomData};
     pub const INIT_AIPARAMS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005267ec, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052d8e8, function_type: PhantomData};
     pub const F_PLAY_SPECIAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, *const i8, i32, i32, *const i8, *const i32, *const u8) -> u32> = FunctionDef{address: 0x00588f7e, function_type: PhantomData};
     pub const LOAD_DATA: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool) -> u32> = FunctionDef{address: 0x0058f269, function_type: PhantomData};
-    pub const F_MOVE_ENTITY_SPECIAL_F: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> u32> = FunctionDef{address: 0x00601aa5, function_type: PhantomData};
-    pub const F_MOVE_ENTITY_DELTA_F: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> u32> = FunctionDef{address: 0x00601b73, function_type: PhantomData};
+    pub const F_MOVE_ENTITY_DELTA_F: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> u32> = FunctionDef{address: 0x00601aa5, function_type: PhantomData};
+    pub const F_MOVE_ENTITY_SPECIAL_F: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> u32> = FunctionDef{address: 0x00601b73, function_type: PhantomData};
     pub const F_PLAY_SET_TERRAIN_F: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> u32> = FunctionDef{address: 0x00601d2d, function_type: PhantomData};
 }
 
@@ -103,10 +104,10 @@ pub mod bfapp {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005784f8, function_type: PhantomData};
     pub const EXIT_OVERRIDE_0: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0057de3e, function_type: PhantomData};
     pub const EXIT_OVERRIDE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0057e05d, function_type: PhantomData};
-    pub const BFAPP_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00587641, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00587641, function_type: PhantomData};
     pub const DESTROY_WINDOW_CLASS: FunctionDef<unsafe extern "fastcall" fn(*const u32)> = FunctionDef{address: 0x00587661, function_type: PhantomData};
     pub const GET_SCREEN_CENTER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005fd367, function_type: PhantomData};
-    pub const BFAPP_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005fd382, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005fd382, function_type: PhantomData};
     pub const LOAD_TYPEDATA: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005fd3a0, function_type: PhantomData};
     pub const TOGGLE_CURSORS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005fd3d1, function_type: PhantomData};
 }
@@ -175,7 +176,7 @@ pub mod bfconfigfile {
 
     pub const GET_STRING_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u8, *const u8) -> *const i32> = FunctionDef{address: 0x00404c52, function_type: PhantomData};
     pub const GET_STRING_LIST_PTR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, *const i8) -> u8> = FunctionDef{address: 0x00405223, function_type: PhantomData};
-    pub const GET_STRING_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, *const i8) -> *const u32> = FunctionDef{address: 0x00405463, function_type: PhantomData};
+    pub const GET_STRING_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *mut u32, *const i8, *const i8) -> *const u32> = FunctionDef{address: 0x00405463, function_type: PhantomData};
     pub const GET_STRING_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32, *const u32) -> bool> = FunctionDef{address: 0x004098c1, function_type: PhantomData};
     pub const ATTEMPT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> bool> = FunctionDef{address: 0x00409ac0, function_type: PhantomData};
     pub const GET_INT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32, *const u32) -> u32> = FunctionDef{address: 0x00409c14, function_type: PhantomData};
@@ -185,13 +186,13 @@ pub mod bfconfigfile {
     pub const ATTEMPT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, u32) -> u32> = FunctionDef{address: 0x0040aeda, function_type: PhantomData};
     pub const ADD_KEY_VAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, u32, *const u32, *const i8)> = FunctionDef{address: 0x0040af4f, function_type: PhantomData};
     pub const ADD_BLOCK: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, u32, *const u32) -> *const u32> = FunctionDef{address: 0x0040b540, function_type: PhantomData};
-    pub const GET_INT_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, *const i8) -> *const u32> = FunctionDef{address: 0x004aabb8, function_type: PhantomData};
+    pub const GET_INT_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *mut u32, *const i8, *const i8) -> *const u32> = FunctionDef{address: 0x004aabb8, function_type: PhantomData};
     pub const ACQUIRE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u8)> = FunctionDef{address: 0x004aaf2d, function_type: PhantomData};
     pub const GET_FLOAT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32, *const f32) -> u32> = FunctionDef{address: 0x004b37c3, function_type: PhantomData};
     pub const GET_BLOCKS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x004b435e, function_type: PhantomData};
     pub const CONSTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u8) -> *const u32> = FunctionDef{address: 0x004b4516, function_type: PhantomData};
     pub const CONSTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u8) -> *const i32> = FunctionDef{address: 0x004d56f9, function_type: PhantomData};
-    pub const GET_FLOAT_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, *const i8) -> *const u32> = FunctionDef{address: 0x00591a5a, function_type: PhantomData};
+    pub const GET_FLOAT_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *mut u32, *const i8, *const i8) -> *const u32> = FunctionDef{address: 0x00591a5a, function_type: PhantomData};
     pub const CONSTRUCTOR_2: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, u32) -> *const u32> = FunctionDef{address: 0x005fed91, function_type: PhantomData};
 }
 
@@ -231,7 +232,7 @@ pub mod bfentity {
     pub const GET_GRID_POS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> *const i32> = FunctionDef{address: 0x0041426f, function_type: PhantomData};
     pub const IS_WALKABLE_BY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x004147fd, function_type: PhantomData};
     pub const CHECK_AVOID_EDGES: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x004149e6, function_type: PhantomData};
-    pub const BFENTITY_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041df2e, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041df2e, function_type: PhantomData};
     pub const SET_IS_REMOVED: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool, bool)> = FunctionDef{address: 0x0041e0d9, function_type: PhantomData};
     pub const SET_VISIBLE: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0041e0f0, function_type: PhantomData};
     pub const IS_REMOVED_UNDO: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x0041e1b5, function_type: PhantomData};
@@ -276,7 +277,7 @@ pub mod bfentity {
     pub const GET_IDLE_ANIM: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool) -> u32> = FunctionDef{address: 0x005ff91c, function_type: PhantomData};
     pub const GET_ICON_ANIM: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005ff92b, function_type: PhantomData};
     pub const IS_SNAP_TO_GROUND: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x005ff936, function_type: PhantomData};
-    pub const BFENTITY_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005ff93d, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005ff93d, function_type: PhantomData};
     pub const DRAW_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32, i32, i32, f32)> = FunctionDef{address: 0x005ff95b, function_type: PhantomData};
     pub const DRAW_AIINFO: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32, i32, i32)> = FunctionDef{address: 0x005ff9e8, function_type: PhantomData};
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005ff9eb, function_type: PhantomData};
@@ -316,13 +317,13 @@ pub mod bfentitytype {
     pub const NUM_ICONS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x004e9e68, function_type: PhantomData};
     pub const GET_ICON_NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004e9e74, function_type: PhantomData};
     pub const GET_UNIT_COUNT: FunctionDef<unsafe extern "cdecl" fn(*const u8, *const i8) -> i32> = FunctionDef{address: 0x004f6cc5, function_type: PhantomData};
-    pub const BFENTITY_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500783, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500783, function_type: PhantomData};
     pub const UNLOAD_DATA: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005008bb, function_type: PhantomData};
     pub const UNLOAD_ANIMATIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005008e7, function_type: PhantomData};
     pub const UNLOAD_SOUNDS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005008fe, function_type: PhantomData};
     pub const LOAD_USER_DATA: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> u32> = FunctionDef{address: 0x00597337, function_type: PhantomData};
     pub const SET_AVAILABLE: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005a111d, function_type: PhantomData};
-    pub const BFENTITY_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x005fe1a4, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x005fe1a4, function_type: PhantomData};
     pub const GET_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005fe1c2, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005fe1c8, function_type: PhantomData};
     pub const GET_USER_DATA: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32) -> *const i32> = FunctionDef{address: 0x005fe1ea, function_type: PhantomData};
@@ -374,7 +375,7 @@ pub mod bffont {
     use super::*;
 
     pub const CREATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, i32) -> u32> = FunctionDef{address: 0x00510102, function_type: PhantomData};
-    pub const BFFONT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620bfa, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620bfa, function_type: PhantomData};
 }
 
 // BFFontCache class functions
@@ -383,8 +384,8 @@ pub mod bffontcache {
 
     pub const REMOVE_FONT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32)> = FunctionDef{address: 0x005032a6, function_type: PhantomData};
     pub const GET_FONT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, i32) -> *const i32> = FunctionDef{address: 0x00510001, function_type: PhantomData};
-    pub const BFFONT_CACHE_0: FunctionDef<unsafe extern "fastcall" fn(*const u32)> = FunctionDef{address: 0x0057e72c, function_type: PhantomData};
-    pub const BFFONT_CACHE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00624926, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "fastcall" fn(*const u32)> = FunctionDef{address: 0x0057e72c, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00624926, function_type: PhantomData};
 }
 
 // BFFontDescription class functions
@@ -393,7 +394,7 @@ pub mod bffontdescription {
 
     pub const GET_HEIGHT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x00418d4a, function_type: PhantomData};
     pub const RELEASE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050241b, function_type: PhantomData};
-    pub const BFFONT_DESCRIPTION: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503364, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503364, function_type: PhantomData};
     pub const GET_AVG_CHAR_WIDTH_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x00510668, function_type: PhantomData};
     pub const GET_HEIGHT_1: FunctionDef<unsafe extern "cdecl" fn(i32) -> u32> = FunctionDef{address: 0x00511c74, function_type: PhantomData};
     pub const GET_AVG_CHAR_WIDTH_1: FunctionDef<unsafe extern "stdcall" fn(u8, u8, u8, u8, u8, u32) -> u32> = FunctionDef{address: 0x00511cc2, function_type: PhantomData};
@@ -422,7 +423,7 @@ pub mod bfgameapp {
     pub const INIT_INSTANCE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, i32, i8, *const i8) -> u32> = FunctionDef{address: 0x00533552, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005786fb, function_type: PhantomData};
     pub const EXIT_OVERRIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0057de27, function_type: PhantomData};
-    pub const BFGAME_APP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604487, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604487, function_type: PhantomData};
     pub const INIT_INSTANCE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00620686, function_type: PhantomData};
     pub const GET_UPDATE_TIME: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0062069f, function_type: PhantomData};
     pub const INIT_INSTANCE_2: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x006206a3, function_type: PhantomData};
@@ -447,7 +448,7 @@ pub mod bfgamemgr {
 pub mod bfgoal {
     use super::*;
 
-    pub const BFGOAL_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041226c, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041226c, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004139fd, function_type: PhantomData};
     pub const SET_GOAL_TILE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x0042224d, function_type: PhantomData};
     pub const CHECK_DURATION: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042323d, function_type: PhantomData};
@@ -470,7 +471,7 @@ pub mod bfgoal {
     pub const GET_SUB_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00603fd6, function_type: PhantomData};
     pub const GET_GOAL_TARGET_POS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00603ff2, function_type: PhantomData};
     pub const GET_GOAL_TARGET_GRID_POS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00604021, function_type: PhantomData};
-    pub const BFGOAL_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604185, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604185, function_type: PhantomData};
 }
 
 // BFGoalFactory class functions
@@ -480,7 +481,7 @@ pub mod bfgoalfactory {
     pub const CREATE_SUB: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00413aa7, function_type: PhantomData};
     pub const CREATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00413bec, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502904, function_type: PhantomData};
-    pub const BFGOAL_FACTORY: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const c_void> = FunctionDef{address: 0x00603e6b, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const c_void> = FunctionDef{address: 0x00603e6b, function_type: PhantomData};
 }
 
 // BFIniFile class functions
@@ -576,8 +577,8 @@ pub mod bfmgr {
     pub const LOOKUP: FunctionDef<unsafe extern "cdecl" fn(*const i8) -> u32> = FunctionDef{address: 0x004bdd7a, function_type: PhantomData};
     pub const CREATE_MANAGER: FunctionDef<unsafe extern "cdecl" fn(*const i8) -> u32> = FunctionDef{address: 0x004bdd91, function_type: PhantomData};
     pub const REGISTERIT: FunctionDef<unsafe extern "cdecl" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x005770e5, function_type: PhantomData};
-    pub const BFMGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057d7f5, function_type: PhantomData};
-    pub const BFMGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057daf1, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057d7f5, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057daf1, function_type: PhantomData};
 }
 
 // BFMove class functions
@@ -585,8 +586,8 @@ pub mod bfmove {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x00412ece, function_type: PhantomData};
-    pub const BFMOVE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004277a3, function_type: PhantomData};
-    pub const BFMOVE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const u32> = FunctionDef{address: 0x004277aa, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004277a3, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const u32> = FunctionDef{address: 0x004277aa, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00435c42, function_type: PhantomData};
 }
 
@@ -595,8 +596,8 @@ pub mod bfmovefactory {
     use super::*;
 
     pub const CREATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00412eec, function_type: PhantomData};
-    pub const BFMOVE_FACTORY_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502938, function_type: PhantomData};
-    pub const BFMOVE_FACTORY_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050293f, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502938, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050293f, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00527f17, function_type: PhantomData};
 }
 
@@ -604,7 +605,7 @@ pub mod bfmovefactory {
 pub mod bfmovemod {
     use super::*;
 
-    pub const BFMOVE_MOD: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9be0, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9be0, function_type: PhantomData};
 }
 
 // BFOldGoal class functions
@@ -617,9 +618,9 @@ pub mod bfoldgoal {
     pub const SET_DURATION: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0042e8fc, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00436244, function_type: PhantomData};
     pub const SET_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0043e99b, function_type: PhantomData};
-    pub const BFOLD_GOAL_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0043ec54, function_type: PhantomData};
-    pub const BFOLD_GOAL_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0043ec5e, function_type: PhantomData};
-    pub const BFOLD_GOAL_2: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0043ec81, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0043ec54, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0043ec5e, function_type: PhantomData};
+    pub const DESTRUCTOR_2: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0043ec81, function_type: PhantomData};
     pub const SET_GOAL_ID: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x00603fdd, function_type: PhantomData};
 }
 
@@ -629,7 +630,7 @@ pub mod bfoldsubgoal {
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00413a87, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004361e8, function_type: PhantomData};
-    pub const BFOLD_SUB_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0043ebf0, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0043ebf0, function_type: PhantomData};
     pub const SET_GOAL_ID: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x004708ea, function_type: PhantomData};
     pub const SET_GOAL_TILE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x004a4954, function_type: PhantomData};
     pub const SET_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004a8b6f, function_type: PhantomData};
@@ -642,12 +643,12 @@ pub mod bfoverlay {
     use super::*;
 
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x00420565, function_type: PhantomData};
-    pub const BFOVERLAY_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00420589, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00420589, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x0045024d, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x0047a7ee, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const u32> = FunctionDef{address: 0x004fc391, function_type: PhantomData};
     pub const ADD_TO_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004fc3cd, function_type: PhantomData};
-    pub const BFOVERLAY_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00624292, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00624292, function_type: PhantomData};
 }
 
 // BFOverlayType class functions
@@ -659,9 +660,9 @@ pub mod bfoverlaytype {
     pub const IS_WALKABLE_BY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x004147b5, function_type: PhantomData};
     pub const IS_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x004aa774, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051cd5e, function_type: PhantomData};
-    pub const BFOVERLAY_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cc7a, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cc7a, function_type: PhantomData};
     pub const NULLSUB: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005fe1a1, function_type: PhantomData};
-    pub const BFOVERLAY_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x0062424c, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x0062424c, function_type: PhantomData};
     pub const GET_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0062426a, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00624270, function_type: PhantomData};
 }
@@ -677,7 +678,7 @@ pub mod bfpathfinder {
     pub const ESTIMATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const f32, *const u32, *const u32, *const u32) -> f32> = FunctionDef{address: 0x00415247, function_type: PhantomData};
     pub const COST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const f32, *const u32, *const u32, *const u32) -> f32> = FunctionDef{address: 0x004153e3, function_type: PhantomData};
     pub const SET_NODE_MAX: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x004c680d, function_type: PhantomData};
-    pub const BFPATH_FINDER: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503905, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503905, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005265a6, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, u32) -> *const u32> = FunctionDef{address: 0x0052669c, function_type: PhantomData};
 }
@@ -748,8 +749,8 @@ pub mod bfresourcedir {
     pub const VALID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x00404fc8, function_type: PhantomData};
     pub const FIND_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const u8, *const u8) -> *const i32> = FunctionDef{address: 0x004b9e9f, function_type: PhantomData};
     pub const FIND_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, *const i8) -> *const i32> = FunctionDef{address: 0x004bfc2f, function_type: PhantomData};
-    pub const BFRESOURCE_DIR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cbe92, function_type: PhantomData};
-    pub const BFRESOURCE_DIR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004cbff4, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cbe92, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004cbff4, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> *const u32> = FunctionDef{address: 0x00529464, function_type: PhantomData};
     pub const TREE_SEARCH: FunctionDef<unsafe extern "cdecl" fn(*const c_void, *const i32, i8, *const u8) -> *const c_void> = FunctionDef{address: 0x00529796, function_type: PhantomData};
     pub const NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x006030a0, function_type: PhantomData};
@@ -771,7 +772,7 @@ pub mod bfresourcemgr {
     pub const ADD_PATH: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x0052870b, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0052903f, function_type: PhantomData};
     pub const SHUTDOWN: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0057e0c4, function_type: PhantomData};
-    pub const BFRESOURCE_MGR: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0057e827, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0057e827, function_type: PhantomData};
 }
 
 // BFResourcePtr class functions
@@ -823,8 +824,8 @@ pub mod bfresourcezip {
     pub const FIND_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, *const i8) -> *const i32> = FunctionDef{address: 0x004bf9fb, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const u32> = FunctionDef{address: 0x00528ac1, function_type: PhantomData};
     pub const VALID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> bool> = FunctionDef{address: 0x00528f94, function_type: PhantomData};
-    pub const BFRESOURCE_ZIP_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057e21f, function_type: PhantomData};
-    pub const BFRESOURCE_ZIP_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057e351, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057e21f, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057e351, function_type: PhantomData};
     pub const INDEX: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const i32> = FunctionDef{address: 0x00602f65, function_type: PhantomData};
 }
 
@@ -832,7 +833,7 @@ pub mod bfresourcezip {
 pub mod bfscenariogoal {
     use super::*;
 
-    pub const BFSCENARIO_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool) -> *const u32> = FunctionDef{address: 0x0061b9f6, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool) -> *const u32> = FunctionDef{address: 0x0061b9f6, function_type: PhantomData};
 }
 
 // BFScenarioMgr class functions
@@ -846,7 +847,7 @@ pub mod bfscenariomgr {
     pub const RESUME_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x004b27e8, function_type: PhantomData};
     pub const ABORT_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004b2a7f, function_type: PhantomData};
     pub const BEGIN_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> i32> = FunctionDef{address: 0x004c9bb2, function_type: PhantomData};
-    pub const BFSCENARIO_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504e6a, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504e6a, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0052428d, function_type: PhantomData};
     pub const LOAD_SCENARIO_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0058de19, function_type: PhantomData};
     pub const PREPARE_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x0058e33e, function_type: PhantomData};
@@ -856,7 +857,7 @@ pub mod bfscenariomgr {
     pub const GET_WORLD_AMBIENTS_NAME: FunctionDef<unsafe extern "fastcall" fn(i32) -> *const u8> = FunctionDef{address: 0x00592659, function_type: PhantomData};
     pub const GET_CROWD_CONFIG_NAME: FunctionDef<unsafe extern "fastcall" fn(i32) -> *const u8> = FunctionDef{address: 0x00592680, function_type: PhantomData};
     pub const GET_WORLD_CONFIG_NAME: FunctionDef<unsafe extern "fastcall" fn(i32) -> *const u8> = FunctionDef{address: 0x005926a7, function_type: PhantomData};
-    pub const BFSCENARIO_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00600019, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00600019, function_type: PhantomData};
     pub const UNLOCK_ALL_SCENARIOS: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x006000d3, function_type: PhantomData};
 }
 
@@ -867,11 +868,12 @@ pub mod bfsndmgr {
     pub const IS_ALT_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x00406f7f, function_type: PhantomData};
     pub const ATTEMPT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x004070b0, function_type: PhantomData};
     pub const GET_SCREEN_CENTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x0043f35f, function_type: PhantomData};
+    pub const NEW_SOUND_GROUP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, *const u32, *const u32, *const u32, *const u32, *const u32, *const u32) -> *const u32> = FunctionDef{address: 0x004504a0, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005284a3, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0057d5e7, function_type: PhantomData};
     pub const DESTROY_SOUNDS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0057d870, function_type: PhantomData};
     pub const ACQUIRE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8)> = FunctionDef{address: 0x005fed6a, function_type: PhantomData};
-    pub const BFSND_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061feec, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061feec, function_type: PhantomData};
     pub const ATTEMPT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8)> = FunctionDef{address: 0x0061ff0a, function_type: PhantomData};
     pub const INSTANTIATE_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x0061ff20, function_type: PhantomData};
 }
@@ -880,7 +882,7 @@ pub mod bfsndmgr {
 pub mod bfsoundmgr {
     use super::*;
 
-    pub const BFSOUND_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005fed4c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005fed4c, function_type: PhantomData};
 }
 
 // BFSubGoal class functions
@@ -899,7 +901,7 @@ pub mod bfsubgoal {
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a8b7c, function_type: PhantomData};
     pub const CLEAR_TARGET: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b248a, function_type: PhantomData};
     pub const GET_GOAL_TARGET_GRID_POS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00604070, function_type: PhantomData};
-    pub const BFSUB_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006041a3, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006041a3, function_type: PhantomData};
 }
 
 // BFTerrainImage class functions
@@ -914,7 +916,7 @@ pub mod bfterrainmgr {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0052560a, function_type: PhantomData};
-    pub const BFTERRAIN_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00602db1, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00602db1, function_type: PhantomData};
     pub const START: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x00602dcf, function_type: PhantomData};
 }
 
@@ -1014,8 +1016,8 @@ pub mod bfuimgr {
     pub const START: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0051e3b8, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00539a66, function_type: PhantomData};
     pub const CONFIGURE_AND_SHOW_DIALOG: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8, bool) -> *const i16> = FunctionDef{address: 0x005a1b15, function_type: PhantomData};
-    pub const BFUIMGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620515, function_type: PhantomData};
-    pub const BFUIMGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006207b1, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620515, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006207b1, function_type: PhantomData};
 }
 
 // BFUnit class functions
@@ -1067,7 +1069,7 @@ pub mod bfunit {
     pub const SET_MOVING: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8, i8)> = FunctionDef{address: 0x0043e5a5, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8, i8)> = FunctionDef{address: 0x0043e642, function_type: PhantomData};
     pub const GET_ONLY_UNDERWATER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043e6c0, function_type: PhantomData};
-    pub const GET_EVENTS_3: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043f40d, function_type: PhantomData};
+    pub const GET_EVENTS_3: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32, u32)> = FunctionDef{address: 0x0043f40d, function_type: PhantomData};
     pub const CLEANUP_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043f4a0, function_type: PhantomData};
     pub const IS_NON_PATH_STEEP: FunctionDef<unsafe extern "stdcall" fn(i32) -> u32> = FunctionDef{address: 0x0044045e, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x004547cc, function_type: PhantomData};
@@ -1092,7 +1094,7 @@ pub mod bfunit {
     pub const INIT_AMBIENT_ANIMS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8)> = FunctionDef{address: 0x004f5465, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const u32> = FunctionDef{address: 0x004f568c, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004f59e7, function_type: PhantomData};
-    pub const BFUNIT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9c33, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9c33, function_type: PhantomData};
     pub const INIT_AFTER_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x0059518e, function_type: PhantomData};
     pub const SEND_EVENT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16, u32, u8, u32, u16, u16)> = FunctionDef{address: 0x0059def9, function_type: PhantomData};
     pub const ABORT_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005b241e, function_type: PhantomData};
@@ -1100,7 +1102,7 @@ pub mod bfunit {
     pub const CLEAR_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x006022b4, function_type: PhantomData};
     pub const RANDOM_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x006022bf, function_type: PhantomData};
     pub const GOAL_SET: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, u32)> = FunctionDef{address: 0x006022c8, function_type: PhantomData};
-    pub const BFUNIT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006022e9, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006022e9, function_type: PhantomData};
     pub const FENCES_OK: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, *const bool, *const bool) -> u32> = FunctionDef{address: 0x00602307, function_type: PhantomData};
     pub const GET_COST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x0060238f, function_type: PhantomData};
     pub const GET_TERRAIN_COST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> i32> = FunctionDef{address: 0x006023ac, function_type: PhantomData};
@@ -1129,10 +1131,10 @@ pub mod bfunittype {
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004b5de3, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, bool) -> u32> = FunctionDef{address: 0x004b5faf, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x004be68c, function_type: PhantomData};
-    pub const BFUNIT_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500b5b, function_type: PhantomData};
-    pub const BFUNIT_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500bda, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500b5b, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500bda, function_type: PhantomData};
     pub const LOAD_DATA: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005ffd1a, function_type: PhantomData};
-    pub const BFUNIT_TYPE_2: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x005ffd1f, function_type: PhantomData};
+    pub const DESTRUCTOR_2: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x005ffd1f, function_type: PhantomData};
     pub const GET_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005ffd3d, function_type: PhantomData};
     pub const GET_MEDIUM_ANIM_SYMBOL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005ffd43, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005ffe36, function_type: PhantomData};
@@ -1164,8 +1166,8 @@ pub mod bfwindow {
     pub const STYLE_FIXED: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052f150, function_type: PhantomData};
     pub const POINTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> bool> = FunctionDef{address: 0x005336d5, function_type: PhantomData};
     pub const ATTACH: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> bool> = FunctionDef{address: 0x00536486, function_type: PhantomData};
-    pub const BFWINDOW_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00587721, function_type: PhantomData};
-    pub const BFWINDOW_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005fd96a, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00587721, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005fd96a, function_type: PhantomData};
 }
 
 // BFWindowClass class functions
@@ -1207,7 +1209,7 @@ pub mod bfworldmgr {
     pub const UNLOCK_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x00598cdc, function_type: PhantomData};
     pub const REMOVE_ALL_ENTITIES: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005b1149, function_type: PhantomData};
     pub const VERIFY_ENTITY_1: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x005b66c4, function_type: PhantomData};
-    pub const BFWORLD_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005fe9b2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005fe9b2, function_type: PhantomData};
 }
 
 // CQuantizer class functions
@@ -1215,8 +1217,8 @@ pub mod cquantizer {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32) -> *const u32> = FunctionDef{address: 0x004addb1, function_type: PhantomData};
-    pub const CQUANTIZER_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004adebe, function_type: PhantomData};
-    pub const CQUANTIZER_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061f8a2, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004adebe, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061f8a2, function_type: PhantomData};
 }
 
 // DX8SndMgr class functions
@@ -1234,7 +1236,7 @@ pub mod dx8sndmgr {
     pub const UN_PAUSE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004ffcc1, function_type: PhantomData};
     pub const START: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005277c2, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0057d761, function_type: PhantomData};
-    pub const DX8SND_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057dad3, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057dad3, function_type: PhantomData};
     pub const UPDATE_PLAYING_VOLUMES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058b922, function_type: PhantomData};
     pub const INSTANTIATE_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x0061fed4, function_type: PhantomData};
 }
@@ -1256,8 +1258,8 @@ pub mod dx8sound {
     pub const GET_SOUND_RESOURCE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0041c514, function_type: PhantomData};
     pub const INSTANTIATE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0041c77c, function_type: PhantomData};
     pub const IS_IN_PLAY_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0041e31e, function_type: PhantomData};
-    pub const DX8SOUND_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e3a1, function_type: PhantomData};
-    pub const DX8SOUND_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x0041e3da, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e3a1, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x0041e3da, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0041ed99, function_type: PhantomData};
     pub const PLAY_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00440764, function_type: PhantomData};
     pub const UPDATE_POSITION: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x0044153b, function_type: PhantomData};
@@ -1308,7 +1310,7 @@ pub mod gxgraphicsmgr {
     pub const START: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i8, i32, i32, i32, i8) -> u32> = FunctionDef{address: 0x004d6c59, function_type: PhantomData};
     pub const INITIALIZE: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i32, u32)> = FunctionDef{address: 0x00533e4b, function_type: PhantomData};
     pub const DESTROY: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0057de67, function_type: PhantomData};
-    pub const GXGRAPHICS_MGR: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x0057de8e, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x0057de8e, function_type: PhantomData};
 }
 
 // GXImage class functions
@@ -1316,14 +1318,14 @@ pub mod gximage {
     use super::*;
 
     pub const DRAW_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, u32) -> u32> = FunctionDef{address: 0x0040d8bf, function_type: PhantomData};
-    pub const GXIMAGE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0040d94b, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0040d94b, function_type: PhantomData};
     pub const ATTEMPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x004b3223, function_type: PhantomData};
     pub const X_SIZE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004b3297, function_type: PhantomData};
     pub const VALID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004b3685, function_type: PhantomData};
-    pub const GXIMAGE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061ef74, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061ef74, function_type: PhantomData};
     pub const NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061efa1, function_type: PhantomData};
     pub const IMAGE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0061efb0, function_type: PhantomData};
-    pub const GXIMAGE_2: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061f0aa, function_type: PhantomData};
+    pub const DESTRUCTOR_2: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061f0aa, function_type: PhantomData};
     pub const DRAW_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, u32) -> u32> = FunctionDef{address: 0x0061f0c8, function_type: PhantomData};
 }
 
@@ -1338,7 +1340,7 @@ pub mod gximagebmp {
     pub const Y_SIZE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005235e2, function_type: PhantomData};
     pub const X_SIZE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005235f1, function_type: PhantomData};
     pub const DRAW: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, u32) -> u32> = FunctionDef{address: 0x00523830, function_type: PhantomData};
-    pub const GXIMAGE_BMP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00523b64, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00523b64, function_type: PhantomData};
     pub const VALID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061f3b0, function_type: PhantomData};
     pub const NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061f3dc, function_type: PhantomData};
     pub const IMAGE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x0061f3ea, function_type: PhantomData};
@@ -1349,7 +1351,7 @@ pub mod gximagetga {
     use super::*;
 
     pub const DRAW: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, u32) -> u32> = FunctionDef{address: 0x004b2db2, function_type: PhantomData};
-    pub const GXIMAGE_TGA: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004b31e2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004b31e2, function_type: PhantomData};
     pub const ATTEMPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x004b32a7, function_type: PhantomData};
     pub const BIT_DEPTH: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004b33d3, function_type: PhantomData};
     pub const Y_SIZE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u16> = FunctionDef{address: 0x004b33de, function_type: PhantomData};
@@ -1371,7 +1373,7 @@ pub mod gxlleanim {
 
     pub const RELEASE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00402f13, function_type: PhantomData};
     pub const PREPARE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> bool> = FunctionDef{address: 0x0040bbc1, function_type: PhantomData};
-    pub const GXLLEANIM: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0040bc77, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0040bc77, function_type: PhantomData};
     pub const ATTEMPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> bool> = FunctionDef{address: 0x00411e21, function_type: PhantomData};
     pub const ACQUIRE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8)> = FunctionDef{address: 0x00411eb8, function_type: PhantomData};
 }
@@ -1409,7 +1411,7 @@ pub mod gxmixer {
 pub mod gxmixerlink {
     use super::*;
 
-    pub const GXMIXER_LINK: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x004016c7, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x004016c7, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i32, u8, i32) -> *const u32> = FunctionDef{address: 0x0040de05, function_type: PhantomData};
 }
 
@@ -1448,7 +1450,7 @@ pub mod gxvideomanager {
     pub const CREATE_DIRECT_DRAW: FunctionDef<unsafe extern "thiscall" fn(*const c_void, u32) -> u32> = FunctionDef{address: 0x00533d0a, function_type: PhantomData};
     pub const INITIALIZE: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i32, u32) -> u32> = FunctionDef{address: 0x00533db5, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x0057df69, function_type: PhantomData};
-    pub const GXVIDEO_MANAGER: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x0057dfc7, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x0057dfc7, function_type: PhantomData};
     pub const RELEASE_DIRECT_DRAW: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x0057e01e, function_type: PhantomData};
 }
 
@@ -1457,7 +1459,7 @@ pub mod httpcallbackinterface {
     use super::*;
 
     pub const CHECK_COMPLETED: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> u8> = FunctionDef{address: 0x0059f93f, function_type: PhantomData};
-    pub const HTTPCALLBACK_INTERFACE: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> *const i32> = FunctionDef{address: 0x00626afd, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> *const i32> = FunctionDef{address: 0x00626afd, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> *const i32> = FunctionDef{address: 0x00626b1d, function_type: PhantomData};
     pub const NOTIFY_DONE: FunctionDef<unsafe extern "thiscall" fn(*const i32)> = FunctionDef{address: 0x00626b35, function_type: PhantomData};
     pub const NOTIFY_ERROR: FunctionDef<unsafe extern "thiscall" fn(*const i32, i32, i32)> = FunctionDef{address: 0x00626b3e, function_type: PhantomData};
@@ -1487,6 +1489,18 @@ pub mod iscroller {
     pub const LOAD_SB: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const c_void, *const u8) -> u32> = FunctionDef{address: 0x00510ba2, function_type: PhantomData};
 }
 
+// PoolAlloc class functions
+pub mod poolalloc {
+    use super::*;
+
+    pub const ALLOCATE: FunctionDef<unsafe extern "cdecl" fn(u32) -> *const c_void> = FunctionDef{address: 0x0040107f, function_type: PhantomData};
+    pub const DEALLOCATE_N_4: FunctionDef<unsafe extern "stdcall" fn(*const u32, i32)> = FunctionDef{address: 0x004012f3, function_type: PhantomData};
+    pub const DEALLOCATE: FunctionDef<unsafe extern "cdecl" fn(*const u32, u32)> = FunctionDef{address: 0x00401b16, function_type: PhantomData};
+    pub const REFILL: FunctionDef<unsafe extern "cdecl" fn(i32) -> *const c_void> = FunctionDef{address: 0x00402f85, function_type: PhantomData};
+    pub const CHUNK_ALLOC: FunctionDef<unsafe extern "cdecl" fn(u32, *const u32) -> *const u32> = FunctionDef{address: 0x0040355a, function_type: PhantomData};
+    pub const DEALLOCATE_N_12: FunctionDef<unsafe extern "stdcall" fn(*const u32, i32)> = FunctionDef{address: 0x00404f0c, function_type: PhantomData};
+}
+
 // SNDSound class functions
 pub mod sndsound {
     use super::*;
@@ -1501,8 +1515,8 @@ pub mod sndsound {
     pub const SET_VOLUME: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x004075ca, function_type: PhantomData};
     pub const PREPARE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x00411585, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0041eda7, function_type: PhantomData};
-    pub const SNDSOUND_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041edd1, function_type: PhantomData};
-    pub const SNDSOUND_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0041ee06, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041edd1, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0041ee06, function_type: PhantomData};
     pub const PLAY_0: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00440750, function_type: PhantomData};
     pub const UPDATE_POSITION: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00441527, function_type: PhantomData};
     pub const PLAY_LOOPED_0: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00441783, function_type: PhantomData};
@@ -1523,8 +1537,8 @@ pub mod sndsound {
 pub mod sndsoundbase {
     use super::*;
 
-    pub const SNDSOUND_BASE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e39a, function_type: PhantomData};
-    pub const SNDSOUND_BASE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061fc9c, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e39a, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061fc9c, function_type: PhantomData};
     pub const HUSH: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061fcba, function_type: PhantomData};
     pub const UN_HUSH: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061fcc5, function_type: PhantomData};
 }
@@ -1535,9 +1549,9 @@ pub mod sndsoundresource {
 
     pub const RELEASE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004072fa, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041c571, function_type: PhantomData};
-    pub const SNDSOUND_RESOURCE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e5e3, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e5e3, function_type: PhantomData};
     pub const NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061f8c0, function_type: PhantomData};
-    pub const SNDSOUND_RESOURCE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061ff34, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061ff34, function_type: PhantomData};
     pub const ATTEMPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x0061ff52, function_type: PhantomData};
     pub const PREPARE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x0061ffaf, function_type: PhantomData};
     pub const VALID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0062000b, function_type: PhantomData};
@@ -1570,8 +1584,8 @@ pub mod sndsoundresourcewav {
     pub const GET_BLOCK_ALIGN: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0041c7ba, function_type: PhantomData};
     pub const GET_NUM_CHANNELS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0041c7c2, function_type: PhantomData};
     pub const GET_SAMPLE_RATE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0041c7ca, function_type: PhantomData};
-    pub const SNDSOUND_RESOURCE_WAV_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0041e5c5, function_type: PhantomData};
-    pub const SNDSOUND_RESOURCE_WAV_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e63d, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0041e5c5, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e63d, function_type: PhantomData};
 }
 
 // Sorter class functions
@@ -1613,7 +1627,7 @@ pub mod uibutton {
     pub const HANDLE_LEFT_BUTTON_DOWN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32)> = FunctionDef{address: 0x004437cf, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8)> = FunctionDef{address: 0x004d35ab, function_type: PhantomData};
     pub const CLEAR_FOR_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d3635, function_type: PhantomData};
-    pub const UIBUTTON: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x004e0c83, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x004e0c83, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x004e9989, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004e99ee, function_type: PhantomData};
     pub const HANDLE_MOUSE_WHEEL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32, i32) -> u32> = FunctionDef{address: 0x004f14e7, function_type: PhantomData};
@@ -1662,13 +1676,13 @@ pub mod uicontrol {
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x004d32c9, function_type: PhantomData};
     pub const ADJUST_DIMENSIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004d483e, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004d4909, function_type: PhantomData};
-    pub const UICONTROL_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004e0996, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004e0996, function_type: PhantomData};
     pub const CONSTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> *const u32> = FunctionDef{address: 0x004e95ea, function_type: PhantomData};
     pub const SET_ICON_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32, i32)> = FunctionDef{address: 0x004ee2ba, function_type: PhantomData};
     pub const SET_ICON_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8, i32, bool, i32, i32)> = FunctionDef{address: 0x004faa82, function_type: PhantomData};
     pub const CONSTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050fe83, function_type: PhantomData};
     pub const GET_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x0058c4aa, function_type: PhantomData};
-    pub const UICONTROL_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620b43, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620b43, function_type: PhantomData};
     pub const SET_IMAGE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00620b61, function_type: PhantomData};
 }
 
@@ -1690,7 +1704,7 @@ pub mod uieditabletext {
     pub const INIT_CURSORS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x004d41be, function_type: PhantomData};
     pub const ADJUST_DIMENSIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004d4e51, function_type: PhantomData};
     pub const RENDER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004ec3bb, function_type: PhantomData};
-    pub const UIEDITABLE_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x00502f26, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x00502f26, function_type: PhantomData};
     pub const HANDLE_MOUSE_MOVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x0058c652, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00620188, function_type: PhantomData};
     pub const HANDLE_LEFT_BUTTON_DOWN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x00620224, function_type: PhantomData};
@@ -1735,14 +1749,14 @@ pub mod uielement {
     pub const ADJUST_DIMENSIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004d481d, function_type: PhantomData};
     pub const RELOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u8> = FunctionDef{address: 0x004d5777, function_type: PhantomData};
     pub const HANDLE_MOUSE_WHEEL_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8, u8, u8, u32) -> u32> = FunctionDef{address: 0x004de381, function_type: PhantomData};
-    pub const UIELEMENT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004e0bc1, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004e0bc1, function_type: PhantomData};
     pub const HANDLE_MOUSE_WHEEL_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32, i32) -> u32> = FunctionDef{address: 0x004f14df, function_type: PhantomData};
     pub const SET_ALIAS_ELEMENT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004ffb8b, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050f8e7, function_type: PhantomData};
     pub const REGISTERIT: FunctionDef<unsafe extern "cdecl" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x005774bf, function_type: PhantomData};
     pub const SET_GLOBAL_GRAYED: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005a0d64, function_type: PhantomData};
     pub const VF_RETURN1_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00606ce7, function_type: PhantomData};
-    pub const UIELEMENT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0062016a, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0062016a, function_type: PhantomData};
 }
 
 // UIGraph class functions
@@ -1752,8 +1766,8 @@ pub mod uigraph {
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004b2aab, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> *const i8> = FunctionDef{address: 0x004d3d36, function_type: PhantomData};
     pub const CLEAR_FOR_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d5c00, function_type: PhantomData};
-    pub const UIGRAPH_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503382, function_type: PhantomData};
-    pub const UIGRAPH_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050340c, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503382, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050340c, function_type: PhantomData};
     pub const SET_GRAPH_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0051a5ef, function_type: PhantomData};
     pub const INIT_DEFAULT_VALUES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0051a646, function_type: PhantomData};
     pub const ADD_POINT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32, *const u32, u32, i32)> = FunctionDef{address: 0x00530614, function_type: PhantomData};
@@ -1776,7 +1790,7 @@ pub mod uiimage {
 
     pub const RENDER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00443cbf, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x004d3509, function_type: PhantomData};
-    pub const UIIMAGE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050295e, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050295e, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00606fd2, function_type: PhantomData};
 }
 
@@ -1790,7 +1804,7 @@ pub mod uiimageset {
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x004d3e91, function_type: PhantomData};
     pub const RENDER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004dca28, function_type: PhantomData};
     pub const SET_STATUS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, i32)> = FunctionDef{address: 0x004f1b13, function_type: PhantomData};
-    pub const UIIMAGE_SET: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503054, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503054, function_type: PhantomData};
     pub const CONSTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00512259, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00622fd7, function_type: PhantomData};
     pub const CONSTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> *const u32> = FunctionDef{address: 0x00622ff9, function_type: PhantomData};
@@ -1817,7 +1831,7 @@ pub mod uilayout {
     pub const RELOAD_1: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d57dc, function_type: PhantomData};
     pub const SORT: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004d7ba2, function_type: PhantomData};
     pub const HANDLE_MOUSE_MOVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x004ffbe9, function_type: PhantomData};
-    pub const UILAYOUT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005023d4, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005023d4, function_type: PhantomData};
     pub const LOAD_ELEMENT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x0050f61a, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x0050f7d3, function_type: PhantomData};
     pub const HANDLE_LEFT_BUTTON_UP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x0058c88e, function_type: PhantomData};
@@ -1867,7 +1881,7 @@ pub mod uilistbox {
     pub const ITEM_NOW_INVISIBLE: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32)> = FunctionDef{address: 0x004f984e, function_type: PhantomData};
     pub const REMOVE_STRING: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004f9908, function_type: PhantomData};
     pub const INCREMENT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, *const i32) -> u32> = FunctionDef{address: 0x004f9ffa, function_type: PhantomData};
-    pub const UILIST_BOX: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502c27, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502c27, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005119ea, function_type: PhantomData};
     pub const HANDLE_CHAR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x00533186, function_type: PhantomData};
     pub const HANDLE_KEY_DOWN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u16) -> u32> = FunctionDef{address: 0x0053337e, function_type: PhantomData};
@@ -1896,8 +1910,8 @@ pub mod uilistboxitem {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u16, *const i32, *const i32, *const i32, u8, *const i32, *const i32, *const i32) -> *const u32> = FunctionDef{address: 0x00418000, function_type: PhantomData};
     pub const CALC_SIZE: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x0041848c, function_type: PhantomData};
     pub const SET_JUSTIFY: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, u32)> = FunctionDef{address: 0x004185f6, function_type: PhantomData};
-    pub const UILIST_BOX_ITEM_0: FunctionDef<unsafe extern "fastcall" fn(*const u32)> = FunctionDef{address: 0x0041863b, function_type: PhantomData};
-    pub const UILIST_BOX_ITEM_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00418788, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "fastcall" fn(*const u32)> = FunctionDef{address: 0x0041863b, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00418788, function_type: PhantomData};
     pub const RENDER_TEXT_ENTRIES: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32, i32, u32, i32, u32)> = FunctionDef{address: 0x004ecba7, function_type: PhantomData};
     pub const RENDER_ICON_ENTRIES: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, i32)> = FunctionDef{address: 0x004ece25, function_type: PhantomData};
     pub const GET_STRING: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const i32> = FunctionDef{address: 0x004f0571, function_type: PhantomData};
@@ -1922,9 +1936,9 @@ pub mod uimessagequeue {
     pub const CLEAR_FOR_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d58ad, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x004facad, function_type: PhantomData};
     pub const RENDER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004fad0f, function_type: PhantomData};
-    pub const UIMESSAGE_QUEUE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503078, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503078, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00622a6a, function_type: PhantomData};
-    pub const UIMESSAGE_QUEUE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00622b32, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00622b32, function_type: PhantomData};
 }
 
 // UIPointGraphRenderer class functions
@@ -1951,8 +1965,8 @@ pub mod uiradioset {
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d4c0e, function_type: PhantomData};
     pub const CLEAR_FOR_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d57e7, function_type: PhantomData};
     pub const HANDLE_MOUSE_WHEEL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32, i32) -> u32> = FunctionDef{address: 0x004f1515, function_type: PhantomData};
-    pub const UIRADIO_SET_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502a12, function_type: PhantomData};
-    pub const UIRADIO_SET_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502aca, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502a12, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502aca, function_type: PhantomData};
 }
 
 // UIScrollBar class functions
@@ -1969,7 +1983,7 @@ pub mod uiscrollbar {
     pub const HANDLE_LEFT_BUTTON_DOWN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32)> = FunctionDef{address: 0x004e23cd, function_type: PhantomData};
     pub const HANDLE_LEFT_BUTTON_UP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32)> = FunctionDef{address: 0x004e2454, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x004e262c, function_type: PhantomData};
-    pub const UISCROLL_BAR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502eb7, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502eb7, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00511212, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00620636, function_type: PhantomData};
 }
@@ -1986,8 +2000,8 @@ pub mod uiscrollingregion {
     pub const DEPOPULATE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004e0cd1, function_type: PhantomData};
     pub const POPULATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, i32, i32, i32, i8) -> u32> = FunctionDef{address: 0x004e90c2, function_type: PhantomData};
     pub const SHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004ea015, function_type: PhantomData};
-    pub const UISCROLLING_REGION_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502fe5, function_type: PhantomData};
-    pub const UISCROLLING_REGION_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503003, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502fe5, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00503003, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "stdcall" fn() -> *const u32> = FunctionDef{address: 0x005125d8, function_type: PhantomData};
     pub const HANDLE_CHAR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x00622ef8, function_type: PhantomData};
     pub const SELECT_NEXT_BUTTON: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00622f18, function_type: PhantomData};
@@ -2005,7 +2019,7 @@ pub mod uistatusimage {
     pub const CLEAR_FOR_LOAD_1: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d3de0, function_type: PhantomData};
     pub const HIGHLIGHT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004ef9f1, function_type: PhantomData};
     pub const UNHIGHLIGHT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004efa36, function_type: PhantomData};
-    pub const UISTATUS_IMAGE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502b10, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00502b10, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x006229dd, function_type: PhantomData};
 }
 
@@ -2024,8 +2038,8 @@ pub mod uitext {
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x004d36bf, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004d4947, function_type: PhantomData};
     pub const SET_SCROLL_BAR: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x004d4c5d, function_type: PhantomData};
-    pub const UITEXT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005029b0, function_type: PhantomData};
-    pub const UITEXT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005029f4, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005029b0, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005029f4, function_type: PhantomData};
     pub const HANDLE_MOUSE_WHEEL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32, i32) -> u32> = FunctionDef{address: 0x00589de4, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00606dc1, function_type: PhantomData};
 }
@@ -2036,7 +2050,7 @@ pub mod uiview {
 
     pub const CONSTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0052059c, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0060a8d2, function_type: PhantomData};
-    pub const UIVIEW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620a72, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00620a72, function_type: PhantomData};
     pub const CONSTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> *const u32> = FunctionDef{address: 0x00620a90, function_type: PhantomData};
     pub const RENDER: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00620aa9, function_type: PhantomData};
 }
@@ -2046,7 +2060,7 @@ pub mod updatehandler {
     use super::*;
 
     pub const CONSTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00624e20, function_type: PhantomData};
-    pub const UPDATE_HANDLER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00624f1c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00624f1c, function_type: PhantomData};
     pub const CONSTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00624f3a, function_type: PhantomData};
     pub const NOTIFY_DONE: FunctionDef<unsafe extern "fastcall" fn(*const u32)> = FunctionDef{address: 0x006265c3, function_type: PhantomData};
 }
@@ -2112,8 +2126,8 @@ pub mod ztadvterrainmgr {
     pub const SET_IMAGE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32, *const u32) -> u32> = FunctionDef{address: 0x004aede5, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005039cd, function_type: PhantomData};
     pub const STOP2D: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00503b7a, function_type: PhantomData};
-    pub const ZTADV_TERRAIN_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050435b, function_type: PhantomData};
-    pub const ZTADV_TERRAIN_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050458d, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050435b, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050458d, function_type: PhantomData};
     pub const START: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00522470, function_type: PhantomData};
     pub const LOAD_TEXTURES_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005224b9, function_type: PhantomData};
     pub const LOAD_TEXTURES_1: FunctionDef<unsafe extern "stdcall" fn(u32, u8, u8, u8, u8, u8, u32, u8, u8, u8, u32, u8, u32)> = FunctionDef{address: 0x005228b3, function_type: PhantomData};
@@ -2127,8 +2141,8 @@ pub mod ztadvterrainmgr {
 pub mod ztambient {
     use super::*;
 
-    pub const ZTAMBIENT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00420519, function_type: PhantomData};
-    pub const ZTAMBIENT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00420547, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00420519, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00420547, function_type: PhantomData};
     pub const CALC_SHADOW_WORLD_POSITION: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const i32)> = FunctionDef{address: 0x00433cad, function_type: PhantomData};
     pub const UPDATE_POSITION: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00434e9c, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x00450261, function_type: PhantomData};
@@ -2151,8 +2165,8 @@ pub mod ztambienttype {
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004fc358, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x0051ca20, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051cd83, function_type: PhantomData};
-    pub const ZTAMBIENT_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cc85, function_type: PhantomData};
-    pub const ZTAMBIENT_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x0057cccb, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cc85, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x0057cccb, function_type: PhantomData};
 }
 
 // ZTAnimal class functions
@@ -2269,8 +2283,8 @@ pub mod ztanimal {
     pub const SET_TARGET_POS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x004e72cc, function_type: PhantomData};
     pub const GET_ICON_ZOOM: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x004edb32, function_type: PhantomData};
     pub const GET_ICON_ANIM: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004ee5be, function_type: PhantomData};
-    pub const ZTANIMAL_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9dac, function_type: PhantomData};
-    pub const ZTANIMAL_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9e18, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9dac, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9e18, function_type: PhantomData};
     pub const IS_SELECTABLE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> bool> = FunctionDef{address: 0x004fb70d, function_type: PhantomData};
     pub const STOP_EATING: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004fd86e, function_type: PhantomData};
     pub const F_EAT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004fd951, function_type: PhantomData};
@@ -2355,8 +2369,8 @@ pub mod ztanimaltype {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x004bece3, function_type: PhantomData};
     pub const RESOLVE_USER_TYPES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004c4482, function_type: PhantomData};
     pub const GET_HELP_ID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004e1485, function_type: PhantomData};
-    pub const ZTANIMAL_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500be5, function_type: PhantomData};
-    pub const ZTANIMAL_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00500cc5, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500be5, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00500cc5, function_type: PhantomData};
     pub const CHANGE_CHARACTERISTIC: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, u32)> = FunctionDef{address: 0x0059ac90, function_type: PhantomData};
 }
 
@@ -2412,7 +2426,7 @@ pub mod ztawardmgr {
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x0047a064, function_type: PhantomData};
     pub const START: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005141e1, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "fastcall" fn(u32)> = FunctionDef{address: 0x00571460, function_type: PhantomData};
-    pub const ZTAWARD_MGR: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0058686b, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0058686b, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x00594093, function_type: PhantomData};
     pub const GET_AWARD: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> i32> = FunctionDef{address: 0x005a12ec, function_type: PhantomData};
     pub const ADD_AWARD: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x005a13ed, function_type: PhantomData};
@@ -2425,6 +2439,7 @@ pub mod ztbuilding {
     pub const USER_DATA_CHANGED: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00412513, function_type: PhantomData};
     pub const FORCE_DEAD_ANIM: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004174dd, function_type: PhantomData};
     pub const MIGHT_START_AMBIENT_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0041e3f8, function_type: PhantomData};
+    pub const GET_CURRENT_UPGRADE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00423497, function_type: PhantomData};
     pub const HAS_OPEN_SLOT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x00429330, function_type: PhantomData};
     pub const GX_POS_FROM_XYPOS_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const i32)> = FunctionDef{address: 0x0042a10c, function_type: PhantomData};
     pub const GET_VALID_EXIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const i32, *const i32) -> u32> = FunctionDef{address: 0x0042aad5, function_type: PhantomData};
@@ -2440,6 +2455,9 @@ pub mod ztbuilding {
     pub const BUY_ITEM: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> u32> = FunctionDef{address: 0x0042d1e2, function_type: PhantomData};
     pub const REMOVE_USER: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, i8) -> u32> = FunctionDef{address: 0x0042d858, function_type: PhantomData};
     pub const YANK_USER: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, *const i32) -> u32> = FunctionDef{address: 0x0042da64, function_type: PhantomData};
+    pub const GET_ADULT_CHANGE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042dd07, function_type: PhantomData};
+    pub const DO_CHANGES: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x0042dd23, function_type: PhantomData};
+    pub const GET_CHILD_CHANGE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042dda7, function_type: PhantomData};
     pub const DRAW_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32, i32, i32, *const u32)> = FunctionDef{address: 0x00433aaf, function_type: PhantomData};
     pub const GET_AIINFO_ON: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00433b0e, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00434c4b, function_type: PhantomData};
@@ -2463,14 +2481,15 @@ pub mod ztbuilding {
     pub const MIGHT_STOP_AMBIENT_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004b0bca, function_type: PhantomData};
     pub const DROP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004e5282, function_type: PhantomData};
     pub const CREATE_NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004e530d, function_type: PhantomData};
-    pub const ZTBUILDING_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9e36, function_type: PhantomData};
-    pub const ZTBUILDING_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9f1d, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9e36, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9f1d, function_type: PhantomData};
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0050023a, function_type: PhantomData};
     pub const CALCULATE_WATER_CAPACITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x0059398a, function_type: PhantomData};
     pub const INIT_AFTER_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00593fd3, function_type: PhantomData};
     pub const REMOVE_USER_IF_PRESENT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> u32> = FunctionDef{address: 0x0059be7b, function_type: PhantomData};
     pub const GET_FUN_GIFT_IF_AVAILABLE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> u32> = FunctionDef{address: 0x0059cd02, function_type: PhantomData};
     pub const SEND_EVENT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16, u32, u8, u32, u16, u16)> = FunctionDef{address: 0x0059dfc7, function_type: PhantomData};
+    pub const GET_UPKEEP: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> f32> = FunctionDef{address: 0x0059e17c, function_type: PhantomData};
     pub const DRAW_1: FunctionDef<unsafe extern "stdcall" fn(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u32)> = FunctionDef{address: 0x0059fb8f, function_type: PhantomData};
     pub const REMOVE_MEMBER: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x005a08ac, function_type: PhantomData};
     pub const GET_SLOT_DRAW_LOC: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, i32)> = FunctionDef{address: 0x005a954d, function_type: PhantomData};
@@ -2490,6 +2509,7 @@ pub mod ztbuildingtype {
 
     pub const GET_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00401f98, function_type: PhantomData};
     pub const IS_CAST_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x0040f856, function_type: PhantomData};
+    pub const GET_UPGRADE: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> *const u32> = FunctionDef{address: 0x0042341c, function_type: PhantomData};
     pub const GET_SLOT_ENTRANCES: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> *const u32> = FunctionDef{address: 0x0042b29f, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0045134e, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x0045e8f2, function_type: PhantomData};
@@ -2504,7 +2524,7 @@ pub mod ztbuildingtype {
     pub const GET_ANIM_ROOT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const u32> = FunctionDef{address: 0x004f43ca, function_type: PhantomData};
     pub const GET_ONLY_SWIMS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004f84bb, function_type: PhantomData};
     pub const GET_SWIMS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004f84cd, function_type: PhantomData};
-    pub const ZTBUILDING_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504984, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504984, function_type: PhantomData};
     pub const ADD_UPGRADE: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, *const i8, i32, i32, i32)> = FunctionDef{address: 0x0058ff14, function_type: PhantomData};
     pub const REMOVE_UPGRADE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32)> = FunctionDef{address: 0x0059012d, function_type: PhantomData};
 }
@@ -2560,8 +2580,8 @@ pub mod ztfence {
     pub const GET_ESTHETIC_BONUS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> *const i32> = FunctionDef{address: 0x0041fb50, function_type: PhantomData};
     pub const UPDATE_ANIMATION: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00434ad7, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00434b1d, function_type: PhantomData};
-    pub const ZTFENCE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00443f37, function_type: PhantomData};
-    pub const ZTFENCE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00443f57, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00443f37, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00443f57, function_type: PhantomData};
     pub const DIRTY_HABITAT_ESCAPABILITY: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00449ab4, function_type: PhantomData};
     pub const VALIDATE_POSITION: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x00449fb2, function_type: PhantomData};
     pub const ADD_TO_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0044cb57, function_type: PhantomData};
@@ -2594,8 +2614,8 @@ pub mod ztfencetype {
     pub const LOAD_CHARACTERISTICS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> u32> = FunctionDef{address: 0x004bb8ed, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS2: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004bbda5, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x004bf505, function_type: PhantomData};
-    pub const ZTFENCE_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050118e, function_type: PhantomData};
-    pub const ZTFENCE_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504be8, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050118e, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504be8, function_type: PhantomData};
     pub const GET_ANIM_ROOT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x005b3a44, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const i32> = FunctionDef{address: 0x005b3a55, function_type: PhantomData};
 }
@@ -2604,8 +2624,8 @@ pub mod ztfencetype {
 pub mod ztfood {
     use super::*;
 
-    pub const ZTFOOD_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9f46, function_type: PhantomData};
-    pub const ZTFOOD_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9f64, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9f46, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9f64, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> *const u32> = FunctionDef{address: 0x004fd1be, function_type: PhantomData};
     pub const CHANGED_FOOD_VALUE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004fd3c1, function_type: PhantomData};
     pub const CREATE_NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004fd3d4, function_type: PhantomData};
@@ -2625,8 +2645,8 @@ pub mod ztfoodtype {
     pub const LOAD_CHARACTERISTICS2: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004c2461, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004c2473, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const i32> = FunctionDef{address: 0x004fd1de, function_type: PhantomData};
-    pub const ZTFOOD_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504c06, function_type: PhantomData};
-    pub const ZTFOOD_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504c24, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504c06, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504c24, function_type: PhantomData};
     pub const CHANGE_CHARACTERISTIC: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, u32)> = FunctionDef{address: 0x0059aef5, function_type: PhantomData};
 }
 
@@ -2655,8 +2675,8 @@ pub mod ztgamemgr {
     pub const GOTO_START: FunctionDef<unsafe extern "stdcall" fn(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u32, u32) -> u32> = FunctionDef{address: 0x004cc5b0, function_type: PhantomData};
     pub const IS_GAME_DATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32) -> u32> = FunctionDef{address: 0x004f5f7a, function_type: PhantomData};
     pub const STOP: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x004fa123, function_type: PhantomData};
-    pub const ZTGAME_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504dd8, function_type: PhantomData};
-    pub const ZTGAME_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504e4c, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504dd8, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504e4c, function_type: PhantomData};
     pub const INIT_MENU_MUSIC: FunctionDef<unsafe extern "fastcall" fn(*const u32)> = FunctionDef{address: 0x00521e18, function_type: PhantomData};
     pub const SET_NEW_GAME_DEFAULTS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, bool)> = FunctionDef{address: 0x0058f39c, function_type: PhantomData};
     pub const OVERRIDE_NEW_GAME_DEFAULTS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00591a40, function_type: PhantomData};
@@ -2682,7 +2702,7 @@ pub mod ztgoalavoid {
 
     pub const EXIT_TANK: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00431834, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x0043eb4f, function_type: PhantomData};
-    pub const ZTGOAL_AVOID: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a4dfd, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a4dfd, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a5471, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a5502, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a557f, function_type: PhantomData};
@@ -2700,7 +2720,7 @@ pub mod ztgoalbagdoo {
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0050e211, function_type: PhantomData};
     pub const REMOVE_ZOODOO: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0050e392, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050e3ef, function_type: PhantomData};
-    pub const ZTGOAL_BAG_DOO: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050e4a2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050e4a2, function_type: PhantomData};
 }
 
 // ZTGoalBuilding class functions
@@ -2708,7 +2728,7 @@ pub mod ztgoalbuilding {
     use super::*;
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004124c6, function_type: PhantomData};
-    pub const ZTGOAL_BUILDING: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a49b, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a49b, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a8162, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a830c, function_type: PhantomData};
 }
@@ -2720,7 +2740,7 @@ pub mod ztgoalbuildingdo {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042a1d5, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042a1db, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042a2b0, function_type: PhantomData};
-    pub const ZTGOAL_BUILDING_DO: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a50f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a50f, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042aa41, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a8201, function_type: PhantomData};
 }
@@ -2729,7 +2749,7 @@ pub mod ztgoalbuildingdo {
 pub mod ztgoalbuildingenter {
     use super::*;
 
-    pub const ZTGOAL_BUILDING_ENTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a4d5, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a4d5, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042a783, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042a789, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042a7cf, function_type: PhantomData};
@@ -2745,7 +2765,7 @@ pub mod ztgoalbuildingentrance {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004124b1, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042a0a5, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042a0ab, function_type: PhantomData};
-    pub const ZTGOAL_BUILDING_ENTRANCE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042c836, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042c836, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042c8af, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a826d, function_type: PhantomData};
 }
@@ -2754,7 +2774,7 @@ pub mod ztgoalbuildingentrance {
 pub mod ztgoalbuildingexit {
     use super::*;
 
-    pub const ZTGOAL_BUILDING_EXIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a549, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042a549, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042a849, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042a84f, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042a899, function_type: PhantomData};
@@ -2770,7 +2790,7 @@ pub mod ztgoalbuildingreturn {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059fe03, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059fe50, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059fe56, function_type: PhantomData};
-    pub const ZTGOAL_BUILDING_RETURN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a058e, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a058e, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a05c8, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005acdba, function_type: PhantomData};
     pub const INVALIDATE_TARGET: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061abef, function_type: PhantomData};
@@ -2782,7 +2802,7 @@ pub mod ztgoalcaptureanimal {
 
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050cf14, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0050cf55, function_type: PhantomData};
-    pub const ZTGOAL_CAPTURE_ANIMAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050d3a6, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050d3a6, function_type: PhantomData};
     pub const ABORT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050d429, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050d434, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0050d5dc, function_type: PhantomData};
@@ -2796,8 +2816,8 @@ pub mod ztgoalchase {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a4c06, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a4c0c, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a4d6c, function_type: PhantomData};
-    pub const ZTGOAL_CHASE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a4d98, function_type: PhantomData};
-    pub const ZTGOAL_CHASE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004a4da2, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a4d98, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004a4da2, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a4dd2, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a4e37, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a4ef2, function_type: PhantomData};
@@ -2811,7 +2831,7 @@ pub mod ztgoalchaseanimal {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050cffd, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0050d059, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050d05f, function_type: PhantomData};
-    pub const ZTGOAL_CHASE_ANIMAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050d360, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050d360, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0050d6f4, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050db25, function_type: PhantomData};
 }
@@ -2823,7 +2843,7 @@ pub mod ztgoalcleandirt {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00412603, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00412623, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00412629, function_type: PhantomData};
-    pub const ZTGOAL_CLEAN_DIRT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00426a95, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00426a95, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00426adb, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a2963, function_type: PhantomData};
 }
@@ -2833,7 +2853,7 @@ pub mod ztgoalcleantank {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0047f828, function_type: PhantomData};
-    pub const ZTGOAL_CLEAN_TANK: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0048abc2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0048abc2, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058a82d, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059658a, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005965c6, function_type: PhantomData};
@@ -2846,7 +2866,7 @@ pub mod ztgoalcleaningdirt {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004269d8, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004269de, function_type: PhantomData};
-    pub const ZTGOAL_CLEANING_DIRT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00426a4f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00426a4f, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0042f860, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042f8cb, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a2dc5, function_type: PhantomData};
@@ -2857,7 +2877,7 @@ pub mod ztgoalcleaningtank {
     use super::*;
 
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0047f64a, function_type: PhantomData};
-    pub const ZTGOAL_CLEANING_TANK: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0047f6ab, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0047f6ab, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0058a7ab, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059619e, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005961de, function_type: PhantomData};
@@ -2871,7 +2891,7 @@ pub mod ztgoalconductshow {
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058d068, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059f963, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059f99f, function_type: PhantomData};
-    pub const ZTGOAL_CONDUCT_SHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a3168, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a3168, function_type: PhantomData};
     pub const ABORT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a8532, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005aa181, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005aa24d, function_type: PhantomData};
@@ -2885,7 +2905,7 @@ pub mod ztgoaldrinkwater {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042655e, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00426582, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004265a0, function_type: PhantomData};
-    pub const ZTGOAL_DRINK_WATER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004266a6, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004266a6, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a0b53, function_type: PhantomData};
 }
 
@@ -2894,7 +2914,7 @@ pub mod ztgoaleat {
     use super::*;
 
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052dbfe, function_type: PhantomData};
-    pub const ZTGOAL_EAT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0059d3ac, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0059d3ac, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0059d3e6, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059d479, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059d57a, function_type: PhantomData};
@@ -2907,7 +2927,7 @@ pub mod ztgoaleatstanding {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052d94f, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052d955, function_type: PhantomData};
-    pub const ZTGOAL_EAT_STANDING: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d967, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d967, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052d9b8, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0052dc85, function_type: PhantomData};
 }
@@ -2919,7 +2939,7 @@ pub mod ztgoaleatingstanding {
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00441290, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052d9c4, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052da00, function_type: PhantomData};
-    pub const ZTGOAL_EATING_STANDING: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052da06, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052da06, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> bool> = FunctionDef{address: 0x0052dd30, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0052de0e, function_type: PhantomData};
 }
@@ -2930,7 +2950,7 @@ pub mod ztgoalemptytrash {
 
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0048b3f2, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0048b4d1, function_type: PhantomData};
-    pub const ZTGOAL_EMPTY_TRASH: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d230, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d230, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052d276, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052d2b2, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059be1c, function_type: PhantomData};
@@ -2942,8 +2962,8 @@ pub mod ztgoalfactory {
 
     pub const CREATE_SUB: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00413a23, function_type: PhantomData};
     pub const CREATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00413acd, function_type: PhantomData};
-    pub const ZTGOAL_FACTORY_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050290b, function_type: PhantomData};
-    pub const ZTGOAL_FACTORY_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502915, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050290b, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502915, function_type: PhantomData};
 }
 
 // ZTGoalFixFence class functions
@@ -2954,7 +2974,7 @@ pub mod ztgoalfixfence {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a23ac, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i8> = FunctionDef{address: 0x0059a2ca, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0059a3d5, function_type: PhantomData};
-    pub const ZTGOAL_FIX_FENCE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0059a440, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0059a440, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059a596, function_type: PhantomData};
 }
 
@@ -2965,7 +2985,7 @@ pub mod ztgoalfixfilter {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a23c0, function_type: PhantomData};
     pub const FIX_FILTER: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00595cde, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00595d17, function_type: PhantomData};
-    pub const ZTGOAL_FIX_FILTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00595dbb, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00595dbb, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i8> = FunctionDef{address: 0x00595e11, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00595f06, function_type: PhantomData};
 }
@@ -2977,7 +2997,7 @@ pub mod ztgoalgawk {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00423214, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042321a, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042325d, function_type: PhantomData};
-    pub const ZTGOAL_GAWK: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004261cf, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004261cf, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0042e527, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042e9f9, function_type: PhantomData};
     pub const LEFT_VA: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042ea14, function_type: PhantomData};
@@ -2989,7 +3009,7 @@ pub mod ztgoalgotofence {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049e331, function_type: PhantomData};
-    pub const ZTGOAL_GO_TO_FENCE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049e39c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049e39c, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a79f0, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a7a14, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a7a1a, function_type: PhantomData};
@@ -3001,7 +3021,7 @@ pub mod ztgoalgotofilter {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005958b4, function_type: PhantomData};
-    pub const ZTGOAL_GO_TO_FILTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0059591f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0059591f, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00596000, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005ae320, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005ae33e, function_type: PhantomData};
@@ -3015,7 +3035,7 @@ pub mod ztgoalgotoshow {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a2e9e, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a307d, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a3083, function_type: PhantomData};
-    pub const ZTGOAL_GO_TO_SHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a3104, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a3104, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a3846, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005a3c4f, function_type: PhantomData};
 }
@@ -3025,7 +3045,7 @@ pub mod ztgoalguesthabitat {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00413ed7, function_type: PhantomData};
-    pub const ZTGOAL_GUEST_HABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004260f5, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004260f5, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042612f, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00436800, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043aa96, function_type: PhantomData};
@@ -3040,7 +3060,7 @@ pub mod ztgoalguestva {
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058ce6c, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058d0cf, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0058d276, function_type: PhantomData};
-    pub const ZTGOAL_GUEST_VA: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0058d2e2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0058d2e2, function_type: PhantomData};
 }
 
 // ZTGoalGuideDuties class functions
@@ -3049,7 +3069,7 @@ pub mod ztgoalguideduties {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0058a858, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058a85e, function_type: PhantomData};
-    pub const ZTGOAL_GUIDE_DUTIES: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0058aa40, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0058aa40, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0058ab6c, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0058ac9c, function_type: PhantomData};
 }
@@ -3059,7 +3079,7 @@ pub mod ztgoalguideva {
     use super::*;
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0058a9ad, function_type: PhantomData};
-    pub const ZTGOAL_GUIDE_VA: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0058ab32, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0058ab32, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058ad88, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058cf00, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058cf31, function_type: PhantomData};
@@ -3072,7 +3092,7 @@ pub mod ztgoalhabitatduties {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00423fda, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00423fe0, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042400a, function_type: PhantomData};
-    pub const ZTGOAL_HABITAT_DUTIES: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049e97b, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049e97b, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049ebe7, function_type: PhantomData};
     pub const NEED_SHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x0049eed6, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049f26e, function_type: PhantomData};
@@ -3085,7 +3105,7 @@ pub mod ztgoalhealanimal {
 
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00438481, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00470010, function_type: PhantomData};
-    pub const ZTGOAL_HEAL_ANIMAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0047018c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0047018c, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0047045a, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00508b3c, function_type: PhantomData};
 }
@@ -3099,7 +3119,7 @@ pub mod ztgoalhealinganimal {
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x0047002e, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00470121, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00470261, function_type: PhantomData};
-    pub const ZTGOAL_HEALING_ANIMAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00508b86, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00508b86, function_type: PhantomData};
 }
 
 // ZTGoalHeliBase class functions
@@ -3107,7 +3127,7 @@ pub mod ztgoalhelibase {
     use super::*;
 
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048d3e1, function_type: PhantomData};
-    pub const ZTGOAL_HELI_BASE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a0826, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a0826, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004e5598, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050687c, function_type: PhantomData};
 }
@@ -3118,7 +3138,7 @@ pub mod ztgoalhelienter {
 
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a479a, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a47f3, function_type: PhantomData};
-    pub const ZTGOAL_HELI_ENTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a483d, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a483d, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a491d, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005a4a45, function_type: PhantomData};
 }
@@ -3127,7 +3147,7 @@ pub mod ztgoalhelienter {
 pub mod ztgoalheliexit {
     use super::*;
 
-    pub const ZTGOAL_HELI_EXIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0048c00b, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0048c00b, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048c045, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048c081, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048c4d1, function_type: PhantomData};
@@ -3144,14 +3164,14 @@ pub mod ztgoalhelireturn {
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a45f0, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005a4709, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a47e7, function_type: PhantomData};
-    pub const ZTGOAL_HELI_RETURN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a4ad6, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a4ad6, function_type: PhantomData};
 }
 
 // ZTGoalKeeperFood class functions
 pub mod ztgoalkeeperfood {
     use super::*;
 
-    pub const ZTGOAL_KEEPER_FOOD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042773f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0042773f, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00438496, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0043849c, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049fade, function_type: PhantomData};
@@ -3165,7 +3185,7 @@ pub mod ztgoalkeeperhabitat {
 
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00423f57, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00423f75, function_type: PhantomData};
-    pub const ZTGOAL_KEEPER_HABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0044091a, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0044091a, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049f644, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a8811, function_type: PhantomData};
 }
@@ -3177,7 +3197,7 @@ pub mod ztgoalladderbaseinside {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049954b, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049957b, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00499581, function_type: PhantomData};
-    pub const ZTGOAL_LADDER_BASE_INSIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049a37c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049a37c, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049a3f3, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049a640, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049a6ab, function_type: PhantomData};
@@ -3193,7 +3213,7 @@ pub mod ztgoalladderbaseoutside {
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049abfe, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049acd8, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049ad06, function_type: PhantomData};
-    pub const ZTGOAL_LADDER_BASE_OUTSIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049addc, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049addc, function_type: PhantomData};
 }
 
 // ZTGoalLadderDownInside class functions
@@ -3204,7 +3224,7 @@ pub mod ztgoalladderdowninside {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b5e0, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049b62f, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b635, function_type: PhantomData};
-    pub const ZTGOAL_LADDER_DOWN_INSIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049b64f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049b64f, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b6ec, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049b700, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049b88c, function_type: PhantomData};
@@ -3217,7 +3237,7 @@ pub mod ztgoalladderdownoutside {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049a1a3, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049a20a, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049a210, function_type: PhantomData};
-    pub const ZTGOAL_LADDER_DOWN_OUTSIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049a46c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049a46c, function_type: PhantomData};
     pub const ABORT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049a4b2, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049a57a, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049a8ca, function_type: PhantomData};
@@ -3231,7 +3251,7 @@ pub mod ztgoalladderupinside {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b2a9, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049b2fc, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b302, function_type: PhantomData};
-    pub const ZTGOAL_LADDER_UP_INSIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049b31a, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049b31a, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b3b7, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049b3f7, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049b575, function_type: PhantomData};
@@ -3246,7 +3266,7 @@ pub mod ztgoalladderupoutside {
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049a053, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049ad94, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049ae22, function_type: PhantomData};
-    pub const ZTGOAL_LADDER_UP_OUTSIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049b001, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049b001, function_type: PhantomData};
     pub const ABORT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b047, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b119, function_type: PhantomData};
 }
@@ -3261,7 +3281,7 @@ pub mod ztgoalleave {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a6758, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a67eb, function_type: PhantomData};
     pub const FIND_EXIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a6889, function_type: PhantomData};
-    pub const ZTGOAL_LEAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004fa2e4, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004fa2e4, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004fa85d, function_type: PhantomData};
 }
 
@@ -3271,7 +3291,7 @@ pub mod ztgoalmaintduties {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> u32> = FunctionDef{address: 0x00439cca, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const i32)> = FunctionDef{address: 0x00439cd0, function_type: PhantomData};
-    pub const ZTGOAL_MAINT_DUTIES: FunctionDef<unsafe extern "thiscall" fn(*const i32, u8)> = FunctionDef{address: 0x004a958f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32, u8)> = FunctionDef{address: 0x004a958f, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const u32, i32) -> *const i32> = FunctionDef{address: 0x004a964c, function_type: PhantomData};
 }
 
@@ -3282,7 +3302,7 @@ pub mod ztgoalotherfood {
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a0bbf, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0061ad92, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061adde, function_type: PhantomData};
-    pub const ZTGOAL_OTHER_FOOD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061ade4, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061ade4, function_type: PhantomData};
 }
 
 // ZTGoalPreattack class functions
@@ -3291,7 +3311,7 @@ pub mod ztgoalpreattack {
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0061b25b, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061b2a7, function_type: PhantomData};
-    pub const ZTGOAL_PREATTACK: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061b2ad, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061b2ad, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061b2d6, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061b4c6, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061b5d9, function_type: PhantomData};
@@ -3303,7 +3323,7 @@ pub mod ztgoalputfood {
 
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004993b9, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005082e5, function_type: PhantomData};
-    pub const ZTGOAL_PUT_FOOD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00508350, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00508350, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00508396, function_type: PhantomData};
 }
 
@@ -3314,7 +3334,7 @@ pub mod ztgoalputtingfood {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00435d3f, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048f624, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049959d, function_type: PhantomData};
-    pub const ZTGOAL_PUTTING_FOOD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00499623, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00499623, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x00508448, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005084b3, function_type: PhantomData};
 }
@@ -3323,7 +3343,7 @@ pub mod ztgoalputtingfood {
 pub mod ztgoalretrieveanimal {
     use super::*;
 
-    pub const ZTGOAL_RETRIEVE_ANIMAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a13a6, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a13a6, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050d2d8, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0050d33f, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050d345, function_type: PhantomData};
@@ -3337,7 +3357,7 @@ pub mod ztgoalreturnfromshow {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a2f1f, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a2f25, function_type: PhantomData};
-    pub const ZTGOAL_RETURN_FROM_SHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a36d1, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a36d1, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a370b, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005a8457, function_type: PhantomData};
 }
@@ -3348,7 +3368,7 @@ pub mod ztgoalscenery {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0044069e, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004406a4, function_type: PhantomData};
-    pub const ZTGOAL_SCENERY: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0044121c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0044121c, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a6d59, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a851b, function_type: PhantomData};
 }
@@ -3359,7 +3379,7 @@ pub mod ztgoalscenerydo {
 
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0044118f, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00441216, function_type: PhantomData};
-    pub const ZTGOAL_SCENERY_DO: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00441256, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00441256, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a6bbd, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a6d68, function_type: PhantomData};
 }
@@ -3368,7 +3388,7 @@ pub mod ztgoalscenerydo {
 pub mod ztgoalsick {
     use super::*;
 
-    pub const ZTGOAL_SICK: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005b05a4, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005b05a4, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005b05de, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b05e4, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b0621, function_type: PhantomData};
@@ -3380,7 +3400,7 @@ pub mod ztgoalsick {
 pub mod ztgoalsite {
     use super::*;
 
-    pub const ZTGOAL_SITE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00422886, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00422886, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004281be, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004281f7, function_type: PhantomData};
     pub const SET_SITE_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004282e1, function_type: PhantomData};
@@ -3390,7 +3410,7 @@ pub mod ztgoalsite {
 pub mod ztgoalsurfacebreath {
     use super::*;
 
-    pub const ZTGOAL_SURFACE_BREATH: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00498cad, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x00498cad, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00498ce7, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00498cf5, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004e89e1, function_type: PhantomData};
@@ -3403,7 +3423,7 @@ pub mod ztgoalsurfacebreath {
 pub mod ztgoalsweeptrash {
     use super::*;
 
-    pub const ZTGOAL_SWEEP_TRASH: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052cfd2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052cfd2, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052d018, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052d054, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052d609, function_type: PhantomData};
@@ -3418,7 +3438,7 @@ pub mod ztgoaltankenter {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049946a, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049ac0a, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049ac9d, function_type: PhantomData};
-    pub const ZTGOAL_TANK_ENTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049afc7, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049afc7, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049b087, function_type: PhantomData};
 }
 
@@ -3428,7 +3448,7 @@ pub mod ztgoaltankexit {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004994bd, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004994c3, function_type: PhantomData};
-    pub const ZTGOAL_TANK_EXIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049a432, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0049a432, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049a4ec, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0049a5ad, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0049a7ae, function_type: PhantomData};
@@ -3440,7 +3460,7 @@ pub mod ztgoaltargetbuilding {
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0061ac58, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061aca4, function_type: PhantomData};
-    pub const ZTGOAL_TARGET_BUILDING: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061acaa, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061acaa, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061acd3, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061ad83, function_type: PhantomData};
 }
@@ -3452,7 +3472,7 @@ pub mod ztgoaltranqanimal {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050da26, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0050da62, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0050da68, function_type: PhantomData};
-    pub const ZTGOAL_TRANQ_ANIMAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050dad3, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0050dad3, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050dd6e, function_type: PhantomData};
 }
 
@@ -3464,7 +3484,7 @@ pub mod ztgoaltrashcan {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0042717d, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004271a1, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0052d0a0, function_type: PhantomData};
-    pub const ZTGOAL_TRASH_CAN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d1c3, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d1c3, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052d209, function_type: PhantomData};
 }
 
@@ -3475,7 +3495,7 @@ pub mod ztgoaltrashpile {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052cef4, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0052cf85, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052cfa0, function_type: PhantomData};
-    pub const ZTGOAL_TRASH_PILE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d05a, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x0052d05a, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0052d30c, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0052d5f5, function_type: PhantomData};
 }
@@ -3486,7 +3506,7 @@ pub mod ztgoaltrickfood {
 
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a25c7, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a25cd, function_type: PhantomData};
-    pub const ZTGOAL_TRICK_FOOD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a6c78, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a6c78, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a6cb2, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005a72d9, function_type: PhantomData};
 }
@@ -3497,7 +3517,7 @@ pub mod ztgoalwaterdrown {
 
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x0061a68a, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061a6d6, function_type: PhantomData};
-    pub const ZTGOAL_WATER_DROWN: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061a6dc, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0061a6dc, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x0061a705, function_type: PhantomData};
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061ab50, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061abb2, function_type: PhantomData};
@@ -3510,7 +3530,7 @@ pub mod ztgoalwaterrecover {
     pub const CHECK_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a5ccc, function_type: PhantomData};
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a5d03, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a5d09, function_type: PhantomData};
-    pub const ZTGOAL_WATER_RECOVER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a5d2b, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x005a5d2b, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a5d73, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x005a5f69, function_type: PhantomData};
 }
@@ -3523,7 +3543,7 @@ pub mod ztgoalzoodoo {
     pub const GET_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a2746, function_type: PhantomData};
     pub const DECIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a274c, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32) -> *const u32> = FunctionDef{address: 0x004a27eb, function_type: PhantomData};
-    pub const ZTGOAL_ZOO_DOO: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a982b, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004a982b, function_type: PhantomData};
     pub const COMPLETE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050e17f, function_type: PhantomData};
 }
 
@@ -3596,8 +3616,8 @@ pub mod ztguest {
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool) -> u32> = FunctionDef{address: 0x004f6082, function_type: PhantomData};
     pub const INIT_STATUS_VARS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004f6372, function_type: PhantomData};
     pub const CREATE_NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004f70e4, function_type: PhantomData};
-    pub const ZTGUEST_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004fa44c, function_type: PhantomData};
-    pub const ZTGUEST_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004fa50a, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004fa44c, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004fa50a, function_type: PhantomData};
     pub const GET_PATH_AWAY_FROM_TARGET: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050d14d, function_type: PhantomData};
     pub const DO_ANGRY_PRICE_CHANGE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00533480, function_type: PhantomData};
     pub const HAS_PRESSING_NEED: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> bool> = FunctionDef{address: 0x0058d5eb, function_type: PhantomData};
@@ -3634,8 +3654,8 @@ pub mod ztguesttype {
     pub const LOAD_ICONS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004c5802, function_type: PhantomData};
     pub const LOAD_AIPREFS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004c597d, function_type: PhantomData};
     pub const LOAD_ANIMATIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i8> = FunctionDef{address: 0x004c59a5, function_type: PhantomData};
-    pub const ZTGUEST_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cbb9c, function_type: PhantomData};
-    pub const ZTGUEST_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004cbc20, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cbb9c, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004cbc20, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f6060, function_type: PhantomData};
     pub const GET_FAST_ANIM_SYMBOL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050cda0, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x005213de, function_type: PhantomData};
@@ -3653,7 +3673,7 @@ pub mod ztguide {
     pub const INTO_NEW_TILE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x004405b3, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u8> = FunctionDef{address: 0x0047987f, function_type: PhantomData};
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0058952b, function_type: PhantomData};
-    pub const ZTGUIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0058954f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0058954f, function_type: PhantomData};
     pub const REMOVE_GUEST: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0058aab4, function_type: PhantomData};
     pub const GET_RANDOM_ASSIGNED_HABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0058af73, function_type: PhantomData};
     pub const RELEASE_GUESTS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0058b362, function_type: PhantomData};
@@ -3685,8 +3705,8 @@ pub mod ztguidetype {
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004c3ee2, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> u32> = FunctionDef{address: 0x004c406f, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051c2d6, function_type: PhantomData};
-    pub const ZTGUIDE_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cb67, function_type: PhantomData};
-    pub const ZTGUIDE_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cb85, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cb67, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cb85, function_type: PhantomData};
     pub const CHANGE_CHARACTERISTIC: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, u32)> = FunctionDef{address: 0x0059b107, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0059b550, function_type: PhantomData};
 }
@@ -3730,7 +3750,8 @@ pub mod zthabitat {
     pub const ADD_SHOW_UNIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x00458610, function_type: PhantomData};
     pub const REMOVE_SHOW_UNIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u8> = FunctionDef{address: 0x004586b9, function_type: PhantomData};
     pub const CLEAR_SHOW_NEIGHBORS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00458a88, function_type: PhantomData};
-    pub const ZTHABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x00459034, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00458cab, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x00459034, function_type: PhantomData};
     pub const MOVE_GATE_TO: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x00466236, function_type: PhantomData};
     pub const HAS_KEEPER_ASSIGNED: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x00468454, function_type: PhantomData};
     pub const GET_POPULARITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x00468732, function_type: PhantomData};
@@ -3809,8 +3830,8 @@ pub mod zthabitatmgr {
     pub const ENTITY_ABOUT_TO_BE_PLACED: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x004d8cd2, function_type: PhantomData};
     pub const TERRAIN_ABOUT_TO_BE_CHANGED: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, i32)> = FunctionDef{address: 0x004db967, function_type: PhantomData};
     pub const TERRAIN_CHANGED: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004dbc79, function_type: PhantomData};
-    pub const ZTHABITAT_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050363d, function_type: PhantomData};
-    pub const ZTHABITAT_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503712, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0050363d, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503712, function_type: PhantomData};
     pub const ENTITY_ABOUT_TO_BE_REMOVED: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0050a5db, function_type: PhantomData};
     pub const REPLACE_GATE_WITH_FENCE: FunctionDef<unsafe extern "stdcall" fn(*const i32) -> bool> = FunctionDef{address: 0x0050b0c8, function_type: PhantomData};
     pub const PATH_REMOVED: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0050bae5, function_type: PhantomData};
@@ -3855,7 +3876,7 @@ pub mod zthelicopter {
     pub const GET_GOAL_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x0048c9ef, function_type: PhantomData};
     pub const SET_BUILDING_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32, u32)> = FunctionDef{address: 0x0048cf57, function_type: PhantomData};
     pub const START_LOOP_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048d645, function_type: PhantomData};
-    pub const ZTHELICOPTER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004a08e6, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004a08e6, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004e5629, function_type: PhantomData};
     pub const INIT_STATUS_VARS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004e5656, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x004e56e9, function_type: PhantomData};
@@ -3883,8 +3904,8 @@ pub mod zthelicoptertype {
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004c42ff, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004e5725, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051c7b5, function_type: PhantomData};
-    pub const ZTHELICOPTER_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cb90, function_type: PhantomData};
-    pub const ZTHELICOPTER_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cbae, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cb90, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cbae, function_type: PhantomData};
 }
 
 // ZTItem class functions
@@ -3917,8 +3938,8 @@ pub mod ztkeeper {
     pub const GET_RANDOM_ASSIGNED_HABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0049db62, function_type: PhantomData};
     pub const NOTIFY_HABITAT_NOT_COMING: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a879f, function_type: PhantomData};
     pub const DROP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004e76bb, function_type: PhantomData};
-    pub const ZTKEEPER_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9d83, function_type: PhantomData};
-    pub const ZTKEEPER_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9da1, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004f9d83, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9da1, function_type: PhantomData};
     pub const INIT_AFTER_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00595386, function_type: PhantomData};
     pub const RESET_AI: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005ae772, function_type: PhantomData};
 }
@@ -3934,8 +3955,8 @@ pub mod ztkeepertype {
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004c32bd, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> u32> = FunctionDef{address: 0x004c34ae, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051bde7, function_type: PhantomData};
-    pub const ZTKEEPER_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057ca95, function_type: PhantomData};
-    pub const ZTKEEPER_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cae0, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057ca95, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cae0, function_type: PhantomData};
     pub const CHANGE_CHARACTERISTIC: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, u32)> = FunctionDef{address: 0x0059b084, function_type: PhantomData};
 }
 
@@ -3943,7 +3964,7 @@ pub mod ztkeepertype {
 pub mod ztmvtempentity {
     use super::*;
 
-    pub const ZTMVTEMP_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const c_void> = FunctionDef{address: 0x004df59d, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const c_void> = FunctionDef{address: 0x004df59d, function_type: PhantomData};
 }
 
 // ZTMVTempEntityList class functions
@@ -3952,7 +3973,7 @@ pub mod ztmvtempentitylist {
 
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00443e12, function_type: PhantomData};
     pub const ADD_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, *const i32) -> *const u32> = FunctionDef{address: 0x004df44e, function_type: PhantomData};
-    pub const ZTMVTEMP_ENTITY_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0060a912, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0060a912, function_type: PhantomData};
 }
 
 // ZTMaint class functions
@@ -3970,7 +3991,7 @@ pub mod ztmaint {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i32) -> *const i32> = FunctionDef{address: 0x004c5ecf, function_type: PhantomData};
     pub const INIT_STATUS_VARS: FunctionDef<unsafe extern "thiscall" fn(*const i32)> = FunctionDef{address: 0x004c6056, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const u32, u32) -> u8> = FunctionDef{address: 0x004c60bc, function_type: PhantomData};
-    pub const ZTMAINT: FunctionDef<unsafe extern "thiscall" fn(*const i32, u8) -> *const u32> = FunctionDef{address: 0x0050205a, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32, u8) -> *const u32> = FunctionDef{address: 0x0050205a, function_type: PhantomData};
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const i32, bool)> = FunctionDef{address: 0x00502078, function_type: PhantomData};
 }
 
@@ -3994,8 +4015,8 @@ pub mod ztmainttype {
     pub const LOAD_CHARACTERISTICS: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i32) -> u32> = FunctionDef{address: 0x004c3d44, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> *const u32> = FunctionDef{address: 0x004c5ead, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const u32, *const i32, *const u8) -> *const i32> = FunctionDef{address: 0x0051bf9e, function_type: PhantomData};
-    pub const ZTMAINT_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> *const i32> = FunctionDef{address: 0x0057cafe, function_type: PhantomData};
-    pub const ZTMAINT_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const i32, u8) -> *const u32> = FunctionDef{address: 0x0057cb49, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const i32) -> *const i32> = FunctionDef{address: 0x0057cafe, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const i32, u8) -> *const u32> = FunctionDef{address: 0x0057cb49, function_type: PhantomData};
     pub const CHANGE_CHARACTERISTIC: FunctionDef<unsafe extern "thiscall" fn(*const i32, i32, i32, u32)> = FunctionDef{address: 0x0059b0cf, function_type: PhantomData};
 }
 
@@ -4048,7 +4069,7 @@ pub mod ztmapview {
     pub const COMMIT_TERRAFORM: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004da19c, function_type: PhantomData};
     pub const UNDO_LAST_ACTION_0: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004de527, function_type: PhantomData};
     pub const SET_ENTITY_POSITION: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, *const c_void, u32, u32)> = FunctionDef{address: 0x004ded90, function_type: PhantomData};
-    pub const CHECK_TANK_PLACEMENT: FunctionDef<unsafe extern "stdcall" fn(*const u32, *const u32, *const u32) -> bool> = FunctionDef{address: 0x004df688, function_type: PhantomData};
+    pub const CHECK_TANK_PLACEMENT: FunctionDef<unsafe extern "stdcall" fn(*const u32, *const u32, *mut u32) -> bool> = FunctionDef{address: 0x004df688, function_type: PhantomData};
     pub const RENDER_1: FunctionDef<unsafe extern "stdcall" fn(i32)> = FunctionDef{address: 0x004df7e8, function_type: PhantomData};
     pub const SET_PLACE_GATE_MODE: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004e1064, function_type: PhantomData};
     pub const FILL_CANVASES: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004ec8bf, function_type: PhantomData};
@@ -4062,8 +4083,8 @@ pub mod ztmapview {
     pub const CHECK_UNDO_BUFFER: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32)> = FunctionDef{address: 0x004fa68c, function_type: PhantomData};
     pub const RENDER_CURRENT_COST: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004fb175, function_type: PhantomData};
     pub const CANCEL_DRAG: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004ffa6b, function_type: PhantomData};
-    pub const ZTMAP_VIEW_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502431, function_type: PhantomData};
-    pub const ZTMAP_VIEW_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005026cf, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502431, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005026cf, function_type: PhantomData};
     pub const SET_BULLDOZER: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8)> = FunctionDef{address: 0x005096e8, function_type: PhantomData};
     pub const REMOVE_ENTITY_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, f32, i8, *const i32, i8)> = FunctionDef{address: 0x0050a0b0, function_type: PhantomData};
     pub const REMOVE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, i8)> = FunctionDef{address: 0x0050a432, function_type: PhantomData};
@@ -4090,7 +4111,7 @@ pub mod ztmarketing {
     use super::*;
 
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0041f2ae, function_type: PhantomData};
-    pub const ZTMARKETING: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00501288, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00501288, function_type: PhantomData};
     pub const GET_FUNDING_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x0052f586, function_type: PhantomData};
     pub const INCREASE_FUNDING: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00589a66, function_type: PhantomData};
     pub const LOAD_CONFIGURATION: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x005916ff, function_type: PhantomData};
@@ -4106,8 +4127,8 @@ pub mod ztmarketingmgr {
 
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> i32> = FunctionDef{address: 0x00435aac, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x0047a0d7, function_type: PhantomData};
-    pub const ZTMARKETING_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504f73, function_type: PhantomData};
-    pub const ZTMARKETING_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504f89, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504f73, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504f89, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0052580f, function_type: PhantomData};
     pub const LOAD_CONFIGURATIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x005915e3, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> bool> = FunctionDef{address: 0x00594129, function_type: PhantomData};
@@ -4121,8 +4142,8 @@ pub mod ztmegatilemgr {
     pub const RECALCULATE_CHARACTERISTICS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0041ffdc, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0043525b, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00463e49, function_type: PhantomData};
-    pub const ZTMEGATILE_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504458, function_type: PhantomData};
-    pub const ZTMEGATILE_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005044fd, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504458, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005044fd, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32)> = FunctionDef{address: 0x0058e82d, function_type: PhantomData};
 }
 
@@ -4131,7 +4152,7 @@ pub mod ztmessagequeue {
     use super::*;
 
     pub const HANDLE_LEFT_BUTTON_UP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x0047fbee, function_type: PhantomData};
-    pub const ZTMESSAGE_QUEUE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050314c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0050314c, function_type: PhantomData};
     pub const COPY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00606cef, function_type: PhantomData};
 }
 
@@ -4148,7 +4169,7 @@ pub mod ztminimap {
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> u32> = FunctionDef{address: 0x004d3f25, function_type: PhantomData};
     pub const ADJUST_DIMENSIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004d4f0b, function_type: PhantomData};
     pub const CLEAR_FOR_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d58ee, function_type: PhantomData};
-    pub const ZTMINI_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503494, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00503494, function_type: PhantomData};
     pub const SET_DIMENSIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32)> = FunctionDef{address: 0x0058e416, function_type: PhantomData};
     pub const HANDLE_LEFT_BUTTON_UP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x0059bb5c, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> *const u32> = FunctionDef{address: 0x00619477, function_type: PhantomData};
@@ -4168,8 +4189,8 @@ pub mod ztobservablearea {
 pub mod ztpath {
     use super::*;
 
-    pub const ZTPATH_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00443f75, function_type: PhantomData};
-    pub const ZTPATH_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00443f93, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00443f75, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00443f93, function_type: PhantomData};
     pub const SHAPE_TO_SET: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x0044a1a5, function_type: PhantomData};
     pub const SET_SHAPE: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0044a20a, function_type: PhantomData};
     pub const VALIDATE_POSITION: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0044a261, function_type: PhantomData};
@@ -4194,8 +4215,8 @@ pub mod ztpathtype {
     pub const IS_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x004aa43a, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004c24cf, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS2: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004c2625, function_type: PhantomData};
-    pub const ZTPATH_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504c2f, function_type: PhantomData};
-    pub const ZTPATH_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504ce0, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504c2f, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504ce0, function_type: PhantomData};
 }
 
 // ZTResearchBranch class functions
@@ -4207,7 +4228,7 @@ pub mod ztresearchbranch {
     pub const GET_FUNDING_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x00470d0f, function_type: PhantomData};
     pub const DAYS_REMAINING_ON_PROGRAM: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> f32> = FunctionDef{address: 0x004eb1bf, function_type: PhantomData};
     pub const PCT_REMAINING_ON_PROGRAM: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x004eb1f2, function_type: PhantomData};
-    pub const ZTRESEARCH_BRANCH: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005018a2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005018a2, function_type: PhantomData};
     pub const LOAD_BRANCH: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x00590832, function_type: PhantomData};
     pub const PICK_RANDOM_PROGRAM: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b09f6, function_type: PhantomData};
     pub const CLEAR_BRANCH: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b0da6, function_type: PhantomData};
@@ -4218,7 +4239,7 @@ pub mod ztresearchbranch {
 pub mod ztresearchcategory {
     use super::*;
 
-    pub const ZTRESEARCH_CATEGORY: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050198d, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050198d, function_type: PhantomData};
     pub const LOAD_CATEGORY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32) -> u32> = FunctionDef{address: 0x00590b76, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00590d52, function_type: PhantomData};
     pub const CLEAR_CATEGORY: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005b0d44, function_type: PhantomData};
@@ -4231,8 +4252,8 @@ pub mod ztresearchmgr {
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> i32> = FunctionDef{address: 0x00435a6f, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u8> = FunctionDef{address: 0x0047a923, function_type: PhantomData};
     pub const FORCE_RESEARCH: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0047e657, function_type: PhantomData};
-    pub const ZTRESEARCH_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504d37, function_type: PhantomData};
-    pub const ZTRESEARCH_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504d55, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504d37, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00504d55, function_type: PhantomData};
     pub const LOAD_BRANCHES: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x0059064e, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> bool> = FunctionDef{address: 0x00593c3c, function_type: PhantomData};
     pub const GET_PROGRAM: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> *const i16> = FunctionDef{address: 0x005944b6, function_type: PhantomData};
@@ -4246,7 +4267,7 @@ pub mod ztresearchmgr {
 pub mod ztresearchprogram {
     use super::*;
 
-    pub const ZTRESEARCH_PROGRAM: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00501a3e, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00501a3e, function_type: PhantomData};
     pub const ON_COMPLETION: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> bool> = FunctionDef{address: 0x0058fb83, function_type: PhantomData};
     pub const RESET: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> bool> = FunctionDef{address: 0x005900d8, function_type: PhantomData};
     pub const LOAD_PROGRAM: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x00590e00, function_type: PhantomData};
@@ -4263,8 +4284,8 @@ pub mod ztrubble {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const u32> = FunctionDef{address: 0x0048e343, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u8> = FunctionDef{address: 0x0048e392, function_type: PhantomData};
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0048e50d, function_type: PhantomData};
-    pub const ZTRUBBLE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0048e52e, function_type: PhantomData};
-    pub const ZTRUBBLE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0048e54e, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0048e52e, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0048e54e, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u8> = FunctionDef{address: 0x006159c0, function_type: PhantomData};
     pub const GET_SELL_PRICE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const f32) -> f32> = FunctionDef{address: 0x00615a89, function_type: PhantomData};
 }
@@ -4280,7 +4301,7 @@ pub mod ztrubbletype {
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004c42a2, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u8> = FunctionDef{address: 0x0051ce38, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051d2cb, function_type: PhantomData};
-    pub const ZTRUBBLE_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cbb9, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cbb9, function_type: PhantomData};
     pub const IS_CAST_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x005b0ebb, function_type: PhantomData};
 }
 
@@ -4289,7 +4310,7 @@ pub mod ztscenariochaingoal {
     use super::*;
 
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0041ddf1, function_type: PhantomData};
-    pub const ZTSCENARIO_CHAIN_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00501860, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00501860, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> *const u32> = FunctionDef{address: 0x00593793, function_type: PhantomData};
 }
 
@@ -4301,7 +4322,7 @@ pub mod ztscenariocomplexgoal {
     pub const GET_STATE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0041de3b, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0041de4d, function_type: PhantomData};
     pub const DISPLAY_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x004f0016, function_type: PhantomData};
-    pub const ZTSCENARIO_COMPLEX_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00501884, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00501884, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i8) -> *const u32> = FunctionDef{address: 0x0059364c, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, i32)> = FunctionDef{address: 0x005950fd, function_type: PhantomData};
     pub const GET_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061ba16, function_type: PhantomData};
@@ -4316,7 +4337,7 @@ pub mod ztscenariomgr {
 
     pub const END_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0048a408, function_type: PhantomData};
     pub const BEGIN_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004c998b, function_type: PhantomData};
-    pub const ZTSCENARIO_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504b62, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00504b62, function_type: PhantomData};
     pub const PREPARE_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const i16> = FunctionDef{address: 0x0058de8a, function_type: PhantomData};
     pub const COMMON_SETUP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0058ed1f, function_type: PhantomData};
     pub const RESUME_SCENARIO: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0058fb34, function_type: PhantomData};
@@ -4349,7 +4370,7 @@ pub mod ztscenariosimplegoal {
     pub const TRIGGER03: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005a13c5, function_type: PhantomData};
     pub const TRIGGER06: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005a154a, function_type: PhantomData};
     pub const TRIGGER05: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005a17a8, function_type: PhantomData};
-    pub const ZTSCENARIO_SIMPLE_GOAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005b12c1, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005b12c1, function_type: PhantomData};
     pub const EVAL11: FunctionDef<unsafe extern "fastcall" fn(i32) -> u32> = FunctionDef{address: 0x0061bb06, function_type: PhantomData};
     pub const TRIGGER01: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0061c139, function_type: PhantomData};
     pub const TRIGGER08: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0061c27d, function_type: PhantomData};
@@ -4368,7 +4389,7 @@ pub mod ztscenariotimer {
     pub const GET_ICON_NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004f0488, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x0058e218, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, i32)> = FunctionDef{address: 0x005950ab, function_type: PhantomData};
-    pub const ZTSCENARIO_TIMER: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005b130f, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005b130f, function_type: PhantomData};
     pub const LOAD_STATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0061c430, function_type: PhantomData};
 }
 
@@ -4377,8 +4398,8 @@ pub mod ztscenery {
     use super::*;
 
     pub const FORCE_IDLE_ANIM: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00410540, function_type: PhantomData};
-    pub const ZTSCENERY_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e075, function_type: PhantomData};
-    pub const ZTSCENERY_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0041e080, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0041e075, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0041e080, function_type: PhantomData};
 }
 
 // ZTSceneryType class functions
@@ -4416,7 +4437,7 @@ pub mod ztscenerytype {
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004ba5b0, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS2: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004bb022, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x004bf2d4, function_type: PhantomData};
-    pub const ZTSCENERY_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004cbc59, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x004cbc59, function_type: PhantomData};
     pub const GET_HELP_ID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004e9e89, function_type: PhantomData};
     pub const ADD_TO_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004f40af, function_type: PhantomData};
     pub const SET_FOOD_UNITS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x004f429d, function_type: PhantomData};
@@ -4425,7 +4446,7 @@ pub mod ztscenerytype {
     pub const GET_SWIMS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004f84c2, function_type: PhantomData};
     pub const IS_SELECTABLE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004fb59e, function_type: PhantomData};
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8)> = FunctionDef{address: 0x004fe778, function_type: PhantomData};
-    pub const ZTSCENERY_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00501080, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00501080, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x0051b091, function_type: PhantomData};
     pub const INIT_AFTER_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00593f72, function_type: PhantomData};
     pub const GET_HABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x006067d1, function_type: PhantomData};
@@ -4436,7 +4457,9 @@ pub mod ztshow {
     use super::*;
 
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x0046df38, function_type: PhantomData};
+    pub const OPERATOR_ASSIGN: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> *const u32> = FunctionDef{address: 0x00485448, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cca2c, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f28c3, function_type: PhantomData};
     pub const CHECK_SCRIPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16) -> u32> = FunctionDef{address: 0x0059e2bd, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0059e773, function_type: PhantomData};
     pub const GET_SHOW_SCRIPT_STATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x0059eb99, function_type: PhantomData};
@@ -4463,7 +4486,7 @@ pub mod ztshow {
     pub const CALCULATE_SATISFACTION_PERCENT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a8a1d, function_type: PhantomData};
     pub const CLEAR_UNIT_GOALS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a8a93, function_type: PhantomData};
     pub const REINIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a8b25, function_type: PhantomData};
-    pub const ZTSHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604d36, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00604d36, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00612c6e, function_type: PhantomData};
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00612c8c, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x00612c91, function_type: PhantomData};
@@ -4483,16 +4506,17 @@ pub mod ztshowinfo {
     pub const ADD_SHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x00473447, function_type: PhantomData};
     pub const GET_SHOW_SPECIES_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x00473661, function_type: PhantomData};
     pub const UPDATE_FROM_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00484ec8, function_type: PhantomData};
+    pub const CALCULATE_ALL_FROM_TYPES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048a1d7, function_type: PhantomData};
     pub const ENTER_NEW_MONTH: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0048b57e, function_type: PhantomData};
     pub const CONSTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> *const u32> = FunctionDef{address: 0x004c978e, function_type: PhantomData};
     pub const SET_SHOW_FREQUENCY: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x004cc86a, function_type: PhantomData};
     pub const CONSTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cc890, function_type: PhantomData};
-    pub const ZTSHOW_INFO_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f28f6, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f28f6, function_type: PhantomData};
     pub const RECALCULATE_SCHEDULE: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8)> = FunctionDef{address: 0x004f2947, function_type: PhantomData};
     pub const GET_SCHEDULED_SHOW_SCRIPT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059dff6, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e725, function_type: PhantomData};
     pub const LISTEN: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e8aa, function_type: PhantomData};
-    pub const GET_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e8c7, function_type: PhantomData};
+    pub const GET_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0059e8c7, function_type: PhantomData};
     pub const CLEANUP_EVENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0059e96e, function_type: PhantomData};
     pub const GET_NUM_UNITS: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> i32> = FunctionDef{address: 0x0059eaad, function_type: PhantomData};
     pub const GET_SCHEDULED_SHOW_KEEPER_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059efc8, function_type: PhantomData};
@@ -4512,7 +4536,7 @@ pub mod ztshowinfo {
     pub const ADD_UNIT_TO_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x005a9a48, function_type: PhantomData};
     pub const ADD_UNIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x005a9c81, function_type: PhantomData};
     pub const REMOVE_UNIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, *const i32)> = FunctionDef{address: 0x005a9c96, function_type: PhantomData};
-    pub const ZTSHOW_INFO_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005aad53, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005aad53, function_type: PhantomData};
     pub const SET_SHOW_INFO_ID: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16) -> bool> = FunctionDef{address: 0x005ab8c3, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00610052, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x00610076, function_type: PhantomData};
@@ -4532,7 +4556,7 @@ pub mod ztshowmgr {
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x004c6f54, function_type: PhantomData};
     pub const INIT_SHOW_PARAMS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0051f59b, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0051f73a, function_type: PhantomData};
-    pub const ZTSHOW_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057dd9d, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057dd9d, function_type: PhantomData};
     pub const IS_DOING_SHOW: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u16) -> u32> = FunctionDef{address: 0x0059eb6e, function_type: PhantomData};
     pub const IS_SHOW_SCRIPT_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u16) -> u32> = FunctionDef{address: 0x0059fab2, function_type: PhantomData};
     pub const GET_SCRIPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16) -> u32> = FunctionDef{address: 0x005a25b7, function_type: PhantomData};
@@ -4547,7 +4571,7 @@ pub mod ztshowscript {
 
     pub const ADD_ITEM: FunctionDef<unsafe extern "thiscall" fn(*const u32, [u8; 0x7c]) -> u32> = FunctionDef{address: 0x0046cdd4, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x0046cf97, function_type: PhantomData};
-    pub const ZTSHOW_SCRIPT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00472f62, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00472f62, function_type: PhantomData};
     pub const CLEAR_ALL: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00475c0f, function_type: PhantomData};
     pub const SIZE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x0059e275, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, bool) -> *const u32> = FunctionDef{address: 0x0059f837, function_type: PhantomData};
@@ -4587,7 +4611,7 @@ pub mod ztshowscriptmgr {
     pub const CLEAR_ALL_SCRIPTS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004c6e1f, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x004c6ebd, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0051f7b7, function_type: PhantomData};
-    pub const ZTSHOW_SCRIPT_MGR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057dd6c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057dd6c, function_type: PhantomData};
     pub const GET_SCRIPT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16) -> u32> = FunctionDef{address: 0x0059e216, function_type: PhantomData};
 }
 
@@ -4610,7 +4634,6 @@ pub mod ztshowstate {
 
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> bool> = FunctionDef{address: 0x0046de22, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004cc9c6, function_type: PhantomData};
-    pub const ZTSHOW_STATE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f28c3, function_type: PhantomData};
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059f72f, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005a8b3e, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x00612d89, function_type: PhantomData};
@@ -4621,7 +4644,7 @@ pub mod ztsoundscape {
     use super::*;
 
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i32)> = FunctionDef{address: 0x004352dd, function_type: PhantomData};
-    pub const ZTSOUNDSCAPE: FunctionDef<unsafe extern "thiscall" fn(*const c_void) -> *const u32> = FunctionDef{address: 0x005003e2, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void) -> *const u32> = FunctionDef{address: 0x005003e2, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const u32, *const u32, *const u8, *const u8)> = FunctionDef{address: 0x005922fd, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void) -> *const u32> = FunctionDef{address: 0x00592596, function_type: PhantomData};
 }
@@ -4640,12 +4663,12 @@ pub mod ztstaff {
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004586f6, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x004795f9, function_type: PhantomData};
     pub const DROP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004e766a, function_type: PhantomData};
-    pub const ZTSTAFF_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9d09, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9d09, function_type: PhantomData};
     pub const DONE_CAPTURE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0050d3e0, function_type: PhantomData};
     pub const REASSIGN_HABITATS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00595237, function_type: PhantomData};
     pub const INIT_AFTER_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8, u32) -> u32> = FunctionDef{address: 0x005952dc, function_type: PhantomData};
     pub const GET_MONTHLY_COST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const f32) -> f32> = FunctionDef{address: 0x005ad1e8, function_type: PhantomData};
-    pub const ZTSTAFF_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00610f71, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00610f71, function_type: PhantomData};
     pub const DRAW_AIINFO: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, i32, i32, i32)> = FunctionDef{address: 0x00610f8f, function_type: PhantomData};
     pub const UPDATE_GOALS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0061122a, function_type: PhantomData};
     pub const GET_GOAL_TEXT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x0061122f, function_type: PhantomData};
@@ -4662,9 +4685,9 @@ pub mod ztstafftype {
     pub const GET_ANIM_ROOT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x004f1d84, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x0051b581, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051bd29, function_type: PhantomData};
-    pub const ZTSTAFF_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057ca11, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057ca11, function_type: PhantomData};
     pub const GET_SOUND_ROOT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x0058c7de, function_type: PhantomData};
-    pub const ZTSTAFF_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006112b5, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x006112b5, function_type: PhantomData};
     pub const GET_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x006112d3, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x006112d9, function_type: PhantomData};
 }
@@ -4702,8 +4725,8 @@ pub mod zttankexhibit {
     pub const CLEAN_WATER_AMOUNT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0049bd60, function_type: PhantomData};
     pub const REMOVE_OWNED_TRANSIENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00505099, function_type: PhantomData};
     pub const REMOVE_ALL_SPARKLES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005050e2, function_type: PhantomData};
-    pub const ZTTANK_EXHIBIT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00505148, function_type: PhantomData};
-    pub const ZTTANK_EXHIBIT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x00505293, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00505148, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const i32> = FunctionDef{address: 0x00505293, function_type: PhantomData};
     pub const SET_WATER_CLEAN: FunctionDef<unsafe extern "fastcall" fn(*const c_void)> = FunctionDef{address: 0x005052b1, function_type: PhantomData};
     pub const REMOVE_ALL_SPARKLES_BY_ID: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005052bd, function_type: PhantomData};
     pub const SET_IS_SHOW_EXHIBIT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005ab683, function_type: PhantomData};
@@ -4741,8 +4764,8 @@ pub mod zttankfilter {
     pub const ADD_BUBBLES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0049bf25, function_type: PhantomData};
     pub const START_HEALTHY_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004a7a38, function_type: PhantomData};
     pub const REMOVE_BUBBLES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004fb151, function_type: PhantomData};
-    pub const ZTTANK_FILTER_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00505425, function_type: PhantomData};
-    pub const ZTTANK_FILTER_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005054a0, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00505425, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005054a0, function_type: PhantomData};
     pub const REMOVE_FROM_MAP: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x0050558c, function_type: PhantomData};
     pub const GET_SELL_PRICE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const f32) -> f32> = FunctionDef{address: 0x0050c961, function_type: PhantomData};
     pub const SET_HEALTHY: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00595c8e, function_type: PhantomData};
@@ -4764,8 +4787,8 @@ pub mod zttankfiltertype {
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004c44aa, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u8> = FunctionDef{address: 0x0051d8b0, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x0051de26, function_type: PhantomData};
-    pub const ZTTANK_FILTER_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057d29e, function_type: PhantomData};
-    pub const ZTTANK_FILTER_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057d2bc, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057d29e, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057d2bc, function_type: PhantomData};
     pub const CHANGE_CHARACTERISTIC: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, u32)> = FunctionDef{address: 0x0059b849, function_type: PhantomData};
 }
 
@@ -4778,7 +4801,7 @@ pub mod zttankheightmode {
     pub const HANDLE_MOUSE_MOVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x00489e6c, function_type: PhantomData};
     pub const HANDLE_LEFT_BUTTON_UP: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, i32, i32) -> u32> = FunctionDef{address: 0x00489fc3, function_type: PhantomData};
     pub const EXIT_OVERRIDE: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00489fcd, function_type: PhantomData};
-    pub const ZTTANK_HEIGHT_MODE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005026ed, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005026ed, function_type: PhantomData};
     pub const HANDLE_CHAR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x0061932b, function_type: PhantomData};
     pub const VF_RETURN0_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00619330, function_type: PhantomData};
     pub const VF_RETURN0_1: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061946d, function_type: PhantomData};
@@ -4810,8 +4833,8 @@ pub mod zttankwall {
     pub const START_PORTAL_CLOSE_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a333b, function_type: PhantomData};
     pub const START_PORTAL_OPEN_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a35e1, function_type: PhantomData};
     pub const SET_IS_PORTAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x005aa9ed, function_type: PhantomData};
-    pub const ZTTANK_WALL_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005ae7a0, function_type: PhantomData};
-    pub const ZTTANK_WALL_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005ae9e4, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x005ae7a0, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x005ae9e4, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x00605b38, function_type: PhantomData};
     pub const IS_OPEN_PORTAL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x00605b87, function_type: PhantomData};
 }
@@ -4826,7 +4849,7 @@ pub mod zttankwalltype {
     pub const IS_CLASS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i8) -> u32> = FunctionDef{address: 0x004aa7e4, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS2_10022410: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004c2c4d, function_type: PhantomData};
     pub const LOAD_TYPE_MEMBERS: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x0051d2fe, function_type: PhantomData};
-    pub const ZTTANK_WALL_TYPE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cc5c, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cc5c, function_type: PhantomData};
 }
 
 // ZTTerraformMode class functions
@@ -4876,8 +4899,8 @@ pub mod ztthoughtmgr {
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x0047a1a2, function_type: PhantomData};
     pub const REMOVE_THOUGHTS_BY_THINKER: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x004fa377, function_type: PhantomData};
     pub const REMOVE_THOUGHTS_BY_HABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, i8)> = FunctionDef{address: 0x004ffe56, function_type: PhantomData};
-    pub const ZTTHOUGHT_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057d815, function_type: PhantomData};
-    pub const ZTTHOUGHT_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057d852, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057d815, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057d852, function_type: PhantomData};
     pub const LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> bool> = FunctionDef{address: 0x0059435b, function_type: PhantomData};
     pub const POPULATE_THOUGHTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0060aced, function_type: PhantomData};
 }
@@ -5146,6 +5169,7 @@ pub mod ztui_multistaff {
 pub mod ztui_ncbuildinginfo {
     use super::*;
 
+    pub const ADD_CALLBACKS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00515854, function_type: PhantomData};
     pub const FORCE_UPDATE: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0058ff06, function_type: PhantomData};
     pub const SHOW: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x006183ff, function_type: PhantomData};
 }
@@ -5267,8 +5291,8 @@ pub mod ztundobuffer {
     pub const CLEAR: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8)> = FunctionDef{address: 0x004f15c8, function_type: PhantomData};
     pub const ADD_ACTION: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, u32, u32, *const u32, u32, u32, u32, u32, u32, *const i32, *const u32, i32, i32)> = FunctionDef{address: 0x004f8a1f, function_type: PhantomData};
     pub const REMOVE_ACTION: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const i32) -> u32> = FunctionDef{address: 0x004fa670, function_type: PhantomData};
-    pub const ZTUNDO_BUFFER_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502713, function_type: PhantomData};
-    pub const ZTUNDO_BUFFER_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0060a8f4, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00502713, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0060a8f4, function_type: PhantomData};
 }
 
 // ZTUnit class functions
@@ -5336,7 +5360,7 @@ pub mod ztunit {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> *const u32> = FunctionDef{address: 0x004f578d, function_type: PhantomData};
     pub const INIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004f5c4b, function_type: PhantomData};
     pub const INIT_STATUS_VARS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004f5c58, function_type: PhantomData};
-    pub const ZTUNIT_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9cf0, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004f9cf0, function_type: PhantomData};
     pub const SET_IS_REMOVED: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8)> = FunctionDef{address: 0x004fa78e, function_type: PhantomData};
     pub const INIT_AFTER_LOAD: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> u32> = FunctionDef{address: 0x005951b3, function_type: PhantomData};
     pub const IS_SHOW_SCRIPT_DONE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059fa79, function_type: PhantomData};
@@ -5347,7 +5371,7 @@ pub mod ztunit {
     pub const REMOVE_FROM_BUILDING_IF_PRESENT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005ae65f, function_type: PhantomData};
     pub const RESET_AI: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005ae68b, function_type: PhantomData};
     pub const FENCES_OK: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, *const bool, *const bool)> = FunctionDef{address: 0x00612edb, function_type: PhantomData};
-    pub const ZTUNIT_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00612ef7, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00612ef7, function_type: PhantomData};
     pub const GET_TERRAIN_COST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00612f15, function_type: PhantomData};
     pub const PICK_DEST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00613065, function_type: PhantomData};
     pub const GET_HABITAT_FROM_VA: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00613072, function_type: PhantomData};
@@ -5374,13 +5398,13 @@ pub mod ztunittype {
     pub const LOAD_DATA: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004bb628, function_type: PhantomData};
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const i32, *const u8) -> *const u32> = FunctionDef{address: 0x004be558, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS2: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u8> = FunctionDef{address: 0x004bf2ba, function_type: PhantomData};
-    pub const ZTUNIT_TYPE_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500a69, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00500a69, function_type: PhantomData};
     pub const GET_TRASH_TYPE: FunctionDef<unsafe extern "stdcall" fn() -> i32> = FunctionDef{address: 0x0052cfbe, function_type: PhantomData};
     pub const SET_TRICK_AVAILABLE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, bool)> = FunctionDef{address: 0x0059b599, function_type: PhantomData};
     pub const GET_SHOW_ITEM: FunctionDef<unsafe extern "stdcall" fn(u16, u32) -> u32> = FunctionDef{address: 0x005a263a, function_type: PhantomData};
     pub const LOAD_ANIMATIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x0061517e, function_type: PhantomData};
     pub const LOAD_BSFUNCTIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32)> = FunctionDef{address: 0x00615183, function_type: PhantomData};
-    pub const ZTUNIT_TYPE_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00615195, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x00615195, function_type: PhantomData};
     pub const CREATE_ENTITY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x006151b3, function_type: PhantomData};
     pub const LOAD_ICONS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x006151d5, function_type: PhantomData};
 }
@@ -5397,7 +5421,7 @@ pub mod ztviewingarea {
     pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const c_void, *const c_void) -> *const u32> = FunctionDef{address: 0x0044ee8e, function_type: PhantomData};
     pub const GET_NSEXTENT: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const i32, *const i32)> = FunctionDef{address: 0x0044f0f2, function_type: PhantomData};
     pub const CLEAR_TILE_OF_VA: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i32)> = FunctionDef{address: 0x004590c7, function_type: PhantomData};
-    pub const ZTVIEWING_AREA: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x00459196, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x00459196, function_type: PhantomData};
     pub const CREATE_OA: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x004f380b, function_type: PhantomData};
     pub const REMOVE_TILE: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i32)> = FunctionDef{address: 0x0050bc1a, function_type: PhantomData};
 }
@@ -5438,9 +5462,10 @@ pub mod ztworldmgr {
     pub const ADD_TO_OBJECT_LIST: FunctionDef<unsafe extern "stdcall" fn(*const u8, u32)> = FunctionDef{address: 0x004fdf04, function_type: PhantomData};
     pub const REMOVE_FROM_ALL_BUILDING_LISTS: FunctionDef<unsafe extern "stdcall" fn(*const i32) -> u32> = FunctionDef{address: 0x005002ac, function_type: PhantomData};
     pub const REMOVE_FROM_BUILDING_LIST: FunctionDef<unsafe extern "stdcall" fn(*const u8, *const i32) -> u32> = FunctionDef{address: 0x00500339, function_type: PhantomData};
-    pub const ZTWORLD_MGR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cce9, function_type: PhantomData};
-    pub const ZTWORLD_MGR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cefb, function_type: PhantomData};
+    pub const DESTRUCTOR_0: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0057cce9, function_type: PhantomData};
+    pub const DESTRUCTOR_1: FunctionDef<unsafe extern "thiscall" fn(*const u32, u8) -> *const u32> = FunctionDef{address: 0x0057cefb, function_type: PhantomData};
     pub const ADD_AMBIENT_EFFECT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0059148e, function_type: PhantomData};
+    pub const GET_GRANDSTANDS_UPKEEP: FunctionDef<unsafe extern "thiscall" fn(*const u32, i16) -> f32> = FunctionDef{address: 0x0059e8f0, function_type: PhantomData};
     pub const PLAY_SHOW_SOUND: FunctionDef<unsafe extern "stdcall" fn(u32, u16, *const i32)> = FunctionDef{address: 0x005a28fb, function_type: PhantomData};
     pub const UPDATE_SHOW_ASSOCIATIONS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x005b3068, function_type: PhantomData};
     pub const TRANS_TO_VER2: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32, *const u32)> = FunctionDef{address: 0x0060d478, function_type: PhantomData};
@@ -5453,7 +5478,7 @@ pub mod ztworldmgr {
 pub mod zoostatus {
     use super::*;
 
-    pub const GET_STATUS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, i32) -> *const f32> = FunctionDef{address: 0x0041dd64, function_type: PhantomData};
+    pub const GET_STATUS: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, i32) -> f32> = FunctionDef{address: 0x0041dd64, function_type: PhantomData};
     pub const SPEND_MARKETING: FunctionDef<unsafe extern "thiscall" fn(*const u32, f32)> = FunctionDef{address: 0x0041f368, function_type: PhantomData};
     pub const SPEND_RESEARCH: FunctionDef<unsafe extern "thiscall" fn(*const u32, f32)> = FunctionDef{address: 0x0041f3f3, function_type: PhantomData};
     pub const CALCULATE_SUMS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x0041f881, function_type: PhantomData};
@@ -5539,6 +5564,35 @@ pub mod msvc_std_basic_string {
     pub const BASIC_STRING_4: FunctionDef<unsafe extern "thiscall" fn(*const c_void, u32, *const u32) -> *const i32> = FunctionDef{address: 0x00404cf4, function_type: PhantomData};
 }
 
+// msvc_std::list<uint> class functions
+pub mod msvc_std_listuint {
+    use super::*;
+
+    pub const INSERT: FunctionDef<unsafe extern "stdcall" fn(*const i32, i32, *const i32) -> *const i32> = FunctionDef{address: 0x0040146c, function_type: PhantomData};
+}
+
+// msvc_std::map<> class functions
+pub mod msvc_std_map {
+    use super::*;
+
+    pub const FREENODE: FunctionDef<unsafe extern "stdcall" fn(*const u32)> = FunctionDef{address: 0x005aad9a, function_type: PhantomData};
+}
+
+// msvc_std::vector<int> class functions
+pub mod msvc_std_vectorint {
+    use super::*;
+
+    pub const VECTORINT_0: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i32) -> *const u32> = FunctionDef{address: 0x0040b160, function_type: PhantomData};
+    pub const VECTORINT_1: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i32) -> *const u32> = FunctionDef{address: 0x004ab1ae, function_type: PhantomData};
+}
+
+// msvc_std::vector_t_4 class functions
+pub mod msvc_std_vector_t_4 {
+    use super::*;
+
+    pub const VECTOR_T_4: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004012e8, function_type: PhantomData};
+}
+
 // sndutil class functions
 pub mod sndutil {
     use super::*;
@@ -5552,6 +5606,7 @@ pub mod standalone {
 
     pub const NULLSUB_0: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x0040100b, function_type: PhantomData};
     pub const NULLSUB_1: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x0040100c, function_type: PhantomData};
+    pub const MEMMOVE: FunctionDef<unsafe extern "cdecl" fn(*const u32, *const u32, u32) -> *const u32> = FunctionDef{address: 0x00401118, function_type: PhantomData};
     pub const VF_RETURN_TRUE_0: FunctionDef<unsafe extern "thiscall" fn(*const c_void) -> u8> = FunctionDef{address: 0x00401302, function_type: PhantomData};
     pub const VF_RETURN_FALSE: FunctionDef<unsafe extern "thiscall" fn(*const c_void) -> u8> = FunctionDef{address: 0x004016d1, function_type: PhantomData};
     pub const FIND_Q23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD722_TREE_Q23STD135PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING_Q33STD380MAP_Q23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING_Q23STD73LESS_Q23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD155ALLOCATOR_Q23STD135PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING13VALUE_COMPARE_Q23STD155ALLOCATOR_Q23STD135PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING_FRCQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q33STD722_TREE_Q23STD135PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING_Q33STD380MAP_Q23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING_Q23STD73LESS_Q23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD155ALLOCATOR_Q23STD135PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING13VALUE_COMPARE_Q23STD155ALLOCATOR_Q23STD135PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD52LIST_P10ZTBUILDING_Q23STD24ALLOCATOR_P10ZTBUILDING21_GENERIC_ITERATOR0: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const i32, *const u8)> = FunctionDef{address: 0x00401b9f, function_type: PhantomData};
@@ -5665,7 +5720,7 @@ pub mod standalone {
     pub const SHOW_CBUILDING_INFO: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00488b79, function_type: PhantomData};
     pub const S_SET_KEY: FunctionDef<unsafe extern "cdecl" fn(*const u32)> = FunctionDef{address: 0x0048a80a, function_type: PhantomData};
     pub const CLICK_ANIMAL_INFO_FOLLOW: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0048c7ef, function_type: PhantomData};
-    pub const CLICK_SELL_ANIMAL: FunctionDef<unsafe extern "cdecl" fn()> = FunctionDef{address: 0x0048d0b4, function_type: PhantomData};
+    pub const CLICK_SELL_ENTITY: FunctionDef<unsafe extern "cdecl" fn()> = FunctionDef{address: 0x0048d0b4, function_type: PhantomData};
     pub const CLICK_ROTATE_RIGHT_0: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0048e40f, function_type: PhantomData};
     pub const UPDATE_INFO_6: FunctionDef<unsafe extern "cdecl" fn()> = FunctionDef{address: 0x004a02f7, function_type: PhantomData};
     pub const HIDE_RES_CON: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x004a02fc, function_type: PhantomData};
@@ -5805,6 +5860,8 @@ pub mod standalone {
     pub const SET_SELECTED_MAP: FunctionDef<unsafe extern "cdecl" fn(u32)> = FunctionDef{address: 0x0050f396, function_type: PhantomData};
     pub const SET_DOWNLOAD_STATE: FunctionDef<unsafe extern "cdecl" fn(i32)> = FunctionDef{address: 0x00512c87, function_type: PhantomData};
     pub const CLEAR_Q23STD539_TREE_Q23STD90PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_13SUPERKEEPER_T_Q33STD289MAP_Q23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_13SUPERKEEPER_T_Q23STD73LESS_Q23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_Q23STD109ALLOCATOR_Q23STD90PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_13SUPERKEEPER_T13VALUE_COMPARE_Q23STD109ALLOCATOR_Q23STD90PAIR_CQ23STD59BASIC_STRINGC_Q23STD14CHAR_TRAITSC_Q23STD12ALLOCATORC_13SUPERKEEPER_T_FV: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x005145cc, function_type: PhantomData};
+    pub const ADD_CALLBACKS_0: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0051533f, function_type: PhantomData};
+    pub const ADD_CALLBACKS_1: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00516f07, function_type: PhantomData};
     pub const CHECK_TERRAIN_OPTIONS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00517854, function_type: PhantomData};
     pub const SAVE_TERRAIN_OPTIONS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x005178d7, function_type: PhantomData};
     pub const ADJUST_TERRAIN: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00517b9a, function_type: PhantomData};
@@ -5929,6 +5986,9 @@ pub mod standalone {
     pub const GET_ANIMAL_UNHAPPY_WITH_SCENERY_STRING: FunctionDef<unsafe extern "cdecl" fn(*const u32, i32, *const i32, *const i8) -> *const u32> = FunctionDef{address: 0x00616c3e, function_type: PhantomData};
     pub const CLICK_CATEGORY_LIST: FunctionDef<unsafe extern "cdecl" fn(i32)> = FunctionDef{address: 0x006173f3, function_type: PhantomData};
     pub const SHOW_NCBUILDING_INFO: FunctionDef<unsafe extern "stdcall" fn(u8)> = FunctionDef{address: 0x0061794a, function_type: PhantomData};
+    pub const CLICK_NCBUILDING_INFO_CLOSE: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00617efb, function_type: PhantomData};
+    pub const CHANGE_NCBUILDING_NAME: FunctionDef<unsafe extern "stdcall" fn(u8)> = FunctionDef{address: 0x00617f1b, function_type: PhantomData};
+    pub const CLICK_NCBUILDING_UPGRADE: FunctionDef<unsafe extern "cdecl" fn(i32)> = FunctionDef{address: 0x00617ff2, function_type: PhantomData};
     pub const CLICK_TERRAFORM_CANCEL: FunctionDef<unsafe extern "stdcall" fn(i32)> = FunctionDef{address: 0x00618a22, function_type: PhantomData};
     pub const CHANGE_ANIMAL_NAME: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00618b27, function_type: PhantomData};
     pub const CLICK_ANIMAL_MORE_INFO_BUTTON: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00618c02, function_type: PhantomData};

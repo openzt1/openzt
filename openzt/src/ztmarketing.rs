@@ -118,7 +118,7 @@ impl ZTMarketing {
         self.current_funding_level.wrapping_add(1) >= count
     }
 
-    /// The `isFundingMined` check - same "inlined at call sites" story as `is_funding_maxed`.
+    /// The `isFundingMined` check - vanilla inlines this at every call site, like `is_funding_maxed`.
     pub fn is_funding_mined(&self) -> bool {
         self.current_funding_level == 0
     }
@@ -270,10 +270,10 @@ impl ZTMarketingMgr {
     pub fn update(&mut self, delta_ticks: u32) {
         let (new_tick_accumulator, days) = predict_mgr_update(self.tick_accumulator, delta_ticks);
         self.tick_accumulator = new_tick_accumulator;
-        if days > 0 {
-            if let Some(marketing) = self.marketing() {
-                marketing.update(days);
-            }
+        if days > 0
+            && let Some(marketing) = self.marketing()
+        {
+            marketing.update(days);
         }
     }
 
@@ -411,9 +411,8 @@ mod tests {
 /// Native reimplementation of `ZTMarketingMgr::save`/`load`'s save-file persistence: a single
 /// little-endian `u32`, the current funding-level index (`0` if no `ZTMarketing` is loaded).
 ///
-/// Promoted to the live path (see `detours` below): by default `ZTMarketingMgr::save`/`load` are
-/// detoured to run this module's logic directly against the real save stream, rather than calling
-/// `.original()`.
+/// The live path: `ZTMarketingMgr::save`/`load` are detoured (see `detours` below) to run this
+/// module's logic directly against the real save stream.
 pub(crate) mod marketing_save_reimplementation {
     use openzt_detour_macro::detour_mod;
 
@@ -543,7 +542,7 @@ pub(crate) mod marketing_update_reimplementation {
         }
     }
 
-    /// Installs the `update` detour. Called unconditionally from `ztmarketing::init()`.
+    /// Installs the `update` detour. Called from `ztmarketing::init()`.
     pub fn init() {
         if let Err(e) = unsafe { detours::init_detours() } {
             error!("Failed to initialise marketing-update-reimplementation detours: {e:?}");
@@ -556,8 +555,6 @@ pub(crate) mod marketing_update_reimplementation {
 /// built on the `openzt-configparser` INI parser. There's only ever one `ZTMarketing` instance, so
 /// `loadConfiguration`/`clearConfiguration` stay plain Rust methods and are never detoured on their
 /// own - only the two `ZTMarketingMgr`-level entry points are.
-///
-/// Promoted to the live path unconditionally, with no shadow-mode/vanilla-fallback flag.
 mod marketing_config_reimplementation {
     use openzt_configparser::ini::Ini;
     use openzt_detour_macro::detour_mod;
@@ -850,8 +847,8 @@ mod marketing_config_reimplementation {
 }
 
 /// Detours `ZTMarketingMgr`'s vtable destructor slot - the scalar deleting destructor at `0x00504f89`
-/// (`ZTMARKETING_MGR_1` in `generated.rs`) - onto [`ZTMarketingMgr::destroy`]. Vanilla's own version of
-/// this function calls the real destructor body (`ZTMARKETING_MGR_0`, `0x00504f73`), then conditionally
+/// (`ztmarketingmgr::DESTRUCTOR_1` in `generated.rs`) - onto [`ZTMarketingMgr::destroy`]. Vanilla's own version of
+/// this function calls the real destructor body (`ztmarketingmgr::DESTRUCTOR_0`, `0x00504f73`), then conditionally
 /// calls `operator delete` on `this` if the caller-supplied flag byte's low bit is set. Left undetoured,
 /// that real body runs `operator delete` on `marketing_ptr` - the funding-table buffer and `ZTMarketing`
 /// struct our own `marketing_config_reimplementation` allocates through Rust's global allocator - the
@@ -859,10 +856,10 @@ mod marketing_config_reimplementation {
 /// for `ZTThoughtMgr`. Since `ZTMarketingMgr` is a process-lifetime singleton and no address for the real
 /// vanilla `operator delete` this class would use is known or needed, this reimplementation only ever
 /// frees the funding table and the `Box`-allocated `ZTMarketing`, never the flag-gated `this` itself.
-/// `ZTMARKETING_MGR_0` (the real destructor body's own address, only ever reached indirectly through
+/// `ztmarketingmgr::DESTRUCTOR_0` (the real destructor body's own address, only ever reached indirectly through
 /// this wrapper) is intentionally left un-detoured: nothing else in vanilla calls it directly.
 mod marketing_dtor_detour {
-    use openzt_detour::generated::ztmarketingmgr::ZTMARKETING_MGR_1;
+    use openzt_detour::generated::ztmarketingmgr::DESTRUCTOR_1 as ZTMARKETINGMGR_DESTRUCTOR;
     use openzt_detour_macro::detour_mod;
     use tracing::error;
 
@@ -873,7 +870,7 @@ mod marketing_dtor_detour {
     mod detours {
         use super::*;
 
-        #[detour(ZTMARKETING_MGR_1)]
+        #[detour(ZTMARKETINGMGR_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztmarketingmgr_dtor(this: *const u32, _flags: u8) -> *const u32 {
             unsafe { mut_from_memory::<ZTMarketingMgr>(this) }.destroy();
             this
