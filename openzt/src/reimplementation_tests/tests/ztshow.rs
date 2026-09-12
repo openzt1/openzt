@@ -13,7 +13,6 @@ use tracing::{error, info};
 use openzt_detour::generated::ztshow::GET_SHOW_SCRIPT_STATE;
 use openzt_detour::generated::ztshowinfo;
 use openzt_detour::generated::ztshowinfo::GET_NUM_UNITS as ZTSHOWINFO_GET_NUM_UNITS;
-use openzt_detour::generated::ztshowscriptstate::CONSTRUCTOR as CREATE_SHOW_SCRIPT_STATE;
 
 use crate::globals::globals;
 use crate::reimplementation_tests::harness::{finish_test, write_success_line};
@@ -22,6 +21,7 @@ use crate::util::{get_from_memory, save_to_memory};
 use crate::zthabitatmgr::ZTHabitat;
 use crate::ztshow::{self, live_support as ztshow_live_support};
 use crate::ztshowscriptmgr;
+use crate::ztshowscriptstate::live_support as ztshowscriptstate_live_support;
 
 use super::ztshowscriptmgr::make_registered_show_script;
 /// `ZTSHOW_GET_SHOW_SCRIPT_STATE` - review follow-up: diffs the new pure Rust
@@ -750,12 +750,11 @@ pub(crate) fn run_ztshow_group3_trick_live_test(failure_log: &mut Option<std::fs
     let real_show = real_show_info + 4;
     let mut fail_flag = false;
 
-    // Create a real ZTShowScriptState for our chosen unit (real, un-hooked CREATE_SHOW_SCRIPT_STATE -
-    // safe against this real, properly-constructed ZTShow's own `+0x34` state map), then fetch it back
-    // the same way `do_current_item`'s own body does. Two-arg call only (this, unit_id) - see
-    // `ztshow.rs`'s `start()` doc comment / `generated.rs`'s `CONSTRUCTOR` entry for why the old
-    // three-arg signature (a bogus `show_id: u16`) was a real stack-imbalance bug.
-    let create_result = unsafe { CREATE_SHOW_SCRIPT_STATE.original()(real_show as *const u32, unit_id) };
+    // Create a real ZTShowScriptState for our chosen unit against this real, properly-constructed
+    // ZTShow's own `+0x34` state map, then fetch it back the same way `do_current_item`'s own body
+    // does. `CREATE_SHOW_SCRIPT_STATE` is detoured onto the Rust port now, so the vanilla pole goes
+    // through the live_support trampoline (`_DETOUR.call`) - real vanilla in every build profile.
+    let create_result = ztshowscriptstate_live_support::real_create_show_script_state(real_show, unit_id);
     if create_result != 0 {
         info!("{}: CREATE_SHOW_SCRIPT_STATE returned {} (nonzero/failure) for unit {:#x}; do_current_item/do_trick_event will still be exercised via their early-return paths", test_name, create_result, unit_id);
     }

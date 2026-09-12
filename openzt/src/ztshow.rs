@@ -28,7 +28,6 @@ use openzt_detour::generated::{
         ADD_SCRIPT, ADD_SHOW, CHECK_PENDING_SCRIPTS, CHECK_UNIT, CHECK_UNIT_TYPE, GET_NUM_UNITS, GET_SHOW_UNIT_LIST, IS_STARTED,
         RECALCULATE_SCHEDULE, REMOVE_SHOW, SEND_EVENT,
     },
-    ztshowscriptstate::{CONSTRUCTOR as CREATE_SHOW_SCRIPT_STATE, GET_NUM_ITEMS},
     standalone::OPERATOR_NEW,
     ztshowmgr::GET_SHOW_INFO,
     zthabitat::PLAY_SHOW_START_SOUND,
@@ -237,20 +236,6 @@ pub fn do_trick_event(this: u32, state_ptr: u32) {
         // `if (GLOBAL_ZTShowMgr != 0) { ... }` guard with no else) and falls through to the shared tail.
     }
     unsafe { DO_KEEPER_EVENT.original()(this as *const u32, 0x271f, state_ptr as *const u32) };
-}
-
-/// Reimplementation of `ZTShowScriptState::getNumItems`, per `ZTShowScriptState_getNumItems.c`/`.asm`. A
-/// sixth real, un-reimplemented raw-dereferencing consumer of `ZTShowScriptMgr::getScript`'s return value,
-/// found by the same open-items audit as [`check_script`]/[`calculate_percent_adjustment`] - the most
-/// central of the three, called from `ZTShow::run` (twice) and both `ZTShowScriptState::setNextItem`
-/// overloads, so likely the first one hit in practice on a live show.
-///
-/// `this` is `ZTShowScriptState*` (the narrow vanilla-memory carve-out described in the module doc
-/// comment); `+0x4` is its own assigned script id (confirmed via `.asm`: `word ptr [this+0x4]`) - **not**
-/// `ZTShow`'s `+0x4` field despite the coincidental offset, a different struct entirely.
-pub fn get_num_items(this: u32) -> i32 {
-    let script_id = get_from_memory::<u16>(this + 0x4);
-    crate::ztshowscriptmgr::script_item_count_by_id(script_id) as i32
 }
 
 /// Reimplementation of `ZTShow::validateItem`, per `ZTShow_validateItem.c`/`.asm`. `this` is `ZTShow*`;
@@ -555,22 +540,14 @@ pub fn calculate_percent_adjustment(this: u32) -> i32 {
 /// -calling into `ztshow::RESOLVE_NEXT_SCHEDULED_SCRIPT_ID`/`standalone::INIT_SHOW_SCRIPT_STATE`
 /// (`0x005a3de4`). Ported from `INIT_SHOW_SCRIPT_STATE`'s decompiled source (supplied directly, not a
 /// local decompile file), cross-checked against the macOS `ZTShow::start` decompile's matching call
-/// sequence. The per-unit `ZTShowScriptState` constructor it calls is `ztshowscriptstate::CONSTRUCTOR`
-/// (`0x005a4075`, imported here as `CREATE_SHOW_SCRIPT_STATE`).
-///
-/// **Real stack-imbalance bug found and fixed** while investigating a live crash in this function's own
-/// "best-effort" `START` smoke test (`reimplementation_tests`'s `ZTSHOW_CHECK_OWNING_HABITAT_LIVE`):
-/// `CREATE_SHOW_SCRIPT_STATE` (`ztshowscriptstate::CONSTRUCTOR`) was called with a bogus third `show_id:
-/// u16` stack argument that the real function doesn't take - confirmed via `RET 0x4` at all three return
-/// sites in its `.asm` (only one 4-byte stack arg popped) and via `_initShowScriptState.c`'s own call site,
-/// where the decompiler labels that slot `unaff_retaddr` (its notation for "uninitialized stack garbage
-/// with no real incoming parameter behind it", not a genuine argument). The real function reads the u16 it
-/// writes into the new state's own `+0x4` field from `this->mbr_0x4`(+2) internally, not from a caller
-/// argument. Passing the extra argument left one stack slot un-popped on every call, corrupting the stack
-/// for whatever ran next - see `generated.rs`'s own corrected `CONSTRUCTOR` entry for the full account.
-/// `show_id` (read from `this+0x6`) is still computed and used below - just no longer passed into this
-/// call - since the real function's caller separately writes it into the unit's own `+0x254` field
-/// afterward (`_initShowScriptState.c` line 85), which this port already did correctly.
+/// sequence. The per-unit create/find-or-insert call below goes through
+/// [`crate::ztshowscriptstate::create_show_script_state`]; the real function behind it
+/// (`generated.rs`'s `ztshowscriptstate::CONSTRUCTOR`, `0x005a4075`, really
+/// `ZTShow::createShowScriptState`) is thiscall `(ZTShow*, u32) -> u32`, `RET 0x4` at all three return
+/// sites per `ZTShowScriptState_ZTShowScriptState.c` - it takes no `show_id` argument (it reads the u16
+/// for the new state's own `+0x4` from `this`'s own `+0x4` internally); the caller separately writes
+/// `show_id` (read from `this+0x6`) into each unit's own `+0x254` field afterward
+/// (`_initShowScriptState.c` line 85), which the loop below does.
 ///
 /// Two pieces of the real function's success-path tail are deliberately **not** ported:
 /// - `(this->cls_0x6355b8+0xc)`/`ZTShow+0x24`'s write from `GLOBAL_ZTAIMgr->field_0xec` - `GLOBAL_ZTAIMgr`
@@ -649,7 +626,10 @@ pub fn start(this: u32) {
                 || !unsafe { call_entity_vtable_noargs(unit_ptr, 0x22c) };
             if needs_state {
                 let show_id = get_from_memory::<u16>(this + 0x6);
-                let result = unsafe { CREATE_SHOW_SCRIPT_STATE.original()(this as *const u32, unit_id) };
+                // Direct Rust call, not `.original()`/`.hooked()`: the real address is detoured onto the
+                // Rust port (`ztshowscriptstate.rs` Stage 3), and this call site wants the port's own
+                // behavior for every caller.
+                let result = crate::ztshowscriptstate::create_show_script_state(this, unit_id);
                 if result != 0 {
                     return;
                 }
@@ -1055,11 +1035,6 @@ mod detours {
     #[detour(CALCULATE_PERCENT_ADJUSTMENT)]
     unsafe extern "fastcall" fn calculate_percent_adjustment_detour(this: *const u32) -> i32 {
         calculate_percent_adjustment(this as u32)
-    }
-
-    #[detour(GET_NUM_ITEMS)]
-    unsafe extern "thiscall" fn get_num_items_detour(this: *const u32) -> i32 {
-        get_num_items(this as u32)
     }
 }
 

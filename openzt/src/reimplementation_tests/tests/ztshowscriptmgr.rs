@@ -20,7 +20,7 @@ use crate::util::get_from_memory;
 use crate::ztshowscriptmgr;
 /// Builds a raw `ZTShowScriptItemRaw` (via `ztshowscriptmgr::live_support::raw_item_matching_type`)
 /// and hands it to `ztshowscriptmgr::add_item`, for a script constructed via `make_registered_show_script`.
-fn add_matching_item(script_ptr: u32, script_type: u32, trick_id: u16) {
+pub(crate) fn add_matching_item(script_ptr: u32, script_type: u32, trick_id: u16) {
     let item = ztshowscriptmgr::live_support::raw_item_matching_type(script_type, trick_id);
     ztshowscriptmgr::add_item(script_ptr, &item);
 }

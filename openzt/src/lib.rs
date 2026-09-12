@@ -127,6 +127,11 @@ mod ztshow;
 /// ZTShowState reimplementation, see openzt/plans/ztshowinfo-implementation-plan.md.
 mod ztshowstate;
 
+/// ztshowscriptstate module - the vanilla ZTShowScriptState per-(unit, show) show-progress record
+/// (struct + init/load/save/setNextItem/getNumItems), see
+/// openzt/plans/ztshowscriptstate-implementation-plan.md.
+mod ztshowscriptstate;
+
 /// ztshowinfo module - Stage 2 (status predicates: isReady/isStarted/isStopped/hasKeeper/needsKeeper/
 /// getScheduledShowKeeperType/getScheduledShowScript) of the ZTShowInfo + ZTShowState reimplementation,
 /// see openzt/plans/ztshowinfo-implementation-plan.md.
@@ -274,6 +279,7 @@ mod zoo_init {
             ztshowscriptmgr::init();
             ztshow::init();
             ztshowstate::init();
+            ztshowscriptstate::init();
             ztshowinfo::init();
             ztshowmgr::init();
             ztshowui::init();
