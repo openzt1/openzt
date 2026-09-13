@@ -201,7 +201,6 @@ pub(super) mod detour_zoo_main {
             // ATTRACTIVENESS/HAS_KEEPER_ASSIGNED run before the others: both share a
             // `characteristics_dirty` side effect (see their own doc comments), so running them
             // first settles that flag before any other test reads the same live habitats.
-            RegisteredTest { name: "DIAG_SHOW_TANK_PROBE", run: tests::ztshow::run_diag_show_tank_probe_test },
             RegisteredTest { name: "ZTHABITATMGR_DETOURS_ENABLED", run: tests::zthabitatmgr::run_zthabitatmgr_detours_enabled_test },
             RegisteredTest { name: "ZTHABITATMGR_GET_HABITAT_PTR_LIVE", run: tests::zthabitatmgr::run_habitat_get_habitat_ptr_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_ATTRACTIVENESS_LIVE", run: tests::zthabitatmgr::run_habitat_get_attractiveness_live_test },

@@ -4,7 +4,7 @@ use openzt_detour::{
         bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
         bftile::VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
-        standalone::{IS_ZOO_WALL, OPERATOR_DELETE, OPERATOR_NEW},
+        standalone::{OPERATOR_DELETE, OPERATOR_NEW},
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
         ztui_showpanel::SET_EXHIBIT,
@@ -24,6 +24,7 @@ use crate::{
     lua_fn,
     util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory, ZTArray, ZTBufferString, ZTString},
     ztmapview::BFTile,
+    ztmegatilemgr::entity_type_matches,
     ztshow::call_entity_vtable_noargs,
     ztshowinfo,
     ztworldmgr::{Direction, ZTWorldMgr},
@@ -305,11 +306,31 @@ fn reset_unit_ai_for_tile_occupants(tile: u32) {
     }
 }
 
-/// `standalone::IS_ZOO_WALL` (already a `generated.rs` entry) already null-checks its own argument
-/// (`_isZooWall.c`), so this just forwards - a small wrapper purely so call sites below read as "is this
-/// fence blocking" rather than the real vanilla function's own name.
+/// `ZTFenceType`'s (and every other fence/wall-family subtype's) shared `isCastClass` type-tag constant
+/// (`&DAT_00638660` in the decompile) - confirms an entity's type is *some* member of the fence/wall
+/// family. RVA = `0x00638660 - 0x400000`.
+const RVA_FENCE_TYPE_CHECK_ARG: u32 = 0x0023_8660;
+
+/// `ZTHabitat::addContiguousSpan`'s real fence-passability check (`ZTHabitat_addContiguousSpan.asm`,
+/// confirmed identical at all five inlined call sites), **not** `standalone::IS_ZOO_WALL`/`isZooWall`
+/// despite sharing the same `isCastClass` ([`RVA_FENCE_TYPE_CHECK_ARG`]) type-family gate. Disassembly
+/// shows the two read different fields: `isZooWall` (`_isZooWall.asm`) tests `entity_type+0x190`, while
+/// `addContiguousSpan` tests `entity_type+0x192` - two bytes apart, a different per-fence-type config
+/// flag. `isZooWall` itself is only ever called from `ZTHabitatMgr::fillZooExterior`
+/// (`ZTHabitatMgr_fillZooExterior.c`), the outer *zoo perimeter* exterior flood-fill - unrelated to an
+/// exhibit's own tile flood-fill - which is why its flag reads true only for the "Zoo Wall" catalog item
+/// and false for an ordinary exhibit fence or tank wall. Reusing it here made every real fence read as
+/// passable, letting the flood-fill leak across the whole map; see
+/// `show-tank-nondeterminism-handover.md`.
 fn is_wall(fence_ptr: u32) -> bool {
-    unsafe { IS_ZOO_WALL.original()(fence_ptr as *const u32) }
+    if fence_ptr == 0 {
+        return false;
+    }
+    if !unsafe { entity_type_matches(fence_ptr, RVA_FENCE_TYPE_CHECK_ARG) } {
+        return false;
+    }
+    let entity_type_ptr: u32 = get_from_memory(fence_ptr + 0x128);
+    get_from_memory::<u8>(entity_type_ptr + 0x192) != 0
 }
 
 /// The `(source_fence, neighbour_fence)` pair [`is_wall`] must both clear before the flood-fill in
@@ -1180,6 +1201,8 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.reset_unit_ai()
     }
 
+    /// `other_habitat` is unused - see [`ZTHabitat::add_habitat_tiles`]'s own doc comment on why the
+    /// real third parameter is always `this` in practice.
     #[detour(ADD_HABITAT_TILES)]
     unsafe extern "thiscall" fn add_habitat_tiles(this: *const u32, seed_tile: *const u32, _other_habitat: *const u32) {
         unsafe { mut_from_memory::<ZTHabitat>(this) }.add_habitat_tiles(seed_tile as u32)
