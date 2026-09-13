@@ -133,6 +133,13 @@ pub fn init() {
         // `FunctionDef::original` doc comment).
         crate::zoostatus::init();
 
+        // ZTHabitatMgr/ZTHabitat: installs the class's 12 detours so ZTHABITATMGR_DETOURS_ENABLED can
+        // assert the wiring itself (same rationale as the MenuMusicHandler/ZTSoundscape/ZooStatus
+        // blocks above). The ZTHABITATMGR_* comparison tests are unaffected: they call
+        // `<FN>.original()` directly, which keeps reaching real vanilla in debug builds regardless of
+        // hook state.
+        crate::zthabitatmgr::init();
+
         unsafe { battery::detour_zoo_main::init_detours() }.is_err().then(|| {
             error!("Error initialising zoo_main detours");
         });

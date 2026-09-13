@@ -522,18 +522,26 @@ impl fmt::Display for ZTWorldMgr {
 }
 
 // TODO: Move to util or better named crate
+/// Variant names (and `x_offset`/`y_offset` below) corrected against `BFTile`'s own
+/// `north_fence`/`east_fence`/`south_fence`/`west_fence` field names - confirmed by cross-referencing
+/// `ZTHabitat_addSeedsOnStack.c`/`ZTHabitat_addContiguousSpan.c`'s fence-passability checks against which
+/// direction each is paired with (e.g. direction `4` checks `south_fence` on the source tile and
+/// `north_fence` on the neighbour it steps to, which only makes sense if direction `4` is `South`). The
+/// previous names were a clean 90°/2-step rotation of the correct ones (`West`→`North`,
+/// `NorthWest`→`NorthEast`, etc.) - every discriminant value is unchanged, so this only relabels which
+/// name refers to which numeric direction; nothing that calls `Direction::from(u32)` changes behavior.
 #[derive(Debug, PartialEq, Eq, FromPrimitive, Clone)]
 #[repr(u32)]
 pub enum Direction {
     #[default]
-    West = 0,
-    NorthWest = 1,
-    North = 2,
-    NorthEast = 3,
-    East = 4,
-    SouthEast = 5,
-    South = 6,
-    SouthWest = 7,
+    North = 0,
+    NorthEast = 1,
+    East = 2,
+    SouthEast = 3,
+    South = 4,
+    SouthWest = 5,
+    West = 6,
+    NorthWest = 7,
 }
 
 const TILE_SIZE: i32 = 0x40;
@@ -560,24 +568,24 @@ impl ZTWorldMgr {
 
     pub fn get_neighbour(&self, bftile: &BFTile, direction: Direction) -> Option<BFTile> {
         let x_offset: i32 = match direction {
-            Direction::West => 0,
-            Direction::NorthWest => 1,
-            Direction::North => 1,
-            Direction::NorthEast => 1,
-            Direction::East => 0,
-            Direction::SouthEast => -1,
-            Direction::South => -1,
-            Direction::SouthWest => -1,
-        };
-        let y_offset: i32 = match direction {
-            Direction::West => -1,
-            Direction::NorthWest => -1,
             Direction::North => 0,
             Direction::NorthEast => 1,
             Direction::East => 1,
             Direction::SouthEast => 1,
             Direction::South => 0,
             Direction::SouthWest => -1,
+            Direction::West => -1,
+            Direction::NorthWest => -1,
+        };
+        let y_offset: i32 = match direction {
+            Direction::North => -1,
+            Direction::NorthEast => -1,
+            Direction::East => 0,
+            Direction::SouthEast => 1,
+            Direction::South => 1,
+            Direction::SouthWest => 1,
+            Direction::West => 0,
+            Direction::NorthWest => -1,
         };
 
         let x: i32 = bftile.pos.x + x_offset;

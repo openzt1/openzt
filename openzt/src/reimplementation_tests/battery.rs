@@ -197,7 +197,38 @@ pub(super) mod detour_zoo_main {
     /// see the call site in `run_on_completion_reset_test_and_exit`.
     fn live_zoo_tests() -> Vec<RegisteredTest> {
         vec![
+            // Wiring check first (see its own doc comment), then the per-habitat getter comparisons.
+            // ATTRACTIVENESS/HAS_KEEPER_ASSIGNED run before the others: both share a
+            // `characteristics_dirty` side effect (see their own doc comments), so running them
+            // first settles that flag before any other test reads the same live habitats.
+            RegisteredTest { name: "DIAG_SHOW_TANK_PROBE", run: tests::ztshow::run_diag_show_tank_probe_test },
+            RegisteredTest { name: "ZTHABITATMGR_DETOURS_ENABLED", run: tests::zthabitatmgr::run_zthabitatmgr_detours_enabled_test },
             RegisteredTest { name: "ZTHABITATMGR_GET_HABITAT_PTR_LIVE", run: tests::zthabitatmgr::run_habitat_get_habitat_ptr_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_ATTRACTIVENESS_LIVE", run: tests::zthabitatmgr::run_habitat_get_attractiveness_live_test },
+            RegisteredTest { name: "ZTHABITAT_HAS_KEEPER_ASSIGNED_LIVE", run: tests::zthabitatmgr::run_habitat_has_keeper_assigned_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_GATE_TILE_OUT_LIVE", run: tests::zthabitatmgr::run_habitat_get_gate_tile_out_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_SHOW_INFO_ID_LIVE", run: tests::zthabitatmgr::run_habitat_get_show_info_id_live_test },
+            RegisteredTest { name: "ZTHABITAT_IS_SHOW_STOPPED_LIVE", run: tests::zthabitatmgr::run_habitat_is_show_stopped_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_POPULARITY_LIVE", run: tests::zthabitatmgr::run_habitat_get_popularity_live_test },
+            RegisteredTest { name: "ZTHABITAT_IS_RIGHT_SALINITY_LIVE", run: tests::zthabitatmgr::run_habitat_is_right_salinity_live_test },
+            RegisteredTest { name: "ZTHABITAT_LISTEN_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_listen_smoke_live_test },
+            RegisteredTest {
+                name: "ZTHABITAT_SET_IS_SHOW_EXHIBIT_ROUNDTRIP_LIVE",
+                run: tests::zthabitatmgr::run_habitat_set_is_show_exhibit_roundtrip_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_OWNED_TILES_COUNT_MATCHES_GET_SIZE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_owned_tiles_count_matches_get_size_live_test,
+            },
+            RegisteredTest { name: "ZTHABITAT_VALIDATE_POSITIONS_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_validate_positions_smoke_live_test },
+            RegisteredTest { name: "ZTHABITAT_RESET_UNIT_AI_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_reset_unit_ai_smoke_live_test },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_HABITAT_TILES_ROUNDTRIP_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_habitat_tiles_roundtrip_live_test,
+            },
+            // Destructive/irreversible - must stay last among the ZTHABITAT_*/ZTHABITATMGR_* entries
+            // (see its own doc comment): empties exactly one real habitat's owned-tile list.
+            RegisteredTest { name: "ZTHABITAT_REMOVE_HABITAT_TILES_LIVE", run: tests::zthabitatmgr::run_habitat_remove_habitat_tiles_live_test },
             // Diagnosing a real save-corruption report: round-trips whatever real show-script data
             // run_load_live_zoo just populated (not synthetic data) through encode_mgr/load_mgr directly -
             // run first, before any other live_zoo_tests entry (several add/mutate scripts) can change the

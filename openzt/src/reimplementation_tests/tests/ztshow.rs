@@ -340,6 +340,46 @@ pub(crate) fn run_ztshowinfo_pending_script_tree_stress_live_test(failure_log: &
 /// `ZTShowInfo*` attached (`ZTHabitat::is_show_tank`), i.e. a genuinely-configured, already-working
 /// show tank that real vanilla would let a show start on. Returns `(habitat_ptr, show_info_ptr)` for
 /// the first match, `None` if the test zoo has none.
+/// TEMPORARY diagnostic - dumps every real habitat's `is_tank`/`is_show_tank`/`water_level`/`getSize`
+/// and the [`find_real_show_tank_habitat`] result, to determine whether a show-tank exists right after
+/// load (before any `ZTHABITAT_*` tile-list test runs) - remove once the "no qualifying show-tank
+/// habitat found" investigation is done.
+pub(crate) fn run_diag_show_tank_probe_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "DIAG_SHOW_TANK_PROBE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let exhibits = habitat_mgr.exhibit_array();
+    if let Some(log_file) = failure_log {
+        let _ = log_file.write_all(format!("CHECKPOINT {} exhibit_count={}\n", test_name, exhibits.len()).as_bytes());
+        for i in 0..exhibits.len() {
+            let ptr = exhibits.get_ptr(i);
+            if ptr == 0 {
+                continue;
+            }
+            let habitat = get_from_memory::<ZTHabitat>(ptr);
+            let is_tank = habitat.is_tank();
+            let is_show_tank = habitat.is_show_tank();
+            let water = if is_tank {
+                let tank = get_from_memory::<crate::zthabitatmgr::ZTTankExhibit>(ptr);
+                *tank.water_level()
+            } else {
+                0
+            };
+            let size = unsafe { openzt_detour::generated::zthabitat::GET_SIZE.original()(ptr as *const u32, false) };
+            let _ = log_file.write_all(
+                format!(
+                    "CHECKPOINT {} habitat {} ({:#010x}) is_tank={} is_show_tank={} water_level={} size={}\n",
+                    test_name, i, ptr, is_tank, is_show_tank, water, size
+                )
+                .as_bytes(),
+            );
+        }
+        let found = find_real_show_tank_habitat();
+        let _ = log_file.write_all(format!("CHECKPOINT {} find_real_show_tank_habitat()={:?}\n", test_name, found).as_bytes());
+    }
+    write_success_line(failure_log, test_name);
+    false
+}
+
 pub(crate) fn find_real_show_tank_habitat() -> Option<(u32, u32)> {
     let habitat_mgr = globals().zthabitatmgr();
     let exhibits = habitat_mgr.exhibit_array();

@@ -314,8 +314,10 @@ pub(crate) const RVA_ANIMAL_TYPE_CHECK: u32 = 0x0023_8690;
 /// Raw no-arg virtual dispatch through an object's own vtable at `slot_offset`, returning `bool` - the
 /// shape both the habitat's `+0x20` slot (`start`'s owning-habitat check) and a unit's `+0x22c` slot
 /// (`start`'s per-unit show-state-needed check) share. No named symbol for either; raw calling convention
-/// confirmed via `.asm` push-order reads (no pushed args beyond `this`/`ECX`).
-unsafe fn call_entity_vtable_noargs(entity_ptr: u32, slot_offset: u32) -> bool {
+/// confirmed via `.asm` push-order reads (no pushed args beyond `this`/`ECX`). `pub(crate)`:
+/// `zthabitatmgr.rs`'s own `teardown_sound` reuses this for a real `SNDSound`'s `+0x50` predicate slot,
+/// the identical implicit-`this`-via-thiscall shape.
+pub(crate) unsafe fn call_entity_vtable_noargs(entity_ptr: u32, slot_offset: u32) -> bool {
     let vtable = get_from_memory::<u32>(entity_ptr);
     let target = get_from_memory::<u32>(vtable + slot_offset);
     let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> bool>(target) };
