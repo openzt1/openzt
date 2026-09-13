@@ -6,19 +6,21 @@ use openzt_detour::{
         bftile::VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
         standalone::{OPERATOR_DELETE, OPERATOR_NEW},
-        ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
+        standalone::WRITE_BYTES_TO_FILE,
+        ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR, SAVE as ZTSHOWINFO_SAVE},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
         ztui_showpanel::SET_EXHIBIT,
         ztviewingarea::UPDATE_AMBIENTS as ZTVIEWINGAREA_UPDATE_AMBIENTS,
         zthabitat::{
             ADD_HABITAT_TILES, GET_EVENTS, RECALCULATE_CHARACTERISTICS, REMOVE_HABITAT_TILES, RESET_UNIT_AI, REVISE_SPECIES_LIST, UPDATE_PORTALS,
-            VALIDATE_POSITIONS,
+            VALIDATE_POSITIONS, SAVE as ZTHABITAT_SAVE,
         },
+        zthabitatmgr::{GET_ZOO_ENTRANCE_TILE, SAVE as ZTHABITATMGR_SAVE},
     },
     FunctionDef,
 };
 use openzt_detour_macro::detour_mod;
-use std::fmt;
+use std::{fmt, mem};
 use tracing::info;
 
 use getset::Getters;
@@ -51,7 +53,9 @@ pub struct ZTHabitatMgr {
     other_array_end: u32,              // 0x02c
     other_array_buffer_end: u32,       // 0x030
     pad3: [u8; 0x24],                  // ----------------------- padding: 36 bytes
-    popularity_scale_factor: f32,
+    popularity_scale_factor: f32,      // 0x058
+    pad4: [u8; 0xc],                   // ----------------------- padding: 12 bytes (0x05c-0x068, not yet reverse-engineered)
+    loaded_marker: u32,                // 0x068 // Set to 1 by both the constructor and the tail of `load` (every branch, success or failure past the header); `save` writes it back out raw. Real meaning beyond "always observed as 1" unconfirmed.
 }
 
 impl ZTHabitatMgr {
@@ -124,6 +128,53 @@ impl ZTHabitatMgr {
 
         None
     }
+
+    /// Ports `ZTHabitatMgr::save` (`ZTHabitatMgr_save.c`/`.asm`, confirmed identical on both platforms
+    /// modulo the macOS decompile's own endian-swap noise): map size (read from the live
+    /// `GLOBAL_ZTWorldMgr`, **not** this manager's own `map_size_x`/`map_size_y` cache - real vanilla
+    /// never touches those two fields here), the zoo entrance tile's position (via the still-un-ported
+    /// `getZooEntranceTile`, called through exactly as vanilla does - including its own lack of a
+    /// null-tile guard before dereferencing `+0x34`/`+0x38`, "dead in practice" the same way this
+    /// codebase already treats several other unguarded vanilla reads), `exhibit_array`'s length, then
+    /// every exhibit's own `save` in order, and finally the raw `loaded_marker` dword.
+    ///
+    /// Unlike `ZTHabitat::save` (which ANDs every field's success together and keeps writing
+    /// regardless, matching that function's own flat structure), a single exhibit's `save` failing here
+    /// **stops the loop immediately and skips the trailing `loaded_marker` write** - real vanilla's own
+    /// nested-if short-circuit, preserved because it changes which bytes actually reach the file, not
+    /// just the boolean result.
+    ///
+    /// Dispatches each exhibit's `save` through its own real vtable slot (`+0x1c`) rather than calling
+    /// [`ZTHabitat::save`] directly - transparently reaches our own detour for a plain `ZTHabitat` (once
+    /// installed, the vtable slot itself points at it) or any un-detoured `ZTTankExhibit` override,
+    /// exactly matching vanilla's own polymorphic dispatch without this port needing to know whether
+    /// `ZTTankExhibit` overrides `save` at all.
+    pub fn save(&self, file: *const i8) -> bool {
+        let world = globals().ztworldmgr();
+        let map_x = world.map_x_size as i32;
+        let map_y = world.map_y_size as i32;
+        let mut ok = write_bytes_to_file(&map_x, file);
+        ok &= write_bytes_to_file(&map_y, file);
+
+        let entrance_tile_ptr = unsafe { GET_ZOO_ENTRANCE_TILE.original()(self as *const Self as *const u32) } as u32;
+        let entrance_x: i32 = get_from_memory(entrance_tile_ptr + 0x34);
+        let entrance_y: i32 = get_from_memory(entrance_tile_ptr + 0x38);
+        ok &= write_bytes_to_file(&entrance_x, file);
+        ok &= write_bytes_to_file(&entrance_y, file);
+
+        let count = self.exhibit_array.len() as u32;
+        ok &= write_bytes_to_file(&count, file);
+
+        for i in 0..self.exhibit_array.len() {
+            let habitat_ptr = self.exhibit_array.get_ptr(i);
+            if !unsafe { call_save_vtable_slot(habitat_ptr, file) } {
+                return false;
+            }
+        }
+
+        ok &= write_bytes_to_file(&self.loaded_marker, file);
+        ok
+    }
 }
 
 impl fmt::Display for ZTHabitatMgr {
@@ -181,9 +232,9 @@ pub struct ZTHabitat {
     unknown_u32: u32,            // 0x0ec
     pad4: [u8; 0x8],             // ----------------------- padding: 8 bytes
     attractiveness: i32,         // 0x0f8 // ZTHabitat::getAttractiveness's cached result, recomputed by recalculateCharacteristics when characteristics_dirty is set.
-    current_donactions: f32,     // 0xfc
-    last_donactions: f32,        // 0x100
-    total_donactions: f32,       // 0x104
+    current_donations: f32,     // 0xfc
+    last_donations: f32,        // 0x100
+    total_donations: f32,       // 0x104
     current_upkeep: f32,         // 0x108
     last_upkeep: f32,            // 0x10c
     total_upkeep: f32,           // 0x110
@@ -639,6 +690,35 @@ fn teardown_sound(sound_ptr: u32) {
         unsafe { call_vtable_slot_noargs(sound_ptr, 0x60) };
     }
     unsafe { call_vtable_slot_with_u8(sound_ptr, 0x0, 1) };
+}
+
+/// Writes `value`'s raw bytes through real vanilla `WriteBytesToFile` (`standalone::WRITE_BYTES_TO_FILE`) -
+/// `true` on success. `.hooked()`, not `.original()`: a `reimplementation-tests` build's `io_redirect`
+/// module detours this exact address to redirect the write into an in-memory capture buffer when a
+/// capture window is active, and `.hooked()` is this codebase's established way to reach whatever real
+/// address currently holds (see `zoostatus.rs`'s own identically-named/documented helper, duplicated
+/// locally per this codebase's per-file convention).
+fn write_bytes_to_file<T>(value: &T, file: *const i8) -> bool {
+    unsafe { WRITE_BYTES_TO_FILE.hooked()(value as *const T as *const u32, mem::size_of::<T>() as u32, 1, file) == 1 }
+}
+
+/// Writes `len` raw bytes starting at `ptr` (not a typed value's own address) - the counterpart
+/// [`ZTHabitat::save`] needs for its own variable-length `exhibit_name` buffer, which [`write_bytes_to_file`]
+/// can't express since its length isn't known at compile time.
+fn write_raw_bytes(ptr: u32, len: u32, file: *const i8) -> bool {
+    unsafe { WRITE_BYTES_TO_FILE.hooked()(ptr as *const u32, len, 1, file) == 1 }
+}
+
+/// Calls vtable slot `+0x1c` (`save`, confirmed via `ZTHabitatMgr_save.asm`'s own `CALL dword ptr
+/// [EAX+0x1c]` dispatch) on `entity_ptr` with `file` - the polymorphic dispatch [`ZTHabitatMgr::save`]
+/// itself uses to reach whichever `save` override each `exhibit_array` entry's real vtable currently
+/// points at (our own detoured [`ZTHabitat::save`] once installed, or any un-detoured `ZTTankExhibit`
+/// override), rather than assuming every entry is a plain `ZTHabitat`.
+unsafe fn call_save_vtable_slot(entity_ptr: u32, file: *const i8) -> bool {
+    let vtable = get_from_memory::<u32>(entity_ptr);
+    let target = get_from_memory::<u32>(vtable + 0x1c);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, *const i8) -> u8>(target) };
+    f(entity_ptr, file) != 0
 }
 
 impl ZTHabitat {
@@ -1119,6 +1199,74 @@ impl ZTHabitat {
         unsafe { UPDATE_PORTALS.original()(self as *const Self as *const u32) };
         self.listen();
     }
+
+    /// Ports `ZTHabitat::save` (vtable `+0x1c`, `ZTHabitat_save.c`/`.asm`, confirmed identical on both
+    /// platforms modulo the macOS decompile's own endian-swap noise): the "seed tile" position (the
+    /// first owned tile - `owned_tiles_ptr`'s sentinel own `next`, then that node's `payload`, read
+    /// exactly as vanilla's own double-pointer-chase does, including its lack of a guard for an empty
+    /// tile list - "dead in practice" the same way `ZTHabitatMgr::save`'s own unguarded entrance-tile
+    /// read is, since a real habitat is never saved without at least one owned tile), `exhibit_name`'s
+    /// length-then-bytes (skipped entirely, not just zero-length, if the name is implausibly long -
+    /// `>= 0x1000` bytes - matching vanilla's own dead branch rather than adding a guard it lacks), the
+    /// entrance tile's position (or `(-1, -1)` with no entrance), `entrance_rotation`, the six
+    /// donation/upkeep running totals, three unknown dwords, `created_timestamp`/`unknown_nt_time` (8
+    /// bytes each), `unknown_u32`, then `is_tank()`/`is_show_tank()` as trailing bytes - delegating to
+    /// [`Self::is_tank`] rather than the real vtable `+0x20` slot it actually calls, per this file's
+    /// existing precedent (see that method's own doc comment). Finally, if `is_show_tank()`, calls
+    /// through to real vanilla `ZTShowInfo::save` (not yet ported).
+    ///
+    /// Every field's success is ANDed together and every write happens regardless of an earlier one
+    /// failing - matches the real body's own flat structure (no early-exit branches besides the
+    /// oversized-name case), unlike [`ZTHabitatMgr::save`]'s own per-exhibit loop.
+    pub fn save(&self, file: *const i8) -> bool {
+        let head_node: u32 = get_from_memory(self.owned_tiles_ptr);
+        let seed_tile_ptr: u32 = get_from_memory(head_node + 8);
+        let seed_x: i32 = get_from_memory(seed_tile_ptr + 0x34);
+        let seed_y: i32 = get_from_memory(seed_tile_ptr + 0x38);
+        let mut ok = write_bytes_to_file(&seed_x, file);
+        ok &= write_bytes_to_file(&seed_y, file);
+
+        let (name_start, name_end, _) = self.exhibit_name.raw_parts();
+        let name_len = name_end.wrapping_sub(name_start);
+        if name_len < 0x1000 {
+            ok &= write_bytes_to_file(&name_len, file);
+            if name_len != 0 {
+                ok &= write_raw_bytes(name_start, name_len, file);
+            }
+        } else {
+            ok = false;
+        }
+
+        let (entrance_x, entrance_y): (i32, i32) = if self.entrance_tile_ptr == 0 {
+            (-1, -1)
+        } else {
+            (get_from_memory(self.entrance_tile_ptr + 0x34), get_from_memory(self.entrance_tile_ptr + 0x38))
+        };
+        ok &= write_bytes_to_file(&entrance_x, file);
+        ok &= write_bytes_to_file(&entrance_y, file);
+        ok &= write_bytes_to_file(&self.entrance_rotation, file);
+        ok &= write_bytes_to_file(&self.current_donations, file);
+        ok &= write_bytes_to_file(&self.last_donations, file);
+        ok &= write_bytes_to_file(&self.total_donations, file);
+        ok &= write_bytes_to_file(&self.current_upkeep, file);
+        ok &= write_bytes_to_file(&self.last_upkeep, file);
+        ok &= write_bytes_to_file(&self.total_upkeep, file);
+        ok &= write_bytes_to_file(&self.unknown_u32_2, file);
+        ok &= write_bytes_to_file(&self.unknown_u32_3, file);
+        ok &= write_bytes_to_file(&self.unknown_u32_4, file);
+        ok &= write_bytes_to_file(&self.created_timestamp, file);
+        ok &= write_bytes_to_file(&self.unknown_nt_time, file);
+        ok &= write_bytes_to_file(&self.unknown_u32, file);
+
+        ok &= write_bytes_to_file(&(self.is_tank() as u8), file);
+        let is_show_tank = self.is_show_tank();
+        ok &= write_bytes_to_file(&(is_show_tank as u8), file);
+        if is_show_tank {
+            ok &= unsafe { ZTSHOWINFO_SAVE.original()(self.zt_show_info_ptr as *const u32, file) } == 1;
+        }
+
+        ok
+    }
 }
 
 impl PartialEq for ZTHabitat {
@@ -1142,9 +1290,9 @@ impl fmt::Display for ZTHabitat {
         writeln!(f, "  unknown_u32: {:#x},", self.unknown_u32)?;
         writeln!(f, "  attractiveness: {},", self.attractiveness)?;
         writeln!(f, "  has_keeper_assigned_raw: {},", self.has_keeper_assigned_raw)?;
-        writeln!(f, "  current_donactions: {},", self.current_donactions)?;
-        writeln!(f, "  last_donactions: {},", self.last_donactions)?;
-        writeln!(f, "  total_donactions: {},", self.total_donactions)?;
+        writeln!(f, "  current_donations: {},", self.current_donations)?;
+        writeln!(f, "  last_donations: {},", self.last_donations)?;
+        writeln!(f, "  total_donations: {},", self.total_donations)?;
         writeln!(f, "  current_upkeep: {},", self.current_upkeep)?;
         writeln!(f, "  last_upkeep: {},", self.last_upkeep)?;
         writeln!(f, "  total_upkeep: {},", self.total_upkeep)?;
@@ -1307,10 +1455,24 @@ pub mod hooks_zthabitatmgr {
         unsafe { mut_from_memory::<ZTHabitat>(this) }.update(elapsed)
     }
 
+    /// `generated.rs`'s own entry types the `file` parameter as `*const u32` rather than `*const i8` -
+    /// an ABI-identical wart (both are 32-bit pointers under `thiscall`), cast at the call site rather
+    /// than treated as a real signature difference (per `CLAUDE.md`'s own note on this generator
+    /// quirk - never hand-edit `generated.rs` itself to "fix" it).
+    #[detour(ZTHABITAT_SAVE)]
+    unsafe extern "thiscall" fn zthabitat_save(this: *const u32, file: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.save(file as *const i8) as u32
+    }
+
+    #[detour(ZTHABITATMGR_SAVE)]
+    unsafe extern "thiscall" fn zthabitatmgr_save(this: *const u32, file: *const i8) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.save(file) as u32
+    }
+
     /// `(name, is_enabled)` per detour - lets the live battery's `ZTHABITATMGR_DETOURS_ENABLED` test
     /// catch a silently-failed `init_detours()` (error logged, game continues on vanilla) rather than
     /// looking green while every hooked production path still runs real vanilla.
-    pub fn detour_status() -> [(&'static str, bool); 17] {
+    pub fn detour_status() -> [(&'static str, bool); 19] {
         [
             ("GET_GATE_TILE_IN", GET_GATE_TILE_IN_DETOUR.is_enabled()),
             ("GET_GATE_TILE_OUT", GET_GATE_TILE_OUT_DETOUR.is_enabled()),
@@ -1329,6 +1491,8 @@ pub mod hooks_zthabitatmgr {
             ("RESET_UNIT_AI", RESET_UNIT_AI_DETOUR.is_enabled()),
             ("ADD_HABITAT_TILES", ADD_HABITAT_TILES_DETOUR.is_enabled()),
             ("UPDATE", UPDATE_DETOUR.is_enabled()),
+            ("ZTHABITAT_SAVE", ZTHABITAT_SAVE_DETOUR.is_enabled()),
+            ("ZTHABITATMGR_SAVE", ZTHABITATMGR_SAVE_DETOUR.is_enabled()),
         ]
     }
 }

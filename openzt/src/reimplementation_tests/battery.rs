@@ -226,6 +226,8 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_add_habitat_tiles_roundtrip_live_test,
             },
             RegisteredTest { name: "ZTHABITAT_UPDATE_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_update_smoke_live_test },
+            RegisteredTest { name: "ZTHABITAT_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_habitat_save_matches_real_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_save_matches_real_live_test },
             // Destructive/irreversible - must stay last among the ZTHABITAT_*/ZTHABITATMGR_* entries
             // (see its own doc comment): empties exactly one real habitat's owned-tile list.
             RegisteredTest { name: "ZTHABITAT_REMOVE_HABITAT_TILES_LIVE", run: tests::zthabitatmgr::run_habitat_remove_habitat_tiles_live_test },

@@ -8,6 +8,7 @@ use tracing::error;
 
 use crate::globals::globals;
 use crate::reimplementation_tests::harness::write_success_line;
+use crate::reimplementation_tests::io_redirect;
 use crate::util::{mut_from_memory, ref_from_memory};
 use crate::zthabitatmgr::{hooks_zthabitatmgr, ZTHabitat, IS_RIGHT_SALINITY};
 
@@ -606,6 +607,75 @@ pub(crate) fn run_habitat_get_habitat_ptr_live_test(failure_log: &mut Option<std
                 fail_flag = true;
             }
         }
+    }
+
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Captures real vanilla `ZTHabitat::save`'s raw output (via the un-detoured `.original()` address -
+/// safe per `save`'s own read-only, no-side-effects reasoning, same as
+/// `ZTRESEARCHMGR_REAL_ZOO_SAVE_ROUNDTRIP_LIVE`) against the reimplemented `save()`'s own output, for
+/// every habitat in the live, loaded zoo, and asserts the two byte streams are identical. Both sides
+/// call the base `ZTHabitat::save` address directly (not through the vtable), so this stays an
+/// apples-to-apples comparison of the base implementation regardless of whether a given entry is
+/// actually a `ZTTankExhibit` - polymorphic dispatch is exercised separately by
+/// `ZTHABITATMGR_SAVE_MATCHES_REAL_LIVE` below.
+pub(crate) fn run_habitat_save_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_SAVE_MATCHES_REAL_LIVE",
+        |ptr| {
+            let dummy_file: u32 = 0;
+            io_redirect::begin_capture();
+            unsafe { zthabitat::SAVE.original()(ptr, &dummy_file as *const u32) };
+            io_redirect::end_capture()
+        },
+        |habitat| {
+            let dummy_file: u32 = 0;
+            io_redirect::begin_capture();
+            habitat.save(&dummy_file as *const u32 as *const i8);
+            io_redirect::end_capture()
+        },
+    )
+}
+
+/// Captures real vanilla `ZTHabitatMgr::save`'s raw output against the reimplemented `save()`'s own
+/// output, over the live, loaded zoo's own manager singleton, and asserts the two byte streams are
+/// identical. Since `save()`'s own per-exhibit loop dispatches through each habitat's real (already-
+/// detoured) vtable slot, both sides funnel the per-exhibit bytes through the identical, shared
+/// `ZTHabitat::save` detour - so this test specifically exercises the manager-level logic (map size,
+/// zoo entrance tile, exhibit count, trailing marker dword, control flow), not the per-exhibit fields
+/// (covered independently by [`run_habitat_save_matches_real_live_test`], which calls the un-detoured
+/// `.original()` address directly).
+pub(crate) fn run_zthabitatmgr_save_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_SAVE_MATCHES_REAL_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let mgr = globals().zthabitatmgr();
+
+    let dummy_file: u32 = 0;
+    io_redirect::begin_capture();
+    let real_ok = unsafe { zthabitatmgr::SAVE.original()(mgr_ptr, &dummy_file as *const u32 as *const i8) };
+    let real_bytes = io_redirect::end_capture();
+
+    io_redirect::begin_capture();
+    let reimpl_ok = mgr.save(&dummy_file as *const u32 as *const i8);
+    let reimpl_bytes = io_redirect::end_capture();
+
+    let mut fail_flag = false;
+    if real_ok != 1 || !reimpl_ok {
+        error!("{}: save() returned failure (real_ok={}, reimpl_ok={})", test_name, real_ok, reimpl_ok);
+        fail_flag = true;
+    }
+    if real_bytes != reimpl_bytes {
+        error!("{}: byte mismatch (real {} bytes, reimpl {} bytes)", test_name, real_bytes.len(), reimpl_bytes.len());
+        if let Some(log_file) = failure_log {
+            let _ =
+                log_file.write_all(format!("Test Failed {}: real_len={} reimpl_len={}\n", test_name, real_bytes.len(), reimpl_bytes.len()).as_bytes());
+        }
+        fail_flag = true;
     }
 
     if !fail_flag {
