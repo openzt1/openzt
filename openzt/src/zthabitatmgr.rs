@@ -1,6 +1,7 @@
 use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour::{
     generated::{
+        ambients::PLAY as AMBIENTS_PLAY,
         bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
         bftile::VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
@@ -8,7 +9,11 @@ use openzt_detour::{
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
         ztui_showpanel::SET_EXHIBIT,
-        zthabitat::{ADD_HABITAT_TILES, GET_EVENTS, RECALCULATE_CHARACTERISTICS, REMOVE_HABITAT_TILES, RESET_UNIT_AI, VALIDATE_POSITIONS},
+        ztviewingarea::UPDATE_AMBIENTS as ZTVIEWINGAREA_UPDATE_AMBIENTS,
+        zthabitat::{
+            ADD_HABITAT_TILES, GET_EVENTS, RECALCULATE_CHARACTERISTICS, REMOVE_HABITAT_TILES, RESET_UNIT_AI, REVISE_SPECIES_LIST, UPDATE_PORTALS,
+            VALIDATE_POSITIONS,
+        },
     },
     FunctionDef,
 };
@@ -157,9 +162,19 @@ pub struct ZTHabitat {
     pad1a: [u8; 0x24],           // ----------------------- padding: 36 bytes
     unknown_flag_0x2c: u8,       // 0x02c // Gates ZTThought::ZTThought's acceptance of a passed-in habitat pointer (see ztthoughtmgr.rs); ZTHabitat::recalculateCharacteristics also early-returns when this is set. Meaning not otherwise confirmed.
     characteristics_dirty: u8,   // 0x02d // Gates the lazy `recalculateCharacteristics` call in getAttractiveness/hasKeeperAssigned (see ZTHabitat_getAttractiveness.c/ZTHabitat_hasKeeperAssigned.c) - distinct from unknown_flag_0x2c above.
-    pad1b: [u8; 0x12],           // ----------------------- padding: 18 bytes
+    pad1b_a: [u8; 0x3],          // ----------------------- padding: 3 bytes
+    species_list_dirty: u8,      // 0x031 // Gates the lazy `reviseSpeciesList` call in update() once species_list_timer crosses its threshold - same dirty-flag/timer shape as characteristics_dirty/characteristics_timer, cleared by real vanilla reviseSpeciesList's own (still un-ported) body as a side effect.
+    pad1b_b: [u8; 0x2],          // ----------------------- padding: 2 bytes
+    viewing_areas_begin: u32,    // 0x034 // Begin pointer of the real vanilla std::vector<ZTViewingArea*> update() walks to tick each entry's own ambient state - only begin/end are modeled (the third vector word, presumably cap_end, is never read by any ported method).
+    viewing_areas_end: u32,      // 0x038
+    pad1b_c: [u8; 0x4],          // ----------------------- padding: 4 bytes (presumably the vector's own cap_end)
     owned_tiles_ptr: u32,        // 0x040 // Pointer to the sentinel node of this habitat's owned-tile list (see TileListNode below), not a BFTile* itself - see getSize/removeHabitatTiles/validatePositions/resetUnitAI/createEdgePairs, all of which walk it identically.
-    pad2: [u8; 0x48],            // ----------------------- padding: 72 bytes
+    pad2a: [u8; 0x10],           // ----------------------- padding: 16 bytes
+    ambients_begin: u32,         // 0x054 // Begin pointer of the real vanilla std::vector<(u32, Ambients*)> update() walks to play each entry's own ambient sound - see viewing_areas_begin's own doc comment for the same only-begin/end-modeled reasoning.
+    ambients_end: u32,           // 0x058
+    pad2b: [u8; 0x28],           // ----------------------- padding: 40 bytes
+    characteristics_timer: u32,  // 0x084 // Elapsed-time accumulator update() advances every tick; past 6999 sets characteristics_dirty and rerolls to a random 0..200 value via the shared game RNG.
+    species_list_timer: u32,     // 0x088 // Same shape as characteristics_timer, gating species_list_dirty/reviseSpeciesList at threshold 7999.
     entrance_tile_ptr: u32,      // 0x08c
     entrance_rotation: u32,      // 0x090
     pad3: [u8; 0x58],            // ----------------------- padding: 88 bytes
@@ -273,6 +288,18 @@ const TILE_LIST_NODE_FREELIST_HEAD_RVA: u32 = RVA_EVENT_VECTOR_FREELIST_BUCKETS 
 /// sentinel" branch is dead in practice and not reproduced here. Re-declared per this repo's own
 /// per-file convention (see `ztshowmgr.rs`'s own copy) - used by [`ZTHabitat::reset_unit_ai`].
 const GLOBAL_ZTAPP_RVA: u32 = 0x00638154 - 0x400000;
+
+/// The shared game RNG state (`DAT_00638060`) [`ZTHabitat::update`] rerolls its two lazy-recalculate
+/// timers through - the same dword LCG state `ztsoundscape.rs`'s own `GAME_RNG_RVA`/`lcg_next`
+/// document and advance for their own, unrelated purpose (ambient position jitter); duplicated locally
+/// per this codebase's existing per-file convention (see e.g. this file's own `GLOBAL_DX8SNDMGR_RVA`).
+const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
+
+/// One MSVC LCG advance over the shared game RNG state: `state = state * 0x343fd + 0x269ec3` with full
+/// 32-bit wrap - see `ztsoundscape.rs`'s own `lcg_next` for the identical formula/derivation.
+fn lcg_next(state: u32) -> u32 {
+    state.wrapping_mul(0x343fd).wrapping_add(0x269ec3)
+}
 
 /// Walks a `ZTHabitat::owned_tiles_ptr`-shaped sentinel field's real, live value (`sentinel_addr` - the
 /// heap-allocated sentinel node's own address, i.e. the container field's *value*, not its address),
@@ -1025,6 +1052,73 @@ impl ZTHabitat {
         teardown_sound(self.end_sound_ptr);
         self.end_sound_ptr = 0;
     }
+
+    /// Ports `ZTHabitat::update` (vtable `+0x24`, `ZTHabitat_update.c`/`.asm`, confirmed against the
+    /// macOS decompile's identical shape): plays every queued ambient sound
+    /// (`ambients_begin`/`ambients_end`), advances the species-list/characteristics lazy-recalculate
+    /// timers - rerolling each via the shared game RNG ([`lcg_next`]) and calling through to the
+    /// still-un-ported real vanilla `reviseSpeciesList`/`recalculateCharacteristics` once its own
+    /// threshold trips, the same dirty-flag/timer shape [`Self::get_attractiveness`] already relies on
+    /// for `characteristics_dirty` - ticks every viewing area's own ambient state
+    /// (`viewing_areas_begin`/`viewing_areas_end`), then calls through to the still-un-ported real
+    /// vanilla `updatePortals` and finally this object's own, already-ported [`Self::listen`].
+    ///
+    /// `updatePortals` is a plain, non-virtual helper (not one of `ZTHabitat`'s 17 vtable slots) -
+    /// deliberately left un-ported and called via `.original()`: its own body is an `isTank`-gated
+    /// portal-list check this port doesn't need to understand to reproduce `update` itself.
+    ///
+    /// `ZTTankExhibit` overrides this vtable slot with its own, separate address (`0x0049625f`, out of
+    /// scope for this pass per `zthabitatmgr-implementation-plan.md`) - detouring only the base
+    /// `ZTHabitat::update` address never intercepts a real tank's own tick, the same base-only-override
+    /// pattern [`Self::is_right_salinity`] already relies on.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`] - `self`'s own address is passed straight into every real vanilla
+    /// call-through above.
+    pub fn update(&mut self, elapsed: u32) {
+        let mut ambient_entry = self.ambients_begin;
+        while ambient_entry != self.ambients_end {
+            let ambient: u32 = get_from_memory(ambient_entry + 4);
+            unsafe { AMBIENTS_PLAY.original()(ambient as *const u32, elapsed as i32, 0x50) };
+            ambient_entry += 8;
+        }
+
+        let species_list_timer = self.species_list_timer.wrapping_add(elapsed);
+        self.species_list_timer = species_list_timer;
+        self.characteristics_timer = self.characteristics_timer.wrapping_add(elapsed);
+
+        if species_list_timer > 7999 {
+            self.species_list_dirty = 1;
+        }
+        if self.species_list_dirty != 0 {
+            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
+            save_to_memory(rng_addr, rng);
+            self.species_list_timer = (rng >> 0x10 & 0x7fff) % 200;
+            unsafe { REVISE_SPECIES_LIST.original()(self as *const Self as *const u32) };
+        }
+
+        if self.characteristics_timer > 6999 {
+            self.characteristics_dirty = 1;
+        }
+        if self.characteristics_dirty != 0 {
+            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
+            save_to_memory(rng_addr, rng);
+            self.characteristics_timer = (rng >> 0x10 & 0x7fff) % 200;
+            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+        }
+
+        let mut viewing_area_entry = self.viewing_areas_begin;
+        while viewing_area_entry != self.viewing_areas_end {
+            let viewing_area: u32 = get_from_memory(viewing_area_entry);
+            unsafe { ZTVIEWINGAREA_UPDATE_AMBIENTS.original()(viewing_area as *const std::ffi::c_void, elapsed as i32) };
+            viewing_area_entry += 4;
+        }
+
+        unsafe { UPDATE_PORTALS.original()(self as *const Self as *const u32) };
+        self.listen();
+    }
 }
 
 impl PartialEq for ZTHabitat {
@@ -1112,7 +1206,7 @@ pub mod hooks_zthabitatmgr {
     use openzt_detour::generated::{
         zthabitat::{
             GET_ATTRACTIVENESS, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
-            SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT,
+            SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE,
         },
         zthabitatmgr::GET_HABITAT,
     };
@@ -1208,10 +1302,15 @@ pub mod hooks_zthabitatmgr {
         unsafe { mut_from_memory::<ZTHabitat>(this) }.add_habitat_tiles(seed_tile as u32)
     }
 
+    #[detour(UPDATE)]
+    unsafe extern "thiscall" fn update(this: *const u32, elapsed: u32) {
+        unsafe { mut_from_memory::<ZTHabitat>(this) }.update(elapsed)
+    }
+
     /// `(name, is_enabled)` per detour - lets the live battery's `ZTHABITATMGR_DETOURS_ENABLED` test
     /// catch a silently-failed `init_detours()` (error logged, game continues on vanilla) rather than
     /// looking green while every hooked production path still runs real vanilla.
-    pub fn detour_status() -> [(&'static str, bool); 16] {
+    pub fn detour_status() -> [(&'static str, bool); 17] {
         [
             ("GET_GATE_TILE_IN", GET_GATE_TILE_IN_DETOUR.is_enabled()),
             ("GET_GATE_TILE_OUT", GET_GATE_TILE_OUT_DETOUR.is_enabled()),
@@ -1229,6 +1328,7 @@ pub mod hooks_zthabitatmgr {
             ("REMOVE_HABITAT_TILES", REMOVE_HABITAT_TILES_DETOUR.is_enabled()),
             ("RESET_UNIT_AI", RESET_UNIT_AI_DETOUR.is_enabled()),
             ("ADD_HABITAT_TILES", ADD_HABITAT_TILES_DETOUR.is_enabled()),
+            ("UPDATE", UPDATE_DETOUR.is_enabled()),
         ]
     }
 }

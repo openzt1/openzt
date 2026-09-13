@@ -469,6 +469,39 @@ pub(crate) fn run_habitat_add_habitat_tiles_roundtrip_live_test(failure_log: &mu
     }
 }
 
+/// Smoke test only, like [`run_habitat_listen_smoke_live_test`]/[`run_habitat_validate_positions_smoke_live_test`]
+/// - `ZTHabitat::update` has no return value and every real sub-call it makes (`Ambients::play`,
+/// `reviseSpeciesList`, `recalculateCharacteristics`, `ZTViewingArea::updateAmbients`, `updatePortals`,
+/// `listen`) is itself either a real vanilla call-through or already covered by its own dedicated live
+/// test elsewhere in this file, so there's no independent "real" pole left to diff a return value
+/// against without double-driving those side effects. Calls the reimplementation with a small,
+/// realistic tick (`16` ms, one frame at 60Hz) on every real, non-tank habitat and only confirms the
+/// battery is still alive afterward - the `ambients_begin`/`_end` and `viewing_areas_begin`/`_end`
+/// vector walks are the two field offsets this test exists to exercise: a wrong offset there would
+/// either read garbage pointers (likely crashing `Ambients::play`/`updateAmbients`) or, if the
+/// begin/end pair happened to compare equal by coincidence, silently skip the walk entirely rather
+/// than prove anything - so this is a real crash-or-hang check, not a no-op. Skips tanks, matching the
+/// detour's own real invocation domain: `ZTTankExhibit` overrides this vtable slot at a separate
+/// address (see `ZTHabitat::update`'s own doc comment), so real vanilla never dispatches a tank's tick
+/// through the address this file detours.
+pub(crate) fn run_habitat_update_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_UPDATE_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { mut_from_memory::<ZTHabitat>(ptr) };
+        if habitat.is_tank() {
+            continue;
+        }
+        habitat.update(16);
+    }
+    write_success_line(failure_log, test_name);
+    false
+}
+
 /// Destructive, irreversible (leaves this one habitat's tile list empty for the rest of the run - unlike
 /// [`run_habitat_add_habitat_tiles_roundtrip_live_test`] above, this test deliberately does not restore
 /// it, to also verify vanilla's own `getSize()` reflects a genuinely-emptied list independent of any
