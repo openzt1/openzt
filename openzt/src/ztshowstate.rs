@@ -38,13 +38,12 @@
 //! sentinel, the same shape this codebase's other tree headers already use).
 //!
 //! [`find_or_insert_state_node`]'s insert-with-hint descent is the same shape `ztshow.rs`'s own
-//! `plan_pending_node_insert` already uses for a sibling tree - and matches the one real, un-ported
-//! vanilla insert this session found and read in full for comparison, `ztshowscriptstate::CONSTRUCTOR`'s
-//! own inlined descent (`ZTShowScriptState_ZTShowScriptState.c`/`.asm`, which turns out to operate on
-//! this *exact* tree at `ZTShow+0x34`, confirming the header/node layout above independently). An
-//! unbalanced BST insert, not a real MSVC red-black insert, matching that sibling tree's own
-//! justification: every known reader of this tree only relies on the ordering invariant, never on a
-//! color/balance bit.
+//! `plan_pending_node_insert` already uses for a sibling tree - and matches the vanilla insert
+//! `ztshowscriptstate.rs`'s `create_show_script_state` ports (the inlined descent in
+//! `ZTShowScriptState_ZTShowScriptState.c`/`.asm`, which operates on this *exact* tree at
+//! `ZTShow+0x34`, confirming the header/node layout above independently). An unbalanced BST insert, not
+//! a real MSVC red-black insert, matching that sibling tree's own justification: every known reader of
+//! this tree only relies on the ordering invariant, never on a color/balance bit.
 //!
 //! ## Allocator note - two different real allocators in play
 //! - **Tree/header nodes (`0x18` bytes each)**: vanilla's shared small-object freelist, head pointer at
@@ -98,7 +97,6 @@
 use openzt_detour::generated::{
     poolalloc::REFILL as ALLOCATE_SMALL_OBJECT_SLOW,
     standalone::{DEALLOCATE, OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
-    ztshowscriptstate::{LOAD as SCRIPT_STATE_LOAD, SAVE as SCRIPT_STATE_SAVE},
     ztshowstate::{CLEAR, INIT, LOAD, SAVE},
 };
 use openzt_detour_macro::detour_mod;
@@ -106,7 +104,8 @@ use tracing::error;
 
 use crate::{
     globals::get_module_base,
-    util::{get_from_memory, save_to_memory},
+    util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory},
+    ztshowscriptstate::{RVA_SCRIPT_STATE_VTABLE, ZTShowScriptState},
 };
 
 /// RVA of the shared small-object freelist head for the `0x18`-byte bucket - see the module doc
@@ -115,11 +114,6 @@ const RVA_SMALL_OBJECT_FREELIST_HEAD: u32 = 0x0023_8008;
 
 /// Size of one tree/header block in this class's own script-state map - see the module doc comment.
 const TREE_NODE_SIZE: u32 = 0x18;
-
-/// RVA of `ZTShowScriptState`'s own vtable (`ZTShowScriptState__vftable_63502c_0063502c` in the
-/// decompile corpus - VA `0x0063502c`). Stamped onto every value object [`show_state_load`] constructs,
-/// matching real vanilla's own `ZTShowState_load.c`.
-const RVA_SCRIPT_STATE_VTABLE: u32 = 0x0023_502c;
 
 fn small_object_freelist_head_addr() -> u32 {
     get_module_base("zoo.exe") as u32 + RVA_SMALL_OBJECT_FREELIST_HEAD
@@ -176,7 +170,7 @@ pub(crate) fn collect_tree_nodes(node: u32, out: &mut Vec<u32>) {
 /// the right-insert arm since *this* header genuinely maintains one (unlike the pending-scripts header
 /// `ztshow.rs` found only has room for `self`/`root`/`leftmost`).
 #[derive(Debug, PartialEq, Eq)]
-enum StateNodeInsertPlan {
+pub(crate) enum StateNodeInsertPlan {
     /// An existing node with a matching key was found - its address.
     Found(u32),
     /// The tree is empty; a freshly-allocated node becomes the root.
@@ -190,10 +184,10 @@ enum StateNodeInsertPlan {
 }
 
 /// Pure decision half of [`find_or_insert_state_node`]'s BST walk - same lower-bound-then-candidate
-/// descent as `ztshow.rs`'s `find_script_state_node`/`plan_pending_node_insert`, and confirmed against
-/// the one real, un-ported vanilla insert this session read in full
+/// descent as `ztshow.rs`'s `find_script_state_node`/`plan_pending_node_insert`, matching the vanilla
+/// insert `ztshowscriptstate.rs`'s `create_show_script_state` ports
 /// (`ZTShowScriptState_ZTShowScriptState.c`'s own inlined descent over this exact tree).
-fn plan_state_node_insert(header: u32, key: u32) -> StateNodeInsertPlan {
+pub(crate) fn plan_state_node_insert(header: u32, key: u32) -> StateNodeInsertPlan {
     let root = get_from_memory::<u32>(header + 0x4);
     if root == 0 {
         return StateNodeInsertPlan::NewRoot;
@@ -239,36 +233,43 @@ fn plan_state_node_insert(header: u32, key: u32) -> StateNodeInsertPlan {
 pub(crate) fn find_or_insert_state_node(header: u32, key: u32) -> u32 {
     match plan_state_node_insert(header, key) {
         StateNodeInsertPlan::Found(node) => node,
+        plan => link_new_state_node(header, key, plan),
+    }
+}
+
+/// Allocates and links a fresh node for `key` into the script-state tree headed by `header`, per
+/// `plan` - [`plan_state_node_insert`]'s three insert outcomes, never `Found` (both callers pre-filter:
+/// [`find_or_insert_state_node`] and [`crate::ztshowscriptstate::create_show_script_state`], which needs
+/// the split so its value allocation happens *before* the node insert - vanilla's own order, stranding
+/// no valueless node if `operator_new` fails). Returns the node's address; callers set `node+0x14` (the
+/// value pointer) themselves.
+pub(crate) fn link_new_state_node(header: u32, key: u32, plan: StateNodeInsertPlan) -> u32 {
+    let node = allocate_tree_node();
+    save_to_memory(node + 0x10, key);
+    match plan {
         StateNodeInsertPlan::NewRoot => {
-            let node = allocate_tree_node();
             save_to_memory(node + 0x4, header);
-            save_to_memory(node + 0x10, key);
             save_to_memory(header + 0x4, node);
             save_to_memory(header + 0x8, node);
             save_to_memory(header + 0xc, node);
-            node
         }
         StateNodeInsertPlan::InsertLeft { parent, parent_is_leftmost } => {
-            let node = allocate_tree_node();
             save_to_memory(node + 0x4, parent);
-            save_to_memory(node + 0x10, key);
             save_to_memory(parent + 0x8, node);
             if parent_is_leftmost {
                 save_to_memory(header + 0x8, node);
             }
-            node
         }
         StateNodeInsertPlan::InsertRight { parent, parent_is_rightmost } => {
-            let node = allocate_tree_node();
             save_to_memory(node + 0x4, parent);
-            save_to_memory(node + 0x10, key);
             save_to_memory(parent + 0xc, node);
             if parent_is_rightmost {
                 save_to_memory(header + 0xc, node);
             }
-            node
         }
+        StateNodeInsertPlan::Found(_) => unreachable!("link_new_state_node called with a Found plan"),
     }
+    node
 }
 
 fn write_field(addr: u32, size: u32, file: *const i8) -> bool {
@@ -355,7 +356,8 @@ pub fn show_state_save(this: u32, file: *const i8) -> bool {
 
     for node in nodes {
         let value = get_from_memory::<u32>(node + 0x14);
-        let node_ok = unsafe { SCRIPT_STATE_SAVE.original()(value as *const u32, file as *const u32) != 0 };
+        let node_ok =
+            unsafe { ref_from_memory::<ZTShowScriptState>(value as *const u32) }.save(file) != 0;
         if !node_ok {
             return false;
         }
@@ -382,11 +384,11 @@ pub fn show_state_save(this: u32, file: *const i8) -> bool {
 /// comment's Allocator section) is zeroed, stamped with the real vtable pointer and the `0xffff`
 /// trick-index sentinel (matching `ZTShowState_load.c`'s own pre-`load()` field defaults - the two
 /// unaccounted `+0x6`/`+0x7` bytes vanilla's own `operator_new` leaves uninitialized are harmlessly
-/// zeroed here instead, since nothing reads them either way), then populated via real, un-ported
-/// `ZTShowScriptState::load` (`.original()`, never detoured by this module). Its own `+0x8` field
+/// zeroed here instead, since nothing reads them either way), then populated by the
+/// `ZTShowScriptState::load` reimplementation in `crate::ztshowscriptstate`. Its own `+0x8` field
 /// (populated by that call) becomes the tree's insertion key - matching vanilla's own
-/// read-then-key-by-loaded-value order exactly, not the live-`start()`-flow order (`ztshow.rs`'s
-/// `CREATE_SHOW_SCRIPT_STATE`) where the key is known upfront instead.
+/// read-then-key-by-loaded-value order exactly, not the live-`start()`-flow order
+/// ([`crate::ztshowscriptstate::create_show_script_state`]) where the key is known upfront instead.
 ///
 /// A single entry-level load failure returns `false` immediately (matching vanilla's own
 /// `bVar14 = bVar14 & bVar3; if (!bVar14) return false;` inside the loop - note this also fires on the
@@ -426,7 +428,8 @@ pub fn show_state_load(this: u32, file: *const u32, version: u32) -> bool {
             save_to_memory(value + 0xc, 0xffffu16);
             save_to_memory(value, vtable_addr);
 
-            let loaded = unsafe { SCRIPT_STATE_LOAD.original()(value as *const u32, file, version) };
+            let loaded =
+                unsafe { mut_from_memory::<ZTShowScriptState>(value as *const u32) }.load(file, version);
             ok &= loaded;
             if !ok {
                 return false;
