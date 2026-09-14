@@ -504,6 +504,25 @@ pub struct ZTWorldMgr {
     entity_type_array_buffer_end: u32,
 }
 
+impl ZTWorldMgr {
+    /// The manager's own flat `entity_array` (every live entity in the world) - exposed read-only for
+    /// [`crate::zthabitatmgr::ZTHabitatMgr::replace_gate`]'s own real vanilla search (confirming a
+    /// stashed gate-fence pointer is still a live world entity before converting it back to a plain
+    /// fence; `ZTHabitatMgr_replaceGate.c`/`.asm` walks `entity_array_start`/`_end` directly).
+    pub fn entity_array(&self) -> impl Iterator<Item = u32> + '_ {
+        let mut ptr = self.entity_array_start;
+        std::iter::from_fn(move || {
+            if ptr >= self.entity_array_end {
+                None
+            } else {
+                let value = get_from_memory::<u32>(ptr);
+                ptr += 4;
+                Some(value)
+            }
+        })
+    }
+}
+
 impl fmt::Display for ZTWorldMgr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -601,6 +620,14 @@ impl ZTWorldMgr {
     pub fn get_ptr_from_bftile(&self, bftile: &BFTile) -> u32 {
         let x = bftile.pos.x as u32;
         let y = bftile.pos.y as u32;
+        self.tile_array + ((y * self.map_x_size + x) * 0x8c)
+    }
+
+    /// Same address math as [`Self::get_ptr_from_bftile`], for callers that only have raw `(x, y)`
+    /// coordinates (e.g. [`crate::zthabitatmgr::ZTHabitatMgr::get_zoo_entrance_tile_ptr`]) rather than
+    /// an already-read `BFTile`. No bounds check - callers that need one (real vanilla
+    /// `ZTHabitatMgr::getZooEntranceTile` included) check `map_x_size`/`map_y_size` themselves first.
+    pub fn get_tile_ptr(&self, x: u32, y: u32) -> u32 {
         self.tile_array + ((y * self.map_x_size + x) * 0x8c)
     }
 

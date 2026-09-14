@@ -187,8 +187,8 @@ pub(crate) fn run_ztshowstate_save_load_roundtrip_test(failure_log: &mut Option<
     io_redirect::begin_capture();
     let save_ret = unsafe { ZTSHOWSTATE_SAVE.hooked()(source as *const u32, file_ptr) };
     let bytes = io_redirect::end_capture();
-    if save_ret != 1 {
-        failures.push(format!("hooked save should return 1, got {save_ret:#010x}"));
+    if !save_ret {
+        failures.push(format!("hooked save should return true, got {save_ret}"));
     }
 
     let target = ztshowstate_live_support::build_standalone_show_state();

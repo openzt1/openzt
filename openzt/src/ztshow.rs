@@ -434,7 +434,7 @@ pub fn validate(this: u32, check_units: bool) -> i32 {
         node = get_from_memory::<u32>(sentinel);
         while node != sentinel {
             let unit_id = get_from_memory::<u32>(node + 0x8);
-            if unsafe { CHECK_UNIT.hooked()(show_info as *const u32, unit_id) } == 0 {
+            if !unsafe { CHECK_UNIT.hooked()(show_info as *const u32, unit_id) } {
                 return 4;
             }
             node = get_from_memory::<u32>(node);
@@ -624,7 +624,7 @@ pub fn start(this: u32) {
             // `.hooked()`, not `.original()`: `IS_STARTED` is now detoured by `ztshowinfo.rs` (Stage 2 of
             // `ztshowinfo-implementation-plan.md`) - see that plan's own "every stage that ports a
             // call-through-only method must switch its `.original()` call sites to `.hooked()`" rule.
-            let needs_state = (owning_show_info != 0 && unsafe { IS_STARTED.hooked()(owning_show_info as *const u32) } == 0)
+            let needs_state = (!owning_show_info.is_null() && unsafe { IS_STARTED.hooked()(owning_show_info) } == 0)
                 || !unsafe { call_entity_vtable_noargs(unit_ptr, 0x22c) };
             if needs_state {
                 let show_id = get_from_memory::<u16>(this + 0x6);
@@ -642,7 +642,7 @@ pub fn start(this: u32) {
     }
 
     let gather_result = unsafe { GATHER_UNITS.original()(this as *const u32) };
-    if gather_result == 0 {
+    if !gather_result {
         save_to_memory(this + 0x1e, 0u8);
         save_to_memory(this + 0x1f, 1u8);
         save_to_memory(this + 0x20, 0u8);

@@ -612,6 +612,23 @@ by `ztmarketing.rs`/`ztresearch.rs`/`ztthoughtmgr.rs`/`ztmegatilemgr.rs`.
   always safe. Calling it *from inside that same function's own detour* is not safe in release (see below) -
   use `<NAME>_DETOUR.call(...)` there regardless of profile.
 
+### Consuming a vanilla return value as a bool - check for undefined upper bytes
+
+Before comparing any `.original()(...)`/`.hooked()(...)` return value against `0` or otherwise treating it
+as a bool, open that function's own decompile and look at its literal `return` statements. Ghidra frequently
+decompiles a function that really only sets `AL` as `return CONCAT31((int3)(garbage >> 8), local_flag)` -
+explicitly packing an undefined/garbage upper 3 bytes around the one real byte - or the sibling shape
+`some_reg & 0xffffff00` (forcing the low byte to a fixed value while leaving the upper bytes as whatever was
+already in the register). Real vanilla callers always match this with `TEST AL, AL` (low byte only, never
+the full register). A full-width comparison against `0` is a genuine bug that happens to work whenever the
+garbage bytes are zero (e.g. an isolated call with a clean stack) and silently breaks once they aren't (e.g.
+a dense burst of repeated calls each leaving different register garbage behind) - so a narrow test passing
+is not strong evidence this class of bug is absent. Found twice so far in this codebase purely via live
+crashes/corruption (`ZooStatus::fChance`, and `ZTHabitatMgr::createHabitat`'s `doTankCheck`/
+`ZTTankExhibit::removeIllegalEntities` reads) - check for it proactively during any signature audit rather
+than waiting for a report. Use `util.rs`'s `low_byte_bool(value: u32) -> bool` at the call site instead of a
+raw `!= 0`/`== 0` comparison whenever a decompile shows this shape.
+
 ### Detouring a function (`#[detour_mod]` / `#[detour(NAME)]`)
 
 Provided by `openzt-detour-macro`. Shape (see `ztthoughtmgr.rs`'s `thought_save_detours` module or

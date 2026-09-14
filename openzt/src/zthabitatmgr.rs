@@ -2,25 +2,46 @@ use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour::{
     generated::{
         ambients::PLAY as AMBIENTS_PLAY,
+        bfentity::GET_TILE as BFENTITY_GET_TILE,
+        bfmap::GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0,
         bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
-        bftile::VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
+        bftile::{GET_CORNER_ELEVATION as BFTILE_GET_CORNER_ELEVATION, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS},
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
+        poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW},
         standalone::WRITE_BYTES_TO_FILE,
+        ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR, SAVE as ZTSHOWINFO_SAVE},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
+        zttankwall::SET_IS_COMBINED_CONNECTOR,
+        ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
+        ztui_habitatinfo::ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT,
         ztui_showpanel::SET_EXHIBIT,
         ztviewingarea::UPDATE_AMBIENTS as ZTVIEWINGAREA_UPDATE_AMBIENTS,
+        ztworldmgr::UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS,
         zthabitat::{
-            ADD_HABITAT_TILES, GET_EVENTS, RECALCULATE_CHARACTERISTICS, REMOVE_HABITAT_TILES, RESET_UNIT_AI, REVISE_SPECIES_LIST, UPDATE_PORTALS,
-            VALIDATE_POSITIONS, SAVE as ZTHABITAT_SAVE,
+            ADD_AMPHIBIOUS_NEIGHBOR, ADD_HABITAT_TILES, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS, CLEAR_SHOW_NEIGHBORS,
+            GET_EVENTS, GET_GATE, GET_SHOW_PORTAL, HILITE_AMPHIBIOUS_NEIGHBORS, HILITE_SHOW_NEIGHBORS, RECALCULATE_CHARACTERISTICS,
+            REMOVE_HABITAT_TILES, RESET_UNIT_AI, REVISE_SPECIES_LIST, UPDATE_PORTALS, VALIDATE_POSITIONS, SAVE as ZTHABITAT_SAVE,
+            CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, SET_NAME as ZTHABITAT_SET_NAME, RESIZE as ZTHABITAT_RESIZE,
+            SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
         },
-        zthabitatmgr::{GET_ZOO_ENTRANCE_TILE, SAVE as ZTHABITATMGR_SAVE},
+        zthabitatmgr::{
+            GET_ZOO_ENTRANCE_TILE, SAVE as ZTHABITATMGR_SAVE, CREATE_HABITAT as ZTHABITATMGR_CREATE_HABITAT,
+            ADD_HABITAT as ZTHABITATMGR_ADD_HABITAT, CAN_SEE_HABITAT_FROM_BUILDING, CAN_SEE_SHOW_FROM_BUILDING, CHECK_AMPHIBIOUS_NEIGHBOR,
+            CHECK_SHOW_NEIGHBOR, DO_TANK_CHECK, DECREMENT_HABITAT_NUM, FIND_BETTER_GATES_FOR_NEIGHBORS, HABITAT_SEEN_FROM_BUILDING, NAME_HABITAT,
+            PLACE_GATE, UPDATE_AMPHIBIOUS_NEIGHBORS_0, UPDATE_AMPHIBIOUS_NEIGHBORS_1, UPDATE_SHOW_NEIGHBORS_0, UPDATE_SHOW_NEIGHBORS_1,
+            DO_SHOW_CHECK, SNAP_TANK_WALLS_INWARD,
+        },
+        zttankexhibit::{
+            CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR, UPDATE_TANK_INFO as ZTTANKEXHIBIT_UPDATE_TANK_INFO,
+            REMOVE_ILLEGAL_ENTITIES as ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES, FILL as ZTTANKEXHIBIT_FILL,
+        },
     },
     FunctionDef,
 };
 use openzt_detour_macro::detour_mod;
-use std::{fmt, mem};
+use std::{collections::HashSet, fmt, mem};
 use tracing::info;
 
 use getset::Getters;
@@ -29,7 +50,7 @@ use crate::{
     command_console::CommandError,
     globals::{get_module_base, globals},
     lua_fn,
-    util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory, ZTArray, ZTBufferString, ZTString},
+    util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory, ZTArray, ZTBufferString, ZTString},
     ztmapview::BFTile,
     ztmegatilemgr::entity_type_matches,
     ztshow::call_entity_vtable_noargs,
@@ -47,15 +68,19 @@ pub struct ZTHabitatMgr {
     map_size_y: u32,                   // 0x00c
     zoo_entrance_x: u32,               // 0x010
     zoo_entrance_y: u32,               // 0x014
-    pad2: [u8; 0x04],                  // ----------------------- padding: 4 bytes
+    pending_habitat_ptr: u32,          // 0x018 // `ZTHabitatMgr::addHabitat`'s own "deferred" slot - a habitat whose `unknown_flag_0x2c` is set gets stashed here instead of appended to `exhibit_array` (confirmed directly via `.asm`'s `MOV dword ptr [ESI+0x18], EAX` on that branch). Almost certainly the single, always-present "world" habitat (unclaimed/exterior tiles): `getAverageHabitatAttractiveness` skips every `exhibit_array` entry with the same `unknown_flag_0x2c` flag set, and `enterNewMonth` rotates this field's own donation/upkeep totals unconditionally, with no null check - real vanilla never treats it as merely a rare/optional queue slot. See `ZTHabitatMgr::enter_new_month`.
     exhibit_array: ZTArray<ZTHabitat>, // 0x01c (0xc bytes)
     other_array_start: u32,            // 0x028 //TODO: Use ZTArray; Seems to be some kind of mapping from BFTile to ZTHabitat or a ZTHabitat index
     other_array_end: u32,              // 0x02c
     other_array_buffer_end: u32,       // 0x030
-    pad3: [u8; 0x24],                  // ----------------------- padding: 36 bytes
+    pad3: [u8; 0x20],                  // ----------------------- padding: 32 bytes
+    pending_gate_fence_ptr: u32,       // 0x054 // Stashed by `ZTHabitatMgr::removeHabitat` when the habitat being deleted owns a real gate fence still present at its entrance tile (`ZTHabitatMgr_removeHabitat_0.c`'s own `this->mbr_0x54 = dVar1` branch), cleared and converted back to a plain fence by `ZTHabitatMgr::replaceGate` - see `Self::replace_gate`.
     popularity_scale_factor: f32,      // 0x058
     pad4: [u8; 0xc],                   // ----------------------- padding: 12 bytes (0x05c-0x068, not yet reverse-engineered)
     loaded_marker: u32,                // 0x068 // Set to 1 by both the constructor and the tail of `load` (every branch, success or failure past the header); `save` writes it back out raw. Real meaning beyond "always observed as 1" unconfirmed.
+    unknown_flag_0x6c: u8,              // 0x06c // Set to 1 unconditionally by the constructor (`ZTHabitatMgr_ZTHabitatMgr.c`'s own `pBVar6->field_0x6c = 1`, confirmed to be `this`-relative despite the decompile's misleading `pBVar6` naming - see `scenery_entity_change_suspended`'s own note). No reader found in this pass.
+    scenery_entity_change_suspended: u8, // 0x06d // Zeroed by the constructor; gates the entire body of `ZTHabitatMgr::sceneryEntityChange` when set (see `Self::scenery_entity_change`) - not written anywhere in this pass's own scope, so always clear/no-op for the functions ported here. Not part of `save`'s own persisted byte layout (`ZTHabitatMgr_save.c` stops at `field_0x68`/`loaded_marker`), confirming these are pure runtime fields.
+    pad5: [u8; 0x2],                    // ----------------------- padding: 2 bytes (0x06e-0x070; the ctor also zeroes 0x06e, purpose/reader unconfirmed - 0x06f unconfirmed)
 }
 
 impl ZTHabitatMgr {
@@ -87,6 +112,13 @@ impl ZTHabitatMgr {
     /// `ZTHabitat*` occupying that tile (0 when empty). Real vanilla returns 0 for any out-of-range
     /// `pos_x`/`pos_y` rather than reading past either array - this previously read unconditionally,
     /// which could over-read past a short/empty column for tiles outside the loaded map.
+    ///
+    /// Each `0x28`-byte row holds more than the single occupant pointer at offset `0`:
+    /// `ZTHabitatMgr_habitatTileChanged.asm` reads 8 more `u32` slots at offsets `0x4..0x24` (stride 4)
+    /// from the same row address this returns, each apparently a cached nearby-habitat pointer (see
+    /// `Self::habitat_tile_changed`) - offset `0x24` itself (the row's 10th and final 4-byte slot) is
+    /// never read by any function this pass ported. Purpose of those 8 slots beyond "something
+    /// `habitatTileChanged` marks dirty" not otherwise confirmed.
     pub fn get_habitat_cell_addr(&self, pos_x: i32, pos_y: i32) -> Option<u32> {
         if pos_x < 0 || pos_y < 0 {
             return None;
@@ -129,14 +161,98 @@ impl ZTHabitatMgr {
         None
     }
 
+    /// Ports `ZTHabitatMgr::getZooEntranceTile` (`ZTHabitatMgr_getZooEntranceTile.c`): the entrance
+    /// tile's address (`GLOBAL_ZTWorldMgr`'s own `tile_array` indexed by `zoo_entrance_x`/`_y`, via
+    /// [`crate::ztworldmgr::ZTWorldMgr::get_tile_ptr`]) if both coordinates are non-negative and within
+    /// the live map's own bounds, else `0`. `zoo_entrance_x`/`_y` are stored as `u32` here but real
+    /// vanilla treats them as signed `int` (`-1` is the "unset" sentinel) - the `< 0` checks below read
+    /// the same bit pattern correctly regardless.
+    pub fn get_zoo_entrance_tile_ptr(&self) -> u32 {
+        let x = self.zoo_entrance_x as i32;
+        let y = self.zoo_entrance_y as i32;
+        if x < 0 || y < 0 {
+            return 0;
+        }
+        let world = globals().ztworldmgr();
+        if x >= world.map_x_size as i32 || y >= world.map_y_size as i32 {
+            return 0;
+        }
+        world.get_tile_ptr(x as u32, y as u32)
+    }
+
+    /// Ports `ZTHabitatMgr::getAverageHabitatAttractiveness` (`ZTHabitatMgr_getAverageHabitatAttractiveness.c`):
+    /// the mean [`ZTHabitat::get_attractiveness`] over every `exhibit_array` entry whose own
+    /// `unknown_flag_0x2c` is clear (skips the special "world" habitat - see [`Self::pending_habitat_ptr`]'s
+    /// own doc comment), truncating toward zero (real vanilla's `iVar3 / iVar2` is a plain signed integer
+    /// divide); `0` if there are no such habitats.
+    pub fn get_average_habitat_attractiveness(&self) -> i32 {
+        let mut sum = 0i32;
+        let mut count = 0i32;
+        for i in 0..self.exhibit_array.len() {
+            let ptr = self.exhibit_array.get_ptr(i);
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+            if habitat.unknown_flag_0x2c == 0 {
+                sum += habitat.get_attractiveness();
+                count += 1;
+            }
+        }
+        if count != 0 {
+            sum / count
+        } else {
+            0
+        }
+    }
+
+    /// Shared driver for [`Self::get_num_families`]/[`Self::get_num_species`]: the count of distinct
+    /// `u32` catalog-entry ids at `catalog_id_offset` (`0x1e4` for family, `0x1ec` for species; see
+    /// `ZTHabitatMgr_getNumFamilies.c`/`_getNumSpecies.c`) across every `ZTHabitat::species_list` entry,
+    /// over every habitat in `exhibit_array`. Real vanilla builds this same distinct-id count by
+    /// inserting into a real `std::set<int>` (an RB-tree) as it walks; a Rust `HashSet` reaches the same
+    /// count without needing to reproduce that container's own node allocation.
+    fn distinct_species_catalog_ids(&self, catalog_id_offset: u32) -> usize {
+        let mut ids = HashSet::new();
+        for i in 0..self.exhibit_array.len() {
+            let ptr = self.exhibit_array.get_ptr(i);
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+            for entry_ptr in habitat.species_list() {
+                ids.insert(get_from_memory::<u32>(entry_ptr + catalog_id_offset));
+            }
+        }
+        ids.len()
+    }
+
+    /// Ports `ZTHabitatMgr::getNumFamilies` - see [`Self::distinct_species_catalog_ids`].
+    pub fn get_num_families(&self) -> i32 {
+        self.distinct_species_catalog_ids(0x1e4) as i32
+    }
+
+    /// Ports `ZTHabitatMgr::getNumSpecies` - see [`Self::distinct_species_catalog_ids`].
+    pub fn get_num_species(&self) -> i32 {
+        self.distinct_species_catalog_ids(0x1ec) as i32
+    }
+
+    /// Ports `ZTHabitatMgr::enterNewMonth` (`ZTHabitatMgr_enterNewMonth.c`): for every `exhibit_array`
+    /// entry, and finally for [`Self::pending_habitat_ptr`] itself (real vanilla reads it unconditionally,
+    /// no null check - see that field's own doc comment for why this is confidently the always-present
+    /// "world" habitat rather than a rarely-populated queue slot), rotates `current_donations` ->
+    /// `last_donations`, `unknown_u32_2` -> `unknown_u32_3`, and `current_upkeep` -> `last_upkeep`,
+    /// zeroing each `current`/leading field. The `total_*`/`unknown_u32_4` fields are untouched, matching
+    /// real vanilla exactly - only the two rolling-window pairs plus `unknown_u32_2`/`_3` reset monthly.
+    pub fn enter_new_month(&self) {
+        for i in 0..self.exhibit_array.len() {
+            rotate_month_fields(self.exhibit_array.get_ptr(i));
+        }
+        rotate_month_fields(self.pending_habitat_ptr);
+    }
+
     /// Ports `ZTHabitatMgr::save` (`ZTHabitatMgr_save.c`/`.asm`, confirmed identical on both platforms
     /// modulo the macOS decompile's own endian-swap noise): map size (read from the live
     /// `GLOBAL_ZTWorldMgr`, **not** this manager's own `map_size_x`/`map_size_y` cache - real vanilla
-    /// never touches those two fields here), the zoo entrance tile's position (via the still-un-ported
-    /// `getZooEntranceTile`, called through exactly as vanilla does - including its own lack of a
-    /// null-tile guard before dereferencing `+0x34`/`+0x38`, "dead in practice" the same way this
-    /// codebase already treats several other unguarded vanilla reads), `exhibit_array`'s length, then
-    /// every exhibit's own `save` in order, and finally the raw `loaded_marker` dword.
+    /// never touches those two fields here), the zoo entrance tile's position (via
+    /// [`Self::get_zoo_entrance_tile_ptr`] - including its own lack of a null-tile guard before
+    /// dereferencing `+0x34`/`+0x38`, "dead in practice" the same way this codebase already treats
+    /// several other unguarded vanilla reads), `exhibit_array`'s length, then every exhibit's own `save`
+    /// in order, and finally the raw `loaded_marker` dword.
     ///
     /// Unlike `ZTHabitat::save` (which ANDs every field's success together and keeps writing
     /// regardless, matching that function's own flat structure), a single exhibit's `save` failing here
@@ -156,7 +272,7 @@ impl ZTHabitatMgr {
         let mut ok = write_bytes_to_file(&map_x, file);
         ok &= write_bytes_to_file(&map_y, file);
 
-        let entrance_tile_ptr = unsafe { GET_ZOO_ENTRANCE_TILE.original()(self as *const Self as *const u32) } as u32;
+        let entrance_tile_ptr = self.get_zoo_entrance_tile_ptr();
         let entrance_x: i32 = get_from_memory(entrance_tile_ptr + 0x34);
         let entrance_y: i32 = get_from_memory(entrance_tile_ptr + 0x38);
         ok &= write_bytes_to_file(&entrance_x, file);
@@ -174,6 +290,854 @@ impl ZTHabitatMgr {
 
         ok &= write_bytes_to_file(&self.loaded_marker, file);
         ok
+    }
+
+    /// Ports `ZTHabitatMgr::addHabitat` (`ZTHabitatMgr_addHabitat.c`/`.asm`, confirmed identical
+    /// control flow on both platforms): appends `habitat_ptr` to `exhibit_array`, doubling its
+    /// backing buffer (minimum `1`) through real vanilla's own `PoolAlloc::allocate`/
+    /// `PoolAlloc::deallocate_n_4` when full - called through rather than reimplemented, since real
+    /// vanilla itself calls these as plain function calls here (unlike most other `PoolAlloc`-backed
+    /// containers in this codebase, which inline the bucket-freelist fast path at every call site -
+    /// see `ztshowinfo.rs`'s own `pool_allocate` doc comment for that contrast), so calling through
+    /// keeps this allocation byte-identical to vanilla for free.
+    ///
+    /// If `habitat_ptr`'s own `unknown_flag_0x2c` is set, the habitat is instead stashed in
+    /// [`Self::pending_habitat_ptr`] and never appended to the array at all - matches vanilla's own
+    /// early-return branch (`ZTHabitatMgr_addHabitat.asm`'s `.7bcc6` block) exactly.
+    ///
+    /// On the append path, also calls through to real vanilla `ZTUI::habitatinfo::addHabitat`, sets
+    /// the shared "habitat list changed" dirty flag ([`HABITAT_LIST_DIRTY_RVA`]), and calls the
+    /// unidentified no-arg helper [`FUN_0044BB5F`] - all three exactly as vanilla's own tail does.
+    pub fn add_habitat(&self, habitat_ptr: u32) {
+        let deferred: u8 = get_from_memory(habitat_ptr + 0x2c);
+        if deferred != 0 {
+            let self_addr = self as *const Self as u32;
+            save_to_memory(self_addr + 0x18, habitat_ptr);
+            return;
+        }
+
+        let (start, end, buffer_end) = self.exhibit_array.raw_parts();
+        if end == buffer_end {
+            let old_len = self.exhibit_array.len() as u32;
+            let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
+            let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 4) } as u32;
+
+            for i in 0..old_len {
+                let value = get_from_memory::<u32>(start + i * 4);
+                if new_buf != 0 {
+                    save_to_memory(new_buf + i * 4, value);
+                }
+            }
+            if new_buf != 0 {
+                save_to_memory(new_buf + old_len * 4, habitat_ptr);
+            }
+            // Real vanilla calls `PoolAlloc::deallocate_n_4` unconditionally here, even for
+            // old_len==0 (freeing a null pointer with count 0) - matched as-is rather than skipped,
+            // since PoolAlloc's real deallocate is expected to no-op on an empty range and this keeps
+            // the call-through byte-for-byte faithful to `ZTHabitatMgr_addHabitat.asm`.
+            unsafe { POOLALLOC_DEALLOCATE_N_4.original()(start as *const u32, old_len as i32) };
+            self.exhibit_array.set_raw_parts(new_buf, new_buf + (old_len + 1) * 4, new_buf + new_cap * 4);
+        } else {
+            save_to_memory(end, habitat_ptr);
+            self.exhibit_array.set_raw_parts(start, end + 4, buffer_end);
+        }
+
+        unsafe { ZTUI_HABITATINFO_ADD_HABITAT.original()(habitat_ptr as *const i32) };
+        let base = get_module_base("zoo.exe") as u32;
+        save_to_memory::<u8>(base + HABITAT_LIST_DIRTY_RVA, 1);
+        unsafe { FUN_0044BB5F.original()() };
+    }
+
+    /// Ports `ZTHabitatMgr::createHabitat` (`ZTHabitatMgr_createHabitat.c`/`.asm`) as an orchestrator:
+    /// constructs the new exhibit and reproduces the real branching exactly, but calls through to real
+    /// vanilla (`.original()`) for every step this pass doesn't separately reimplement -
+    /// `doTankCheck`/`decrementHabitatNum`/`nameHabitat`/`ZTHabitat::setName`/`ZTHabitat::resize`/
+    /// `ZTHabitat::setDirtyCharacteristics`/`placeGate`/`updateAmphibiousNeighbors`/`doShowCheck`, the
+    /// two constructors, and (tank-only) `snapTankWallsInward`/`findBetterGatesForNeighbors`/
+    /// `ZTTankExhibit::updateTankInfo`/`removeIllegalEntities`/`fill`. Only [`Self::add_habitat`]
+    /// itself is genuinely reimplemented here, matching this pass's own scoped goal (see
+    /// `zthabitatmgr-implementation-plan.md`'s step 5) rather than porting the ~15 other functions this
+    /// single method touches.
+    ///
+    /// `name_ptr` may be null, matching real call sites (`fencePlaced`/`morphExhibit` always pass a null
+    /// name, taking the `nameHabitat` modal-dialog branch). `seed_tile_ptr` is always real.
+    /// `resize_tile_ptr`/`gate_tile_ptr`, despite the raw decompile's signature allowing null, are
+    /// **never** actually null at any real call site - every caller (`fencePlaced`, `morphExhibit`,
+    /// and `placeGate`'s other direct callers `splitTank`/`splitTankIntoLand`) passes three real BFTile
+    /// pointers pairwise related to `seed_tile_ptr` (confirmed by reading every `createHabitat`/
+    /// `placeGate` call site in the decompile corpus) - a genuinely null resize/gate tile is not a
+    /// realistic input, just something the raw signature happens to permit. Confirmed live
+    /// (crash-capture) that a null `resize_tile_ptr` crashes two different ways depending on where it's
+    /// read: real vanilla `resize` does not tolerate `this == 0` (a null-pointer dereference a few calls
+    /// deep, not an early return) when `resize_target_ptr` resolves to null, and separately,
+    /// `resize_tile_ptr` itself flows straight into `placeGate`'s own pathfinding
+    /// (`BFPathFinder::findPath`/`BFUnit::getPathCost`, which dereferences both tile arguments
+    /// unconditionally at `+0x3c`/`+0x40`) regardless of `resize_target_ptr`. This method still guards
+    /// the `resize`/`setDirtyCharacteristics` calls on `resize_target_ptr != 0` (skipping them rather
+    /// than reproducing the raw decompile's unconditional null-receiver call) since a real, unknown
+    /// call site with no resize target is plausible even though none is attested in the decompile
+    /// corpus - but `resize_tile_ptr` itself must still be a real tile pointer for `placeGate` to run
+    /// safely; there is no equivalent guard for a null `resize_tile_ptr` reaching `placeGate`.
+    ///
+    /// The `local_4`/`bVar1` mapview-visibility flags (`ZTUI::general::getMapview()`'s own `+0x378`
+    /// byte, `ZTMapView`'s own real meaning not otherwise reverse-engineered in this codebase - see
+    /// `zthabitatmgr-implementation-plan.md`) are read as flat offsets off the returned pointer,
+    /// confirmed directly via `.asm` (`MOV AL, [ECX+0x378]`) rather than the C decompile's fictional
+    /// `cls_0x6314c8.cls_0x6313e4` nested-base naming.
+    pub fn create_habitat(&self, seed_tile_ptr: u32, resize_tile_ptr: u32, gate_tile_ptr: u32, name_ptr: u32) {
+        let mgr_ptr = self as *const Self as *const u32;
+
+        let mut habitat_ptr = unsafe { OPERATOR_NEW.original()(0x178) } as u32;
+        if habitat_ptr != 0 {
+            habitat_ptr = unsafe { ZTHABITAT_CONSTRUCTOR.original()(habitat_ptr as *const u32, seed_tile_ptr as *const u32, false) } as u32;
+        }
+
+        let is_tank = unsafe { DO_TANK_CHECK.original()(habitat_ptr as i32) };
+        if is_tank {
+            unsafe { DECREMENT_HABITAT_NUM.original()(mgr_ptr) };
+            if habitat_ptr != 0 {
+                unsafe { call_vtable_slot_with_u8(habitat_ptr, 0x18, 1) };
+            }
+
+            let base = get_module_base("zoo.exe") as u32;
+            let ztapp_ptr: u32 = get_from_memory(base + GLOBAL_ZTAPP_RVA);
+            let gate_flag: u8 = if ztapp_ptr != 0 { get_from_memory(ztapp_ptr + 0x441) } else { 0 };
+            let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+            let mapview_active = mapview_ptr != 0 && get_from_memory::<u8>(mapview_ptr + 0x378) != 0;
+            let start_filled = gate_flag == 0 && !mapview_active;
+
+            let mut tank_ptr = unsafe { OPERATOR_NEW.original()(0x1e8) } as u32;
+            if tank_ptr != 0 {
+                tank_ptr = unsafe { ZTTANKEXHIBIT_CONSTRUCTOR.original()(tank_ptr as *const u32, seed_tile_ptr as *const u32, false, start_filled) } as u32;
+            }
+            habitat_ptr = tank_ptr;
+
+            let mapview_ptr2 = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+            let show_active = mapview_ptr2 != 0 && get_from_memory::<u8>(mapview_ptr2 + 0x378) != 0;
+
+            unsafe { SNAP_TANK_WALLS_INWARD.original()(mgr_ptr, tank_ptr as *const std::ffi::c_void) };
+            if !show_active {
+                unsafe { FIND_BETTER_GATES_FOR_NEIGHBORS.original()(mgr_ptr, tank_ptr as *const u32) };
+            }
+            unsafe { DO_SHOW_CHECK.original()(mgr_ptr, tank_ptr as *const i32, 0) };
+            unsafe { ZTTANKEXHIBIT_UPDATE_TANK_INFO.original()(tank_ptr as *const u32) };
+            let has_illegal_entities = unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(tank_ptr as *const u32, 1, !show_active) };
+            if !has_illegal_entities {
+                self.add_habitat(tank_ptr);
+                let mapview_ptr3 = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+                if mapview_ptr3 != 0 {
+                    save_to_memory::<u8>(mapview_ptr3 + 0x455, 1);
+                }
+                unsafe { DECREMENT_HABITAT_NUM.original()(mgr_ptr) };
+                return;
+            }
+            unsafe { ZTTANKEXHIBIT_FILL.original()(tank_ptr as *const u32) };
+        }
+
+        if name_ptr == 0 {
+            unsafe { NAME_HABITAT.original()(mgr_ptr, habitat_ptr as *const u32) };
+        } else {
+            unsafe { ZTHABITAT_SET_NAME.original()(habitat_ptr as *const u32, name_ptr as *const u32) };
+            unsafe { DECREMENT_HABITAT_NUM.original()(mgr_ptr) };
+        }
+        self.add_habitat(habitat_ptr);
+
+        let resize_target_ptr = if resize_tile_ptr == 0 {
+            0
+        } else {
+            let x: i32 = get_from_memory(resize_tile_ptr + 0x34);
+            let y: i32 = get_from_memory(resize_tile_ptr + 0x38);
+            self.get_habitat_ptr(x, y)
+        };
+        // Guarded on a non-null receiver despite the raw decompile showing an unconditional call -
+        // confirmed live (crash-capture) that real vanilla `resize` does NOT tolerate `this == 0`: it
+        // reaches a null-pointer dereference at `+0x40` a few calls deep rather than early-returning,
+        // contradicting this method's own earlier assumption (now corrected) that vanilla runs this
+        // path constantly with a null receiver. Skipping the call when there's no resize target is
+        // also the semantically sensible behavior (nothing to resize).
+        if resize_target_ptr != 0 {
+            unsafe { ZTHABITAT_RESIZE.original()(resize_target_ptr as *const u32, resize_tile_ptr as i32) };
+            unsafe { ZTHABITAT_SET_DIRTY_CHARACTERISTICS.original()(resize_target_ptr as *const u32) };
+        }
+        unsafe {
+            PLACE_GATE.original()(
+                mgr_ptr,
+                habitat_ptr as *const u32,
+                seed_tile_ptr as *const u32,
+                resize_tile_ptr as *const u32,
+                gate_tile_ptr as *const u32,
+            )
+        };
+        unsafe { UPDATE_AMPHIBIOUS_NEIGHBORS_1.original()(mgr_ptr, habitat_ptr as *const u32) };
+        unsafe { DO_SHOW_CHECK.original()(mgr_ptr, habitat_ptr as *const i32, 1) };
+    }
+
+    /// Ports `ZTHabitatMgr::replaceGateWithFence` (`ZTHabitatMgr_replaceGateWithFence.c`/`.asm`) - a
+    /// plain free `stdcall` helper (`generated.rs`'s own signature has no `this`) despite living in the
+    /// `ZTHabitatMgr::` decompile namespace, the same "misnamed as instance method" pattern
+    /// `Self::highlight_habitat`/`ZTHabitat::highlight` already document elsewhere in this file. Demotes
+    /// `fence_ptr` (real vanilla's own current gate) back into a plain fence via `ZTFence::makeFence` and
+    /// its own vtable `+0x84` `validatePosition(true)` (confirmed via `.asm`; see
+    /// [`Self::replace_fence_with_gate`]'s own doc comment for the same call), gated on
+    /// [`RVA_FENCE_TYPE_CHECK_ARG`]/`fence_ptr` being non-null. Sets/clears
+    /// [`GATE_CONVERSION_IN_PROGRESS_RVA`] around the conversion, matching real vanilla's own
+    /// `fencePlaced`/`fenceRemoved` re-entrancy guard.
+    pub fn replace_gate_with_fence(fence_ptr: u32) -> bool {
+        let base = get_module_base("zoo.exe") as u32;
+        save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 1);
+        if fence_ptr == 0 || !unsafe { entity_type_matches(fence_ptr, RVA_FENCE_TYPE_CHECK_ARG) } {
+            return false;
+        }
+        unsafe {
+            ZTFENCE_MAKE_FENCE.original()(fence_ptr as *const u32);
+            call_vtable_slot_with_u8(fence_ptr, 0x84, 1);
+        }
+        save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 0);
+        true
+    }
+
+    /// Ports `ZTHabitatMgr::replaceFenceWithGate` (`ZTHabitatMgr_replaceFenceWithGate.c`/`.asm` -
+    /// followed at the `.asm` level throughout: the C decompile's own struct-offset math for `param_1`'s
+    /// fields is garbled, e.g. `param_1[3].field_0x69` is really the flat byte `fence_ptr+0x465`).
+    /// Promotes `fence_ptr` into a gate (`ZTFence::makeGate`, its own vtable `+0x84`
+    /// `validatePosition(true)`), clears a tank-wall-specific flag at `+0x465` when the fence is
+    /// specifically a tank wall ([`RVA_TANK_WALL_TYPE_CHECK_ARG`]), then - if the fence's own tile is
+    /// occupied by a real tank exhibit - calls through to real vanilla `ZTTankExhibit::updateTankInfo` to
+    /// refresh it. Gated the same way as [`Self::replace_gate_with_fence`] on `fence_ptr` being non-null
+    /// and a genuine member of the fence/wall family.
+    pub fn replace_fence_with_gate(&self, fence_ptr: u32) -> bool {
+        let base = get_module_base("zoo.exe") as u32;
+        save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 1);
+        if fence_ptr == 0 || !unsafe { entity_type_matches(fence_ptr, RVA_FENCE_TYPE_CHECK_ARG) } {
+            return false;
+        }
+        unsafe {
+            ZTFENCE_MAKE_GATE.original()(fence_ptr as *const u32);
+            call_vtable_slot_with_u8(fence_ptr, 0x84, 1);
+        }
+        if unsafe { entity_type_matches(fence_ptr, RVA_TANK_WALL_TYPE_CHECK_ARG) } {
+            save_to_memory::<u8>(fence_ptr + 0x465, 0);
+        }
+        let tile_ptr = unsafe { BFENTITY_GET_TILE.original()(fence_ptr as *const u32) } as u32;
+        if tile_ptr != 0 {
+            let tile = get_from_memory::<BFTile>(tile_ptr);
+            let habitat_ptr = self.get_habitat_ptr(tile.pos.x, tile.pos.y);
+            if habitat_ptr != 0 && get_from_memory::<u32>(habitat_ptr) == ZTHabitat::TANK_VTABLE_PTR {
+                unsafe { ZTTANKEXHIBIT_UPDATE_TANK_INFO.original()(habitat_ptr as *const u32) };
+            }
+        }
+        save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 0);
+        true
+    }
+
+    /// Ports `ZTHabitatMgr::replaceGate` (`ZTHabitatMgr_replaceGate.c`/`.asm`): converts
+    /// [`Self::pending_gate_fence_ptr`] back into a plain fence via [`Self::replace_gate_with_fence`] -
+    /// but only after confirming it's still a live entity in `GLOBAL_ZTWorldMgr`'s own `entity_array`
+    /// (real vanilla's own defensive re-check; see [`crate::ztworldmgr::ZTWorldMgr::entity_array`]) -
+    /// then clears the field. If the field is set but genuinely isn't found among a *non-empty*
+    /// `entity_array` (real vanilla's own inconsistency-guard branch, never attested by any real call
+    /// site), calls through the unidentified [`FUN_005B66D7`] and returns **without** clearing the field,
+    /// matching real vanilla's own early return exactly.
+    pub fn replace_gate(&self) {
+        let self_addr = self as *const Self as u32;
+        let gate_ptr = self.pending_gate_fence_ptr;
+        if gate_ptr != 0 {
+            let world = globals().ztworldmgr();
+            let mut entities = world.entity_array().peekable();
+            if entities.peek().is_some() {
+                if entities.any(|e| e == gate_ptr) {
+                    Self::replace_gate_with_fence(gate_ptr);
+                } else {
+                    unsafe { FUN_005B66D7.original()() };
+                    return;
+                }
+            }
+        }
+        save_to_memory::<u32>(self_addr + 0x54, 0);
+    }
+
+    /// Ports `ZTHabitatMgr::habitatTileChanged` (`ZTHabitatMgr_habitatTileChanged.c`/`.asm`, both
+    /// confirmed identical - no CONCAT/garbled-offset surprises). For every tile within a 7x7 square
+    /// centred on `tile_ptr` (`±3` in both axes, matching real vanilla's own inclusive bounds), reads
+    /// that tile's own grid-cell row (see [`Self::get_habitat_cell_addr`]'s own updated doc comment for
+    /// the row's real 10-slot shape) and sets [`ZTHabitat::neighbor_dirty`] on every non-null pointer
+    /// found in the row's 8 "extra" slots (offsets `0x4..0x24`, skipping the primary occupant at offset
+    /// `0` and the row's unread final slot at `0x24`). Out-of-range neighbor tiles are silently skipped
+    /// via [`Self::get_habitat_cell_addr`]'s own `None` - real vanilla's separate `map_x_size`/
+    /// `map_y_size`/`tile_array != 0` guard collapses to the same effect once a zoo is loaded (the only
+    /// state this is ever called in), so is not reproduced as a second, redundant check here.
+    pub fn habitat_tile_changed(&self, tile_ptr: u32) {
+        let tile = get_from_memory::<BFTile>(tile_ptr);
+        for x in (tile.pos.x - 3)..=(tile.pos.x + 3) {
+            for y in (tile.pos.y - 3)..=(tile.pos.y + 3) {
+                let Some(row_addr) = self.get_habitat_cell_addr(x, y) else {
+                    continue;
+                };
+                for slot in 0..8u32 {
+                    let neighbor_ptr: u32 = get_from_memory(row_addr + 0x4 + slot * 4);
+                    if neighbor_ptr != 0 {
+                        save_to_memory::<u8>(neighbor_ptr + 0x25, 1);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::terrainTileChanged` (`ZTHabitatMgr_terrainTileChanged.c`): a thin gate in
+    /// front of [`Self::habitat_tile_changed`] - only calls through when `tile_ptr`'s own occupying
+    /// habitat exists and has its [`ZTHabitat::unknown_flag_0x2c`] set. `tile_ptr == 0` is real vanilla's
+    /// own explicit no-op branch (not merely a defensive addition here).
+    pub fn terrain_tile_changed(&self, tile_ptr: u32) {
+        if tile_ptr == 0 {
+            return;
+        }
+        let tile = get_from_memory::<BFTile>(tile_ptr);
+        let habitat_ptr = self.get_habitat_ptr(tile.pos.x, tile.pos.y);
+        if habitat_ptr != 0 && unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.unknown_flag_0x2c != 0 {
+            self.habitat_tile_changed(tile_ptr);
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::sceneryEntityChange` (`ZTHabitatMgr_sceneryEntityChange.c`): gated on
+    /// [`Self::scenery_entity_change_suspended`] (never set anywhere in this pass's own scope, so always
+    /// a no-op gate for now). When `tile_ptr`'s own occupying habitat has [`ZTHabitat::unknown_flag_0x2c`]
+    /// set, delegates entirely to [`Self::habitat_tile_changed`] (same as [`Self::terrain_tile_changed`]);
+    /// otherwise walks the habitat's own `viewing_areas_begin..viewing_areas_end` vector and sets the same
+    /// [`ZTHabitat::neighbor_dirty`] byte on every entry - real vanilla's own `*(undefined1*)(*piVar2 +
+    /// 0x25) = 1` loop, same shape as [`ZTHabitat::update`]'s own viewing-area walk.
+    pub fn scenery_entity_change(&self, tile_ptr: u32) {
+        if self.scenery_entity_change_suspended != 0 || tile_ptr == 0 {
+            return;
+        }
+        let tile = get_from_memory::<BFTile>(tile_ptr);
+        let habitat_ptr = self.get_habitat_ptr(tile.pos.x, tile.pos.y);
+        if habitat_ptr == 0 {
+            return;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        if habitat.unknown_flag_0x2c != 0 {
+            self.habitat_tile_changed(tile_ptr);
+            return;
+        }
+        let mut viewing_area_entry = habitat.viewing_areas_begin;
+        while viewing_area_entry != habitat.viewing_areas_end {
+            let viewing_area_ptr: u32 = get_from_memory(viewing_area_entry);
+            save_to_memory::<u8>(viewing_area_ptr + 0x25, 1);
+            viewing_area_entry += 4;
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::checkAmphibiousNeighbor` (`ZTHabitatMgr_checkAmphibiousNeighbor.c`/`.asm`) -
+    /// read at the `.asm` level throughout since the C decompile's own struct-offset math for the
+    /// "blocked by name" branch is garbled (a `setName` vtable call passed a type-tag address as if it
+    /// were a name string): that whole block turned out, cross-referenced against the `.asm`, to be the
+    /// exact same fence-family + `+0x192` passability check [`is_wall`] already implements, just called
+    /// on `fence_a`/`fence_b` - see below.
+    ///
+    /// Resolves `habitat_b` from `tile_b_ptr`'s own position, bails if it's null or the "world" habitat
+    /// ([`ZTHabitat::unknown_flag_0x2c`] set), and requires `habitat_a`/`habitat_b` to differ on
+    /// [`ZTHabitat::is_tank`] (exactly one of the two must be a tank). Resolves the fence occupying each
+    /// tile's own slot in the direction connecting them (via `ZTHabitat::tile_fence_in_direction` +
+    /// [`BFMAP_GET_DIRECTION_0`], only when a genuine fence-family member -
+    /// [`RVA_FENCE_TYPE_CHECK_ARG`]), then picks the "combined connector" wall: `fence_a` if it's a tank
+    /// wall ([`RVA_TANK_WALL_TYPE_CHECK_ARG`]) with its own `+0x464` flag set, else `fence_b` under the
+    /// same tank-wall check - bailing if neither qualifies, or if that wall's own `+0x464` flag is clear.
+    /// Clears the wall's combined-connector flag, then bails if `fence_a`/`fence_b` are **both** real
+    /// walls per [`is_wall`] (both sides physically block the connection). Bails if either habitat is
+    /// itself a show tank ([`ZTHabitat::is_tank`] `&&` `zt_show_info_ptr != 0`- those go through
+    /// [`Self::check_show_neighbor`] instead). Resolves whichever of `tile_a_ptr`/`tile_b_ptr` has its own
+    /// `+0x85` bit `0x20` set to the "far" tile, requires a real *tank* habitat to occupy the *other*
+    /// tile's position, and requires both corner elevations adjacent to the connecting direction
+    /// ([`BFTILE_GET_CORNER_ELEVATION`]) to equal that tank's own `tank_height` (`+0x184`) plus its first
+    /// owned tile's own `+0x3c` field ([`first_owned_tile_extra_height`]). On a full match, calls real
+    /// vanilla `ZTHabitat::addAmphibiousNeighbor` both directions and sets the wall's combined-connector
+    /// flag, returning `true`.
+    ///
+    /// `addAmphibiousNeighbor`/`clearAmphibiousNeighbors` themselves are deliberately left un-ported and
+    /// called only via `.original()` - see `zthabitatmgr-implementation-plan.md`'s own top-level note on
+    /// why (real STL red-black-tree insert/erase through an unidentified internal helper - cross-allocator
+    /// risk for no behavioral gain, since every consumer here only needs to *call* add, never reimplement
+    /// it).
+    pub fn check_amphibious_neighbor(&self, habitat_a_ptr: u32, tile_a_ptr: u32, tile_b_ptr: u32) -> bool {
+        if tile_b_ptr == 0 {
+            return false;
+        }
+        let tile_b = get_from_memory::<BFTile>(tile_b_ptr);
+        let habitat_b_ptr = self.get_habitat_ptr(tile_b.pos.x, tile_b.pos.y);
+        if habitat_b_ptr == 0 {
+            return false;
+        }
+        let habitat_b = unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) };
+        if habitat_b.unknown_flag_0x2c != 0 {
+            return false;
+        }
+        let habitat_a = unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) };
+        if habitat_a.is_tank() == habitat_b.is_tank() {
+            return false;
+        }
+
+        let tile_a = get_from_memory::<BFTile>(tile_a_ptr);
+        let dir_ab = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_a_ptr as i32, tile_b_ptr as i32) };
+        let fence_a = if dir_ab != -1 {
+            let f = ZTHabitat::tile_fence_in_direction(&tile_a, dir_ab as u32);
+            if f != 0 && unsafe { entity_type_matches(f, RVA_FENCE_TYPE_CHECK_ARG) } { f } else { 0 }
+        } else {
+            0
+        };
+
+        let dir_ba = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_b_ptr as i32, tile_a_ptr as i32) };
+        let fence_b = if dir_ba != -1 {
+            let f = ZTHabitat::tile_fence_in_direction(&tile_b, dir_ba as u32);
+            if f != 0 && unsafe { entity_type_matches(f, RVA_FENCE_TYPE_CHECK_ARG) } { f } else { 0 }
+        } else {
+            0
+        };
+
+        let mut connector = 0u32;
+        if fence_a != 0 && unsafe { entity_type_matches(fence_a, RVA_TANK_WALL_TYPE_CHECK_ARG) } && get_from_memory::<u8>(fence_a + 0x464) != 0 {
+            connector = fence_a;
+        } else if fence_b != 0 && unsafe { entity_type_matches(fence_b, RVA_TANK_WALL_TYPE_CHECK_ARG) } {
+            connector = fence_b;
+        }
+        if connector == 0 || get_from_memory::<u8>(connector + 0x464) == 0 {
+            return false;
+        }
+
+        unsafe { SET_IS_COMBINED_CONNECTOR.original()(connector as *const u32, false) };
+
+        if fence_a != 0 && fence_b != 0 && is_wall(fence_a) && is_wall(fence_b) {
+            return false;
+        }
+
+        if (habitat_a.is_tank() && habitat_a.zt_show_info_ptr != 0) || (habitat_b.is_tank() && habitat_b.zt_show_info_ptr != 0) {
+            return false;
+        }
+
+        let (far_tile_ptr, near_tile_ptr) = if get_from_memory::<u8>(tile_a_ptr + 0x85) & 0x20 != 0 {
+            (tile_b_ptr, tile_a_ptr)
+        } else {
+            (tile_a_ptr, tile_b_ptr)
+        };
+
+        let near_tile = get_from_memory::<BFTile>(near_tile_ptr);
+        let candidate_ptr = self.get_habitat_ptr(near_tile.pos.x, near_tile.pos.y);
+        if candidate_ptr == 0 || !unsafe { ref_from_memory::<ZTHabitat>(candidate_ptr) }.is_tank() {
+            return false;
+        }
+
+        let extra_height = first_owned_tile_extra_height(candidate_ptr);
+        let tank_height: i32 = get_from_memory(candidate_ptr + 0x184);
+        let target_elevation = tank_height + extra_height;
+
+        let direction = unsafe { BFMAP_GET_DIRECTION_0.original()(far_tile_ptr as i32, near_tile_ptr as i32) };
+        let corner_a = if direction == -1 { -1 } else { (direction + 1) & 7 };
+        let elevation_a = unsafe { BFTILE_GET_CORNER_ELEVATION.original()(far_tile_ptr as *const u32, corner_a) };
+        if target_elevation != elevation_a {
+            return false;
+        }
+        let corner_b = if direction == -1 { -1 } else { (direction - 1) & 7 };
+        let elevation_b = unsafe { BFTILE_GET_CORNER_ELEVATION.original()(far_tile_ptr as *const u32, corner_b) };
+        if target_elevation != elevation_b {
+            return false;
+        }
+
+        unsafe {
+            ADD_AMPHIBIOUS_NEIGHBOR.original()(habitat_b_ptr as *const u32, habitat_a_ptr as *const u32);
+            ADD_AMPHIBIOUS_NEIGHBOR.original()(habitat_a_ptr as *const u32, habitat_b_ptr as *const u32);
+            SET_IS_COMBINED_CONNECTOR.original()(connector as *const u32, true);
+        }
+        true
+    }
+
+    /// Snapshots `habitat_ptr`'s own [`ZTHabitat::boundary_tile_pairs_begin`]/`_end` vector into a plain
+    /// `Vec<(u32,u32)>` - shared by [`Self::update_amphibious_neighbors`]/[`Self::update_show_neighbors`]/
+    /// [`Self::do_show_check`], all three of which iterate real vanilla `checkAmphibiousNeighbor`/
+    /// `checkShowNeighbor`/show-exhibit calls that can themselves mutate habitat state, matching real
+    /// vanilla's own defensive snapshot-before-iterate shape (a fresh `std::vector` copy) rather than
+    /// walking the live vector in place.
+    fn snapshot_boundary_tile_pairs(begin: u32, end: u32) -> Vec<(u32, u32)> {
+        let mut pairs = Vec::new();
+        let mut entry = begin;
+        while entry != end {
+            pairs.push((get_from_memory(entry), get_from_memory(entry + 4)));
+            entry += 8;
+        }
+        pairs
+    }
+
+    /// Ports `ZTHabitatMgr::updateAmphibiousNeighbors` (`_1`, `ZTHabitatMgr_updateAmphibiousNeighbors_1.c`):
+    /// gated on `habitat_ptr` not being the "world" habitat ([`ZTHabitat::unknown_flag_0x2c`] clear),
+    /// calls through to real vanilla `ZTHabitat::clearAmphibiousNeighbors` (left un-ported - see
+    /// [`Self::check_amphibious_neighbor`]'s own doc comment), then re-derives every amphibious
+    /// connection from scratch via [`Self::check_amphibious_neighbor`] over a
+    /// [snapshot][Self::snapshot_boundary_tile_pairs] of the habitat's own boundary tile-pairs.
+    pub fn update_amphibious_neighbors(&self, habitat_ptr: u32) {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        if habitat.unknown_flag_0x2c != 0 {
+            return;
+        }
+        unsafe { CLEAR_AMPHIBIOUS_NEIGHBORS.original()(habitat_ptr as *const u32) };
+        let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
+        for (tile_a_ptr, tile_b_ptr) in pairs {
+            self.check_amphibious_neighbor(habitat_ptr, tile_a_ptr, tile_b_ptr);
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::updateAmphibiousNeighbors` (`_0`, `ZTHabitatMgr_updateAmphibiousNeighbors_0.c`):
+    /// a thin wrapper resolving the habitats occupying `tile_ptr` and its neighbour in `direction` (via
+    /// [`ZTWorldMgr::get_neighbour`], the already-ported/tested `BFMap::getNeighbor(0)` equivalent), and -
+    /// only when they differ and neither is the "world" habitat - calling through to
+    /// [`Self::update_amphibious_neighbors`] for the first. Real vanilla's own body dereferences both
+    /// resolved habitat pointers' `+0x2c` unconditionally with no null guard; this port adds one (skip
+    /// rather than dereference null) since a real, unguarded null pointer read here would just crash Rust
+    /// for no behavioral gain - real vanilla's own call sites never seem to hit this case in practice
+    /// either, since map edges (where a neighbour tile can be absent) are exactly where this would occur.
+    pub fn update_amphibious_neighbors_from_tile(&self, tile_ptr: u32, direction: u32) {
+        let world = globals().ztworldmgr();
+        let habitat_a_ptr = if tile_ptr != 0 {
+            let tile = get_from_memory::<BFTile>(tile_ptr);
+            self.get_habitat_ptr(tile.pos.x, tile.pos.y)
+        } else {
+            0
+        };
+        let neighbour_ptr = if tile_ptr != 0 { get_neighbour_ptr(world, tile_ptr, Direction::from(direction)) } else { 0 };
+        let habitat_b_ptr = if neighbour_ptr != 0 {
+            let tile = get_from_memory::<BFTile>(neighbour_ptr);
+            self.get_habitat_ptr(tile.pos.x, tile.pos.y)
+        } else {
+            0
+        };
+        if habitat_a_ptr == habitat_b_ptr || habitat_a_ptr == 0 || habitat_b_ptr == 0 {
+            return;
+        }
+        let habitat_a = unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) };
+        let habitat_b = unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) };
+        if habitat_a.unknown_flag_0x2c == 0 && habitat_b.unknown_flag_0x2c == 0 {
+            self.update_amphibious_neighbors(habitat_a_ptr);
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::checkShowNeighbor` (`ZTHabitatMgr_checkShowNeighbor.c`/`.asm`). Resolves
+    /// `habitat_b` from `tile_b_ptr`'s own position, bailing if null or the "world" habitat
+    /// ([`ZTHabitat::unknown_flag_0x2c`] set). Requires exactly one of `habitat_a`/`habitat_b` to be a
+    /// "showable" tank ([`ZTHabitat::is_tank`] `&&` `zt_show_info_ptr != 0`) - the other must not be.
+    ///
+    /// If `habitat_a`/`habitat_b` agree on [`ZTHabitat::is_tank`] (both tanks, or both non-tanks) and
+    /// `habitat_a` is *not* a tank, connects directly. If both are tanks, connects only when their
+    /// [`tank_height_plus_extra`] sums match, both `tank_height` (`+0x184`) exceed `3`, and both
+    /// `is_filled` (`+0x198`). If `is_tank()` disagrees between the two, bails.
+    ///
+    /// On connect: calls real vanilla `ZTHabitat::addShowNeighbor` both directions, resolves the fence on
+    /// each tile's own connecting-direction slot (own direction for `tile_a`, the opposite direction -
+    /// `(dir - 4) & 7` - for `tile_b`, confirmed via `.asm` rather than a second `BFMap::getDirection`
+    /// call) gated on [`RVA_FENCE_TYPE_CHECK_ARG`], calls each found fence's own vtable `+0x138` slot with
+    /// arg `0`, then registers a show portal via `ZTHabitat::getShowPortal`/`addShowPortal` if one doesn't
+    /// already exist. Always returns `true` once a connection was made, regardless of the portal calls'
+    /// own results - matching real vanilla's own unconditional `return true` tail.
+    ///
+    /// `addShowNeighbor`/`clearShowNeighbors` themselves are deliberately left un-ported - same reasoning
+    /// as [`Self::check_amphibious_neighbor`]'s own doc comment gives for `addAmphibiousNeighbor`.
+    pub fn check_show_neighbor(&self, habitat_a_ptr: u32, tile_a_ptr: u32, tile_b_ptr: u32) -> bool {
+        if tile_b_ptr == 0 {
+            return false;
+        }
+        let tile_b = get_from_memory::<BFTile>(tile_b_ptr);
+        let habitat_b_ptr = self.get_habitat_ptr(tile_b.pos.x, tile_b.pos.y);
+        if habitat_b_ptr == 0 {
+            return false;
+        }
+        let habitat_b = unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) };
+        if habitat_b.unknown_flag_0x2c != 0 {
+            return false;
+        }
+        let habitat_a = unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) };
+
+        let a_showable = habitat_a.is_tank() && habitat_a.zt_show_info_ptr != 0;
+        let b_showable = habitat_b.is_tank() && habitat_b.zt_show_info_ptr != 0;
+        if a_showable == b_showable {
+            return false;
+        }
+
+        if habitat_a.is_tank() != habitat_b.is_tank() {
+            return false;
+        }
+        if habitat_a.is_tank() {
+            let sum_a = tank_height_plus_extra(habitat_a_ptr);
+            let sum_b = tank_height_plus_extra(habitat_b_ptr);
+            let tank_height_a: i32 = get_from_memory(habitat_a_ptr + 0x184);
+            let tank_height_b: i32 = get_from_memory(habitat_b_ptr + 0x184);
+            let filled_a = get_from_memory::<u8>(habitat_a_ptr + 0x198) != 0;
+            let filled_b = get_from_memory::<u8>(habitat_b_ptr + 0x198) != 0;
+            if !(sum_a == sum_b && tank_height_a > 3 && tank_height_b > 3 && filled_a && filled_b) {
+                return false;
+            }
+        }
+
+        unsafe {
+            ADD_SHOW_NEIGHBOR.original()(habitat_a_ptr as *const u32, habitat_b_ptr as *const u32);
+            ADD_SHOW_NEIGHBOR.original()(habitat_b_ptr as *const u32, habitat_a_ptr as *const u32);
+        }
+
+        let tile_a = get_from_memory::<BFTile>(tile_a_ptr);
+        let direction = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_a_ptr as i32, tile_b_ptr as i32) };
+        let fence_a = if direction != -1 {
+            let f = ZTHabitat::tile_fence_in_direction(&tile_a, direction as u32);
+            if f != 0 && unsafe { entity_type_matches(f, RVA_FENCE_TYPE_CHECK_ARG) } { f } else { 0 }
+        } else {
+            0
+        };
+        let opposite = if direction == -1 { -1 } else { (direction - 4) & 7 };
+        let fence_b = if opposite != -1 {
+            let f = ZTHabitat::tile_fence_in_direction(&tile_b, opposite as u32);
+            if f != 0 && unsafe { entity_type_matches(f, RVA_FENCE_TYPE_CHECK_ARG) } { f } else { 0 }
+        } else {
+            0
+        };
+        if fence_a != 0 {
+            unsafe { call_vtable_slot_with_ptr(fence_a, 0x138, 0) };
+        }
+        if fence_b != 0 {
+            unsafe { call_vtable_slot_with_ptr(fence_b, 0x138, 0) };
+        }
+
+        let existing_portal = unsafe { GET_SHOW_PORTAL.original()(habitat_a_ptr as *const u32, habitat_b_ptr as *const u32) };
+        if existing_portal == 0 {
+            let added = unsafe { ADD_SHOW_PORTAL.original()(habitat_a_ptr as *const u32, tile_a_ptr as *const u32, tile_b_ptr as *const u32) };
+            if added != 0 {
+                unsafe { ADD_SHOW_PORTAL.original()(habitat_b_ptr as *const u32, tile_b_ptr as *const u32, tile_a_ptr as *const u32) };
+            }
+        }
+        true
+    }
+
+    /// Ports `ZTHabitatMgr::updateShowNeighbors` (`_1`, `ZTHabitatMgr_updateShowNeighbors_1.c`) - the
+    /// recursive worker. Gated on `habitat_ptr` not being the "world" habitat
+    /// ([`ZTHabitat::unknown_flag_0x2c`] clear).
+    ///
+    /// If `habitat_ptr` is itself "showable" ([`ZTHabitat::is_tank`] `&&` `zt_show_info_ptr != 0`): calls
+    /// through to real vanilla `ZTHabitat::clearShowNeighbors` (left un-ported - see
+    /// [`Self::check_show_neighbor`]'s own doc comment), then re-derives every show connection via
+    /// [`Self::check_show_neighbor`] over a [snapshot][Self::snapshot_boundary_tile_pairs] of the
+    /// boundary tile-pairs.
+    ///
+    /// Otherwise: for each boundary pair's own *second* tile (matching the real decompile's own
+    /// `puVar7[1]` - only the second tile of each pair is examined, not the first), resolves the habitat
+    /// occupying it; if that habitat is showable and hasn't already been visited during this call (a
+    /// plain linear-scan `Vec<u32>`, matching the real decompile's own hand-rolled growable visited-set
+    /// exactly - no need to model its own `PoolAlloc`-backed storage, this is purely local scratch state),
+    /// records it and recurses into `update_show_neighbors` for it.
+    pub fn update_show_neighbors(&self, habitat_ptr: u32) {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        if habitat.unknown_flag_0x2c != 0 {
+            return;
+        }
+        let showable = habitat.is_tank() && habitat.zt_show_info_ptr != 0;
+        let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
+
+        if showable {
+            unsafe { CLEAR_SHOW_NEIGHBORS.original()(habitat_ptr as *const u32) };
+            for (tile_a_ptr, tile_b_ptr) in pairs {
+                self.check_show_neighbor(habitat_ptr, tile_a_ptr, tile_b_ptr);
+            }
+            return;
+        }
+
+        let mut visited: Vec<u32> = Vec::new();
+        for (_, tile_b_ptr) in pairs {
+            if tile_b_ptr == 0 {
+                continue;
+            }
+            let tile_b = get_from_memory::<BFTile>(tile_b_ptr);
+            let neighbor_ptr = self.get_habitat_ptr(tile_b.pos.x, tile_b.pos.y);
+            if neighbor_ptr == 0 {
+                continue;
+            }
+            let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+            let neighbor_showable = neighbor.is_tank() && neighbor.zt_show_info_ptr != 0;
+            if neighbor_showable && !visited.contains(&neighbor_ptr) {
+                visited.push(neighbor_ptr);
+                self.update_show_neighbors(neighbor_ptr);
+            }
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::updateShowNeighbors` (`_0`, `ZTHabitatMgr_updateShowNeighbors_0.c`) - same
+    /// thin-wrapper shape as [`Self::update_amphibious_neighbors_from_tile`], calling through to
+    /// [`Self::update_show_neighbors`] for the tile's own habitat.
+    pub fn update_show_neighbors_from_tile(&self, tile_ptr: u32, direction: u32) {
+        let world = globals().ztworldmgr();
+        let habitat_a_ptr = if tile_ptr != 0 {
+            let tile = get_from_memory::<BFTile>(tile_ptr);
+            self.get_habitat_ptr(tile.pos.x, tile.pos.y)
+        } else {
+            0
+        };
+        let neighbour_ptr = if tile_ptr != 0 { get_neighbour_ptr(world, tile_ptr, Direction::from(direction)) } else { 0 };
+        let habitat_b_ptr = if neighbour_ptr != 0 {
+            let tile = get_from_memory::<BFTile>(neighbour_ptr);
+            self.get_habitat_ptr(tile.pos.x, tile.pos.y)
+        } else {
+            0
+        };
+        if habitat_a_ptr == habitat_b_ptr || habitat_a_ptr == 0 || habitat_b_ptr == 0 {
+            return;
+        }
+        let habitat_a = unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) };
+        let habitat_b = unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) };
+        if habitat_a.unknown_flag_0x2c == 0 && habitat_b.unknown_flag_0x2c == 0 {
+            self.update_show_neighbors(habitat_a_ptr);
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::doShowCheck` (`ZTHabitatMgr_doShowCheck.c`/`.asm`, read at the `.asm` level
+    /// throughout for the same reason as [`Self::check_amphibious_neighbor`]). Over a
+    /// [snapshot][Self::snapshot_boundary_tile_pairs] of `habitat_ptr`'s own boundary tile-pairs (an empty
+    /// snapshot immediately fails the whole check, matching real vanilla exactly), for each pair resolves
+    /// the fence on each tile's own connecting-direction slot (own/reverse direction, both gated on
+    /// [`RVA_FENCE_TYPE_CHECK_ARG`] like [`Self::check_show_neighbor`]) and:
+    /// - if `fence_a` is absent but `fence_b` is present: [`fence_entity_flag_0x6f`] on `fence_b` sets
+    ///   "found a show neighbor" if true, else requires a real *tank* habitat at `fence_b`'s own tile
+    ///   (`BFEntity::getTile` + [`Self::get_habitat_ptr`]) or the whole check fails immediately.
+    /// - if `fence_a` is present: [`fence_entity_flag_0x6f`] on `fence_a` sets "found a show neighbor" if
+    ///   true; additionally, when `fence_b` is absent or `ZTUI::general::getMapview()`'s own `+0x378` flag
+    ///   is set, the same flag must be true or the whole check fails immediately.
+    ///
+    /// A pair with neither fence present, or one that doesn't trip either failure branch, simply moves on
+    /// to the next pair. If the check never fails but also never finds a show neighbor, it's forced to
+    /// fail (matching real vanilla's own `if (!bVar2) goto <fail>` tail).
+    ///
+    /// On success: calls the already-ported [`ZTHabitat::set_is_show_exhibit`], and - when `remove_illegal`
+    /// and [`ZTHabitat::is_tank`] - calls through to real vanilla `ZTTankExhibit::removeIllegalEntities`.
+    /// On failure: calls the already-ported [`ZTHabitat::set_is_not_show_exhibit`]. Either way, finally
+    /// calls [`Self::update_show_neighbors`] (this port's own Rust version, not `.original()`) and real
+    /// vanilla `ZTWorldMgr::updateShowAssociations`, then returns the success/failure result.
+    pub fn do_show_check(&self, habitat_ptr: u32, remove_illegal: bool) -> bool {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
+
+        let mut still_valid = !pairs.is_empty();
+        let mut found_show_neighbor = false;
+
+        if still_valid {
+            for (tile_a_ptr, tile_b_ptr) in &pairs {
+                if !still_valid {
+                    break;
+                }
+                let (tile_a_ptr, tile_b_ptr) = (*tile_a_ptr, *tile_b_ptr);
+                let tile_a = get_from_memory::<BFTile>(tile_a_ptr);
+                let tile_b = get_from_memory::<BFTile>(tile_b_ptr);
+
+                let dir_ab = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_a_ptr as i32, tile_b_ptr as i32) };
+                let fence_a = if dir_ab != -1 {
+                    let f = ZTHabitat::tile_fence_in_direction(&tile_a, dir_ab as u32);
+                    if f != 0 && unsafe { entity_type_matches(f, RVA_FENCE_TYPE_CHECK_ARG) } { f } else { 0 }
+                } else {
+                    0
+                };
+                let dir_ba = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_b_ptr as i32, tile_a_ptr as i32) };
+                let fence_b = if dir_ba != -1 {
+                    let f = ZTHabitat::tile_fence_in_direction(&tile_b, dir_ba as u32);
+                    if f != 0 && unsafe { entity_type_matches(f, RVA_FENCE_TYPE_CHECK_ARG) } { f } else { 0 }
+                } else {
+                    0
+                };
+
+                if fence_a == 0 {
+                    if fence_b != 0 {
+                        let flag = fence_entity_flag_0x6f(fence_b);
+                        if flag {
+                            found_show_neighbor = true;
+                        } else {
+                            let entity_tile_ptr = unsafe { BFENTITY_GET_TILE.original()(fence_b as *const u32) } as u32;
+                            let candidate_ptr = if entity_tile_ptr != 0 {
+                                let t = get_from_memory::<BFTile>(entity_tile_ptr);
+                                self.get_habitat_ptr(t.pos.x, t.pos.y)
+                            } else {
+                                0
+                            };
+                            let valid = candidate_ptr != 0 && unsafe { ref_from_memory::<ZTHabitat>(candidate_ptr) }.is_tank();
+                            if !valid {
+                                still_valid = false;
+                            }
+                        }
+                    }
+                } else {
+                    let flag = fence_entity_flag_0x6f(fence_a);
+                    if flag {
+                        found_show_neighbor = true;
+                    }
+                    let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+                    let mapview_flag = mapview_ptr != 0 && get_from_memory::<u8>(mapview_ptr + 0x378) != 0;
+                    if (fence_b == 0 || mapview_flag) && !flag {
+                        still_valid = false;
+                    }
+                }
+            }
+            if !found_show_neighbor {
+                still_valid = false;
+            }
+        }
+
+        if still_valid {
+            unsafe { mut_from_memory::<ZTHabitat>(habitat_ptr) }.set_is_show_exhibit();
+            if remove_illegal && habitat.is_tank() {
+                unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(habitat_ptr as *const u32, 2, false) };
+            }
+        } else {
+            unsafe { mut_from_memory::<ZTHabitat>(habitat_ptr) }.set_is_not_show_exhibit();
+        }
+
+        self.update_show_neighbors(habitat_ptr);
+        unsafe { ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS.original()() };
+
+        still_valid
+    }
+
+    /// Ports `ZTHabitatMgr::canSeeShowFromBuilding` (`ZTHabitatMgr_canSeeShowFromBuilding.c`): the show
+    /// id ([`ZTHabitat::get_show_info_id`]) of the first `exhibit_array` entry with a real `ZTShowInfo`
+    /// that [`Self::can_see_habitat_from_building`] (kept un-ported - see that method's own doc comment)
+    /// reports visible from `building_ptr`, or `0` if none. Real vanilla's own return value packs
+    /// undefined upper 16 bits around the real `u16` show id (same `CONCAT22` shape [`ZTHabitat::get_show_info_id`]'s
+    /// own doc comment documents) - masked here via a plain zero-extending cast, matching that method.
+    pub fn can_see_show_from_building(&self, building_ptr: u32) -> u32 {
+        for i in 0..self.exhibit_array.len() {
+            let habitat_ptr = self.exhibit_array.get_ptr(i);
+            let show_id = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_show_info_id();
+            if show_id != 0 && low_byte_bool(unsafe { Self::can_see_habitat_from_building(habitat_ptr, building_ptr) }) {
+                return show_id as u32;
+            }
+        }
+        0
+    }
+
+    /// Ports `ZTHabitatMgr::habitatSeenFromBuilding` (`ZTHabitatMgr_habitatSeenFromBuilding.c`): the
+    /// pointer of the first `exhibit_array` entry that isn't the "world" habitat
+    /// ([`ZTHabitat::unknown_flag_0x2c`] clear), is a "showable" tank ([`ZTHabitat::is_tank`] `&&`
+    /// `zt_show_info_ptr != 0`), and that [`Self::can_see_habitat_from_building`] reports visible from
+    /// `building_ptr` - or `0` (null) if none.
+    pub fn habitat_seen_from_building(&self, building_ptr: u32) -> u32 {
+        for i in 0..self.exhibit_array.len() {
+            let habitat_ptr = self.exhibit_array.get_ptr(i);
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+            if habitat.unknown_flag_0x2c != 0 {
+                continue;
+            }
+            if habitat.is_tank() && habitat.zt_show_info_ptr != 0 && low_byte_bool(unsafe { Self::can_see_habitat_from_building(habitat_ptr, building_ptr) }) {
+                return habitat_ptr;
+            }
+        }
+        0
+    }
+
+    /// `ZTHabitatMgr::canSeeHabitatFromBuilding` (`ZTHabitatMgr_canSeeHabitatFromBuilding.c`) -
+    /// deliberately left un-ported: a genuine identification blocker, not a cross-allocator-risk
+    /// judgment call like `addAmphibiousNeighbor`/`addShowNeighbor`. Its two actual payload calls
+    /// (`FUN_004f2d44`, `FUN_004a79cc` - likely a line-of-sight raycast/rect-intersection helper) have no
+    /// per-function decompile/`.meta` in this pass's corpus. Surfaced here rather than guessed past, per
+    /// `CLAUDE.md`'s own note on this; `generated.rs`'s own `CAN_SEE_HABITAT_FROM_BUILDING` entry
+    /// already has the correct `cdecl` ABI, so every caller here just calls through.
+    unsafe fn can_see_habitat_from_building(habitat_ptr: u32, building_ptr: u32) -> u32 {
+        unsafe { CAN_SEE_HABITAT_FROM_BUILDING.original()(habitat_ptr, building_ptr as i32) }
     }
 }
 
@@ -210,7 +1174,12 @@ impl fmt::Display for ZTHabitatMgr {
 pub struct ZTHabitat {
     vtable: u32,                 // 0x000
     zt_show_info_ptr: u32,       // 0x004
-    pad1a: [u8; 0x24],           // ----------------------- padding: 36 bytes
+    amphibious_neighbors_head: u32, // 0x008 // MSVC `std::set<ZTHabitat*>` head/sentinel node pointer for the amphibious-neighbor set - confirmed red-black-tree node layout (`+0x0`=color/isnil, `+0x4`=parent, `+0x8`=left, `+0xc`=right, `+0x10`=value) via `ZTHabitat_hiliteAmphibiousNeighbors.c`'s own in-order walk (see `walk_neighbor_tree`) and `addAmphibiousNeighbor`'s own STL insert helper (both left un-ported - see `Self::hilite_amphibious_neighbors`'s own doc comment). `ZTHabitat_getSize.c` independently walks this exact same field with identical node arithmetic - `getSize` itself remains out of this pass's scope, but this corrects `zthabitatmgr-implementation-plan.md`'s own earlier step 6h note (which speculated this was an unrelated nested-sub-habitat tree).
+    pad1a_a1: [u8; 0x8],          // ----------------------- padding: 8 bytes
+    show_neighbors_head: u32,    // 0x014 // Same shape as `amphibious_neighbors_head`, for the show-neighbor set (`ZTHabitat_hiliteShowNeighbors.c`/`addShowNeighbor`/`clearShowNeighbors`). The C decompiles mislabel this field `zoo_entrance_y` (an OOAnalyzer type-propagation artifact bleeding in a `ZTHabitatMgr`-shaped name) - trust the `.asm`-confirmed `+0x14` offset, named here for what it actually is.
+    pad1a_a2: [u8; 0xd],          // ----------------------- padding: 13 bytes
+    neighbor_dirty: u8,          // 0x025 // Set to 1 by `ZTHabitatMgr::habitatTileChanged`/`sceneryEntityChange` on every cached neighbor-habitat pointer found in a changed tile's own grid-cell row (see `ZTHabitatMgr::habitat_tile_changed`), and by the still-unported `ZTHabitat::recreateOAs`/`ZTHabitatMgr::pathRemoved`. No reader identified in this pass - real consumer not yet found in the decompile corpus.
+    pad1a_b: [u8; 0x6],          // ----------------------- padding: 6 bytes
     unknown_flag_0x2c: u8,       // 0x02c // Gates ZTThought::ZTThought's acceptance of a passed-in habitat pointer (see ztthoughtmgr.rs); ZTHabitat::recalculateCharacteristics also early-returns when this is set. Meaning not otherwise confirmed.
     characteristics_dirty: u8,   // 0x02d // Gates the lazy `recalculateCharacteristics` call in getAttractiveness/hasKeeperAssigned (see ZTHabitat_getAttractiveness.c/ZTHabitat_hasKeeperAssigned.c) - distinct from unknown_flag_0x2c above.
     pad1b_a: [u8; 0x3],          // ----------------------- padding: 3 bytes
@@ -220,10 +1189,16 @@ pub struct ZTHabitat {
     viewing_areas_end: u32,      // 0x038
     pad1b_c: [u8; 0x4],          // ----------------------- padding: 4 bytes (presumably the vector's own cap_end)
     owned_tiles_ptr: u32,        // 0x040 // Pointer to the sentinel node of this habitat's owned-tile list (see TileListNode below), not a BFTile* itself - see getSize/removeHabitatTiles/validatePositions/resetUnitAI/createEdgePairs, all of which walk it identically.
-    pad2a: [u8; 0x10],           // ----------------------- padding: 16 bytes
+    pad2a1: [u8; 0x4],            // ----------------------- padding: 4 bytes
+    boundary_tile_pairs_begin: u32, // 0x048 // Begin pointer of the real vanilla `std::vector<std::pair<BFTile*,BFTile*>>` `updateAmphibiousNeighbors_1`/`updateShowNeighbors_1`/`doShowCheck` each independently snapshot-and-iterate (see `ZTHabitatMgr::update_amphibious_neighbors`/`update_show_neighbors`/`do_show_check`) - confirmed via all three decompiles reading the identical `field_0x48`/`field_0x4c` pair. Only begin/end are modeled (the third vector word, `cap_end`, is never read), matching this file's own established convention for `viewing_areas_begin`/`ambients_begin`.
+    boundary_tile_pairs_end: u32,   // 0x04c
+    pad2a2: [u8; 0x4],            // ----------------------- padding: 4 bytes
     ambients_begin: u32,         // 0x054 // Begin pointer of the real vanilla std::vector<(u32, Ambients*)> update() walks to play each entry's own ambient sound - see viewing_areas_begin's own doc comment for the same only-begin/end-modeled reasoning.
     ambients_end: u32,           // 0x058
-    pad2b: [u8; 0x28],           // ----------------------- padding: 40 bytes
+    pad2b_a: [u8; 0x4],          // ----------------------- padding: 4 bytes
+    species_list_begin: u32,     // 0x060 // Begin pointer of the real vanilla std::vector<catalog-entry*> ZTHabitat::getSpeciesList exposes (`&this->field_0x60`) - lazily recalculated via the same characteristics_dirty gate as get_attractiveness/has_keeper_assigned. See Self::species_list.
+    species_list_end: u32,       // 0x064
+    pad2b_b: [u8; 0x1c],         // ----------------------- padding: 28 bytes (presumably the vector's own cap_end plus more unreverse-engineered bytes)
     characteristics_timer: u32,  // 0x084 // Elapsed-time accumulator update() advances every tick; past 6999 sets characteristics_dirty and rerolls to a random 0..200 value via the shared game RNG.
     species_list_timer: u32,     // 0x088 // Same shape as characteristics_timer, gating species_list_dirty/reviseSpeciesList at threshold 7999.
     entrance_tile_ptr: u32,      // 0x08c
@@ -294,6 +1269,18 @@ impl std::ops::Deref for ZTTankExhibit {
 /// `private/docs/vtables/ZTHabitat.md`'s own raw vtable dump) rather than hand-editing `generated.rs`.
 pub(crate) const IS_RIGHT_SALINITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef::new(0x00446995);
 
+/// Unidentified no-argument helper `ZTHabitatMgr::addHabitat`/`removeHabitat_0`/`removeHabitat_1` all
+/// call immediately after setting [`HABITAT_LIST_DIRTY_RVA`] - confirmed directly via
+/// `ZTHabitatMgr_addHabitat.asm`'s own tail (`CALL habitatinfo::addHabitat; MOV byte ptr DAT_00639144,
+/// 0x1; CALL FUN_0044bb5f`). No per-function decompile/`.meta` exists for `0x0044bb5f`.
+const FUN_0044BB5F: FunctionDef<unsafe extern "cdecl" fn()> = FunctionDef::new(0x0044bb5f);
+
+/// `DAT_00639144`'s RVA - a shared "habitat list changed" dirty byte flag, set by
+/// `ZTHabitatMgr::addHabitat`/`removeHabitat_0`/`removeHabitat_1`/`nameLoadedHabitats` and cleared by
+/// `ZTUI::habitatinfo::update` once it's refreshed the habitat list UI off the back of it (confirmed via
+/// `habitatinfo_update.c`). RVA = `0x00639144 - 0x400000`.
+const HABITAT_LIST_DIRTY_RVA: u32 = 0x0023_9144;
+
 /// Base of vanilla's shared small-object freelist bucket array, bucketed by `(byte_capacity - 1) >> 3` -
 /// the same `DAT_00638000` family `ambients.rs`'s `RVA_GROUP_ARRAY_FREELIST_BUCKETS` already documents
 /// and live-tests (`Ambients_~Ambients.asm`'s `SUB EAX,1; SAR EAX,3; MOV EAX,[EAX*4+0x638000]; ...` per-
@@ -352,6 +1339,27 @@ fn lcg_next(state: u32) -> u32 {
     state.wrapping_mul(0x343fd).wrapping_add(0x269ec3)
 }
 
+/// The per-habitat field rotation [`ZTHabitatMgr::enter_new_month`] applies identically to every
+/// `exhibit_array` entry and to [`ZTHabitatMgr::pending_habitat_ptr`]: `current_donations` (`+0xfc`) ->
+/// `last_donations` (`+0x100`), `unknown_u32_2` (`+0x114`) -> `unknown_u32_3` (`+0x118`), and
+/// `current_upkeep` (`+0x108`) -> `last_upkeep` (`+0x10c`), zeroing each leading field. Operates on a raw
+/// address rather than a typed `&ZTHabitat`/`&mut ZTHabitat` since real vanilla's own body never
+/// distinguishes `ZTHabitat` from `ZTTankExhibit` here - both share the same base-class field layout this
+/// touches.
+fn rotate_month_fields(habitat_ptr: u32) {
+    let current_donations: f32 = get_from_memory(habitat_ptr + 0xfc);
+    save_to_memory::<f32>(habitat_ptr + 0xfc, 0.0);
+    save_to_memory(habitat_ptr + 0x100, current_donations);
+
+    let unknown_u32_2: u32 = get_from_memory(habitat_ptr + 0x114);
+    save_to_memory::<u32>(habitat_ptr + 0x114, 0);
+    save_to_memory(habitat_ptr + 0x118, unknown_u32_2);
+
+    let current_upkeep: f32 = get_from_memory(habitat_ptr + 0x108);
+    save_to_memory::<f32>(habitat_ptr + 0x108, 0.0);
+    save_to_memory(habitat_ptr + 0x10c, current_upkeep);
+}
+
 /// Walks a `ZTHabitat::owned_tiles_ptr`-shaped sentinel field's real, live value (`sentinel_addr` - the
 /// heap-allocated sentinel node's own address, i.e. the container field's *value*, not its address),
 /// yielding each real node's address in order and never the sentinel itself. Matches every corroborating
@@ -367,6 +1375,61 @@ pub(crate) fn walk_tile_list(sentinel_addr: u32) -> impl Iterator<Item = u32> {
             current = get_from_memory::<u32>(node);
             Some(node)
         }
+    })
+}
+
+/// Walks a real MSVC `std::set<ZTHabitat*>` (`amphibious_neighbors_head`/`show_neighbors_head`) in
+/// sorted (in-order) order, yielding each node's own address - never the head/sentinel itself. Node
+/// layout confirmed via `ZTHabitat_hiliteAmphibiousNeighbors.c`/`_hiliteShowNeighbors.c` (byte-for-byte
+/// identical bodies): `+0x0`=color/isnil, `+0x4`=parent, `+0x8`=left, `+0xc`=right, `+0x10`=value (the
+/// `ZTHabitat*` payload, read directly - not a further pointer indirection). This is a direct,
+/// line-for-line translation of that decompile's own in-order-successor walk (start at the head's
+/// leftmost descendant; each step take the right child's own leftmost descendant if a right child
+/// exists, else climb via `parent` while the current node is its parent's *right* child; terminate when
+/// back at `head_ptr`) - not a "clean" textbook re-derivation, to avoid an off-by-one divergence from
+/// what real vanilla's own insert/erase actually produced.
+///
+/// The tree itself (insert/erase) is deliberately left un-ported - see
+/// [`ZTHabitat::hilite_amphibious_neighbors`]'s own doc comment - so this only ever reads a tree shape
+/// real vanilla's own `addAmphibiousNeighbor`/`addShowNeighbor`/`clearAmphibiousNeighbors`/
+/// `clearShowNeighbors` produced, never mutates it.
+pub(crate) fn walk_neighbor_tree(head_ptr: u32) -> impl Iterator<Item = u32> {
+    let mut current = get_from_memory::<u32>(head_ptr + 0x8);
+    std::iter::from_fn(move || {
+        if current == head_ptr {
+            return None;
+        }
+        let node = current;
+
+        let right_child = get_from_memory::<u32>(node + 0xc);
+        if right_child == 0 {
+            let mut parent = get_from_memory::<u32>(node + 0x4);
+            let mut cursor = node;
+            if cursor == get_from_memory::<u32>(parent + 0xc) {
+                loop {
+                    cursor = parent;
+                    parent = get_from_memory::<u32>(cursor + 0x4);
+                    if cursor != get_from_memory::<u32>(parent + 0xc) {
+                        break;
+                    }
+                }
+            }
+            current = if get_from_memory::<u32>(cursor + 0xc) != parent { parent } else { cursor };
+        } else {
+            let mut right = right_child;
+            let mut left_child = get_from_memory::<u32>(right + 0x8);
+            let successor;
+            loop {
+                if left_child == 0 {
+                    successor = right;
+                    break;
+                }
+                right = left_child;
+                left_child = get_from_memory::<u32>(left_child + 0x8);
+            }
+            current = successor;
+        }
+        Some(node)
     })
 }
 
@@ -389,6 +1452,31 @@ fn reset_unit_ai_for_tile_occupants(tile: u32) {
 /// family. RVA = `0x00638660 - 0x400000`.
 const RVA_FENCE_TYPE_CHECK_ARG: u32 = 0x0023_8660;
 
+/// `isCastClass` type-tag constant (`&DAT_00638720`) used alongside tank-specific checks throughout the
+/// decompile corpus (`ZTTankExhibit_updateTankInfo.c`, `_setIsShowExhibit.c`, `_addWaterRipples.c`,
+/// `_updateAdjustmentCosts.c`) - most likely `ZTTankWallType`'s own tag, distinguishing a tank wall from
+/// the broader fence/wall family [`RVA_FENCE_TYPE_CHECK_ARG`] already covers. Not independently confirmed
+/// against a named symbol (no vtable/mac-lookup evidence for this specific address), only inferred from
+/// convergent call-site context - see [`ZTHabitatMgr::replace_fence_with_gate`]'s own use. RVA =
+/// `0x00638720 - 0x400000`.
+const RVA_TANK_WALL_TYPE_CHECK_ARG: u32 = 0x0023_8720;
+
+/// `DAT_00639148`'s RVA - a shared "gate placement/conversion in progress" flag, set to `1` for the
+/// duration of `ZTHabitatMgr::replaceGateWithFence`/`replaceFenceWithGate` and read as an early-return
+/// guard by `ZTHabitatMgr::fencePlaced`/`fenceRemoved` (both still real/un-ported) to suppress their own
+/// reaction while a gate conversion is already underway. RVA = `0x00639148 - 0x400000`.
+const GATE_CONVERSION_IN_PROGRESS_RVA: u32 = 0x0023_9148;
+
+/// Unidentified tail-call helper `ZTHabitatMgr::replaceGate`/`removeHabitat` both jump into
+/// (`JMP FUN_005b66d7`, not a normal `CALL` - it owns cleaning up its caller's own stack frame, the same
+/// implicit-stack-convention idiom `zthabitatmgr-implementation-plan.md` documents for
+/// `fillZooExterior`'s `FUN_005947c3`) when a stashed gate-fence pointer isn't found in
+/// `GLOBAL_ZTWorldMgr`'s own `entity_array` - an inconsistency-guard branch that real callers never
+/// actually reach in practice (a stashed pointer always came from a real, live world entity). No
+/// decompile/`.meta` exists for `0x005b66d7` to identify its real name or purpose further; surfaced here
+/// rather than hand-edited into `generated.rs` per `CLAUDE.md`.
+const FUN_005B66D7: FunctionDef<unsafe extern "cdecl" fn()> = FunctionDef::new(0x005b66d7);
+
 /// `ZTHabitat::addContiguousSpan`'s real fence-passability check (`ZTHabitat_addContiguousSpan.asm`,
 /// confirmed identical at all five inlined call sites), **not** `standalone::IS_ZOO_WALL`/`isZooWall`
 /// despite sharing the same `isCastClass` ([`RVA_FENCE_TYPE_CHECK_ARG`]) type-family gate. Disassembly
@@ -409,6 +1497,54 @@ fn is_wall(fence_ptr: u32) -> bool {
     }
     let entity_type_ptr: u32 = get_from_memory(fence_ptr + 0x128);
     get_from_memory::<u8>(entity_type_ptr + 0x192) != 0
+}
+
+/// `ZTHabitatMgr::doShowCheck`'s own fence-family gate + `+0x6f` entity-type byte read - same
+/// `entity_type_matches(fence, RVA_FENCE_TYPE_CHECK_ARG)` shape as [`is_wall`], but reading a different
+/// byte (`+0x6f` rather than `is_wall`'s own `+0x192`). Meaning of this byte not otherwise confirmed
+/// beyond gating `doShowCheck`'s own "found a real show neighbor"/"still valid" accumulation - see
+/// `ZTHabitatMgr::do_show_check`. The real decompile's own fallback for a failed `isCastClass` check
+/// reads a literal near-null address (`byte ptr [0x6f]`, an OOAnalyzer artifact for an uninitialized
+/// local, not a real memory reference) - dead in practice since every caller already confirmed the same
+/// `isCastClass` check passed once before reaching this read, so not reproduced here (would be a real
+/// null-adjacent read in Rust with no behavioral upside).
+fn fence_entity_flag_0x6f(fence_ptr: u32) -> bool {
+    if fence_ptr == 0 {
+        return false;
+    }
+    if !unsafe { entity_type_matches(fence_ptr, RVA_FENCE_TYPE_CHECK_ARG) } {
+        return false;
+    }
+    let entity_type_ptr: u32 = get_from_memory(fence_ptr + 0x128);
+    get_from_memory::<u8>(entity_type_ptr + 0x6f) != 0
+}
+
+/// The "extra height" term `checkAmphibiousNeighbor`/`checkShowNeighbor` both add to a tank habitat's
+/// own `tank_height` (`+0x184`, [`ZTTankExhibit::tank_height`]) before comparing two tanks for a
+/// connection: the habitat's first owned tile's own `+0x3c` cached-height field, or `0` if the habitat
+/// owns no tiles yet - confirmed identical in both decompiles (`ZTHabitatMgr_checkAmphibiousNeighbor.c`'s
+/// `iVar9`, `ZTHabitatMgr_checkShowNeighbor.c`'s `iVar4`/`iVar1`). Meaning of the tile's own `+0x3c` field
+/// itself not otherwise confirmed.
+fn first_owned_tile_extra_height(habitat_ptr: u32) -> i32 {
+    let sentinel: u32 = get_from_memory(habitat_ptr + 0x40);
+    let head: u32 = get_from_memory(sentinel);
+    let tile_ptr: u32 = get_from_memory(head + 8);
+    if tile_ptr == 0 {
+        0
+    } else {
+        get_from_memory(tile_ptr + 0x3c)
+    }
+}
+
+/// `habitat_ptr`'s own `tank_height` (`+0x184`) plus [`first_owned_tile_extra_height`] - the sum
+/// `checkShowNeighbor` compares between two tank habitats before connecting them as show neighbors. Reads
+/// `+0x184` as a raw offset rather than through [`ZTTankExhibit`] since the caller only reaches this once
+/// `is_tank()` has already confirmed the object really is a `ZTTankExhibit`, matching this file's own
+/// established convention (see e.g. `ZTHabitatMgr::replace_fence_with_gate`'s own raw vtable-pointer
+/// check) of not paying for a full struct copy just to read one already-known-safe field.
+fn tank_height_plus_extra(habitat_ptr: u32) -> i32 {
+    let tank_height: i32 = get_from_memory(habitat_ptr + 0x184);
+    tank_height + first_owned_tile_extra_height(habitat_ptr)
 }
 
 /// The `(source_fence, neighbour_fence)` pair [`is_wall`] must both clear before the flood-fill in
@@ -678,6 +1814,18 @@ unsafe fn call_vtable_slot_with_u8(entity_ptr: u32, slot_offset: u32, arg: u8) {
     f(entity_ptr, arg);
 }
 
+/// Calls a 1-arg (raw pointer) thiscall vtable slot - `ZTHabitat_moveGateTo_0.asm`'s own `+0x1c` gate/
+/// fence `setName` dispatch (`PUSH <name-buffer-ptr>; CALL [vtable+0x1c]`), confirmed at the `.asm` level
+/// since the C decompile's own struct-offset math for this call is garbled (see
+/// [`ZTHabitatMgr::replace_fence_with_gate`]'s own doc comment for the same class of decompile-vs-`.asm`
+/// mismatch).
+unsafe fn call_vtable_slot_with_ptr(entity_ptr: u32, slot_offset: u32, arg: u32) {
+    let vtable = get_from_memory::<u32>(entity_ptr);
+    let target = get_from_memory::<u32>(vtable + slot_offset);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32)>(target) };
+    f(entity_ptr, arg);
+}
+
 /// Tears down one of `ZTHabitat`'s two owned `SNDSound`s (`start_sound_ptr`/`end_sound_ptr`), per
 /// `ZTHabitat_setIsNotShowExhibit.c`'s identical teardown shape for both fields: a `+0x50` predicate
 /// check gating an optional `+0x60` "stop" call, then an unconditional `+0x0(1)` scalar-deleting-
@@ -760,6 +1908,130 @@ impl ZTHabitat {
         Some(tile)
     }
 
+    /// The fence occupying `tile`'s own slot in `direction` (`&tile->field_0x14 + (direction/2)*4` in
+    /// the decompile - the same idiom `BFTile`'s own `north_fence`/`east_fence`/`south_fence`/
+    /// `west_fence` fields already model, see [`fence_pair`]), or `0` for a non-cardinal direction (real
+    /// callers - fence/gate placement - never pass one in practice, but this stays defensive rather than
+    /// panicking on an unexpected value from a live, external caller).
+    fn tile_fence_in_direction(tile: &BFTile, direction_raw: u32) -> u32 {
+        match Direction::from(direction_raw) {
+            Direction::North => tile.north_fence,
+            Direction::East => tile.east_fence,
+            Direction::South => tile.south_fence,
+            Direction::West => tile.west_fence,
+            _ => 0,
+        }
+    }
+
+    /// Ports `ZTHabitat::moveGateTo`'s internal 2-arg helper (`ZTHabitat_moveGateTo_0.c`/`.asm`,
+    /// `generated.rs`'s `MOVE_GATE_TO_0` at `0x0046616c` - the C decompile's own struct-offset math is
+    /// garbled, e.g. the final `setName` call's real target is confirmed via `.asm` as vtable `+0x1c`, not
+    /// the decompile's own nested-base guess). Demotes this habitat's current gate ([`GET_GATE`], still
+    /// real/un-ported) back into a plain fence and promotes `candidate_fence_ptr` into the new gate -
+    /// updating [`Self::entrance_tile_ptr`]/[`Self::entrance_rotation`] and giving the new gate this
+    /// habitat's own name - but only when `candidate_fence_ptr` genuinely separates two different
+    /// habitats (its own tile and the neighbour stepped through by its own rotation belong to different
+    /// [`ZTHabitatMgr::get_habitat_ptr`] owners). No-op (`false`) for a null candidate or one that doesn't
+    /// satisfy that check.
+    ///
+    /// **Must only be called on a live `ZTHabitat` reference** - `self`'s address is written into
+    /// directly (`entrance_tile_ptr`/`entrance_rotation`) and passed to real vanilla `getGate`/`setName`,
+    /// same precondition [`Self::get_attractiveness`] documents.
+    ///
+    /// **Not detoured - deliberately unverified, do not wire up without further investigation.**
+    /// Live-tested (calling this directly, bypassing any detour) against a real habitat's own current
+    /// gate and crash-captured twice, both times inside real, unmodified vanilla `ZTFence::makeGate` ->
+    /// `setHealthy` -> `dirtyHabitatEscapability`, which dereferences `+0x2c` on whatever
+    /// `ZTHabitatMgr::get_habitat_ptr` returns for `candidate_fence_ptr`'s own tile with **no null guard
+    /// at all** (`mov al, byte ptr [esi+0x2c]` with `esi=0`). The first run crashed because the picked
+    /// tile had no habitat owner at all; adding a precondition check (only proceed when
+    /// `get_habitat_ptr` on the fence's own tile is non-null) still crashed the *second* time at the
+    /// identical instruction, meaning `Self::tile_fence_in_direction`'s candidate-discovery lookup (used
+    /// by [`Self::move_gate_to`]) does not reliably find the same fence real vanilla `getGate`'s own more
+    /// involved logic would - this file's own "Correction: getSize/getGate are not leaf functions" note
+    /// already flags `getGate`'s real body as depending on a fence/tile-array layout subtlety
+    /// (`isCastClass`-shaped double indirection) this codebase doesn't yet model, and this crash is
+    /// concrete live evidence that `moveGateTo` inherits the same gap rather than being the
+    /// self-contained leaf this doc's own earlier scoping assumed. Needs that same fence/tile-array
+    /// question resolved before this can be trusted enough to detour or live-test again.
+    fn move_gate_to_inner(&self, candidate_fence_ptr: u32) -> bool {
+        if candidate_fence_ptr == 0 {
+            return false;
+        }
+        let zthm = globals().zthabitatmgr();
+        let world = globals().ztworldmgr();
+
+        let tile_ptr = unsafe { BFENTITY_GET_TILE.original()(candidate_fence_ptr as *const u32) } as u32;
+        let rotation: u32 = get_from_memory(candidate_fence_ptr + 0x12c);
+        let neighbour_ptr = if tile_ptr != 0 { get_neighbour_ptr(world, tile_ptr, Direction::from(rotation)) } else { 0 };
+
+        let owner = if tile_ptr != 0 {
+            let tile = get_from_memory::<BFTile>(tile_ptr);
+            zthm.get_habitat_ptr(tile.pos.x, tile.pos.y)
+        } else {
+            0
+        };
+        let neighbour_owner = if neighbour_ptr != 0 {
+            let neighbour = get_from_memory::<BFTile>(neighbour_ptr);
+            zthm.get_habitat_ptr(neighbour.pos.x, neighbour.pos.y)
+        } else {
+            0
+        };
+        if owner == neighbour_owner {
+            return false;
+        }
+
+        let old_gate_ptr = unsafe { GET_GATE.original()(self as *const Self as *const u32) } as u32;
+        if old_gate_ptr != 0 {
+            unsafe {
+                ZTFENCE_MAKE_FENCE.original()(old_gate_ptr as *const u32);
+                call_vtable_slot_noargs(old_gate_ptr, 0x20); // createName
+                call_vtable_slot_with_u8(old_gate_ptr, 0x84, 1); // validatePosition(true)
+            }
+        }
+
+        unsafe { ZTFENCE_MAKE_GATE.original()(candidate_fence_ptr as *const u32) };
+        let new_gate_tile_ptr = unsafe { BFENTITY_GET_TILE.original()(candidate_fence_ptr as *const u32) } as u32;
+        let new_rotation: u32 = get_from_memory(candidate_fence_ptr + 0x12c);
+        let self_addr = self as *const Self as u32;
+        save_to_memory(self_addr + 0x8c, new_gate_tile_ptr);
+        save_to_memory(self_addr + 0x90, new_rotation);
+        unsafe { call_vtable_slot_with_ptr(candidate_fence_ptr, 0x1c, self_addr + 0x154) }; // setName(&exhibit_name)
+        true
+    }
+
+    /// Ports `ZTHabitat::moveGateTo` (`ZTHabitat_moveGateTo.c`, `generated.rs`'s `MOVE_GATE_TO_1`):
+    /// resolves whatever fence currently occupies `tile_ptr`'s own slot in `direction_raw` (only when
+    /// it's genuinely a member of the fence/wall family, per [`entity_type_matches`]/
+    /// [`RVA_FENCE_TYPE_CHECK_ARG`] - discarded (treated as no candidate) otherwise, matching real
+    /// vanilla's own guard) and hands it to [`Self::move_gate_to_inner`]. `direction_raw == 0xffffffff`
+    /// (real vanilla's own "no direction" `EDirection` sentinel, outside `Direction`'s own enum domain -
+    /// never fed through [`Direction::from`], which would silently default it to `North`) always skips
+    /// straight to a null candidate.
+    ///
+    /// Always returns `true` once past the null-tile guard - real vanilla's own return value is
+    /// `CONCAT31(garbage, 1)` (see `CLAUDE.md`'s note on this decompile shape), i.e. the low byte is
+    /// hardcoded regardless of `move_gate_to_inner`'s own result. Same live-reference precondition as
+    /// [`Self::move_gate_to_inner`].
+    pub fn move_gate_to(&self, tile_ptr: u32, direction_raw: u32) -> bool {
+        if tile_ptr == 0 {
+            return false;
+        }
+        let candidate_ptr = if direction_raw != 0xffff_ffff {
+            let tile = get_from_memory::<BFTile>(tile_ptr);
+            let fence_ptr = Self::tile_fence_in_direction(&tile, direction_raw);
+            if fence_ptr != 0 && unsafe { entity_type_matches(fence_ptr, RVA_FENCE_TYPE_CHECK_ARG) } {
+                fence_ptr
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        self.move_gate_to_inner(candidate_ptr);
+        true
+    }
+
     /// Ports `ZTHabitat::getAttractiveness` (`ZTHabitat_getAttractiveness.c`/macOS
     /// `ZTHabitat_getAttractiveness.c`, same shape on both platforms): lazily recomputes via the real,
     /// still-un-ported `recalculateCharacteristics` when `characteristics_dirty` is set, then returns the
@@ -786,6 +2058,61 @@ impl ZTHabitat {
             unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
         }
         self.has_keeper_assigned_raw != 0
+    }
+
+    /// Ports `ZTHabitat::getSpeciesList` (`ZTHabitat_getSpeciesList.c`): same `characteristics_dirty`-gated
+    /// lazy-recalculate shape as [`Self::get_attractiveness`]/[`Self::has_keeper_assigned`], then yields
+    /// every raw catalog-entry pointer in the real vanilla `std::vector<T*>` at `species_list_begin`/
+    /// `species_list_end` (`&this->field_0x60` in the decompile) - callers read whichever offset off each
+    /// entry they need (e.g. [`ZTHabitatMgr::distinct_species_catalog_ids`]'s `0x1e4`/`0x1ec` family/
+    /// species ids) rather than this method modeling the catalog-entry struct itself.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`] - the lazy recalculate call passes `self`'s own address to real
+    /// vanilla, and the vector fields are re-read from live memory after it runs.
+    pub fn species_list(&self) -> impl Iterator<Item = u32> {
+        if self.characteristics_dirty != 0 {
+            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+        }
+        let begin = self.species_list_begin;
+        let end = self.species_list_end;
+        (begin..end).step_by(4).map(get_from_memory::<u32>)
+    }
+
+    /// Ports `ZTHabitatMgr::highlightHabitat` (`ZTHabitatMgr_highlightHabitat.c`) - despite the
+    /// `ZTHabitatMgr::` decompile namespace, the real function is a free `stdcall` helper taking a
+    /// `ZTHabitat*` directly (no `this`), which is why this lives on `ZTHabitat` rather than
+    /// `ZTHabitatMgr`. Walks the owned-tile list ([`walk_tile_list`]) setting bit `0x80` at each tile's
+    /// own `+0x83` when `hilite` is set, or bit `0x10` at `+0x85` when it isn't - two different flags/
+    /// bytes, not a single toggle, confirmed against the real decompile's own two distinct branches (see
+    /// [`Self::unhighlight`] for the separate, differently-shaped "clear" function real vanilla exposes
+    /// alongside this one).
+    pub fn highlight(&self, hilite: bool) {
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile = get_from_memory::<TileListNode>(node).payload;
+            if hilite {
+                let flags: u8 = get_from_memory(tile + 0x83);
+                save_to_memory(tile + 0x83, flags | 0x80);
+            } else {
+                let flags: u8 = get_from_memory(tile + 0x85);
+                save_to_memory(tile + 0x85, flags | 0x10);
+            }
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::unhighlightHabitat` (`ZTHabitatMgr_unhighlightHabitat.c`) - see
+    /// [`Self::highlight`]'s own doc comment for why this lives on `ZTHabitat`. Clears both `+0x83` bit
+    /// `0x80` and `+0x85` bit `0x10` on every owned tile - a genuinely different, not merely inverse,
+    /// operation from `highlight(false)` (which only ever touches `+0x85`), confirmed directly against
+    /// the real decompile.
+    pub fn unhighlight(&self) {
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile = get_from_memory::<TileListNode>(node).payload;
+            let flags_83: u8 = get_from_memory(tile + 0x83);
+            save_to_memory(tile + 0x83, flags_83 & 0x7f);
+            let flags_85: u8 = get_from_memory(tile + 0x85);
+            save_to_memory(tile + 0x85, flags_85 & 0xef);
+        }
     }
 
     /// Ports `ZTHabitat::getShowInfoID` (`ZTHabitat_getShowInfoID.c`): the real body's upper 16 bits are
@@ -1077,7 +2404,7 @@ impl ZTHabitat {
         }
 
         let registered = unsafe { REGISTER_SHOW.hooked()(zt_show_mgr, show_info as *const u32, true) };
-        if registered == 0 {
+        if !registered {
             unsafe { ZTSHOWINFO_DESTRUCTOR.original()(show_info as *const u32, 1) };
             self.zt_show_info_ptr = 0;
             return;
@@ -1262,10 +2589,44 @@ impl ZTHabitat {
         let is_show_tank = self.is_show_tank();
         ok &= write_bytes_to_file(&(is_show_tank as u8), file);
         if is_show_tank {
-            ok &= unsafe { ZTSHOWINFO_SAVE.original()(self.zt_show_info_ptr as *const u32, file) } == 1;
+            ok &= unsafe { ZTSHOWINFO_SAVE.original()(self.zt_show_info_ptr as *const u32, file) };
         }
 
         ok
+    }
+
+    /// Ports `ZTHabitat::hiliteAmphibiousNeighbors` (`ZTHabitat_hiliteAmphibiousNeighbors.c`): walks
+    /// [`Self::amphibious_neighbors_head`] via [`walk_neighbor_tree`] and calls the already-ported
+    /// [`Self::highlight`]/[`Self::unhighlight`] on each neighbor - `unhighlight()` when `hilite` is
+    /// `false`, `highlight(true)` otherwise, matching the real decompile's own two branches exactly (not
+    /// a symmetric `highlight(hilite)`/`highlight(!hilite)` pair - see those methods' own doc comments for
+    /// why they're genuinely different operations, not each other's inverse). Purely a read of the tree
+    /// real vanilla's own `addAmphibiousNeighbor`/`clearAmphibiousNeighbors` (left un-ported) produced -
+    /// no allocation, no mutation of the tree itself.
+    pub fn hilite_amphibious_neighbors(&self, hilite: bool) {
+        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+            if hilite {
+                neighbor.highlight(true);
+            } else {
+                neighbor.unhighlight();
+            }
+        }
+    }
+
+    /// Ports `ZTHabitat::hiliteShowNeighbors` (`ZTHabitat_hiliteShowNeighbors.c`) - identical shape to
+    /// [`Self::hilite_amphibious_neighbors`], walking [`Self::show_neighbors_head`] instead.
+    pub fn hilite_show_neighbors(&self, hilite: bool) {
+        for node in walk_neighbor_tree(self.show_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+            if hilite {
+                neighbor.highlight(true);
+            } else {
+                neighbor.unhighlight();
+            }
+        }
     }
 }
 
@@ -1356,7 +2717,10 @@ pub mod hooks_zthabitatmgr {
             GET_ATTRACTIVENESS, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
             SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE,
         },
-        zthabitatmgr::GET_HABITAT,
+        zthabitatmgr::{
+            ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES, HABITAT_TILE_CHANGED, HIGHLIGHT_HABITAT,
+            REPLACE_FENCE_WITH_GATE, REPLACE_GATE, REPLACE_GATE_WITH_FENCE, SCENERY_ENTITY_CHANGE, TERRAIN_TILE_CHANGED, UNHIGHLIGHT_HABITAT,
+        },
     };
 
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
@@ -1460,19 +2824,167 @@ pub mod hooks_zthabitatmgr {
     /// than treated as a real signature difference (per `CLAUDE.md`'s own note on this generator
     /// quirk - never hand-edit `generated.rs` itself to "fix" it).
     #[detour(ZTHABITAT_SAVE)]
-    unsafe extern "thiscall" fn zthabitat_save(this: *const u32, file: *const u32) -> u32 {
-        unsafe { ref_from_memory::<ZTHabitat>(this) }.save(file as *const i8) as u32
+    unsafe extern "thiscall" fn zthabitat_save(this: *const u32, file: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.save(file as *const i8)
     }
 
     #[detour(ZTHABITATMGR_SAVE)]
-    unsafe extern "thiscall" fn zthabitatmgr_save(this: *const u32, file: *const i8) -> u32 {
-        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.save(file) as u32
+    unsafe extern "thiscall" fn zthabitatmgr_save(this: *const u32, file: *const i8) -> bool {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.save(file)
+    }
+
+    #[detour(ZTHABITATMGR_ADD_HABITAT)]
+    unsafe extern "thiscall" fn zthabitatmgr_add_habitat(this: *const u32, habitat_ptr: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.add_habitat(habitat_ptr as u32)
+    }
+
+    #[detour(ZTHABITATMGR_CREATE_HABITAT)]
+    unsafe extern "thiscall" fn zthabitatmgr_create_habitat(this: *const u32, seed_tile: *const u8, resize_tile: *const u32, gate_tile: u32, name_ptr: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.create_habitat(seed_tile as u32, resize_tile as u32, gate_tile, name_ptr as u32)
+    }
+
+    #[detour(GET_ZOO_ENTRANCE_TILE)]
+    unsafe extern "thiscall" fn get_zoo_entrance_tile(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_zoo_entrance_tile_ptr() as i32
+    }
+
+    #[detour(GET_AVERAGE_HABITAT_ATTRACTIVENESS)]
+    unsafe extern "fastcall" fn get_average_habitat_attractiveness(this: i32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this as u32) }.get_average_habitat_attractiveness()
+    }
+
+    #[detour(GET_NUM_FAMILIES)]
+    unsafe extern "fastcall" fn get_num_families(this: i32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this as u32) }.get_num_families()
+    }
+
+    #[detour(GET_NUM_SPECIES)]
+    unsafe extern "fastcall" fn get_num_species(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_num_species()
+    }
+
+    /// Real vanilla is a free `stdcall` helper taking a `ZTHabitat*` directly, not a `ZTHabitatMgr`
+    /// method - see `ZTHabitat::highlight`'s own doc comment. Null-checked here rather than inside
+    /// `highlight` itself, matching real vanilla's own `if (param_1 != NULL)` guard at the call boundary.
+    #[detour(HIGHLIGHT_HABITAT)]
+    unsafe extern "stdcall" fn highlight_habitat(habitat: *const u32, hilite: i8) {
+        if habitat.is_null() {
+            return;
+        }
+        unsafe { ref_from_memory::<ZTHabitat>(habitat) }.highlight(hilite != 0)
+    }
+
+    /// See [`highlight_habitat`]'s own doc comment - same free-function/null-guard shape, real vanilla's
+    /// `ZTHabitatMgr::unhighlightHabitat`.
+    #[detour(UNHIGHLIGHT_HABITAT)]
+    unsafe extern "stdcall" fn unhighlight_habitat(habitat: i32) {
+        if habitat == 0 {
+            return;
+        }
+        unsafe { ref_from_memory::<ZTHabitat>(habitat as u32) }.unhighlight()
+    }
+
+    #[detour(ENTER_NEW_MONTH)]
+    unsafe extern "thiscall" fn enter_new_month(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.enter_new_month()
+    }
+
+    // `MOVE_GATE_TO_1` is deliberately NOT detoured yet - see `ZTHabitat::move_gate_to`'s own doc
+    // comment for why (a live-tested crash traced back to the same "entrance tile's own fence-slot
+    // array" uncertainty this file's "Correction: getSize/getGate are not leaf functions" note already
+    // flags for `getGate`).
+
+    /// Real vanilla is a plain free `stdcall` helper (`generated.rs`'s own signature has no `this`) -
+    /// see [`crate::zthabitatmgr::ZTHabitatMgr::replace_gate_with_fence`]'s own doc comment.
+    #[detour(REPLACE_GATE_WITH_FENCE)]
+    unsafe extern "stdcall" fn replace_gate_with_fence(fence: *const i32) -> bool {
+        ZTHabitatMgr::replace_gate_with_fence(fence as u32)
+    }
+
+    #[detour(REPLACE_FENCE_WITH_GATE)]
+    unsafe extern "thiscall" fn replace_fence_with_gate(this: *const u32, fence: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.replace_fence_with_gate(fence as u32) as u32
+    }
+
+    #[detour(REPLACE_GATE)]
+    unsafe extern "thiscall" fn replace_gate(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.replace_gate()
+    }
+
+    #[detour(HABITAT_TILE_CHANGED)]
+    unsafe extern "thiscall" fn habitat_tile_changed(this: *const u32, tile: i32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.habitat_tile_changed(tile as u32)
+    }
+
+    #[detour(TERRAIN_TILE_CHANGED)]
+    unsafe extern "thiscall" fn terrain_tile_changed(this: *const u32, tile: i32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.terrain_tile_changed(tile as u32)
+    }
+
+    #[detour(SCENERY_ENTITY_CHANGE)]
+    unsafe extern "thiscall" fn scenery_entity_change(this: *const u32, tile: i32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.scenery_entity_change(tile as u32)
+    }
+
+    #[detour(HILITE_AMPHIBIOUS_NEIGHBORS)]
+    unsafe extern "thiscall" fn hilite_amphibious_neighbors(this: *const u32, hilite: i8) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.hilite_amphibious_neighbors(hilite != 0)
+    }
+
+    #[detour(HILITE_SHOW_NEIGHBORS)]
+    unsafe extern "thiscall" fn hilite_show_neighbors(this: *const u32, hilite: i8) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.hilite_show_neighbors(hilite != 0)
+    }
+
+    #[detour(CHECK_AMPHIBIOUS_NEIGHBOR)]
+    unsafe extern "thiscall" fn check_amphibious_neighbor(this: *const u32, habitat_a: *const u32, tile_a: *const u32, tile_b: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.check_amphibious_neighbor(habitat_a as u32, tile_a as u32, tile_b as u32) as u32
+    }
+
+    #[detour(UPDATE_AMPHIBIOUS_NEIGHBORS_1)]
+    unsafe extern "thiscall" fn update_amphibious_neighbors_1(this: *const u32, habitat: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.update_amphibious_neighbors(habitat as u32)
+    }
+
+    #[detour(UPDATE_AMPHIBIOUS_NEIGHBORS_0)]
+    unsafe extern "thiscall" fn update_amphibious_neighbors_0(this: *const u32, tile: i32, direction: u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.update_amphibious_neighbors_from_tile(tile as u32, direction)
+    }
+
+    #[detour(CHECK_SHOW_NEIGHBOR)]
+    unsafe extern "thiscall" fn check_show_neighbor(this: *const u32, habitat_a: *const u32, tile_a: *const u32, tile_b: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.check_show_neighbor(habitat_a as u32, tile_a as u32, tile_b as u32) as u32
+    }
+
+    #[detour(UPDATE_SHOW_NEIGHBORS_1)]
+    unsafe extern "thiscall" fn update_show_neighbors_1(this: *const u32, habitat: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.update_show_neighbors(habitat as u32)
+    }
+
+    #[detour(UPDATE_SHOW_NEIGHBORS_0)]
+    unsafe extern "thiscall" fn update_show_neighbors_0(this: *const u32, tile: i32, direction: u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.update_show_neighbors_from_tile(tile as u32, direction)
+    }
+
+    #[detour(DO_SHOW_CHECK)]
+    unsafe extern "thiscall" fn do_show_check(this: *const u32, habitat: *const i32, remove_illegal: i8) -> bool {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.do_show_check(habitat as u32, remove_illegal != 0)
+    }
+
+    #[detour(CAN_SEE_SHOW_FROM_BUILDING)]
+    unsafe extern "thiscall" fn can_see_show_from_building(this: *const u32, building: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.can_see_show_from_building(building as u32)
+    }
+
+    #[detour(HABITAT_SEEN_FROM_BUILDING)]
+    unsafe extern "thiscall" fn habitat_seen_from_building(this: *const u32, building: i32) -> *const i32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.habitat_seen_from_building(building as u32) as *const i32
     }
 
     /// `(name, is_enabled)` per detour - lets the live battery's `ZTHABITATMGR_DETOURS_ENABLED` test
     /// catch a silently-failed `init_detours()` (error logged, game continues on vanilla) rather than
     /// looking green while every hooked production path still runs real vanilla.
-    pub fn detour_status() -> [(&'static str, bool); 19] {
+    pub fn detour_status() -> [(&'static str, bool); 45] {
         [
             ("GET_GATE_TILE_IN", GET_GATE_TILE_IN_DETOUR.is_enabled()),
             ("GET_GATE_TILE_OUT", GET_GATE_TILE_OUT_DETOUR.is_enabled()),
@@ -1493,6 +3005,32 @@ pub mod hooks_zthabitatmgr {
             ("UPDATE", UPDATE_DETOUR.is_enabled()),
             ("ZTHABITAT_SAVE", ZTHABITAT_SAVE_DETOUR.is_enabled()),
             ("ZTHABITATMGR_SAVE", ZTHABITATMGR_SAVE_DETOUR.is_enabled()),
+            ("ZTHABITATMGR_ADD_HABITAT", ZTHABITATMGR_ADD_HABITAT_DETOUR.is_enabled()),
+            ("ZTHABITATMGR_CREATE_HABITAT", ZTHABITATMGR_CREATE_HABITAT_DETOUR.is_enabled()),
+            ("GET_ZOO_ENTRANCE_TILE", GET_ZOO_ENTRANCE_TILE_DETOUR.is_enabled()),
+            ("GET_AVERAGE_HABITAT_ATTRACTIVENESS", GET_AVERAGE_HABITAT_ATTRACTIVENESS_DETOUR.is_enabled()),
+            ("GET_NUM_FAMILIES", GET_NUM_FAMILIES_DETOUR.is_enabled()),
+            ("GET_NUM_SPECIES", GET_NUM_SPECIES_DETOUR.is_enabled()),
+            ("HIGHLIGHT_HABITAT", HIGHLIGHT_HABITAT_DETOUR.is_enabled()),
+            ("UNHIGHLIGHT_HABITAT", UNHIGHLIGHT_HABITAT_DETOUR.is_enabled()),
+            ("ENTER_NEW_MONTH", ENTER_NEW_MONTH_DETOUR.is_enabled()),
+            ("REPLACE_GATE_WITH_FENCE", REPLACE_GATE_WITH_FENCE_DETOUR.is_enabled()),
+            ("REPLACE_FENCE_WITH_GATE", REPLACE_FENCE_WITH_GATE_DETOUR.is_enabled()),
+            ("REPLACE_GATE", REPLACE_GATE_DETOUR.is_enabled()),
+            ("HABITAT_TILE_CHANGED", HABITAT_TILE_CHANGED_DETOUR.is_enabled()),
+            ("TERRAIN_TILE_CHANGED", TERRAIN_TILE_CHANGED_DETOUR.is_enabled()),
+            ("SCENERY_ENTITY_CHANGE", SCENERY_ENTITY_CHANGE_DETOUR.is_enabled()),
+            ("HILITE_AMPHIBIOUS_NEIGHBORS", HILITE_AMPHIBIOUS_NEIGHBORS_DETOUR.is_enabled()),
+            ("HILITE_SHOW_NEIGHBORS", HILITE_SHOW_NEIGHBORS_DETOUR.is_enabled()),
+            ("CHECK_AMPHIBIOUS_NEIGHBOR", CHECK_AMPHIBIOUS_NEIGHBOR_DETOUR.is_enabled()),
+            ("UPDATE_AMPHIBIOUS_NEIGHBORS_1", UPDATE_AMPHIBIOUS_NEIGHBORS_1_DETOUR.is_enabled()),
+            ("UPDATE_AMPHIBIOUS_NEIGHBORS_0", UPDATE_AMPHIBIOUS_NEIGHBORS_0_DETOUR.is_enabled()),
+            ("CHECK_SHOW_NEIGHBOR", CHECK_SHOW_NEIGHBOR_DETOUR.is_enabled()),
+            ("UPDATE_SHOW_NEIGHBORS_1", UPDATE_SHOW_NEIGHBORS_1_DETOUR.is_enabled()),
+            ("UPDATE_SHOW_NEIGHBORS_0", UPDATE_SHOW_NEIGHBORS_0_DETOUR.is_enabled()),
+            ("DO_SHOW_CHECK", DO_SHOW_CHECK_DETOUR.is_enabled()),
+            ("CAN_SEE_SHOW_FROM_BUILDING", CAN_SEE_SHOW_FROM_BUILDING_DETOUR.is_enabled()),
+            ("HABITAT_SEEN_FROM_BUILDING", HABITAT_SEEN_FROM_BUILDING_DETOUR.is_enabled()),
         ]
     }
 }

@@ -109,7 +109,7 @@ impl MenuMusicHandler {
     /// the just-released (and potentially now-dangling) `SNDSound`, exactly matching vanilla's own control
     /// flow. Not fixed here - this port preserves vanilla behavior verbatim, bugs included.
     pub fn init(&mut self, filename: *const i8, attenuation: i32) -> bool {
-        if self.sound_ptr != 0 && unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } != 0 {
+        if self.sound_ptr != 0 && unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } {
             unsafe { STOP.original()(self.sound_ptr as *const u32) };
             if self.sound_ptr != 0 {
                 unsafe { SNDSOUND_DESTRUCTOR.original()(self.sound_ptr as *const u32, 1) };
@@ -138,7 +138,7 @@ impl MenuMusicHandler {
         self.fading = 0;
 
         let dx8sndmgr_ptr: u32 = get_from_memory(get_module_base("zoo.exe") as u32 + GLOBAL_DX8SNDMGR_RVA);
-        let success = unsafe { DX8SNDMGR_ATTEMPT.original()(dx8sndmgr_ptr as *const u32, new_sound as *const u32, filename) } != 0;
+        let success = unsafe { DX8SNDMGR_ATTEMPT.original()(dx8sndmgr_ptr as *const u32, new_sound as *const u32, filename) };
         if success {
             unsafe { SET_BASE_ATTENUATION.original()(new_sound as *const u32, attenuation) };
         }
@@ -154,17 +154,13 @@ impl MenuMusicHandler {
     /// returned false, exactly matching vanilla's control flow - clears `fading`/`fade_counter` and pushes
     /// a `0` through [`SET_FADE_ATTENUATION`] (`+0x4c`) and [`SET_VOLUME`] (`+0x40`).
     ///
-    /// Boolean call results are masked to the low byte (`& 0xff`) because vanilla's own call sites test
-    /// only `AL` (`TEST AL, AL` in the `.asm`) and the two thunks' bodies aren't in the decompile corpus
-    /// to confirm what they leave in the upper EAX bits.
+    /// `VALID`'s raw return is still masked to the low byte - it remains a raw `u32` in `generated.rs`.
     pub fn start_play(&mut self) {
         if self.ini_menu_music_disabled != 0 || self.sound_ptr == 0 {
             return;
         }
         let sound = self.sound_ptr as *const u32;
-        if (unsafe { VALID.original()(sound) } & 0xff) != 0
-            && (unsafe { IS_PLAYING.original()(sound) } & 0xff) == 0
-        {
+        if (unsafe { VALID.original()(sound) } & 0xff) != 0 && !unsafe { IS_PLAYING.original()(sound) } {
             unsafe { PLAY_LOOPED_1.original()(sound) };
         }
         self.fading = 0;
@@ -176,13 +172,13 @@ impl MenuMusicHandler {
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::startFade`, per
     /// `MenuMusicHandler_startFade.c`/`.asm`. Arms the fade (`fading = 1`, `fade_counter = 0`) - but only
     /// when not already fading, `sound_ptr` is non-null, and the sound reports currently playing
-    /// ([`IS_PLAYING`], `+0x50`); otherwise a complete no-op. Same low-byte masking as [`start_play`].
+    /// ([`IS_PLAYING`], `+0x50`); otherwise a complete no-op.
     pub fn start_fade(&mut self) {
         if self.fading != 0 || self.sound_ptr == 0 {
             return;
         }
         let sound = self.sound_ptr as *const u32;
-        if (unsafe { IS_PLAYING.original()(sound) } & 0xff) != 0 {
+        if unsafe { IS_PLAYING.original()(sound) } {
             self.fading = 1;
             self.fade_counter = 0;
         }
@@ -224,7 +220,7 @@ impl MenuMusicHandler {
         self.fade_counter += fade_increment(delta);
         if self.fade_counter > 3000 {
             let sound = self.sound_ptr as *const u32;
-            if (unsafe { IS_PLAYING.original()(sound) } & 0xff) != 0 {
+            if unsafe { IS_PLAYING.original()(sound) } {
                 self.fading = 0;
                 self.fade_counter = 0;
                 unsafe { STOP.original()(sound) };
@@ -245,13 +241,12 @@ impl MenuMusicHandler {
     /// the dtor inlined - see the module doc comment; never call that address), per
     /// `MenuMusicHandler_~MenuMusicHandler.asm`: stops `sound_ptr`'s `SNDSound` when it reports currently
     /// playing ([`IS_PLAYING`], `+0x50`, then [`STOP`], `+0x60`), then the slot-0 [`SNDSOUND_DESTRUCTOR`]
-    /// `release(1)`. Same low-byte [`IS_PLAYING`] masking as [`start_play`] (`TEST %AL, %AL` in the
-    /// `.asm`), and the same redundant `sound_ptr` re-check before the release as [`init`]/[`update`]
+    /// `release(1)`, and the same redundant `sound_ptr` re-check before the release as [`init`]/[`update`]
     /// render it. Leaves `sound_ptr` itself untouched, matching vanilla - the caller frees the block
     /// right after (in `~ZTGameMgr`'s tail, via `operator_delete`).
     pub fn destruct(&mut self) {
         if self.sound_ptr != 0 {
-            if (unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } & 0xff) != 0 {
+            if unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } {
                 unsafe { STOP.original()(self.sound_ptr as *const u32) };
             }
             if self.sound_ptr != 0 {

@@ -64,7 +64,7 @@ pub mod roof_detours {
     /// Temporarily shows roofs before saving if they are currently hidden,
     /// then re-hides them after saving.
     #[detour(SAVE_GAME)]
-    unsafe extern "stdcall" fn save_game_detour() -> u32 {
+    unsafe extern "stdcall" fn save_game_detour() -> bool {
         // Check if roofs are currently hidden
         let were_roofs_hidden = runtime_state::get_bool("roofs_hidden");
 

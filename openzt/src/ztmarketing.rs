@@ -813,7 +813,7 @@ mod marketing_config_reimplementation {
         use crate::util::mut_from_memory;
 
         #[detour(LOAD_CONFIGURATIONS)]
-        unsafe extern "thiscall" fn load_configurations(this: *const u32, path: *const i8) -> u32 {
+        unsafe extern "thiscall" fn load_configurations(this: *const u32, path: *const i8) -> bool {
             let path_str = unsafe { std::ffi::CStr::from_ptr(path) }.to_string_lossy().into_owned();
 
             // Parse the top-level file independently before mutating anything; fall back to vanilla
@@ -827,7 +827,7 @@ mod marketing_config_reimplementation {
             let ok = mgr.load_configurations(&path_str);
             let level_count = mgr.marketing().map(|m| m.funding_levels().len()).unwrap_or(0);
             info!("marketing-config-reimplementation: loadConfigurations(\"{path_str}\") replaced natively -> {ok} ({level_count} funding levels)");
-            ok as u32
+            ok
         }
 
         #[detour(CLEAR_CONFIGURATIONS)]

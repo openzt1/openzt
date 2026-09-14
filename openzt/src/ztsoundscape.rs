@@ -472,7 +472,7 @@ impl ZTSoundscape {
         if world_name != 0 {
             let slot = &self.world_snd as *const SndSlot as *const u32;
             unsafe {
-                if (SNDSOUND_ATTEMPT.original()(slot, sndmgr as *const u32, world_name as *const i8) & 0xff) != 0 {
+                if SNDSOUND_ATTEMPT.original()(slot, sndmgr as *const u32, world_name as *const i8) {
                     SNDSOUND_SET_BASE_ATTENUATION.original()(slot, self.world_atten);
                     SNDSOUND_PLAY_LOOPED_1.original()(slot);
                 }
@@ -614,10 +614,7 @@ impl ZTSoundscape {
             } else {
                 &self.crowd_snd_b as *const SndSlot as *const u32
             };
-            if (unsafe {
-                SNDSOUND_ATTEMPT.original()(slot, sndmgr as *const u32, self.crowd_filename[index] as *const i8)
-            } & 0xff) != 0
-            {
+            if unsafe { SNDSOUND_ATTEMPT.original()(slot, sndmgr as *const u32, self.crowd_filename[index] as *const i8) } {
                 unsafe {
                     SNDSOUND_SET_BASE_ATTENUATION.original()(slot, self.crowd_atten[index]);
                     SNDSOUND_SET_FADE_ATTENUATION.original()(slot, START_FADE_ATTEN);

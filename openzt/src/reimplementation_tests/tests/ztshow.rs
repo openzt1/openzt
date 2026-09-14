@@ -499,7 +499,7 @@ pub(crate) fn run_ztshowinfo_real_save_load_byte_count_live_test(failure_log: &m
                 .as_bytes(),
         );
     }
-    if (save_ok & 0xff) == 0 {
+    if !save_ok {
         error!("{}: real ZTShowInfo::save returned failure", test_name);
         fail_flag = true;
     }
@@ -515,7 +515,7 @@ pub(crate) fn run_ztshowinfo_real_save_load_byte_count_live_test(failure_log: &m
             format!("CHECKPOINT {} load_ok={} bytes_consumed={} bytes_written={}\n", test_name, load_ok, consumed_len, written_len).as_bytes(),
         );
     }
-    if load_ok == 0 {
+    if !load_ok {
         error!("{}: real ZTShowInfo::load returned failure replaying its own save's bytes", test_name);
         fail_flag = true;
     }

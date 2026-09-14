@@ -228,6 +228,72 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTHABITAT_UPDATE_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_update_smoke_live_test },
             RegisteredTest { name: "ZTHABITAT_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_habitat_save_matches_real_live_test },
             RegisteredTest { name: "ZTHABITATMGR_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_save_matches_real_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_ADD_HABITAT_ROUNDTRIP_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_add_habitat_roundtrip_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_CREATE_HABITAT_SMOKE_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_create_habitat_smoke_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_GET_ZOO_ENTRANCE_TILE_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_get_zoo_entrance_tile_live_test },
+            RegisteredTest {
+                name: "ZTHABITATMGR_GET_AVERAGE_HABITAT_ATTRACTIVENESS_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_average_habitat_attractiveness_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_GET_NUM_FAMILIES_SPECIES_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_num_families_species_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_HIGHLIGHT_UNHIGHLIGHT_ROUNDTRIP_LIVE",
+                run: tests::zthabitatmgr::run_habitat_highlight_unhighlight_roundtrip_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_ENTER_NEW_MONTH_ROUNDTRIP_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_enter_new_month_roundtrip_live_test,
+            },
+            RegisteredTest { name: "ZTHABITATMGR_REPLACE_GATE_SMOKE_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_replace_gate_smoke_live_test },
+            RegisteredTest {
+                name: "ZTHABITATMGR_HABITAT_TILE_CHANGED_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_habitat_tile_changed_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_TERRAIN_TILE_CHANGED_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_terrain_tile_changed_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_SCENERY_ENTITY_CHANGE_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_scenery_entity_change_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_HILITE_NEIGHBORS_ROUNDTRIP_LIVE",
+                run: tests::zthabitatmgr::run_habitat_hilite_neighbors_roundtrip_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_CHECK_AMPHIBIOUS_NEIGHBOR_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_check_amphibious_neighbor_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_UPDATE_AMPHIBIOUS_NEIGHBORS_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_update_amphibious_neighbors_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_CHECK_SHOW_NEIGHBOR_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_check_show_neighbor_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_UPDATE_SHOW_NEIGHBORS_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_update_show_neighbors_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_DO_SHOW_CHECK_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_do_show_check_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_CAN_SEE_SHOW_FROM_BUILDING_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_can_see_show_from_building_smoke_live_test,
+            },
+            // ZTHABITAT_MOVE_GATE_TO_ROUNDTRIP_LIVE is deliberately NOT registered - see
+            // `ZTHabitat::move_gate_to`'s own doc comment: exercising it (even directly, bypassing the
+            // - deliberately unwired - detour) crash-captured twice into real vanilla `ZTFence::makeGate`'s
+            // own `setHealthy`/`dirtyHabitatEscapability` chain, tracing back to the same "entrance tile's
+            // own fence-slot array" uncertainty this file's own `getGate`/`getSize` correction note
+            // already flags as unresolved.
             // Destructive/irreversible - must stay last among the ZTHABITAT_*/ZTHABITATMGR_* entries
             // (see its own doc comment): empties exactly one real habitat's owned-tile list.
             RegisteredTest { name: "ZTHABITAT_REMOVE_HABITAT_TILES_LIVE", run: tests::zthabitatmgr::run_habitat_remove_habitat_tiles_live_test },
@@ -397,7 +463,7 @@ pub(super) mod detour_zoo_main {
     /// to the original and never alters its return value or behavior, just records the path into
     /// `CAPTURED_MARKETING_PATH`.
     #[detour(LOAD_CONFIGURATIONS)]
-    unsafe extern "thiscall" fn detour_capture_marketing_load_configurations_path(this: *const u32, path: *const i8) -> u32 {
+    unsafe extern "thiscall" fn detour_capture_marketing_load_configurations_path(this: *const u32, path: *const i8) -> bool {
         let path_str = unsafe { CStr::from_ptr(path) }.to_string_lossy().into_owned();
         let _ = CAPTURED_MARKETING_PATH.set(path_str);
         unsafe { LOAD_CONFIGURATIONS_DETOUR.call(this, path) }

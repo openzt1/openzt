@@ -1766,11 +1766,7 @@ impl ZooStatus {
         };
 
         let chance = unsafe { F_CHANCE.original()(chance_param) };
-        // Only the low byte is defined when `chance_param == 0` (real vanilla's own `fChance` leaves the
-        // upper 3 bytes as leftover EAX garbage in that case) - `ZooStatus_newguestChecks.asm`'s own real
-        // caller tests `TEST %AL, %AL`, never the full `EAX`. See [`Self::update`]'s own doc comment for
-        // the fuller evidence trail (a live crash from the same untruncated-comparison bug elsewhere).
-        if chance & 0xff == 0 {
+        if !chance {
             return;
         }
         unsafe { F_CREATE_GUEST.original()(self as *mut Self as *const u32) };
@@ -2480,18 +2476,7 @@ impl ZooStatus {
         let donation_threshold: f32 = get_from_memory(get_module_base("zoo.exe") as u32 + raw_globals::DONATION_CASH_THRESHOLD_RVA);
         if cash < donation_threshold {
             let chance = unsafe { F_CHANCE.original()(self.donation_chance_percent) };
-            // Only the low byte is a defined result - real vanilla's own `fChance` (`ZooStatus_fChance.c`)
-            // returns `in_EAX & 0xffffff00` (upper 3 bytes untouched leftover garbage, only ever cleared
-            // to 0 in the low byte) when its `param_1` (== `donation_chance_percent`) is `0`, and its own
-            // real caller here (`zoostatus_update.asm`) tests the result with `TEST %AL, %AL`, never the
-            // full `EAX`. Comparing the untruncated `u32` (this port's original Stage-4 code) let stale
-            // upper-byte garbage make `donation_chance_percent == 0` spuriously "roll true" and fire
-            // `f_grant_donation` - crashed a live standalone-`ZTGameMgr` test, since `f_grant_donation`
-            // grants through the *live* `GLOBAL_ZTGameMgr` (not `self`) and calls real vanilla
-            // `BFApp::loadString`, both unsafe this early/against a non-live instance. Fixed to match the
-            // real caller's own `TEST AL, AL` - see `ztgamemgr.rs`'s `update_sim`/`zoostatus_result & 0xff`
-            // for the same established masking convention elsewhere in this codebase.
-            if chance & 0xff != 0 {
+            if chance {
                 self.f_grant_donation();
             }
         }
@@ -3058,15 +3043,15 @@ mod zoostatus_detours {
     }
 
     #[detour(SAVE)]
-    unsafe extern "thiscall" fn save(this: *const u32, file: *const i8) -> u32 {
-        unsafe { ref_from_memory::<ZooStatus>(this) }.save(file)
+    unsafe extern "thiscall" fn save(this: *const u32, file: *const i8) -> bool {
+        unsafe { ref_from_memory::<ZooStatus>(this) }.save(file) != 0
     }
 
     /// `file` is declared `*const u8` in `generated.rs`; [`ZooStatus::load`] takes `*const u32` (matching
     /// `ztgamemgr.rs`'s own `load`'s file-handle type) - cast only, same handle either way.
     #[detour(LOAD)]
-    unsafe extern "thiscall" fn load(this: *const u32, file: *const u8, version: u32) -> u32 {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.load(file as *const u32, version)
+    unsafe extern "thiscall" fn load(this: *const u32, file: *const u8, version: u32) -> bool {
+        unsafe { mut_from_memory::<ZooStatus>(this) }.load(file as *const u32, version) != 0
     }
 
     #[detour(HEAL_ANIMAL)]
