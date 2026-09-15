@@ -1,7 +1,7 @@
 //! Compares the reimplemented `ZTHabitatMgr`/`ZTHabitat` methods (production file
 //! `openzt/src/zthabitatmgr.rs`) against real vanilla over the live, loaded zoo's own habitat grid.
 
-use openzt_detour::generated::{standalone::OPERATOR_NEW, zthabitat, zthabitatmgr};
+use openzt_detour::generated::{standalone::OPERATOR_NEW, zthabitat, zthabitatmgr, ztviewingarea};
 use std::fmt::Debug;
 use std::io::Write;
 use tracing::error;
@@ -136,6 +136,18 @@ pub(crate) fn run_habitat_get_popularity_live_test(failure_log: &mut Option<std:
         "ZTHABITAT_GET_POPULARITY_LIVE",
         |ptr| unsafe { zthabitat::GET_POPULARITY.original()(ptr) },
         |habitat| habitat.get_popularity(),
+    )
+}
+
+/// Real vanilla `doTankCheck` only allocates/frees its own local scratch vector (confirmed via its
+/// decompile - no field of `habitat`/any other object is mutated), so this is a safe read-only
+/// comparison over every real habitat in the loaded zoo, tank or not.
+pub(crate) fn run_habitat_do_tank_check_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_DO_TANK_CHECK_LIVE",
+        |ptr| unsafe { zthabitatmgr::DO_TANK_CHECK.original()(ptr as i32) },
+        |habitat| habitat.do_tank_check(),
     )
 }
 
@@ -1389,6 +1401,522 @@ pub(crate) fn run_zthabitatmgr_can_see_show_from_building_smoke_live_test(failur
         false
     } else {
         let msg = format!("expected 0 with no real show habitats present, got {:#x}", result);
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Real-vanilla-vs-reimplementation comparison for `ZTHabitatMgr::canFindPath` and `clear_pathfinding`
+/// together, since real vanilla's own `canFindPath` needs a freshly-cleared grid to give a meaningful
+/// answer. Picks the live zoo entrance tile and the first owned tile of the first non-"world" habitat in
+/// `exhibit_array` as the two endpoints (skips if either isn't available), clears the grid, calls real
+/// vanilla's own `.original()` for ground truth, clears the grid again (both runs share the same live
+/// `+0x24` visited-bit state so one run's marks would otherwise contaminate the other), then calls the
+/// reimplementation and asserts the two agree. Leaves the grid cleared afterward.
+///
+/// `generated.rs`'s `zthabitatmgr::CAN_FIND_PATH` types its return as `bool` - the x86 ABI only ever
+/// reads `AL` for a `bool`-returning function, which is exactly what real callers do too
+/// (`ZTHabitatMgr_fencePlaced.c` casts to `char` before comparing) - so `.original()`'s result compares
+/// directly against the reimplementation's own `bool` with no manual low-byte masking needed.
+pub(crate) fn run_zthabitatmgr_can_find_path_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_CAN_FIND_PATH_ROUNDTRIP_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mgr_ptr = habitat_mgr as *const _ as u32;
+
+    let tile_a = habitat_mgr.get_zoo_entrance_tile_ptr();
+    let tile_b = (0..habitat_mgr.exhibit_array().len()).find_map(|i| {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            return None;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        if *habitat.unknown_flag_0x2c() != 0 {
+            return None;
+        }
+        crate::zthabitatmgr::walk_tile_list(*habitat.owned_tiles_ptr())
+            .next()
+            .map(|node| get_from_memory::<u32>(node + 0x8))
+            .filter(|&t| t != 0)
+    });
+
+    let Some(tile_b) = tile_b else {
+        write_success_line(failure_log, &format!("{} (skipped: no real habitat with owned tiles found)", test_name));
+        return false;
+    };
+    if tile_a == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no zoo entrance tile set)", test_name));
+        return false;
+    }
+
+    habitat_mgr.clear_pathfinding();
+    let real_result = unsafe { zthabitatmgr::CAN_FIND_PATH.original()(mgr_ptr as *const u32, tile_a as *const u32, tile_b as *const u32) };
+    habitat_mgr.clear_pathfinding();
+    let reimpl_result = habitat_mgr.can_find_path(tile_a, tile_b);
+    habitat_mgr.clear_pathfinding();
+
+    if real_result == reimpl_result {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!("real={real_result}, reimpl={reimpl_result}");
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Smoke test for `ZTHabitatMgr::clear_pathfinding`: marks a real tile's visited bit via `can_find_path`
+/// (the entrance tile searching for itself - a trivial same-tile call that still marks the entrance
+/// tile's own cell before returning), then clears the grid and asserts that specific cell's `+0x24`
+/// visited-bit byte reads back `0`. Skips if no zoo entrance tile is set (same precondition
+/// `ZTHABITATMGR_CAN_FIND_PATH_ROUNDTRIP_LIVE` skips on).
+pub(crate) fn run_zthabitatmgr_clear_pathfinding_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_CLEAR_PATHFINDING_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let tile_ptr = habitat_mgr.get_zoo_entrance_tile_ptr();
+    if tile_ptr == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no zoo entrance tile set)", test_name));
+        return false;
+    }
+
+    habitat_mgr.clear_pathfinding();
+    habitat_mgr.can_find_path(tile_ptr, tile_ptr);
+    habitat_mgr.clear_pathfinding();
+
+    let tile = get_from_memory::<crate::ztmapview::BFTile>(tile_ptr);
+    let Some(cell_addr) = habitat_mgr.get_habitat_cell_addr(tile.pos.x, tile.pos.y) else {
+        write_success_line(failure_log, &format!("{} (skipped: entrance tile position out of grid range)", test_name));
+        return false;
+    };
+    let flags: u8 = get_from_memory(cell_addr + 0x24);
+    if flags & 0x3 == 0 {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!("expected visited bits cleared, got {flags:#x}");
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Real called before reimpl deliberately, same `characteristics_dirty` ordering rationale as
+/// [`run_habitat_get_attractiveness_live_test`] - both `false` (direct-occupant count alone) and `true`
+/// (additionally summing every amphibious neighbor's own count) are exercised over every live habitat.
+pub(crate) fn run_habitat_get_num_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let direct = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_ANIMALS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_ANIMALS.original()(ptr, false) },
+        |habitat| habitat.get_num_animals(false),
+    );
+    let with_neighbors = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_ANIMALS_WITH_NEIGHBORS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_ANIMALS.original()(ptr, true) },
+        |habitat| habitat.get_num_animals(true),
+    );
+    direct || with_neighbors
+}
+
+/// `ZTHabitat::getAllAnimals` always returns the same `&this->field_0x6c` pointer regardless of `sort`,
+/// only conditionally reordering the vector's own contents first - comparing that pointer would be
+/// meaningless, so this compares the sorted *contents* instead. Real vanilla is called first (`sort =
+/// true`), settling the live array into its real ordering; the reimplementation is then called (also
+/// `sort = true`) over that now-already-sorted array. Since both call through to the identical real
+/// comparator ([`GET_ALL_ANIMALS_SORT_COMPARATOR`] internally), re-sorting an already-correctly-sorted
+/// array is expected to be a no-op, so the reimplementation's own output should match real vanilla's
+/// exactly, element-for-element.
+pub(crate) fn run_habitat_get_all_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_ALL_ANIMALS_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        unsafe { zthabitat::GET_ALL_ANIMALS.original()(ptr as *const u32, 1) };
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let real_animals: Vec<u32> = (begin..end).step_by(4).map(get_from_memory::<u32>).collect();
+
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let reimpl_animals: Vec<u32> = habitat.get_all_animals(true).collect();
+
+        if real_animals != reimpl_animals {
+            let msg = format!("mismatch at habitat {i} ({ptr:#010x}): real={real_animals:?}, reimpl={reimpl_animals:?}");
+            error!("{}: {}", test_name, msg);
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+            }
+            fail_flag = true;
+        }
+    }
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Compares the real vanilla `surrounding_species_begin`/`_end` vector (reached through real
+/// `getSurroundingSpecies`'s own returned pointer) against the reimplementation's own
+/// [`ZTHabitat::surrounding_species`] iterator, over every live habitat. Both sides share the same
+/// `characteristics_dirty` gate and neither mutates the vector itself (unlike `getAllAnimals`), so plain
+/// content comparison is safe in either call order.
+pub(crate) fn run_habitat_get_surrounding_species_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_SURROUNDING_SPECIES_LIVE",
+        |ptr| {
+            let vec_ptr = unsafe { zthabitat::GET_SURROUNDING_SPECIES.original()(ptr) } as u32;
+            let begin: u32 = get_from_memory(vec_ptr);
+            let end: u32 = get_from_memory(vec_ptr + 4);
+            (begin..end).step_by(4).map(get_from_memory::<u32>).collect::<Vec<u32>>()
+        },
+        |habitat| habitat.surrounding_species().collect::<Vec<u32>>(),
+    )
+}
+
+/// Smoke test for `ZTHabitat::remove_species`: picks the first live habitat whose real
+/// `ambients_begin`/`ambients_end` vector is non-empty (skips if none is found - not every loaded zoo
+/// necessarily has a habitat with an active ambient-sound species entry), removes its first entry by key,
+/// and asserts the vector shrank by exactly one pair and no longer contains that key. Does not compare
+/// against real vanilla's own `.original()` - unlike the read-only getters above, this is destructive (it
+/// frees a real `Ambients*` and shifts the vector), so there is no way to run both poles against the same
+/// starting state; correctness of the shift/free logic itself is exercised here structurally instead.
+pub(crate) fn run_habitat_remove_species_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_REMOVE_SPECIES_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let found = (0..habitat_mgr.exhibit_array().len()).find_map(|i| {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            return None;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        if *habitat.ambients_begin() != *habitat.ambients_end() {
+            let key: u32 = get_from_memory(*habitat.ambients_begin());
+            Some((ptr, key))
+        } else {
+            None
+        }
+    });
+
+    let Some((ptr, key)) = found else {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitat with a populated ambients vector)", test_name));
+        return false;
+    };
+
+    let old_len = {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        (*habitat.ambients_end() - *habitat.ambients_begin()) / 8
+    };
+
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.remove_species(key);
+
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let new_len = (*habitat.ambients_end() - *habitat.ambients_begin()) / 8;
+    let still_present = (0..new_len).any(|i| get_from_memory::<u32>(*habitat.ambients_begin() + i * 8) == key);
+
+    if new_len == old_len - 1 && !still_present {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!("expected len {} without key {key:#x}, got len {new_len} (still_present={still_present})", old_len - 1);
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// `ZTHabitat::acceptDonation` has no independent "real" pole to diff against without double-applying the
+/// donation to the live zoo's own cash/finance totals (calling both real and reimpl would add the amount
+/// twice) - structural test instead: calls the reimplementation once on the first real habitat with a
+/// small, fixed amount and asserts `current_donations`/`total_donations` advanced by exactly that amount
+/// and the global `ZTGameMgr` budget did too. Reuses the already-live-tested
+/// `ZooStatus::increase_donations`/`ZTGameMgr::add_cash` (see `reimplementation_tests/tests/zoostatus.rs`/
+/// `ztgamemgr.rs`'s own live tests for those, exercised the same way), so a small, permanent budget/
+/// donation-total bump here is the same already-accepted side effect those tests already produce.
+pub(crate) fn run_habitat_accept_donation_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ACCEPT_DONATION_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let Some(ptr) = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).find(|&p| p != 0) else {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitat)", test_name));
+        return false;
+    };
+
+    const AMOUNT: f32 = 1.0;
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let donations_before = *habitat.current_donations();
+    let total_before = *habitat.total_donations();
+    let cash_before = globals().ztgamemgr().cash();
+
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.accept_donation(AMOUNT);
+
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let donations_after = *habitat.current_donations();
+    let total_after = *habitat.total_donations();
+    let cash_after = globals().ztgamemgr().cash();
+
+    let ok = (donations_after - donations_before - AMOUNT).abs() < 0.01
+        && (total_after - total_before - AMOUNT).abs() < 0.01
+        && (cash_after - cash_before - AMOUNT).abs() < 0.01;
+
+    if ok {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!(
+            "donations {donations_before}->{donations_after}, total {total_before}->{total_after}, cash {cash_before}->{cash_after} (amount={AMOUNT})"
+        );
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// `ZTHabitat::setDirtyCharacteristics` only ever sets flags (`characteristics_dirty` on `self` and
+/// recursively on every amphibious-/show-neighbor) - no allocation, no other observable side effect - so
+/// there is no independent "real" pole worth diffing against beyond confirming the flag ends up set.
+/// Calls the reimplementation once per real habitat and asserts `characteristics_dirty` is set afterward
+/// (whether it started clear or was already dirty). Deliberately does not reset the flag afterward: per
+/// `ZTHabitat::update`'s own doc comment this is a harmless, self-correcting lazy-recalculate flag real
+/// vanilla's own timers set constantly during normal play anyway.
+pub(crate) fn run_habitat_set_dirty_characteristics_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_SET_DIRTY_CHARACTERISTICS_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        unsafe { mut_from_memory::<ZTHabitat>(ptr) }.set_dirty_characteristics();
+        let now_dirty = *unsafe { ref_from_memory::<ZTHabitat>(ptr) }.characteristics_dirty() != 0;
+        if !now_dirty {
+            failures.push(format!("habitat {} ({:#010x}): set_dirty_characteristics left characteristics_dirty clear", i, ptr));
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// `ZTHabitat::setTimeLastServiced` writes a timestamp field this pass found no real reader for (see
+/// `zthabitatmgr.rs`'s own `time_last_serviced` doc comment) - structural test: writes a fixed sentinel
+/// value to the first real habitat via the reimplementation and asserts it reads back exactly, then
+/// restores the field's original value (unlike `characteristics_dirty` this field has no established
+/// "harmless to leave changed" precedent, so restored defensively).
+pub(crate) fn run_habitat_set_time_last_serviced_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_SET_TIME_LAST_SERVICED_ROUNDTRIP_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let Some(ptr) = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).find(|&p| p != 0) else {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitat)", test_name));
+        return false;
+    };
+
+    let original: u32 = get_from_memory(ptr + 0xec);
+    const SENTINEL: u32 = 0x1234_5678;
+
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.set_time_last_serviced(SENTINEL, true);
+    let written: u32 = get_from_memory(ptr + 0xec);
+
+    save_to_memory(ptr + 0xec, original);
+
+    if written == SENTINEL {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!("expected {SENTINEL:#x}, got {written:#x}");
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Reads `ptr`'s own `boundary_tile_pairs_begin`/`_end` vector into a plain `Vec` for
+/// [`run_habitat_create_edge_pairs_matches_real_live_test`]'s own before/after comparison.
+fn snapshot_boundary_pairs(ptr: u32) -> Vec<(u32, u32)> {
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let begin = *habitat.boundary_tile_pairs_begin();
+    let end = *habitat.boundary_tile_pairs_end();
+    let mut result = Vec::new();
+    let mut cursor = begin;
+    while cursor != end {
+        result.push((get_from_memory(cursor), get_from_memory(cursor + 4)));
+        cursor += 8;
+    }
+    result
+}
+
+/// Compares real vanilla `ZTHabitat::createEdgePairs` against the reimplementation on the same live
+/// habitat, called back-to-back: `createEdgePairs` fully rebuilds `boundary_tile_pairs_begin`/`_end` from
+/// scratch every call (clears then repopulates - no dependency on the vector's own prior contents), so
+/// calling real first and then the reimplementation on the identical, now-settled input produces directly
+/// comparable output, the same "real-then-reimpl call-through-safe" reasoning
+/// `ZTHABITAT_GET_ATTRACTIVENESS_LIVE` already establishes for a different lazily-recalculated field.
+pub(crate) fn run_habitat_create_edge_pairs_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_CREATE_EDGE_PAIRS_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let Some(ptr) = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).find(|&p| p != 0) else {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitat)", test_name));
+        return false;
+    };
+
+    unsafe { zthabitat::CREATE_EDGE_PAIRS.original()(ptr as *const u32) };
+    let real_pairs = snapshot_boundary_pairs(ptr);
+
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.create_edge_pairs();
+    let reimpl_pairs = snapshot_boundary_pairs(ptr);
+
+    if real_pairs == reimpl_pairs {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!("real={:?}, reimpl={:?}", real_pairs, reimpl_pairs);
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Roundtrip test for `ZTHabitat::addViewingArea`/`removeViewingArea`: constructs a brand-new, synthetic
+/// `ZTViewingArea` (real vanilla `operator_new(0x5c)` + `ZTViewingArea::ZTViewingArea` constructor, both
+/// called through) over the first live habitat's own first owned tile, appends it via the
+/// reimplementation, asserts the vector grew by one entry ending in the new pointer with
+/// `characteristics_dirty` set, then removes it again via the reimplementation (which also frees it
+/// through real vanilla's own destructor/`operator_delete` - no leak) and asserts the vector is back to
+/// its original length. Synthetic and self-contained: never touches any pre-existing real viewing area.
+pub(crate) fn run_habitat_add_remove_viewing_area_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ADD_REMOVE_VIEWING_AREA_ROUNDTRIP_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let found = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).find_map(|ptr| {
+        if ptr == 0 {
+            return None;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        crate::zthabitatmgr::walk_tile_list(*habitat.owned_tiles_ptr())
+            .next()
+            .map(|node| get_from_memory::<u32>(node + 0x8))
+            .filter(|&t| t != 0)
+            .map(|tile_ptr| (ptr, tile_ptr))
+    });
+
+    let Some((ptr, tile_ptr)) = found else {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitat with an owned tile)", test_name));
+        return false;
+    };
+
+    let new_va = unsafe { OPERATOR_NEW.original()(0x5c) } as u32;
+    if new_va == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: operator_new failed)", test_name));
+        return false;
+    }
+    unsafe { ztviewingarea::CONSTRUCTOR.original()(new_va as *const std::ffi::c_void, ptr as *const std::ffi::c_void, tile_ptr as *const std::ffi::c_void) };
+
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let before_len = (*habitat.viewing_areas_end() - *habitat.viewing_areas_begin()) / 4;
+
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.add_viewing_area(new_va);
+
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let after_add_len = (*habitat.viewing_areas_end() - *habitat.viewing_areas_begin()) / 4;
+    let last_entry: u32 = get_from_memory(*habitat.viewing_areas_end() - 4);
+    let dirty_after_add = *habitat.characteristics_dirty() != 0;
+
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.remove_viewing_area(new_va);
+
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let after_remove_len = (*habitat.viewing_areas_end() - *habitat.viewing_areas_begin()) / 4;
+
+    let ok = after_add_len == before_len + 1 && last_entry == new_va && dirty_after_add && after_remove_len == before_len;
+
+    if ok {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!(
+            "before_len={before_len}, after_add_len={after_add_len} (expected {}), last_entry={last_entry:#x} (expected {new_va:#x}), \
+             dirty_after_add={dirty_after_add}, after_remove_len={after_remove_len} (expected {before_len})",
+            before_len + 1
+        );
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Smoke test for `ZTHabitat::recreateOAs`: finds the first live habitat with a non-empty viewing-areas
+/// vector (skips if none), calls the reimplementation, and asserts every entry's own `+0x25` byte reads
+/// back `1` afterward.
+pub(crate) fn run_habitat_recreate_oas_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_RECREATE_OAS_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let found = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).find(|&ptr| {
+        ptr != 0 && {
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+            *habitat.viewing_areas_begin() != *habitat.viewing_areas_end()
+        }
+    });
+
+    let Some(ptr) = found else {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitat with a populated viewing-areas vector)", test_name));
+        return false;
+    };
+
+    unsafe { ref_from_memory::<ZTHabitat>(ptr) }.recreate_oas();
+
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let mut cursor = *habitat.viewing_areas_begin();
+    let end = *habitat.viewing_areas_end();
+    let mut unset: Vec<u32> = Vec::new();
+    while cursor != end {
+        let va_ptr: u32 = get_from_memory(cursor);
+        let flag: u8 = get_from_memory(va_ptr + 0x25);
+        if flag != 1 {
+            unset.push(va_ptr);
+        }
+        cursor += 4;
+    }
+
+    if unset.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!("viewing areas with +0x25 still unset: {unset:#x?}");
         error!("{}: {}", test_name, msg);
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
