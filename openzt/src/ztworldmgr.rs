@@ -504,6 +504,25 @@ pub struct ZTWorldMgr {
     entity_type_array_buffer_end: u32,
 }
 
+impl ZTWorldMgr {
+    /// The manager's own flat `entity_array` (every live entity in the world) - exposed read-only for
+    /// [`crate::zthabitatmgr::ZTHabitatMgr::replace_gate`]'s own real vanilla search (confirming a
+    /// stashed gate-fence pointer is still a live world entity before converting it back to a plain
+    /// fence; `ZTHabitatMgr_replaceGate.c`/`.asm` walks `entity_array_start`/`_end` directly).
+    pub fn entity_array(&self) -> impl Iterator<Item = u32> + '_ {
+        let mut ptr = self.entity_array_start;
+        std::iter::from_fn(move || {
+            if ptr >= self.entity_array_end {
+                None
+            } else {
+                let value = get_from_memory::<u32>(ptr);
+                ptr += 4;
+                Some(value)
+            }
+        })
+    }
+}
+
 impl fmt::Display for ZTWorldMgr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -522,18 +541,26 @@ impl fmt::Display for ZTWorldMgr {
 }
 
 // TODO: Move to util or better named crate
+/// Variant names (and `x_offset`/`y_offset` below) corrected against `BFTile`'s own
+/// `north_fence`/`east_fence`/`south_fence`/`west_fence` field names - confirmed by cross-referencing
+/// `ZTHabitat_addSeedsOnStack.c`/`ZTHabitat_addContiguousSpan.c`'s fence-passability checks against which
+/// direction each is paired with (e.g. direction `4` checks `south_fence` on the source tile and
+/// `north_fence` on the neighbour it steps to, which only makes sense if direction `4` is `South`). The
+/// previous names were a clean 90°/2-step rotation of the correct ones (`West`→`North`,
+/// `NorthWest`→`NorthEast`, etc.) - every discriminant value is unchanged, so this only relabels which
+/// name refers to which numeric direction; nothing that calls `Direction::from(u32)` changes behavior.
 #[derive(Debug, PartialEq, Eq, FromPrimitive, Clone)]
 #[repr(u32)]
 pub enum Direction {
     #[default]
-    West = 0,
-    NorthWest = 1,
-    North = 2,
-    NorthEast = 3,
-    East = 4,
-    SouthEast = 5,
-    South = 6,
-    SouthWest = 7,
+    North = 0,
+    NorthEast = 1,
+    East = 2,
+    SouthEast = 3,
+    South = 4,
+    SouthWest = 5,
+    West = 6,
+    NorthWest = 7,
 }
 
 const TILE_SIZE: i32 = 0x40;
@@ -560,24 +587,24 @@ impl ZTWorldMgr {
 
     pub fn get_neighbour(&self, bftile: &BFTile, direction: Direction) -> Option<BFTile> {
         let x_offset: i32 = match direction {
-            Direction::West => 0,
-            Direction::NorthWest => 1,
-            Direction::North => 1,
-            Direction::NorthEast => 1,
-            Direction::East => 0,
-            Direction::SouthEast => -1,
-            Direction::South => -1,
-            Direction::SouthWest => -1,
-        };
-        let y_offset: i32 = match direction {
-            Direction::West => -1,
-            Direction::NorthWest => -1,
             Direction::North => 0,
             Direction::NorthEast => 1,
             Direction::East => 1,
             Direction::SouthEast => 1,
             Direction::South => 0,
             Direction::SouthWest => -1,
+            Direction::West => -1,
+            Direction::NorthWest => -1,
+        };
+        let y_offset: i32 = match direction {
+            Direction::North => -1,
+            Direction::NorthEast => -1,
+            Direction::East => 0,
+            Direction::SouthEast => 1,
+            Direction::South => 1,
+            Direction::SouthWest => 1,
+            Direction::West => 0,
+            Direction::NorthWest => -1,
         };
 
         let x: i32 = bftile.pos.x + x_offset;
@@ -593,6 +620,14 @@ impl ZTWorldMgr {
     pub fn get_ptr_from_bftile(&self, bftile: &BFTile) -> u32 {
         let x = bftile.pos.x as u32;
         let y = bftile.pos.y as u32;
+        self.tile_array + ((y * self.map_x_size + x) * 0x8c)
+    }
+
+    /// Same address math as [`Self::get_ptr_from_bftile`], for callers that only have raw `(x, y)`
+    /// coordinates (e.g. [`crate::zthabitatmgr::ZTHabitatMgr::get_zoo_entrance_tile_ptr`]) rather than
+    /// an already-read `BFTile`. No bounds check - callers that need one (real vanilla
+    /// `ZTHabitatMgr::getZooEntranceTile` included) check `map_x_size`/`map_y_size` themselves first.
+    pub fn get_tile_ptr(&self, x: u32, y: u32) -> u32 {
         self.tile_array + ((y * self.map_x_size + x) * 0x8c)
     }
 

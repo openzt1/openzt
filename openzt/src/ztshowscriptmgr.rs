@@ -777,10 +777,8 @@ pub fn init() {
 }
 
 mod ztshowscriptmgr_detours {
-    use std::ffi::c_void;
-
     use openzt_detour::generated::{
-        ztshowscript_old::SAVE as SAVE_SCRIPT_OLD,
+        ztshowscript::SAVE as SAVE_SCRIPT_OLD,
         ztshowscriptmgr::{CLEAR_ALL_SCRIPTS, GET_SCRIPT, LOAD, REGISTER_SCRIPT, SAVE, UNREGISTER_SCRIPT},
     };
     use openzt_detour_macro::detour_mod;
@@ -818,13 +816,13 @@ mod ztshowscriptmgr_detours {
         }
 
         #[detour(SAVE)]
-        unsafe extern "thiscall" fn save(_this: *const u32, file: *const i8) -> u32 {
-            crate::ztshowscriptmgr::save_mgr(file as *const u32) as u32
+        unsafe extern "thiscall" fn save(_this: *const u32, file: *const i8) -> bool {
+            crate::ztshowscriptmgr::save_mgr(file as *const u32)
         }
 
         #[detour(LOAD)]
-        unsafe extern "thiscall" fn load(_this: *const u32, file: *const u32, version: u32) -> u32 {
-            crate::ztshowscriptmgr::load_mgr(file, version) as u32
+        unsafe extern "thiscall" fn load(_this: *const u32, file: *const u32, version: u32) -> bool {
+            crate::ztshowscriptmgr::load_mgr(file, version)
         }
 
         #[detour(GET_SCRIPT)]
@@ -843,8 +841,8 @@ mod ztshowscriptmgr_detours {
         }
 
         #[detour(SAVE_SCRIPT_OLD)]
-        unsafe extern "thiscall" fn save_script_old(this: *const c_void, file: *const i8) -> u32 {
-            crate::ztshowscriptmgr::save_script(this as u32, file as *const u32) as u32
+        unsafe extern "thiscall" fn save_script_old(this: *const u32, file: *const i8) -> bool {
+            crate::ztshowscriptmgr::save_script(this as u32, file as *const u32)
         }
     }
 
@@ -902,8 +900,8 @@ mod ztshowscript_detours {
         }
 
         #[detour(LOAD)]
-        unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> u32 {
-            let Some((id, script)) = crate::ztshowscriptmgr::read_script(file, version) else { return 0 };
+        unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> bool {
+            let Some((id, script)) = crate::ztshowscriptmgr::read_script(file, version) else { return false };
             let mut state = crate::ztshowscriptmgr::STATE.lock().unwrap();
             state.aliases.insert(this as u32, id);
             state.scripts.insert(id, script);
@@ -911,7 +909,7 @@ mod ztshowscript_detours {
             // also stamps the stream's id into `this->mbr_0x4` (`ZTShowScript_load.c:51`'s first
             // `deallocate` call), so a loaded save's script needs it set too.
             crate::util::save_to_memory::<u16>(this as u32 + 4, id);
-            1
+            true
         }
     }
 

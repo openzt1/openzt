@@ -325,8 +325,7 @@ impl ZTShowMgr {
 
         let base = get_module_base("zoo.exe") as u32;
         let ztapp_ptr: u32 = get_from_memory(base + GLOBAL_ZTAPP_RVA);
-        let expansion_2_installed =
-            ztapp_ptr != 0 && unsafe { GET_INSTALLED_EXPANSION.original()(ztapp_ptr as *const u32, 2) } != 0;
+        let expansion_2_installed = ztapp_ptr != 0 && unsafe { GET_INSTALLED_EXPANSION.original()(ztapp_ptr as *const u32, 2) };
 
         if expansion_2_installed
             && let Some(ini) = bfconfigfile::ini_compat::read_cfg("shows.cfg")
@@ -540,8 +539,7 @@ impl ZTShowMgr {
     /// since the writers' cutover); the bytes are copied out under the lock and written from a
     /// local, so the store mutex is never held across the `WriteBytesToFile` call-out.
     pub fn save(&mut self, file: *const i8) -> u32 {
-        let script_ok =
-            unsafe { ZTSHOWSCRIPTMGR_SAVE.hooked()(&raw const self.show_script_mgr as *const u32, file) } & 0xff != 0;
+        let script_ok = unsafe { ZTSHOWSCRIPTMGR_SAVE.hooked()(&raw const self.show_script_mgr as *const u32, file) };
         let counter: u16 = SHOW_STORE.lock().unwrap().show_id_counter;
         let write_ok = unsafe { WRITE_BYTES_TO_FILE.hooked()(&raw const counter as *const u32, 2, 1, file) } == 1;
         (script_ok & write_ok) as u32
@@ -560,9 +558,7 @@ impl ZTShowMgr {
     /// into the store only on a successful read - the same only-on-success visibility the real
     /// body's in-place global write gave the battery's short-read pins.
     pub fn load(&mut self, file: *const u32, version: u32) -> u32 {
-        let mut ok =
-            unsafe { ZTSHOWSCRIPTMGR_LOAD.hooked()(&raw const self.show_script_mgr as *const u32, file, version) } & 0xff
-                != 0;
+        let mut ok = unsafe { ZTSHOWSCRIPTMGR_LOAD.hooked()(&raw const self.show_script_mgr as *const u32, file, version) };
         if version > 0x60 {
             let mut counter: u16 = 0;
             let read_ok =
@@ -696,13 +692,13 @@ mod detours {
     }
 
     #[detour(REGISTER_SHOW)]
-    unsafe extern "thiscall" fn register_show_detour(this: *const u32, show: *const u32, force: bool) -> u32 {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).register_show(show, force) }
+    unsafe extern "thiscall" fn register_show_detour(this: *const u32, show: *const u32, force: bool) -> bool {
+        unsafe { mut_from_memory::<ZTShowMgr>(this).register_show(show, force) != 0 }
     }
 
     #[detour(UNREGISTER_SHOW)]
-    unsafe extern "thiscall" fn unregister_show_detour(this: *const u32, id: u16, show: *const u32, clear: bool) -> u32 {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).unregister_show(id, show, clear) }
+    unsafe extern "thiscall" fn unregister_show_detour(this: *const u32, id: u16, show: *const u32, clear: bool) -> bool {
+        unsafe { mut_from_memory::<ZTShowMgr>(this).unregister_show(id, show, clear) != 0 }
     }
 
     /// Stage 4 read cutover - see [`ZTShowMgr::get_show_info`]. The instance pointer is deliberately
@@ -710,15 +706,15 @@ mod detours {
     /// than mapped onto a `ZTShowMgr` - a null `this`, which vanilla's own body would fault on,
     /// resolves through the same store as any other.
     #[detour(GET_SHOW_INFO)]
-    unsafe extern "thiscall" fn get_show_info_detour(_this: *const u32, id: u16) -> u32 {
-        ZTShowMgr::get_show_info(id)
+    unsafe extern "thiscall" fn get_show_info_detour(_this: *const u32, id: u16) -> *const u32 {
+        ZTShowMgr::get_show_info(id) as *const u32
     }
 
     /// Stage 4 read cutover - see [`ZTShowMgr::get_script_id`]. Same dropped-`this` reasoning as
     /// [`get_show_info_detour`].
     #[detour(GET_SCRIPT_ID)]
-    unsafe extern "thiscall" fn get_script_id_detour(_this: *const u32, id: u16) -> u32 {
-        ZTShowMgr::get_script_id(id)
+    unsafe extern "thiscall" fn get_script_id_detour(_this: *const u32, id: u16) -> u16 {
+        ZTShowMgr::get_script_id(id) as u16
     }
 
     /// Stage 5 walk - see [`ZTShowMgr::enter_new_month`]. Dropped `this`, same single-store
@@ -739,30 +735,30 @@ mod detours {
     /// `ZTShowScriptMgr` sub-object address the delegation receives (its own detour ignores it -
     /// the Rust store is process-global), matching vanilla's `ADD %ECX, 0x34` hand-off.
     #[detour(SAVE)]
-    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const i8) -> u32 {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).save(file) }
+    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const i8) -> bool {
+        unsafe { mut_from_memory::<ZTShowMgr>(this).save(file) != 0 }
     }
 
     /// Stage 6 load - see [`ZTShowMgr::load`]. Same sub-object hand-off as [`save_detour`].
     #[detour(LOAD)]
-    unsafe extern "thiscall" fn load_detour(this: *const u32, file: *const u32, version: u32) -> u32 {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).load(file, version) }
+    unsafe extern "thiscall" fn load_detour(this: *const u32, file: *const u32, version: u32) -> bool {
+        unsafe { mut_from_memory::<ZTShowMgr>(this).load(file, version) != 0 }
     }
 
     /// Stage 7 probe - see [`ZTShowMgr::is_doing_show`]. Dropped `this`, same single-store
     /// reasoning as [`get_show_info_detour`]: the real body only ever forwards `this` to
     /// `getShowInfo`, whose stage-4 detour already answers from the store.
     #[detour(IS_DOING_SHOW)]
-    unsafe extern "thiscall" fn is_doing_show_detour(_this: *const u32, unit_id: u32, show_id: u16) -> u32 {
-        ZTShowMgr::is_doing_show(unit_id, show_id)
+    unsafe extern "thiscall" fn is_doing_show_detour(_this: *const u32, unit_id: u32, show_id: u16) -> bool {
+        ZTShowMgr::is_doing_show(unit_id, show_id) != 0
     }
 
     /// Stage 8 probe - see [`ZTShowMgr::is_show_script_done`]. Dropped `this`, same single-store
     /// reasoning as [`get_show_info_detour`]: the real body only ever forwards `this` to
     /// `getShowInfo`, whose stage-4 detour already answers from the store.
     #[detour(IS_SHOW_SCRIPT_DONE)]
-    unsafe extern "thiscall" fn is_show_script_done_detour(_this: *const u32, script_id: u32, show_id: u16) -> u32 {
-        ZTShowMgr::is_show_script_done(script_id, show_id)
+    unsafe extern "thiscall" fn is_show_script_done_detour(_this: *const u32, script_id: u32, show_id: u16) -> u8 {
+        ZTShowMgr::is_show_script_done(script_id, show_id) as u8
     }
 
     /// The real vanilla body through the detour's trampoline - the only release-safe way back to
@@ -775,12 +771,12 @@ mod detours {
 
     /// The real vanilla `registerShow` through the detour's trampoline - same release-safety
     /// reasoning as [`call_real`]. This is [`ZTShowMgr::register_show`]'s shadow/mirror call-through.
-    pub(super) fn call_real_register_show(this: *const u32, show: *const u32, force: bool) -> u32 {
+    pub(super) fn call_real_register_show(this: *const u32, show: *const u32, force: bool) -> bool {
         unsafe { REGISTER_SHOW_DETOUR.call(this, show, force) }
     }
 
     /// Same mechanism for the real `unregisterShow` - see [`call_real_register_show`].
-    pub(super) fn call_real_unregister_show(this: *const u32, id: u16, show: *const u32, clear: bool) -> u32 {
+    pub(super) fn call_real_unregister_show(this: *const u32, id: u16, show: *const u32, clear: bool) -> bool {
         unsafe { UNREGISTER_SHOW_DETOUR.call(this, id, show, clear) }
     }
 
@@ -789,17 +785,15 @@ mod detours {
     /// since stage 9 stopped the writers maintaining the tree, this walk answers only what was
     /// planted there through the raw trampolines (see [`call_real_register_show`]), which is exactly
     /// the tree-only differential the stage-5 walk tests pin.
-    pub(super) fn call_real_get_show_info(this: *const u32, id: u16) -> u32 {
+    pub(super) fn call_real_get_show_info(this: *const u32, id: u16) -> *const u32 {
         unsafe { GET_SHOW_INFO_DETOUR.call(this, id) }
     }
 
     /// Same mechanism for the real `getScriptID`. Note its real body reaches `getShowInfo` by raw
     /// address (`CALL ZTShowMgr::getShowInfo` in `ZTShowMgr_getScriptID.asm`), so post-cutover this
     /// pole is vanilla glue around the *detoured* reader - it verifies the real ABI glue and the
-    /// real `+0x8` read on top of [`SHOW_STORE`]'s answer, not vanilla's tree. Its found path also
-    /// leaves EAX's upper half holding the show-info pointer's high bits (no `movzx`), so callers
-    /// comparing it against the port's clean return must mask to 16 bits.
-    pub(super) fn call_real_get_script_id(this: *const u32, id: u16) -> u32 {
+    /// real `+0x8` read on top of [`SHOW_STORE`]'s answer, not vanilla's tree.
+    pub(super) fn call_real_get_script_id(this: *const u32, id: u16) -> u16 {
         unsafe { GET_SCRIPT_ID_DETOUR.call(this, id) }
     }
 
@@ -824,23 +818,21 @@ mod detours {
     /// the pole isolates is vanilla's own tail: reading [`SHOW_ID_COUNTER_RVA`] in place and the
     /// exact write shape (address, size 2, count 1) it hands `WriteBytesToFile` - the capture
     /// must come out byte-identical to the port's.
-    pub(super) fn call_real_save(this: *const u32, file: *const i8) -> u32 {
+    pub(super) fn call_real_save(this: *const u32, file: *const i8) -> bool {
         unsafe { SAVE_DETOUR.call(this, file) }
     }
 
     /// Same mechanism for the real `load` - the `ZTSHOWMGR_SAVE_LOAD` real-side pole, pinning
     /// vanilla's unsigned `version > 0x60` gate and the 2-byte read target against the port's.
-    pub(super) fn call_real_load(this: *const u32, file: *const u32, version: u32) -> u32 {
+    pub(super) fn call_real_load(this: *const u32, file: *const u32, version: u32) -> bool {
         unsafe { LOAD_DETOUR.call(this, file, version) }
     }
 
     /// Same mechanism for the real `isDoingShow` - the `ZTSHOWMGR_IS_DOING_SHOW` real-side pole.
     /// Its `getShowInfo` leg resolves through the stage-4 detoured reader (a raw `CALL`), so the
     /// pole isolates vanilla's own tail: the embedded-`ZTShow` hand-off (`LEA %ECX, [EAX + 0x4]`)
-    /// and the `SETNZ %AL` combine on the real `getShowScriptState` walk. Only its `AL` byte is
-    /// defined (upper EAX holds the state pointer's high bits), so callers comparing it against
-    /// the port's clean 0/1 must mask to the low byte.
-    pub(super) fn call_real_is_doing_show(this: *const u32, unit_id: u32, show_id: u16) -> u32 {
+    /// and the `SETNZ %AL` combine on the real `getShowScriptState` walk.
+    pub(super) fn call_real_is_doing_show(this: *const u32, unit_id: u32, show_id: u16) -> bool {
         unsafe { IS_DOING_SHOW_DETOUR.call(this, unit_id, show_id) }
     }
 
@@ -848,10 +840,7 @@ mod detours {
     /// real-side pole. Its `getShowInfo` leg resolves through the stage-4 detoured reader (a raw
     /// `CALL`), so the pole isolates vanilla's own tail: the embedded-`ZTShow` hand-off
     /// (`LEA %ECX, [EAX + 0x4]`), the real `getShowScriptState` walk, and the `+0x13` byte read.
-    /// Only its `AL` byte is defined (upper EAX holds the state pointer's high bits on the hit
-    /// path), so callers comparing it against the port's clean zero-extended byte must mask to the
-    /// low byte.
-    pub(super) fn call_real_is_show_script_done(this: *const u32, script_id: u32, show_id: u16) -> u32 {
+    pub(super) fn call_real_is_show_script_done(this: *const u32, script_id: u32, show_id: u16) -> u8 {
         unsafe { IS_SHOW_SCRIPT_DONE_DETOUR.call(this, script_id, show_id) }
     }
 }
@@ -957,13 +946,13 @@ pub(crate) mod live_support {
     /// `ZTSHOWMGR_GET_SHOW_INFO_GET_SCRIPT_ID`'s real side) - see
     /// [`detours::call_real_get_show_info`]; `.original()` has been a release-profile re-entry
     /// hazard on this address since stage 4 hooked it.
-    pub(crate) fn call_real_get_show_info(this: *const u32, id: u16) -> u32 {
+    pub(crate) fn call_real_get_show_info(this: *const u32, id: u16) -> *const u32 {
         detours::call_real_get_show_info(this, id)
     }
 
     /// Calls the real vanilla `ZTShowMgr::getScriptID` through the detour's trampoline - see
     /// [`detours::call_real_get_script_id`] for why this pole is only half-real post-cutover.
-    pub(crate) fn call_real_get_script_id(this: *const u32, id: u16) -> u32 {
+    pub(crate) fn call_real_get_script_id(this: *const u32, id: u16) -> u16 {
         detours::call_real_get_script_id(this, id)
     }
 
@@ -1007,28 +996,26 @@ pub(crate) mod live_support {
     /// Calls the real vanilla `ZTShowMgr::save` through the detour's trampoline - the
     /// `ZTSHOWMGR_SAVE_LOAD` real-side pole; `.original()` has been a release-profile re-entry
     /// hazard on this address since stage 6 hooked it.
-    pub(crate) fn call_real_save(this: *const u32, file: *const i8) -> u32 {
+    pub(crate) fn call_real_save(this: *const u32, file: *const i8) -> bool {
         detours::call_real_save(this, file)
     }
 
     /// Same for the real `ZTShowMgr::load` - see [`call_real_save`].
-    pub(crate) fn call_real_load(this: *const u32, file: *const u32, version: u32) -> u32 {
+    pub(crate) fn call_real_load(this: *const u32, file: *const u32, version: u32) -> bool {
         detours::call_real_load(this, file, version)
     }
 
     /// Calls the real vanilla `ZTShowMgr::isDoingShow` through the detour's trampoline - the
     /// `ZTSHOWMGR_IS_DOING_SHOW` real-side pole; `.original()` has been a release-profile re-entry
-    /// hazard on this address since stage 7 hooked it. Only its `AL` byte is defined (see
-    /// [`detours::call_real_is_doing_show`]).
-    pub(crate) fn call_real_is_doing_show(this: *const u32, unit_id: u32, show_id: u16) -> u32 {
+    /// hazard on this address since stage 7 hooked it.
+    pub(crate) fn call_real_is_doing_show(this: *const u32, unit_id: u32, show_id: u16) -> bool {
         detours::call_real_is_doing_show(this, unit_id, show_id)
     }
 
     /// Calls the real vanilla `ZTShowMgr::isShowScriptDone` through the detour's trampoline - the
     /// `ZTSHOWMGR_IS_SHOW_SCRIPT_DONE` real-side pole; `.original()` has been a release-profile
-    /// re-entry hazard on this address since stage 8 hooked it. Only its `AL` byte is defined (see
-    /// [`detours::call_real_is_show_script_done`]).
-    pub(crate) fn call_real_is_show_script_done(this: *const u32, script_id: u32, show_id: u16) -> u32 {
+    /// re-entry hazard on this address since stage 8 hooked it.
+    pub(crate) fn call_real_is_show_script_done(this: *const u32, script_id: u32, show_id: u16) -> u8 {
         detours::call_real_is_show_script_done(this, script_id, show_id)
     }
 
@@ -1036,12 +1023,10 @@ pub(crate) mod live_support {
     /// **bypassing the stage-9 port** - the stage-5 walk tests use it to plant a registration
     /// that exists only in the standalone vanilla tree, proving the Rust walks read [`SHOW_STORE`]
     /// and not the tree (the hooked register writes only the store, so the raw body is the only
-    /// way to make the two stores disagree on purpose). The raw body only guarantees its success
-    /// byte in `AL` (upper EAX is register garbage - callers must mask `& 0xff`); the hooked path
-    /// is the one returning a cleaned `0`/`1`. Note the raw body still increments the now-inert
-    /// vanilla counter global and writes `field_0x70` through the real setter - both harmless to
-    /// the store, which never reads either.
-    pub(crate) fn call_real_register_show(this: *const u32, show: *const u32, force: bool) -> u32 {
+    /// way to make the two stores disagree on purpose). Note the raw body still increments the
+    /// now-inert vanilla counter global and writes `field_0x70` through the real setter - both
+    /// harmless to the store, which never reads either.
+    pub(crate) fn call_real_register_show(this: *const u32, show: *const u32, force: bool) -> bool {
         detours::call_real_register_show(this, show, force)
     }
 
@@ -1049,7 +1034,7 @@ pub(crate) mod live_support {
     /// registration from the standalone vanilla tree without touching the store (a hooked
     /// unregister's mirror step would be a no-op remove for an id the store never held, but going
     /// through the raw body keeps the store-tree asymmetry explicit).
-    pub(crate) fn call_real_unregister_show(this: *const u32, id: u16, show: *const u32, clear: bool) -> u32 {
+    pub(crate) fn call_real_unregister_show(this: *const u32, id: u16, show: *const u32, clear: bool) -> bool {
         detours::call_real_unregister_show(this, id, show, clear)
     }
 }

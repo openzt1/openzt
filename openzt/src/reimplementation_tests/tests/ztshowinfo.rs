@@ -1048,7 +1048,7 @@ pub(crate) fn run_ztshowinfo_check_unit_live_test(failure_log: &mut Option<std::
     let rust_result = unsafe { CHECK_UNIT.hooked()(real_show_info_ptr as *const u32, unit_id) };
     let real_result = unsafe { CHECK_UNIT.original()(real_show_info_ptr as *const u32, unit_id) };
     if rust_result != real_result {
-        failures.push(format!("checkUnit(eligible unit) mismatch: rust={rust_result:#010x} real={real_result:#010x}"));
+        failures.push(format!("checkUnit(eligible unit) mismatch: rust={rust_result} real={real_result}"));
     }
 
     // A real, resolvable unit whose entity type fails the trick-eligibility check must return 0 on both
@@ -1058,10 +1058,10 @@ pub(crate) fn run_ztshowinfo_check_unit_live_test(failure_log: &mut Option<std::
         let rust_ineligible = unsafe { CHECK_UNIT.hooked()(real_show_info_ptr as *const u32, non_eligible_id) };
         let real_ineligible = unsafe { CHECK_UNIT.original()(real_show_info_ptr as *const u32, non_eligible_id) };
         if rust_ineligible != real_ineligible {
-            failures.push(format!("checkUnit(non-eligible unit) mismatch: rust={rust_ineligible:#010x} real={real_ineligible:#010x}"));
+            failures.push(format!("checkUnit(non-eligible unit) mismatch: rust={rust_ineligible} real={real_ineligible}"));
         }
-        if rust_ineligible != 0 {
-            failures.push(format!("checkUnit(non-eligible unit) should be 0, rust={rust_ineligible:#010x}"));
+        if rust_ineligible {
+            failures.push(format!("checkUnit(non-eligible unit) should be false, rust={rust_ineligible}"));
         }
     } else {
         error!("{}: no non-trick-eligible unit found in test zoo - the ineligible-type branch is uncovered this run", test_name);
@@ -1070,8 +1070,8 @@ pub(crate) fn run_ztshowinfo_check_unit_live_test(failure_log: &mut Option<std::
     // unit_id == 0 must short-circuit to 0 on both poles.
     let rust_zero = unsafe { CHECK_UNIT.hooked()(real_show_info_ptr as *const u32, 0) };
     let real_zero = unsafe { CHECK_UNIT.original()(real_show_info_ptr as *const u32, 0) };
-    if rust_zero != 0 || real_zero != 0 {
-        failures.push(format!("checkUnit(0) should be 0 on both poles: rust={rust_zero:#010x} real={real_zero:#010x}"));
+    if rust_zero || real_zero {
+        failures.push(format!("checkUnit(0) should be false on both poles: rust={rust_zero} real={real_zero}"));
     }
 
     // A bogus unit id (never resolves via BFWorldMgr::getUnit) must also be 0 on both poles.
@@ -1079,7 +1079,7 @@ pub(crate) fn run_ztshowinfo_check_unit_live_test(failure_log: &mut Option<std::
     let rust_bogus = unsafe { CHECK_UNIT.hooked()(real_show_info_ptr as *const u32, bogus_id) };
     let real_bogus = unsafe { CHECK_UNIT.original()(real_show_info_ptr as *const u32, bogus_id) };
     if rust_bogus != real_bogus {
-        failures.push(format!("checkUnit(bogus id) mismatch: rust={rust_bogus:#010x} real={real_bogus:#010x}"));
+        failures.push(format!("checkUnit(bogus id) mismatch: rust={rust_bogus} real={real_bogus}"));
     }
 
     finish_test(test_name, failures, failure_log)
@@ -1412,8 +1412,8 @@ pub(crate) fn run_ztshowinfo_save_load_roundtrip_test(failure_log: &mut Option<s
     io_redirect::begin_capture();
     let save_ret = unsafe { SAVE.hooked()(source as *const u32, &dummy_file as *const u32 as *const i8) };
     let bytes = io_redirect::end_capture();
-    if save_ret & 0xff != 1 {
-        failures.push(format!("hooked save should report success in its low byte, got {save_ret:#010x}"));
+    if !save_ret {
+        failures.push(format!("hooked save should report success, got {save_ret}"));
     }
 
     let target = ztshow_live_support::build_standalone_show_info();
@@ -1421,8 +1421,8 @@ pub(crate) fn run_ztshowinfo_save_load_roundtrip_test(failure_log: &mut Option<s
     io_redirect::begin_replay(bytes);
     let load_ret = unsafe { LOAD.hooked()(target as *const u32, &dummy_file as *const u32, CURRENT_VERSION) };
     io_redirect::end_replay();
-    if load_ret != 1 {
-        failures.push(format!("hooked load should return 1, got {load_ret}"));
+    if !load_ret {
+        failures.push(format!("hooked load should return true, got {load_ret}"));
     }
 
     for (offset, size, label) in [
@@ -1758,28 +1758,22 @@ pub(crate) fn run_ztshowinfo_gather_units_live_test(failure_log: &mut Option<std
     add_unit_to_list(rust_info, entity_ptr);
     add_unit_to_list(real_info, entity_ptr);
 
-    // Masked to the low byte: real vanilla's own asm (`ZTShowInfo_gatherUnits.asm`) only ever writes `AL`
-    // (`XOR BL,BL` up front, `MOV AL,BL` on exit) - on the miss path in particular, EAX still holds
-    // `AI_cls_0x404fd6::find`'s own leftover pointer value in its upper 24 bits, an undefined-upper-bits
-    // decompiler artifact (same class as `ZooStatus::fChance`'s/`getScheduledShowScript`'s own, both
-    // already documented elsewhere in this file) rather than real data - confirmed live: this comparison
-    // failed unmasked the first time this test ran (`rust=0x0 real=0x1afa00`).
     const MISSING_TYPE_ID: u32 = 0x7fff_ffff;
-    let rust_miss = unsafe { GATHER_UNITS.hooked()(rust_info as *const u32, MISSING_TYPE_ID) } & 0xff;
-    let real_miss = unsafe { GATHER_UNITS.original()(real_info as *const u32, MISSING_TYPE_ID) } & 0xff;
+    let rust_miss = unsafe { GATHER_UNITS.hooked()(rust_info as *const u32, MISSING_TYPE_ID) };
+    let real_miss = unsafe { GATHER_UNITS.original()(real_info as *const u32, MISSING_TYPE_ID) };
     if rust_miss != real_miss {
-        failures.push(format!("gatherUnits(missing type) mismatch: rust={rust_miss:#x} real={real_miss:#x}"));
+        failures.push(format!("gatherUnits(missing type) mismatch: rust={rust_miss} real={real_miss}"));
     }
-    if rust_miss != 0 {
+    if rust_miss {
         failures.push("gatherUnits should be false for a type with no pending-scripts node".to_string());
     }
 
-    let rust_result = unsafe { GATHER_UNITS.hooked()(rust_info as *const u32, unit_type_id) } & 0xff;
-    let real_result = unsafe { GATHER_UNITS.original()(real_info as *const u32, unit_type_id) } & 0xff;
+    let rust_result = unsafe { GATHER_UNITS.hooked()(rust_info as *const u32, unit_type_id) };
+    let real_result = unsafe { GATHER_UNITS.original()(real_info as *const u32, unit_type_id) };
     if rust_result != real_result {
-        failures.push(format!("gatherUnits(populated type) mismatch: rust={rust_result:#x} real={real_result:#x}"));
+        failures.push(format!("gatherUnits(populated type) mismatch: rust={rust_result} real={real_result}"));
     }
-    if rust_result == 0 {
+    if !rust_result {
         failures.push("expected gatherUnits to find at least one trick-eligible unit".to_string());
     }
 

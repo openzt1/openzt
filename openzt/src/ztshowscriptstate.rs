@@ -263,8 +263,8 @@ mod detours {
     }
 
     #[detour(SAVE)]
-    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const u32) -> u32 {
-        unsafe { ref_from_memory::<ZTShowScriptState>(this) }.save(file as *const i8)
+    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTShowScriptState>(this) }.save(file as *const i8) != 0
     }
 
     #[detour(SET_NEXT_ITEM_0)]
@@ -322,7 +322,7 @@ mod detours {
             unsafe { super::LOAD_DETOUR.call(this as *const u32, file, version) }
         }
 
-        pub(crate) fn save(this: u32, file: *const u32) -> u32 {
+        pub(crate) fn save(this: u32, file: *const u32) -> bool {
             unsafe { super::SAVE_DETOUR.call(this as *const u32, file) }
         }
 
@@ -371,7 +371,7 @@ pub(crate) mod live_support {
         super::detours::test_real::load(this, file, version)
     }
 
-    pub(crate) fn real_save(this: u32, file: *const u32) -> u32 {
+    pub(crate) fn real_save(this: u32, file: *const u32) -> bool {
         super::detours::test_real::save(this, file)
     }
 

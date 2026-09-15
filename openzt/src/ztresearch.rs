@@ -436,7 +436,7 @@ impl ZTResearchProgram {
         dispatch_reset(&mut LiveResearchEffects, self) as u32
     }
 
-    pub fn load_program(&mut self, reader: *const u32) -> u32 {
+    pub fn load_program(&mut self, reader: *const u32) -> bool {
         unsafe { ztresearchprogram::LOAD_PROGRAM.original()((self as *mut Self) as *const u32, reader) }
     }
 }
@@ -781,7 +781,7 @@ impl ZTResearchCategory {
 
     /// Calls the vanilla `ZTResearchCategory::loadCategory`; used while reading a mod/save's
     /// research definitions. `reader` is whatever stream/buffer pointer the original expects.
-    pub fn load_category(&mut self, reader: *const i32) -> u32 {
+    pub fn load_category(&mut self, reader: *const i32) -> bool {
         unsafe { ztresearchcategory::LOAD_CATEGORY.original()((self as *mut Self) as *const u32, reader) }
     }
 
@@ -1029,7 +1029,7 @@ impl ZTResearchBranch {
     /// vanilla does.
     pub fn update(&mut self, days: u32) {
         let should_check_expansion =
-            global_always_check_expansion() || unsafe { ztui_expansionselect::GET_ANY_EXPANSIONS_DISABLED.original()() != 0 };
+            global_always_check_expansion() || unsafe { ztui_expansionselect::GET_ANY_EXPANSIONS_DISABLED.original()() };
 
         let category = self.current_category();
         if should_check_expansion && category.is_none() {
@@ -1086,7 +1086,7 @@ impl ZTResearchBranch {
     /// as this struct's own doc comment) and populates this branch's fields/`category_array`/funding
     /// table from it - the branch-level counterpart to `ZTResearchCategory::load_category`/
     /// `ZTResearchProgram::load_program`. `path` is a null-terminated path string.
-    pub fn load_branch(&mut self, path: *const i8) -> u32 {
+    pub fn load_branch(&mut self, path: *const i8) -> bool {
         unsafe { ztresearchbranch::LOAD_BRANCH.original()((self as *mut Self) as *const u32, path) }
     }
 
@@ -1761,7 +1761,7 @@ impl ZTResearchMgr {
     /// `vanilla-research-save` feature no detour is installed and the address still holds genuine
     /// vanilla code.
     pub fn save(&self, file: *const u32) -> bool {
-        unsafe { ztresearchmgr::SAVE.hooked()((self as *const Self) as *const u32, file) != 0 }
+        unsafe { ztresearchmgr::SAVE.hooked()((self as *const Self) as *const u32, file) }
     }
 
     /// Calls `ZTResearchMgr::load` - the save-file counterpart to `save()`. Per
@@ -3073,7 +3073,7 @@ mod research_config_reimplementation {
         use crate::util::ref_from_memory;
 
         #[detour(LOAD_BRANCHES)]
-        unsafe extern "thiscall" fn load_branches(this: *const u32, manifest_path: *const i8) -> u32 {
+        unsafe extern "thiscall" fn load_branches(this: *const u32, manifest_path: *const i8) -> bool {
             let manifest_path_str = unsafe { CStr::from_ptr(manifest_path) }.to_string_lossy().into_owned();
 
             // Read the manifest ourselves before calling the original, so we know which branch files
@@ -3096,7 +3096,7 @@ mod research_config_reimplementation {
             let result = unsafe { LOAD_BRANCHES_DETOUR.call(this, manifest_path) };
             debug!("research-config-reimplementation: ZTResearchMgr::loadBranches(\"{manifest_path_str}\") called, this={:#x}, vanilla result: {result}", this as u32);
 
-            if result == 0 {
+            if !result {
                 return result;
             }
             let (Some(ids_before), Some(entries)) = (ids_before, entries) else {
@@ -3172,7 +3172,7 @@ mod research_config_reimplementation {
         use crate::util::mut_from_memory;
 
         #[detour(LOAD_BRANCHES)]
-        unsafe extern "thiscall" fn load_branches(this: *const u32, manifest_path: *const i8) -> u32 {
+        unsafe extern "thiscall" fn load_branches(this: *const u32, manifest_path: *const i8) -> bool {
             let manifest_path_str = unsafe { CStr::from_ptr(manifest_path) }.to_string_lossy().into_owned();
             debug!("research-config-reimplementation: loadBranches(\"{manifest_path_str}\") called, this={:#x}", this as u32);
 
@@ -3199,7 +3199,7 @@ mod research_config_reimplementation {
             } else {
                 debug!("research-config-reimplementation: replaced loadBranches(\"{manifest_path_str}\") natively (0 branches in manifest)");
             }
-            1
+            true
         }
 
         #[detour(CLEAR_BRANCHES)]
@@ -3690,7 +3690,7 @@ pub(crate) mod research_save_reimplementation {
         use crate::util::{mut_from_memory, ref_from_memory};
 
         #[detour(SAVE)]
-        unsafe extern "thiscall" fn save(this: *const u32, file: *const u32) -> u8 {
+        unsafe extern "thiscall" fn save(this: *const u32, file: *const u32) -> bool {
             let mgr = unsafe { ref_from_memory::<ZTResearchMgr>(this) };
             let bytes = serialize(&snapshot_mgr(mgr));
 
@@ -3698,7 +3698,7 @@ pub(crate) mod research_save_reimplementation {
             if !ok {
                 error!("research-save-reimplementation: WriteBytesToFile failed writing {} research bytes", bytes.len());
             }
-            ok as u8
+            ok
         }
 
         #[detour(LOAD)]

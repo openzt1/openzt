@@ -298,7 +298,7 @@ pub(crate) fn run_ztawardmgr_real_zoo_save_load_roundtrip_live_test(failure_log:
         let _ = log_file.write_all(format!("CHECKPOINT {} real_ids={:?} bytes={}\n", test_name, real_ids, captured_bytes.len()).as_bytes());
     }
 
-    if save_ok == 0 {
+    if !save_ok {
         error!("{}: real vanilla save() returned failure", test_name);
         fail_flag = true;
     }

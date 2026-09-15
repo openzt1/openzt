@@ -41,7 +41,14 @@ use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal};
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct BFTile {
-    padding: [u8; 0x10],
+    /// Pointer to the sentinel node of this tile's own occupant list - the exact same
+    /// [`crate::zthabitatmgr::TileListNode`] shape/pool `ZTHabitat::owned_tiles_ptr` (`+0x40`) uses, one
+    /// level more nested ("everything currently standing on this tile" vs. "every tile a habitat owns").
+    /// Confirmed directly against `ZTHabitat_resetUnitAI.asm` (`MOV EAX, dword ptr [EDI]` where `EDI` is
+    /// the tile pointer, then walked identically to `owned_tiles_ptr`, calling vtable slot `+0x100` on
+    /// each occupant's own payload) - see `ZTHabitat::reset_unit_ai`.
+    pub(crate) unit_list_ptr: u32,
+    padding: [u8; 0xc],
     pub entity_ptr: u32, // 0x10 Pointer to the entity on this tile, if any
     pub north_fence: u32, // 0x14 Change to &ZTFence when that type exists
     pub east_fence: u32,  // 0x18
@@ -73,7 +80,8 @@ impl fmt::Display for BFTile {
 impl BFTile {
     pub fn new(pos: IVec3, unknown_byte_2: u8) -> Self {
         BFTile {
-            padding: [0; 0x10],
+            unit_list_ptr: 0,
+            padding: [0; 0xc],
             entity_ptr: 0,
             north_fence: 0,
             east_fence: 0,

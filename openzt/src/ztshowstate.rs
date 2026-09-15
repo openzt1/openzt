@@ -460,8 +460,8 @@ mod detours {
     }
 
     #[detour(SAVE)]
-    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const u32) -> u32 {
-        show_state_save(this as u32, file as *const i8) as u32
+    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const u32) -> bool {
+        show_state_save(this as u32, file as *const i8)
     }
 
     #[detour(LOAD)]
