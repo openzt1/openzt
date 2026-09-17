@@ -1,7 +1,9 @@
 //! Compares the reimplemented `ZTHabitatMgr`/`ZTHabitat` methods (production file
 //! `openzt/src/zthabitatmgr.rs`) against real vanilla over the live, loaded zoo's own habitat grid.
 
-use openzt_detour::generated::{standalone::OPERATOR_NEW, zthabitat, zthabitatmgr, ztviewingarea};
+use openzt_detour::generated::{
+    bfentity::GET_TILE as BFENTITY_GET_TILE, bfmap::WORLD_TO_TILE, standalone::OPERATOR_NEW, zthabitat, zthabitatmgr, ztviewingarea,
+};
 use std::fmt::Debug;
 use std::io::Write;
 use tracing::error;
@@ -10,7 +12,12 @@ use crate::globals::globals;
 use crate::reimplementation_tests::harness::write_success_line;
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory};
-use crate::zthabitatmgr::{hooks_zthabitatmgr, ZTHabitat, IS_RIGHT_SALINITY};
+use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
+use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
+use crate::zthabitatmgr::{
+    free_event_vector_buffer, hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat, ZTHabitatMgr, IS_RIGHT_SALINITY,
+    RVA_KEEPER_TYPE_CHECK_ARG,
+};
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
 /// `zthabitatmgr::init()`, and this asserts all of its detours actually report enabled. Without
@@ -1842,7 +1849,7 @@ pub(crate) fn run_habitat_add_remove_viewing_area_roundtrip_live_test(failure_lo
         write_success_line(failure_log, &format!("{} (skipped: operator_new failed)", test_name));
         return false;
     }
-    unsafe { ztviewingarea::CONSTRUCTOR.original()(new_va as *const std::ffi::c_void, ptr as *const std::ffi::c_void, tile_ptr as *const std::ffi::c_void) };
+    unsafe { ztviewingarea::CONSTRUCTOR.original()(new_va as *const u32, ptr as *const std::ffi::c_void, tile_ptr as *const std::ffi::c_void) };
 
     let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
     let before_len = (*habitat.viewing_areas_end() - *habitat.viewing_areas_begin()) / 4;
@@ -1917,6 +1924,888 @@ pub(crate) fn run_habitat_recreate_oas_smoke_live_test(failure_log: &mut Option<
         false
     } else {
         let msg = format!("viewing areas with +0x25 still unset: {unset:#x?}");
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Smoke test only - **does not** call real vanilla `ZTHabitat::getOutermostTank` directly for
+/// comparison, unlike this file's other `ZTHABITAT_*_LIVE` getter tests. `ZTHabitat::get_outermost_tank`'s
+/// own doc comment documents a genuine, real-vanilla null-deref bug (`ZTHabitat_getOutermostTank.asm`'s
+/// `.15`/`.1466e` branch dereferences a zeroed `ESI` when `getGateTileOut` finds no further gate tile) -
+/// confirmed live by an earlier version of this exact test, which called `.original()` directly and
+/// crashed the whole battery outright on a real tank whose own gate-tile chain ends this way. The
+/// reimplemented method deliberately diverges from real vanilla on that one input (returns the current
+/// tank instead of crashing) - there is no safe way to invoke real vanilla's own body for a byte-for-byte
+/// comparison here, so this only smoke-tests the reimplementation itself.
+pub(crate) fn run_habitat_get_outermost_tank_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_OUTERMOST_TANK_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 || !unsafe { ref_from_memory::<ZTHabitat>(ptr) }.is_tank() {
+            continue;
+        }
+        habitat_mgr.clear_tank_walk_markers();
+        let _ = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_outermost_tank();
+    }
+    write_success_line(failure_log, test_name);
+    false
+}
+
+/// Smoke test for `ZTHabitatMgr::getOutermostTank` (the manager-level wrapper) - **not** detoured (see
+/// its own doc comment: `generated.rs`'s declared return type is wrong), so this is the only live
+/// coverage it gets. Calls it directly for every real tank in the loaded zoo, asserting no crash and
+/// that it agrees with the already-verified [`ZTHabitat::get_outermost_tank`].
+pub(crate) fn run_zthabitatmgr_get_outermost_tank_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_GET_OUTERMOST_TANK_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 || !unsafe { ref_from_memory::<ZTHabitat>(ptr) }.is_tank() {
+            continue;
+        }
+        let via_mgr = habitat_mgr.get_outermost_tank(ptr);
+        habitat_mgr.clear_tank_walk_markers();
+        let via_habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_outermost_tank();
+        if via_mgr != via_habitat {
+            let msg = format!("mismatch at habitat {} ({:#010x}): via_mgr={:#010x}, via_habitat={:#010x}", i, ptr, via_mgr, via_habitat);
+            error!("{}: {}", test_name, msg);
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+            }
+            fail_flag = true;
+        }
+    }
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// `ZTHABITAT_GET_NEEDY_NESTED_TANK_SMOKE_LIVE` - same "compare our own two call paths, not real
+/// vanilla" shape as `ZTHABITATMGR_GET_OUTERMOST_TANK_SMOKE_LIVE` just above, deliberately avoiding a
+/// direct `.original()` comparison: real vanilla's own body has two independent unguarded null-deref
+/// paths (a boundary pair's own second tile pointer, or the habitat resolved at that tile's position,
+/// either being null - see `ZTHabitat::get_needy_nested_tank`'s own doc comment) that
+/// `ZTHABITAT_GET_OUTERMOST_TANK_LIVE`'s own history shows can crash the whole battery outright when hit
+/// live rather than raising a catchable exception.
+pub(crate) fn run_habitat_get_needy_nested_tank_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NEEDY_NESTED_TANK_SMOKE_LIVE";
+
+    let keeper_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+    let Some(keeper_ptr) = keeper_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    };
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut checked = 0;
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 || !unsafe { ref_from_memory::<ZTHabitat>(ptr) }.is_tank() {
+            continue;
+        }
+        checked += 1;
+        let via_mgr = habitat_mgr.get_needy_nested_tank(ptr, keeper_ptr);
+        habitat_mgr.clear_tank_walk_markers();
+        let via_habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_needy_nested_tank(keeper_ptr);
+        if via_mgr != via_habitat {
+            let msg = format!("mismatch at habitat {} ({:#010x}): via_mgr={:#010x}, via_habitat={:#010x}", i, ptr, via_mgr, via_habitat);
+            error!("{}: {}", test_name, msg);
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+            }
+            fail_flag = true;
+        }
+    }
+
+    if checked == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no live tank habitat found)", test_name));
+        return false;
+    }
+
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Comparison test for `ZTHabitatMgr::getTank`: real vs. reimplemented, over every real habitat's own
+/// [`ZTHabitat::get_gate_tile_out`] tile (a real, in-map tile guaranteed to exist for any habitat that
+/// has ever been placed) plus the null-tile edge case.
+pub(crate) fn run_zthabitatmgr_get_tank_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_GET_TANK_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut fail_flag = false;
+
+    let mut check = |tile_ptr: u32| {
+        let real_value = unsafe { zthabitatmgr::GET_TANK.original()(habitat_mgr as *const _ as *const u32, tile_ptr as *const u32) } as u32;
+        let reimpl_value = habitat_mgr.get_tank(tile_ptr);
+        if real_value != reimpl_value {
+            let msg = format!("mismatch at tile {:#010x}: real={:#010x}, reimpl={:#010x}", tile_ptr, real_value, reimpl_value);
+            error!("{}: {}", test_name, msg);
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+            }
+            fail_flag = true;
+        }
+    };
+
+    check(0);
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        if let Some(tile) = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_gate_tile_out() {
+            check(globals().ztworldmgr().get_ptr_from_bftile(&tile));
+        }
+    }
+
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Smoke test: calls the reimplemented `ZTHabitatMgr::break_amphibious_connection` over every real
+/// habitat's own boundary tile-pairs, asserting no crash - same "not restored afterward" convention as
+/// this file's other real-state-mutating smoke tests (e.g.
+/// `run_zthabitatmgr_check_amphibious_neighbor_smoke_live_test`).
+pub(crate) fn run_zthabitatmgr_break_amphibious_connection_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_BREAK_AMPHIBIOUS_CONNECTION_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut entry = *habitat.boundary_tile_pairs_begin();
+        let end = *habitat.boundary_tile_pairs_end();
+        while entry != end {
+            let tile_a: u32 = get_from_memory(entry);
+            let tile_b: u32 = get_from_memory(entry + 4);
+            crate::zthabitatmgr::ZTHabitatMgr::break_amphibious_connection(tile_a, tile_b);
+            entry += 8;
+        }
+    }
+    write_success_line(failure_log, test_name);
+    false
+}
+
+/// Smoke test: calls the reimplemented `ZTHabitatMgr::recalculate_deterioration` once against the real,
+/// loaded zoo's own fences/habitats, asserting no crash. Mutates real habitat deterioration state as a
+/// side effect (matches real vanilla's own per-tick call) - not restored afterward, same convention as
+/// this file's other mutating smoke tests.
+pub(crate) fn run_zthabitatmgr_recalculate_deterioration_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_RECALCULATE_DETERIORATION_SMOKE_LIVE";
+    unsafe { &mut *globals().zthabitatmgr_ptr() }.recalculate_deterioration();
+    write_success_line(failure_log, test_name);
+    false
+}
+
+/// Smoke test: calls the reimplemented `ZTHabitatMgr::mark_zoo_exterior` (which internally calls
+/// `fill_zoo_exterior`) once against the real, loaded zoo, asserting no crash. Mutates real tile state
+/// (`BFTile`'s own `+0x83` "in zoo" bit) as a side effect - matches real vanilla's own per-load call, not
+/// restored afterward.
+pub(crate) fn run_zthabitatmgr_mark_zoo_exterior_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_MARK_ZOO_EXTERIOR_SMOKE_LIVE";
+    globals().zthabitatmgr().mark_zoo_exterior();
+    write_success_line(failure_log, test_name);
+    false
+}
+
+/// Smoke test: calls the reimplemented `ZTHabitatMgr::update` (the manager-level, non-virtual function -
+/// distinct from the already-independently-tested `ZTHabitat::update` vtable slot) once against the real,
+/// loaded zoo with a plausible `elapsed` value, asserting no crash. Calls through to real, un-ported
+/// vanilla `updateGates` and the already-verified `ZTHabitat::update` over every real habitat - not
+/// restored afterward, matching this file's other mutating smoke tests.
+pub(crate) fn run_zthabitatmgr_update_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_UPDATE_SMOKE_LIVE";
+    globals().zthabitatmgr().update(16);
+    write_success_line(failure_log, test_name);
+    false
+}
+
+/// Real comparison test (not just a smoke test - `ZTHabitat::blockService` is read-only, so calling the
+/// real, un-detoured `.original()` address alongside the reimplementation is safe): finds the first live
+/// `ZTKeeper` in the real, loaded zoo's own `entity_array` (via [`RVA_KEEPER_TYPE_CHECK_ARG`], the same
+/// `isCastClass` tag [`crate::zthabitatmgr::ZTHabitat::block_service`]'s own leading guard uses), then
+/// compares real vanilla against the reimplementation over every real habitat for all four
+/// `(skip_tank_depth_check, check_tank_and_neighbors)` combinations. Skipped (not failed) if the loaded
+/// save has no keeper at all.
+/// `ZTHABITATMGR_CHECK_ENTER_HABITAT_MATCHES_REAL_LIVE` - compares real vanilla `checkEnterHabitat`
+/// against [`ZTHabitatMgr::check_enter_habitat`] for every real habitat that has a confirmed entrance
+/// gate ([`ZTHabitat::get_gate_tile_in`]/`_out` both `Some`), using any live animal as `unit_ptr` (the
+/// function only compares path costs to the gate tiles, not the unit's actual current location, so any
+/// real `BFUnit` works). Pure query with no side effects on either side, so a direct real-vanilla
+/// comparison is safe - same reasoning as `ZTHABITAT_BLOCK_SERVICE_MATCHES_REAL_LIVE` just below.
+pub(crate) fn run_zthabitatmgr_check_enter_habitat_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_CHECK_ENTER_HABITAT_MATCHES_REAL_LIVE";
+
+    let unit_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_ANIMAL_TYPE_CHECK) });
+    let Some(unit_ptr) = unit_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live animal found)", test_name));
+        return false;
+    };
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        if habitat.get_gate_tile_in().is_none() || habitat.get_gate_tile_out().is_none() {
+            continue;
+        }
+        checked += 1;
+        let real = unsafe { zthabitatmgr::CHECK_ENTER_HABITAT.original()(ptr as *const u32, unit_ptr as *const u32) };
+        let reimpl = ZTHabitatMgr::check_enter_habitat(ptr, unit_ptr);
+        if real != reimpl {
+            failures.push(format!("habitat {} ({:#010x}): real={}, reimpl={}", i, ptr, real, reimpl));
+        }
+    }
+
+    if checked == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no habitat with a confirmed entrance gate)", test_name));
+        return false;
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Smoke test for `ZTHabitatMgr::entity_about_to_be_removed`: calls it over every live world entity that
+/// resolves (via `BFEntity::getTile`) to a real habitat, asserting no crash. `characteristics_dirty`/
+/// `species_list_dirty` are written unconditionally before the tank/amphibious-neighbor branch, but
+/// `BEFORE_ENTITY_CHANGE`'s own real (un-ported) body immediately clears both again as part of its own
+/// work (confirmed live), so their post-call state is not itself a testable signal here - see
+/// [`crate::zthabitatmgr::ZTHabitatMgr::entity_about_to_be_removed`]'s own doc comment. Separately tracks
+/// whether any live entity's habitat is a tank with a non-empty amphibious-neighbor set and is itself
+/// scenery or an animal (the tank-branch precondition, reached only for real coverage of that branch); if
+/// none is found in the loaded save, reports a skip rather than a failure, matching
+/// [`run_habitat_hilite_neighbors_roundtrip_live_test`]'s own convention.
+pub(crate) fn run_zthabitatmgr_entity_about_to_be_removed_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_ENTITY_ABOUT_TO_BE_REMOVED_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut tank_neighbor_exercised = false;
+
+    for entity_ptr in globals().ztworldmgr().entity_array() {
+        if entity_ptr == 0 {
+            continue;
+        }
+        let tile_ptr = unsafe { BFENTITY_GET_TILE.original()(entity_ptr as *const u32) } as u32;
+        if tile_ptr == 0 {
+            continue;
+        }
+        let tile = get_from_memory::<crate::ztmapview::BFTile>(tile_ptr);
+        let habitat_ptr = habitat_mgr.get_habitat_ptr(tile.pos.x, tile.pos.y);
+        if habitat_ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let is_tank_with_neighbors = habitat.is_tank() && walk_neighbor_tree(*habitat.amphibious_neighbors_head()).next().is_some();
+        let is_scenery_or_animal =
+            unsafe { entity_type_matches(entity_ptr, RVA_SCENERY_TYPE_CHECK_ARG) || entity_type_matches(entity_ptr, RVA_ANIMAL_TYPE_CHECK) };
+
+        habitat_mgr.entity_about_to_be_removed(entity_ptr);
+
+        if is_tank_with_neighbors && is_scenery_or_animal {
+            tank_neighbor_exercised = true;
+        }
+    }
+
+    if tank_neighbor_exercised {
+        write_success_line(failure_log, test_name);
+    } else {
+        write_success_line(failure_log, &format!("{} (skipped: no tank habitat with amphibious neighbors found)", test_name));
+    }
+    false
+}
+
+/// Smoke test for `ZTHabitatMgr::entity_removed`: same live-entity walk as
+/// [`run_zthabitatmgr_entity_about_to_be_removed_smoke_live_test`], calling `entity_removed(tile_ptr,
+/// entity_type_ptr)` (`entity_type_ptr` read from `BFEntity::inner_class_ptr` at `+0x128`), asserting no
+/// crash. Same dirty-flag caveat as that sibling applies (`AFTER_ENTITY_CHANGE`'s own real body clears
+/// them again), so this only tracks whether the tank+amphibious-neighbor branch was reached for coverage
+/// purposes, same skip convention as the sibling.
+pub(crate) fn run_zthabitatmgr_entity_removed_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_ENTITY_REMOVED_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut tank_neighbor_exercised = false;
+
+    for entity_ptr in globals().ztworldmgr().entity_array() {
+        if entity_ptr == 0 {
+            continue;
+        }
+        let tile_ptr = unsafe { BFENTITY_GET_TILE.original()(entity_ptr as *const u32) } as u32;
+        if tile_ptr == 0 {
+            continue;
+        }
+        let tile = get_from_memory::<crate::ztmapview::BFTile>(tile_ptr);
+        let habitat_ptr = habitat_mgr.get_habitat_ptr(tile.pos.x, tile.pos.y);
+        if habitat_ptr == 0 {
+            continue;
+        }
+        let entity_type_ptr = get_from_memory::<u32>(entity_ptr + 0x128);
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let is_tank_with_neighbors = habitat.is_tank() && walk_neighbor_tree(*habitat.amphibious_neighbors_head()).next().is_some();
+        let is_scenery_or_animal = entity_type_ptr != 0
+            && unsafe { crate::ztshow::type_check(entity_type_ptr, RVA_SCENERY_TYPE_CHECK_ARG) || crate::ztshow::type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) };
+
+        habitat_mgr.entity_removed(tile_ptr, entity_type_ptr);
+
+        if is_tank_with_neighbors && is_scenery_or_animal {
+            tank_neighbor_exercised = true;
+        }
+    }
+
+    if tank_neighbor_exercised {
+        write_success_line(failure_log, test_name);
+    } else {
+        write_success_line(failure_log, &format!("{} (skipped: no tank habitat with amphibious neighbors found)", test_name));
+    }
+    false
+}
+
+/// Smoke test for `ZTHabitatMgr::entity_about_to_be_placed`: same shape as
+/// [`run_zthabitatmgr_entity_about_to_be_removed_smoke_live_test`], but resolves the entity's tile via
+/// `WORLD_TO_TILE` against `BFEntity::pos` (`+0x114`) instead of `BFEntity::getTile`, matching the
+/// production method's own resolution path for an entity not yet assigned a tile.
+pub(crate) fn run_zthabitatmgr_entity_about_to_be_placed_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_ENTITY_ABOUT_TO_BE_PLACED_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut tank_neighbor_exercised = false;
+
+    for entity_ptr in globals().ztworldmgr().entity_array() {
+        if entity_ptr == 0 {
+            continue;
+        }
+        let mut tile_xyz = [0i32; 3];
+        unsafe { WORLD_TO_TILE.original()(tile_xyz.as_mut_ptr() as *const i32, (entity_ptr + 0x114) as *const i32) };
+        let habitat_ptr = habitat_mgr.get_habitat_ptr(tile_xyz[0], tile_xyz[1]);
+        if habitat_ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let is_tank_with_neighbors = habitat.is_tank() && walk_neighbor_tree(*habitat.amphibious_neighbors_head()).next().is_some();
+        let is_scenery_or_animal =
+            unsafe { entity_type_matches(entity_ptr, RVA_SCENERY_TYPE_CHECK_ARG) || entity_type_matches(entity_ptr, RVA_ANIMAL_TYPE_CHECK) };
+
+        habitat_mgr.entity_about_to_be_placed(entity_ptr);
+
+        if is_tank_with_neighbors && is_scenery_or_animal {
+            tank_neighbor_exercised = true;
+        }
+    }
+
+    if tank_neighbor_exercised {
+        write_success_line(failure_log, test_name);
+    } else {
+        write_success_line(failure_log, &format!("{} (skipped: no tank habitat with amphibious neighbors found)", test_name));
+    }
+    false
+}
+
+/// Smoke test for `ZTHabitatMgr::entity_placed`: same shape as
+/// [`run_zthabitatmgr_entity_removed_smoke_live_test`], but resolves the entity's tile via
+/// `WORLD_TO_TILE`/`BFEntity::pos` like [`run_zthabitatmgr_entity_about_to_be_placed_smoke_live_test`],
+/// bounds-checked against `map_x_size`/`map_y_size` to match the production method's own guard.
+pub(crate) fn run_zthabitatmgr_entity_placed_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_ENTITY_PLACED_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let world_mgr = globals().ztworldmgr();
+    let mut tank_neighbor_exercised = false;
+
+    for entity_ptr in world_mgr.entity_array() {
+        if entity_ptr == 0 {
+            continue;
+        }
+        let mut tile_xyz = [0i32; 3];
+        unsafe { WORLD_TO_TILE.original()(tile_xyz.as_mut_ptr() as *const i32, (entity_ptr + 0x114) as *const i32) };
+        let (tile_x, tile_y) = (tile_xyz[0], tile_xyz[1]);
+        if tile_x < 0 || tile_y < 0 || tile_x as u32 >= world_mgr.map_x_size || tile_y as u32 >= world_mgr.map_y_size {
+            continue;
+        }
+        let tile_ptr = world_mgr.get_tile_ptr(tile_x as u32, tile_y as u32);
+        let tile = get_from_memory::<crate::ztmapview::BFTile>(tile_ptr);
+        let habitat_ptr = habitat_mgr.get_habitat_ptr(tile.pos.x, tile.pos.y);
+        if habitat_ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let is_tank_with_neighbors = habitat.is_tank() && walk_neighbor_tree(*habitat.amphibious_neighbors_head()).next().is_some();
+        let is_scenery_or_animal =
+            unsafe { entity_type_matches(entity_ptr, RVA_SCENERY_TYPE_CHECK_ARG) || entity_type_matches(entity_ptr, RVA_ANIMAL_TYPE_CHECK) };
+
+        habitat_mgr.entity_placed(entity_ptr);
+
+        if is_tank_with_neighbors && is_scenery_or_animal {
+            tank_neighbor_exercised = true;
+        }
+    }
+
+    if tank_neighbor_exercised {
+        write_success_line(failure_log, test_name);
+    } else {
+        write_success_line(failure_log, &format!("{} (skipped: no tank habitat with amphibious neighbors found)", test_name));
+    }
+    false
+}
+
+pub(crate) fn run_habitat_block_service_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_BLOCK_SERVICE_MATCHES_REAL_LIVE";
+
+    let keeper_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+    let Some(keeper_ptr) = keeper_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    };
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for skip_tank_depth_check in [false, true] {
+            for check_tank_and_neighbors in [false, true] {
+                let real = unsafe {
+                    zthabitat::BLOCK_SERVICE.original()(ptr as *const u32, keeper_ptr as *const u32, skip_tank_depth_check, check_tank_and_neighbors)
+                };
+                let reimpl = habitat.block_service(keeper_ptr, skip_tank_depth_check, check_tank_and_neighbors);
+                if real != reimpl {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), skip_tank_depth_check={}, check_tank_and_neighbors={}: real={}, reimpl={}",
+                        i, ptr, skip_tank_depth_check, check_tank_and_neighbors, real, reimpl
+                    ));
+                }
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Step 6o batch: `getNumKeepers`, `isBeingServiced`, `getAnimals` - all three are plain
+/// `characteristics_dirty`-gated leaf getters, same shape as `getAttractiveness`, so
+/// [`compare_over_live_habitats`] applies directly.
+pub(crate) fn run_habitat_get_num_keepers_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_KEEPERS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_KEEPERS.original()(ptr) },
+        |habitat| habitat.get_num_keepers(),
+    )
+}
+
+pub(crate) fn run_habitat_is_being_serviced_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_IS_BEING_SERVICED_LIVE",
+        |ptr| unsafe { zthabitat::IS_BEING_SERVICED.original()(ptr) != 0 },
+        |habitat| habitat.is_being_serviced(),
+    )
+}
+
+pub(crate) fn run_habitat_get_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_ANIMALS_LIVE",
+        |ptr| unsafe { zthabitat::GET_ANIMALS.original()(ptr) },
+        |habitat| habitat.get_animals() as i32,
+    )
+}
+
+/// Same direct/with-neighbors shape as `run_habitat_get_num_animals_live_test`.
+pub(crate) fn run_habitat_get_num_hungry_foodless_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let direct = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_HUNGRY_FOODLESS_ANIMALS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_HUNGRY_FOODLESS_ANIMALS.original()(ptr, false) },
+        |habitat| habitat.get_num_hungry_foodless_animals(false),
+    );
+    let with_neighbors = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_HUNGRY_FOODLESS_ANIMALS_WITH_NEIGHBORS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_HUNGRY_FOODLESS_ANIMALS.original()(ptr, true) },
+        |habitat| habitat.get_num_hungry_foodless_animals(true),
+    );
+    direct || with_neighbors
+}
+
+/// `getAmountKeeperFood`'s 16-entry `category` array isn't otherwise enumerable from outside
+/// `ZTHabitat` (no accessor exposes its length as a constant), so this exercises every index directly
+/// rather than going through [`compare_over_live_habitats`]' single-value shape.
+pub(crate) fn run_habitat_get_amount_keeper_food_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_AMOUNT_KEEPER_FOOD_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for category in 0..16u32 {
+            for include_neighbors in [false, true] {
+                let real = unsafe { zthabitat::GET_AMOUNT_KEEPER_FOOD.original()(ptr as *const u32, category, include_neighbors) };
+                let reimpl = habitat.get_amount_keeper_food(category, include_neighbors);
+                if real != reimpl {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), category={}, include_neighbors={}: real={}, reimpl={}",
+                        i, ptr, category, include_neighbors, real, reimpl
+                    ));
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Same per-category exhaustive shape as `run_habitat_get_amount_keeper_food_live_test`.
+pub(crate) fn run_habitat_get_food_to_leave_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_FOOD_TO_LEAVE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for category in 0..16u32 {
+            for include_neighbors in [false, true] {
+                let real = unsafe { zthabitat::GET_FOOD_TO_LEAVE.original()(ptr as *const u32, category, include_neighbors) };
+                let reimpl = habitat.get_food_to_leave(category as i32, include_neighbors);
+                if real != reimpl {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), category={}, include_neighbors={}: real={}, reimpl={}",
+                        i, ptr, category, include_neighbors, real, reimpl
+                    ));
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Membership test over `hasBldg`'s own vector: `entity_ptr = 0` is exercised on every habitat (should
+/// never be a member), plus each habitat's own first real building-list entry when non-empty (should
+/// always be a member) - covers both the false and true paths without needing to construct anything.
+pub(crate) fn run_habitat_has_bldg_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_HAS_BLDG_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut candidates = vec![0u32];
+        let (begin, end) = (*habitat.building_list_begin(), *habitat.building_list_end());
+        if end > begin {
+            candidates.push(get_from_memory::<u32>(begin));
+        }
+        for entity_ptr in candidates {
+            let real = unsafe { zthabitat::HAS_BLDG.original()(ptr as *const u32, entity_ptr as *const u32) };
+            let reimpl = habitat.has_bldg(entity_ptr);
+            if real != reimpl {
+                failures.push(format!("habitat {} ({:#010x}), entity={:#010x}: real={}, reimpl={}", i, ptr, entity_ptr, real, reimpl));
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Content comparison (sorted, not pointer-identity) for `getSicklyAnimals`' own out-param vector -
+/// real vanilla is called first into its own scratch buffer, then the reimplementation into a separate
+/// scratch buffer, both freed afterward via [`free_event_vector_buffer`] (matching each side's own real
+/// tail exactly - not a `PoolAlloc::deallocate` call).
+pub(crate) fn run_habitat_get_sickly_animals_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_SICKLY_ANIMALS_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+
+        let mut real_vector = [0u32; 3];
+        unsafe { zthabitat::GET_SICKLY_ANIMALS.original()(ptr as *const u32, real_vector.as_mut_ptr() as *const i32) };
+        let mut real_animals: Vec<u32> = (real_vector[0]..real_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+        real_animals.sort_unstable();
+        free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+        let mut reimpl_vector = [0u32; 3];
+        habitat.get_sickly_animals(reimpl_vector.as_mut_ptr() as u32);
+        let mut reimpl_animals: Vec<u32> = (reimpl_vector[0]..reimpl_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+        reimpl_animals.sort_unstable();
+        free_event_vector_buffer(reimpl_vector[0], reimpl_vector[2] - reimpl_vector[0]);
+
+        if real_animals != reimpl_animals {
+            failures.push(format!("habitat {} ({:#010x}): real={:?}, reimpl={:?}", i, ptr, real_animals, reimpl_animals));
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Same content-comparison shape as `run_habitat_get_sickly_animals_matches_real_live_test`, for
+/// `getViewingAreasWithGuests`' own out-param vector.
+pub(crate) fn run_habitat_get_viewing_areas_with_guests_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_VIEWING_AREAS_WITH_GUESTS_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+
+        let mut real_vector = [0u32; 3];
+        unsafe { zthabitat::GET_VIEWING_AREAS_WITH_GUESTS.original()(ptr as *const u32, real_vector.as_mut_ptr() as *const i32) };
+        let mut real_vas: Vec<u32> = (real_vector[0]..real_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+        real_vas.sort_unstable();
+        free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+        let mut reimpl_vector = [0u32; 3];
+        habitat.get_viewing_areas_with_guests(reimpl_vector.as_mut_ptr() as u32);
+        let mut reimpl_vas: Vec<u32> = (reimpl_vector[0]..reimpl_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+        reimpl_vas.sort_unstable();
+        free_event_vector_buffer(reimpl_vector[0], reimpl_vector[2] - reimpl_vector[0]);
+
+        if real_vas != reimpl_vas {
+            failures.push(format!("habitat {} ({:#010x}): real={:?}, reimpl={:?}", i, ptr, real_vas, reimpl_vas));
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Same "find a live `ZTKeeper`, compare over every habitat" shape as
+/// `run_habitat_block_service_matches_real_live_test`.
+pub(crate) fn run_habitat_get_num_sickly_animals_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NUM_SICKLY_ANIMALS_MATCHES_REAL_LIVE";
+
+    let keeper_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+    let Some(keeper_ptr) = keeper_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    };
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for include_neighbors in [false, true] {
+            let real = unsafe { zthabitat::GET_NUM_SICKLY_ANIMALS.original()(ptr as *const u32, keeper_ptr as *const u32, include_neighbors) };
+            let reimpl = habitat.get_num_sickly_animals(keeper_ptr, include_neighbors);
+            if real != reimpl {
+                failures.push(format!("habitat {} ({:#010x}), include_neighbors={}: real={}, reimpl={}", i, ptr, include_neighbors, real, reimpl));
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Same "find a live `ZTKeeper`, compare over every habitat" shape, for `getNearestSickAnimal`'s own
+/// returned pointer (rather than a count).
+pub(crate) fn run_habitat_get_nearest_sick_animal_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NEAREST_SICK_ANIMAL_MATCHES_REAL_LIVE";
+
+    let keeper_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+    let Some(keeper_ptr) = keeper_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    };
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for check_can_see in [false, true] {
+            let real = unsafe { zthabitat::GET_NEAREST_SICK_ANIMAL.original()(ptr as *const u32, keeper_ptr as i32, check_can_see as i8) } as u32;
+            let reimpl = habitat.get_nearest_sick_animal(keeper_ptr, check_can_see);
+            if real != reimpl {
+                failures.push(format!(
+                    "habitat {} ({:#010x}), check_can_see={}: real={:#010x}, reimpl={:#010x}",
+                    i, ptr, check_can_see, real, reimpl
+                ));
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Roundtrip test for `ZTHabitat::removeViewingAreas`: same synthetic-`ZTViewingArea` construction as
+/// `run_habitat_add_remove_viewing_area_roundtrip_live_test`, but only on a habitat that starts with
+/// **no** existing viewing areas (`viewing_areas_begin == viewing_areas_end`) - `removeViewingAreas`
+/// empties the *entire* vector, not just one entry, so running it against a habitat with pre-existing
+/// real viewing areas would destroy live game state unrelated to this test. Only the synthetic area
+/// this test itself added is ever at risk.
+pub(crate) fn run_habitat_remove_viewing_areas_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_REMOVE_VIEWING_AREAS_ROUNDTRIP_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+
+    let found = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).find_map(|ptr| {
+        if ptr == 0 {
+            return None;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        if *habitat.unknown_flag_0x2c() != 0 || *habitat.viewing_areas_begin() != *habitat.viewing_areas_end() {
+            return None;
+        }
+        walk_tile_list(*habitat.owned_tiles_ptr()).next().map(|node| get_from_memory::<u32>(node + 0x8)).filter(|&t| t != 0).map(|tile_ptr| (ptr, tile_ptr))
+    });
+
+    let Some((ptr, tile_ptr)) = found else {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitat with empty viewing areas and an owned tile)", test_name));
+        return false;
+    };
+
+    let new_va = unsafe { OPERATOR_NEW.original()(0x5c) } as u32;
+    if new_va == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: operator_new failed)", test_name));
+        return false;
+    }
+    unsafe { ztviewingarea::CONSTRUCTOR.original()(new_va as *const u32, ptr as *const std::ffi::c_void, tile_ptr as *const std::ffi::c_void) };
+
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.add_viewing_area(new_va);
+    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.remove_viewing_areas();
+
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    let ok = *habitat.viewing_areas_begin() == *habitat.viewing_areas_end();
+
+    if ok {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!(
+            "expected empty viewing area vector after remove_viewing_areas, begin={:#x} end={:#x}",
+            habitat.viewing_areas_begin(),
+            habitat.viewing_areas_end()
+        );
         error!("{}: {}", test_name, msg);
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());

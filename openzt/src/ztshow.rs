@@ -933,9 +933,9 @@ pub(crate) fn find_or_insert_pending_script_node(show_info: u32, unit_type_id: u
 /// nothing else mutates the tree's structure in between.
 ///
 /// **Deliberately not ported**: the config-file-driven default-admission-cost block (`BFConfigFile`/
-/// `s_shows.cfg`/`meth_0x46ec56`, gated behind an unrelated global flag) - `meth_0x46ec56` has no
-/// decompile/address anywhere in this repo, and this only affects admission pricing, not show-script
-/// correctness. Same class of deliberate skip as `start`'s own UI-toast/`GLOBAL_ZTAIMgr` gaps.
+/// `s_shows.cfg`/`ZTShowInfo::setAdmission`, gated behind an unrelated global flag) - this only affects
+/// admission pricing, not show-script correctness. Same class of deliberate skip as `start`'s own
+/// UI-toast/`GLOBAL_ZTAIMgr` gaps.
 pub fn add_script(show_info: u32, unit_type_id: u32, new_script_id: u16) -> bool {
     if new_script_id == 0 || new_script_id == 0xffff || unit_type_id == 0 {
         return false;

@@ -21,17 +21,17 @@ use openzt_detour_macro::detour_mod;
 #[detour_mod]
 pub mod roof_detours {
     use super::*;
-    use openzt_detour::generated::ztmapview::PLACE_ENTITY_ON_MAP_1;
+    use openzt_detour::generated::ztmapview::PLACE_ENTITY_ON_MAP;
     use openzt_detour::generated::ztui_gameopts::SAVE_GAME;
 
-    /// Detour for PLACE_ENTITY_ON_MAP_1
+    /// Detour for PLACE_ENTITY_ON_MAP
     ///
     /// After placing an entity, checks if it's a roof and hides it if needed.
     /// The second parameter (entity_ptr) is the BFEntity that was just placed.
-    #[detour(PLACE_ENTITY_ON_MAP_1)]
+    #[detour(PLACE_ENTITY_ON_MAP)]
     unsafe extern "thiscall" fn place_entity_on_map_detour(_this: *const u32, entity_ptr: *const u32, _pos: f32, _rotation: i32) -> *const i32 {
         // Call the original function first to place the entity
-        let result = unsafe { PLACE_ENTITY_ON_MAP_1_DETOUR.call(_this, entity_ptr, _pos, _rotation) };
+        let result = unsafe { PLACE_ENTITY_ON_MAP_DETOUR.call(_this, entity_ptr, _pos, _rotation) };
 
         let entity_addr = entity_ptr as u32;
 

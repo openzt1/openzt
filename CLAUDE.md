@@ -629,6 +629,15 @@ crashes/corruption (`ZooStatus::fChance`, and `ZTHabitatMgr::createHabitat`'s `d
 than waiting for a report. Use `util.rs`'s `low_byte_bool(value: u32) -> bool` at the call site instead of a
 raw `!= 0`/`== 0` comparison whenever a decompile shows this shape.
 
+**When you have live Ghidra access, prefer fixing the root cause over masking at every call site.** If the
+function's real C++ return type is genuinely `bool` (a membership/comparison test used as a yes/no gate at
+every caller, not a wider value callers happen to truncate), retype its return in Ghidra directly
+(`variables` → `set_prototype`, e.g. `bool isAmphibiousNeighbor(void * this, uint param_1)`) rather than
+leaving it `uint`/`undefined4` and masking with `low_byte_bool` on the Rust side. Ghidra then emits clean
+`return a != b;`-shaped code instead of the `CONCAT31` packing, for every caller at once. Reach for
+`low_byte_bool` only when you're not sure the real return type is `bool`, or when it's confirmed wider and
+callers are just reinterpreting it.
+
 ### Detouring a function (`#[detour_mod]` / `#[detour(NAME)]`)
 
 Provided by `openzt-detour-macro`. Shape (see `ztthoughtmgr.rs`'s `thought_save_detours` module or
@@ -722,6 +731,78 @@ looks like the game "just exited") - a reboot is sometimes needed to see a real 
 Build a leak-only teardown path for the side that might hold vanilla-allocated nodes (free only what your own
 code definitely allocated, deliberately leak the rest) rather than reusing a normal Box-walking cleanup - see
 `ztthoughtmgr.rs`'s `live_support::destroy_standalone_mgr_leaking_nodes` for a worked example.
+
+## Ghidra MCP (live identification work)
+
+When a Ghidra MCP server is connected, prefer it over manual decompile copy-paste for identification work
+(naming unnamed/`FUN_`/`cls_`/`meth_` helpers, resolving ICF-folded shared-label functions, fixing missed
+parameters). Gotchas hit in practice:
+
+- Most calls (`get_code`, `variables`, ...) are async - they return a `task_id`; poll with `get_task_status`
+  until it completes, don't assume the first response is the result.
+- `rename_symbol`/`batch_rename`: pass the **bare current function name** as `identifier` (e.g.
+  `meth_0x412fb8`) - not the namespace-qualified name (`BFTile::meth_0x412fb8`) and not the address, both of
+  which fail with "Function not found". `new_name` does accept a fully qualified name
+  (`msvc_std::list<uint>::erase`).
+- `variables` with `action: set_prototype`: pass `function_address` (address works here), and **omit the
+  calling-convention keyword** (`__thiscall` etc.) from the `prototype` string - including it fails with
+  "Can't resolve return type". Ghidra keeps the function's existing calling convention automatically.
+- Before applying a proposed name, `search_functions_by_name` for it first. A name can already exist at a
+  *different* address - proof the helper is one of this codebase's known ICF-folded/shared-label functions
+  with multiple real instantiations (same phenomenon as `cls_0x4012a6`/`meth_0x40a01d`). Renaming to a
+  colliding name fails outright rather than overwriting, so disambiguate (e.g. an address suffix) instead of
+  guessing blind.
+- Still applies even with live access: never hand-edit `generated.rs` directly (see above) - use Ghidra MCP to
+  confirm/apply names and fix signatures in the live project, then regenerate as usual.
+- To pin down an unknown container element size precisely (rather than guessing from context), find which
+  size-classed `PoolAlloc` freelist bucket (`DAT_006380XX`) its constructor/destructor pushes/pops from. The
+  bucket index formula seen throughout this codebase is `idx = (byteSize - 1) >> 3`, with the freelist array
+  at `DAT_00638000 + idx*4`; bucket `idx` covers sizes in `(idx*8, idx*8+8]`. Two different addresses that
+  both round to the same bucket are not proof they share a size - invert the formula to get the real range.
+- When a name collides with one already applied at a different address (`Function with name 'x' already
+  exists in namespace 'y'`), that's confirmation the helper is one of this codebase's known ICF-folded/
+  shared-label functions with multiple real instantiations - disambiguate (an address suffix, or a
+  byte-size tag like `tree24`/`tree36` when the instantiations genuinely differ in size) rather than
+  guessing which one is "real."
+- `rename_symbol`'s `identifier` matches by the function's **unqualified short name only** - it ignores the
+  namespace prefix, and resolves an ambiguous match (more than one function sharing that short name,
+  anywhere in the binary) to the **lowest address** among them, silently. Never reuse a short name across
+  two of your own renames, even under different namespaces you intend to keep distinct - check
+  `search_functions_by_name` on the exact short name for collisions (including pre-existing, unrelated ones)
+  before renaming. If a rename lands on the wrong address, fix it with a temporary-rename dance: rename the
+  wrongly-grabbed function to a throwaway placeholder, rename the real target (now uniquely resolvable),
+  then rename the placeholder back.
+- `create_function` at an address can fail with "may not contain valid code or may overlap an existing
+  function" even when the surrounding instruction boundaries are genuinely clean (confirmed via
+  `get_basic_blocks` on the neighboring functions and gap-filling `disassemble_at` first) - the real cause
+  wasn't identified. If it keeps failing after confirming clean boundaries, defining the function manually
+  in the Ghidra GUI is a reliable fallback; `get_code`/`get_basic_blocks` work normally on it afterward.
+
+## Cross-checking real names via the macOS decompile
+
+The Windows OOAnalyzer pass invents placeholder names (`meth_0x...`, `cls_0x...`, `FUN_...`) for everything
+it can't identify, but Zoo Tycoon's macOS build kept real, unstripped C++ symbol names. When a placeholder
+looks like it's a genuine **game-logic method** (a `ZTHabitat`/`ZTAnimal`/`BF*`-style class method, not a
+generic STL/allocator internal), check for a macOS decompile before inventing a name:
+
+- Real names live in `private/resources/macos-decompiles/` as `ClassName_methodName.c`. `Grep` there for the
+  class name first (e.g. `ZTHabitat_`) - if the specific method already has a file, read it directly.
+- If a Ghidra MCP session is connected, the user can also open the macOS binary as a second program
+  (`list_binaries` will show it once loaded; pass `program_name` to target it) and query it live the same way
+  as the Windows one - useful when the static export in `private/resources/macos-decompiles/` doesn't cover
+  the function you need, or looks stale.
+- **Match by structure, not just class name.** Confirm a macOS candidate by comparing the actual call
+  sequence/branch shape against the Windows decompile (same helper calls in the same order, same early-outs,
+  same loop shape) - don't accept a name just because it's the right class and "sounds right." Example from
+  this codebase: `ZTHabitat::getCloseOutsideTile`'s macOS body (walk neighbors, skip via `isAmphibiousNeighbor`,
+  collect survivors into a temp list, `rand() % size` to pick one, return a stored field) matched the Windows
+  `meth_0x448cb7` step-for-step, including the exact predicate call site that turned out to be
+  `isAmphibiousNeighbor` too - that's a real confirmation, not a guess.
+- **This technique is for game-logic methods, not compiler-generated internals.** STL/allocator helpers
+  (`vector<T>::_Insert_n`, `_Tree::insert`, etc.) get their own compiler- and platform-specific internal
+  shapes and mangled names on macOS (e.g. `_insert__Q23std42__list_deleter<PCv,...>`) that don't correspond
+  1:1 with the MSVC/Windows internals - don't go looking for a macOS name for those; keep using the
+  `msvc_std::*` generic-role naming convention instead.
 
 ## Code Quality
 
