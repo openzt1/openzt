@@ -397,6 +397,7 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_get_needy_nested_tank_smoke_live_test,
             },
             RegisteredTest { name: "ZTHABITATMGR_GET_TANK_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_get_tank_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_LEADS_TO_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_leads_to_live_test },
             RegisteredTest {
                 name: "ZTHABITATMGR_BREAK_AMPHIBIOUS_CONNECTION_SMOKE_LIVE",
                 run: tests::zthabitatmgr::run_zthabitatmgr_break_amphibious_connection_smoke_live_test,

@@ -11,7 +11,7 @@ use tracing::error;
 use crate::globals::globals;
 use crate::reimplementation_tests::harness::write_success_line;
 use crate::reimplementation_tests::io_redirect;
-use crate::util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory};
+use crate::util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory};
 use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
 use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
 use crate::zthabitatmgr::{
@@ -2065,6 +2065,56 @@ pub(crate) fn run_zthabitatmgr_get_tank_live_test(failure_log: &mut Option<std::
         }
         if let Some(tile) = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_gate_tile_out() {
             check(globals().ztworldmgr().get_ptr_from_bftile(&tile));
+        }
+    }
+
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Comparison test for `ZTHabitatMgr::leadsTo`: real vs. reimplemented, over every ordered pair of real
+/// habitats in the loaded zoo's own `exhibit_array` (including self-pairs) plus the null-pointer edge
+/// cases. Unlike `ZTHABITAT_GET_OUTERMOST_TANK_LIVE`'s own smoke-test-only precedent, real vanilla
+/// `leadsTo` explicitly null-checks `getGateTileOut`'s own result before dereferencing it - no known
+/// unguarded-null-deref risk, so a direct `.original()` comparison is safe here. Both sides reset
+/// `tank_walk_visited_marker` internally on every call, so back-to-back real/reimplemented calls don't
+/// interfere with each other.
+pub(crate) fn run_zthabitatmgr_leads_to_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_LEADS_TO_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut fail_flag = false;
+
+    let mut check = |habitat_a: u32, habitat_b: u32| {
+        let real_value = low_byte_bool(unsafe {
+            zthabitatmgr::LEADS_TO.original()(habitat_mgr as *const _ as *const u32, habitat_a as *const u32, habitat_b as *const u32)
+        });
+        let reimpl_value = habitat_mgr.leads_to(habitat_a, habitat_b);
+        if real_value != reimpl_value {
+            let msg = format!("mismatch for ({:#010x}, {:#010x}): real={}, reimpl={}", habitat_a, habitat_b, real_value, reimpl_value);
+            error!("{}: {}", test_name, msg);
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+            }
+            fail_flag = true;
+        }
+    };
+
+    check(0, 0);
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr_a = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr_a == 0 {
+            continue;
+        }
+        check(ptr_a, 0);
+        check(0, ptr_a);
+        for j in 0..habitat_mgr.exhibit_array().len() {
+            let ptr_b = habitat_mgr.exhibit_array().get_ptr(j);
+            if ptr_b == 0 {
+                continue;
+            }
+            check(ptr_a, ptr_b);
         }
     }
 

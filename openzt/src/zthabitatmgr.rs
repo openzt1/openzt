@@ -52,7 +52,7 @@ use openzt_detour::{
             CHECK_SHOW_NEIGHBOR, DECREMENT_HABITAT_NUM, FIND_BETTER_GATES_FOR_NEIGHBORS, HABITAT_SEEN_FROM_BUILDING, NAME_HABITAT,
             PLACE_GATE, UPDATE_AMPHIBIOUS_NEIGHBORS_0, UPDATE_AMPHIBIOUS_NEIGHBORS_1, UPDATE_SHOW_NEIGHBORS_0, UPDATE_SHOW_NEIGHBORS_1,
             DO_SHOW_CHECK, SNAP_TANK_WALLS_INWARD, CLEAR_PATHFINDING, CLEAR_STAFF_HABITAT, CAN_FIND_PATH,
-            GET_TANK, BREAK_AMPHIBIOUS_CONNECTION, FENCE_REPLACED, RECALCULATE_DETERIORATION, FILL_ZOO_EXTERIOR, MARK_ZOO_EXTERIOR,
+            GET_TANK, BREAK_AMPHIBIOUS_CONNECTION, FENCE_REPLACED, RECALCULATE_DETERIORATION, FILL_ZOO_EXTERIOR, MARK_ZOO_EXTERIOR, LEADS_TO,
             UPDATE as ZTHABITATMGR_UPDATE, UPDATE_GATES, CHECK_EXHIBIT_MORPH, AFTER_ENTITY_CHANGE,
         },
         zttankexhibit::{
@@ -1719,6 +1719,60 @@ impl ZTHabitatMgr {
             if ptr != 0 {
                 unsafe { mut_from_memory::<ZTHabitat>(ptr) }.tank_walk_visited_marker = 0;
             }
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::leadsTo` (`ZTHabitatMgr_leadsTo.c`/`.asm`): `true` if walking the gate-tile-out
+    /// chain from `habitat_a_ptr` (via [`ZTHabitat::get_gate_tile_out`] + [`Self::get_habitat_ptr`] on the
+    /// resulting tile's own position, the same lookup [`Self::get_outermost_tank`] uses) reaches
+    /// `habitat_b_ptr` or loops back to `habitat_a_ptr`, before the walk hits a tile with no further gate,
+    /// an already-visited habitat, or a "world" habitat ([`ZTHabitat::unknown_flag_0x2c`] set). Requires
+    /// both `habitat_a_ptr`/`habitat_b_ptr` to be non-null and non-"world" up front, else returns `false`
+    /// immediately without touching any walk state.
+    ///
+    /// Shares [`ZTHabitat::tank_walk_visited_marker`] (`+0x168`) with [`Self::get_outermost_tank`]/
+    /// [`Self::get_needy_nested_tank`]'s own tank-chain walks - resets it across every `exhibit_array`
+    /// entry via [`Self::clear_tank_walk_markers`] before walking, the same shared-scratch-flag convention
+    /// those two already establish, rather than duplicating the reset loop real vanilla's own decompile
+    /// inlines. The decompile's own `this_00 == param_1` "looped back to the start" check is reproduced
+    /// faithfully even though it's unreachable in practice - `habitat_a_ptr` is already marked visited
+    /// before the walk begins, so the earlier already-visited check always catches a direct loop-back
+    /// first; kept for exact parity with real vanilla's own control flow rather than "corrected" away.
+    pub fn leads_to(&self, habitat_a_ptr: u32, habitat_b_ptr: u32) -> bool {
+        if habitat_a_ptr == 0 {
+            return false;
+        }
+        if unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) }.unknown_flag_0x2c != 0 || habitat_b_ptr == 0 {
+            return false;
+        }
+        if unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) }.unknown_flag_0x2c != 0 {
+            return false;
+        }
+
+        self.clear_tank_walk_markers();
+        unsafe { mut_from_memory::<ZTHabitat>(habitat_a_ptr) }.tank_walk_visited_marker = 1;
+
+        let mut current_ptr = habitat_a_ptr;
+        loop {
+            let gate_tile = unsafe { ref_from_memory::<ZTHabitat>(current_ptr) }.get_gate_tile_out();
+            let next_ptr = match gate_tile {
+                Some(tile) => self.get_habitat_ptr(tile.pos.x, tile.pos.y),
+                None => 0,
+            };
+            if next_ptr == 0 {
+                return false;
+            }
+            if unsafe { ref_from_memory::<ZTHabitat>(next_ptr) }.tank_walk_visited_marker != 0 {
+                return false;
+            }
+            unsafe { mut_from_memory::<ZTHabitat>(next_ptr) }.tank_walk_visited_marker = 1;
+            if next_ptr == habitat_b_ptr || next_ptr == habitat_a_ptr {
+                return true;
+            }
+            if unsafe { ref_from_memory::<ZTHabitat>(next_ptr) }.unknown_flag_0x2c != 0 {
+                return false;
+            }
+            current_ptr = next_ptr;
         }
     }
 
@@ -5625,6 +5679,11 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_needy_nested_tank(habitat as u32, keeper as u32) as *const u32
     }
 
+    #[detour(LEADS_TO)]
+    unsafe extern "thiscall" fn leads_to(this: *const u32, habitat_a: *const u32, habitat_b: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.leads_to(habitat_a as u32, habitat_b as u32) as u32
+    }
+
     /// Real vanilla is a plain free `stdcall` helper (no `this`) - see
     /// [`ZTHabitatMgr::break_amphibious_connection`]'s own doc comment.
     #[detour(BREAK_AMPHIBIOUS_CONNECTION)]
@@ -5729,7 +5788,7 @@ pub mod hooks_zthabitatmgr {
     /// `(name, is_enabled)` per detour - lets the live battery's `ZTHABITATMGR_DETOURS_ENABLED` test
     /// catch a silently-failed `init_detours()` (error logged, game continues on vanilla) rather than
     /// looking green while every hooked production path still runs real vanilla.
-    pub fn detour_status() -> [(&'static str, bool); 97] {
+    pub fn detour_status() -> [(&'static str, bool); 98] {
         [
             ("GET_GATE_TILE_IN", GET_GATE_TILE_IN_DETOUR.is_enabled()),
             ("GET_GATE_TILE_OUT", GET_GATE_TILE_OUT_DETOUR.is_enabled()),
@@ -5820,6 +5879,7 @@ pub mod hooks_zthabitatmgr {
             ("GET_OUTERMOST_TANK", GET_OUTERMOST_TANK_DETOUR.is_enabled()),
             ("ZTHABITAT_GET_NEEDY_NESTED_TANK", ZTHABITAT_GET_NEEDY_NESTED_TANK_DETOUR.is_enabled()),
             ("GET_NEEDY_NESTED_TANK", GET_NEEDY_NESTED_TANK_DETOUR.is_enabled()),
+            ("LEADS_TO", LEADS_TO_DETOUR.is_enabled()),
             ("BREAK_AMPHIBIOUS_CONNECTION", BREAK_AMPHIBIOUS_CONNECTION_DETOUR.is_enabled()),
             ("FENCE_REPLACED", FENCE_REPLACED_DETOUR.is_enabled()),
             ("RECALCULATE_DETERIORATION", RECALCULATE_DETERIORATION_DETOUR.is_enabled()),
