@@ -2373,6 +2373,50 @@ pub(crate) fn run_zthabitatmgr_entity_placed_smoke_live_test(failure_log: &mut O
     false
 }
 
+/// Smoke test for the species-rating-cache producer/consumer pair `ZTHabitatMgr::terrainAboutToBeChanged`/
+/// `terrainChanged` (see `species-rating-cache-identification-handover.md`). Calls
+/// `terrain_about_to_be_changed` over each real habitat's first owned tile (`size = 1`, so the scan finds
+/// exactly that one habitat) to populate the cache, then calls `terrain_changed` once to exercise the
+/// consumer path over whatever's left cached (each `terrain_about_to_be_changed` call clears the cache at
+/// its own top, matching real vanilla, so only the last habitat processed survives to the consumer call -
+/// still a meaningful exercise of both functions). `ZTHabitatMgr::beforeEntityChange` (the third function
+/// in this cluster) is already exercised indirectly by
+/// [`run_zthabitatmgr_entity_about_to_be_placed_smoke_live_test`]/
+/// [`run_zthabitatmgr_entity_placed_smoke_live_test`], which now call through `Self::before_entity_change`
+/// on every live entity's own habitat.
+pub(crate) fn run_zthabitatmgr_terrain_changed_cluster_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_TERRAIN_CHANGED_CLUSTER_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut any_habitat_exercised = false;
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let Some(tile_ptr) = crate::zthabitatmgr::walk_tile_list(*habitat.owned_tiles_ptr())
+            .next()
+            .map(|node| get_from_memory::<u32>(node + 0x8))
+            .filter(|&t| t != 0)
+        else {
+            continue;
+        };
+        let tile = get_from_memory::<crate::ztmapview::BFTile>(tile_ptr);
+        habitat_mgr.terrain_about_to_be_changed(tile.pos.x, tile.pos.y, 1);
+        any_habitat_exercised = true;
+    }
+
+    habitat_mgr.terrain_changed();
+
+    if any_habitat_exercised {
+        write_success_line(failure_log, test_name);
+    } else {
+        write_success_line(failure_log, &format!("{} (skipped: no habitat with an owned tile found)", test_name));
+    }
+    false
+}
+
 pub(crate) fn run_habitat_block_service_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTHABITAT_BLOCK_SERVICE_MATCHES_REAL_LIVE";
 

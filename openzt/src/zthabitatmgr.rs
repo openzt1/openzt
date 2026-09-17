@@ -27,7 +27,10 @@ use openzt_detour::{
             ADD_TILE as ZTVIEWINGAREA_ADD_TILE, REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE, DESTRUCTOR as ZTVIEWINGAREA_DESTRUCTOR,
             GET_NSEXTENT as ZTVIEWINGAREA_GET_NSEXTENT, GET_EWEXTENT as ZTVIEWINGAREA_GET_EWEXTENT, CONSTRUCTOR as ZTVIEWINGAREA_CONSTRUCTOR,
         },
-        ztworldmgr::UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS,
+        ztworldmgr::{
+            UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS, PLAY_SMILE_SOUND as ZTWORLDMGR_PLAY_SMILE_SOUND,
+            PLAY_FROWN_SOUND as ZTWORLDMGR_PLAY_FROWN_SOUND,
+        },
         zthabitat::{
             ADD_AMPHIBIOUS_NEIGHBOR, ADD_HABITAT_TILES, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS, CLEAR_SHOW_NEIGHBORS,
             GET_EVENTS, GET_GATE, GET_SHOW_PORTAL, HILITE_AMPHIBIOUS_NEIGHBORS, HILITE_SHOW_NEIGHBORS, RECALCULATE_CHARACTERISTICS,
@@ -41,6 +44,7 @@ use openzt_detour::{
             GET_ANIMALS, GET_AMOUNT_KEEPER_FOOD, GET_FOOD_TO_LEAVE, GET_NUM_KEEPERS, IS_BEING_SERVICED,
             SEND_MAINT_WORKER_CLEANUP_EVENTS, GET_NUM_HUNGRY_FOODLESS_ANIMALS, GET_NUM_SICKLY_ANIMALS,
             GET_SICKLY_ANIMALS, GET_NEAREST_SICK_ANIMAL, GET_VIEWING_AREAS_WITH_GUESTS, HAS_BLDG, REMOVE_VIEWING_AREAS,
+            GET_SPECIES_RATING, GENERATE_FACES,
         },
         zthabitatmgr::{
             GET_ZOO_ENTRANCE_TILE, SAVE as ZTHABITATMGR_SAVE, CREATE_HABITAT as ZTHABITATMGR_CREATE_HABITAT,
@@ -49,7 +53,7 @@ use openzt_detour::{
             PLACE_GATE, UPDATE_AMPHIBIOUS_NEIGHBORS_0, UPDATE_AMPHIBIOUS_NEIGHBORS_1, UPDATE_SHOW_NEIGHBORS_0, UPDATE_SHOW_NEIGHBORS_1,
             DO_SHOW_CHECK, SNAP_TANK_WALLS_INWARD, CLEAR_PATHFINDING, CLEAR_STAFF_HABITAT, CAN_FIND_PATH,
             GET_TANK, BREAK_AMPHIBIOUS_CONNECTION, FENCE_REPLACED, RECALCULATE_DETERIORATION, FILL_ZOO_EXTERIOR, MARK_ZOO_EXTERIOR,
-            UPDATE as ZTHABITATMGR_UPDATE, UPDATE_GATES, CHECK_EXHIBIT_MORPH, BEFORE_ENTITY_CHANGE, AFTER_ENTITY_CHANGE,
+            UPDATE as ZTHABITATMGR_UPDATE, UPDATE_GATES, CHECK_EXHIBIT_MORPH, AFTER_ENTITY_CHANGE,
         },
         zttankexhibit::{
             CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR, UPDATE_TANK_INFO as ZTTANKEXHIBIT_UPDATE_TANK_INFO,
@@ -59,7 +63,11 @@ use openzt_detour::{
     FunctionDef,
 };
 use openzt_detour_macro::detour_mod;
-use std::{collections::{HashSet, VecDeque}, fmt, mem};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fmt, mem,
+    sync::{LazyLock, Mutex},
+};
 use tracing::info;
 
 use getset::Getters;
@@ -676,7 +684,7 @@ impl ZTHabitatMgr {
         let habitat = unsafe { mut_from_memory::<ZTHabitat>(habitat_ptr) };
         habitat.set_dirty_characteristics();
         habitat.species_list_dirty = 1;
-        unsafe { BEFORE_ENTITY_CHANGE.original()(habitat_ptr as *const i32) };
+        Self::before_entity_change(habitat_ptr);
         if !habitat.is_tank() {
             return;
         }
@@ -687,7 +695,7 @@ impl ZTHabitatMgr {
         }
         let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
         for neighbor_ptr in neighbors {
-            unsafe { BEFORE_ENTITY_CHANGE.original()(neighbor_ptr as *const i32) };
+            Self::before_entity_change(neighbor_ptr);
         }
     }
 
@@ -748,7 +756,7 @@ impl ZTHabitatMgr {
         let habitat = unsafe { mut_from_memory::<ZTHabitat>(habitat_ptr) };
         habitat.set_dirty_characteristics();
         habitat.species_list_dirty = 1;
-        unsafe { BEFORE_ENTITY_CHANGE.original()(habitat_ptr as *const i32) };
+        Self::before_entity_change(habitat_ptr);
         if !habitat.is_tank() {
             return;
         }
@@ -759,7 +767,7 @@ impl ZTHabitatMgr {
         }
         let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
         for neighbor_ptr in neighbors {
-            unsafe { BEFORE_ENTITY_CHANGE.original()(neighbor_ptr as *const i32) };
+            Self::before_entity_change(neighbor_ptr);
         }
     }
 
@@ -808,6 +816,180 @@ impl ZTHabitatMgr {
             unsafe {
                 AFTER_ENTITY_CHANGE.original()(neighbor_ptr as *const u32, entity_type_ptr as *const u32, std::ptr::null(), false, 1);
             }
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::beforeEntityChange` (`ZTHabitatMgr_beforeEntityChange.c`/`.asm`): real
+    /// vanilla is a free `stdcall` helper taking a habitat pointer directly, not a `ZTHabitatMgr`
+    /// instance method (`generated.rs`'s own `BEFORE_ENTITY_CHANGE` has no `this`) - called as an
+    /// associated function here, matching [`Self::replace_gate_with_fence`]'s own precedent for the same
+    /// shape. Clears real vanilla's own single, separate, file-scope `map<int,float>`
+    /// (`DAT_0063b998`/`_99c`) at the top of every call - architecturally distinct from
+    /// [`SPECIES_RATING_CACHE`] above, not a second producer/consumer of it, per
+    /// `species-rating-cache-identification-handover.md`. Unless `habitat_ptr` is the "world" habitat
+    /// ([`ZTHabitat::unknown_flag_0x2c`] set), calls [`get_species_rating`] for every one of its current
+    /// [`ZTHabitat::surrounding_species`]. Real vanilla stores each result back into that just-cleared
+    /// map, but nothing else anywhere in the decompile corpus ever reads it afterward (confirmed in the
+    /// handover doc) - the whole function's only observable effect is the `getSpeciesRating` calls
+    /// themselves, so this port performs the same calls in the same order without modeling the
+    /// write-only map.
+    pub fn before_entity_change(habitat_ptr: u32) {
+        if habitat_ptr == 0 {
+            return;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        if habitat.unknown_flag_0x2c != 0 {
+            return;
+        }
+        for species_ptr in habitat.surrounding_species() {
+            let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
+            unsafe { get_species_rating(habitat_ptr, species_key) };
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::terrainAboutToBeChanged` (`ZTHabitatMgr_terrainAboutToBeChanged.c`/`.asm`):
+    /// the producer half of the species-rating-cache pair [`Self::terrain_changed`] consumes - see
+    /// `species-rating-cache-identification-handover.md`. Omits real vanilla's own bracketing
+    /// `GetTickCount()` calls (perf-timing only, no functional effect).
+    ///
+    /// Clears [`SPECIES_RATING_CACHE`], then scans the `[x, x+size)` x `[y, y+size)` tile square (via
+    /// [`Self::get_habitat_ptr`]) collecting each distinct, non-"world"
+    /// ([`ZTHabitat::unknown_flag_0x2c`] clear) habitat found. On first encountering each one, marks it
+    /// dirty ([`ZTHabitat::set_dirty_characteristics`], `species_list_dirty = 1`) and, if it's a tank
+    /// ([`ZTHabitat::is_tank`]), calls [`ZTHabitat::reset_unit_ai`] - matching real vanilla's own
+    /// `isTank` (`+0x20`) / `resetUnitAI` (`+0x34`) vtable-slot pair, called directly here since both are
+    /// already fully ported.
+    ///
+    /// For each distinct habitat found, builds a fresh `species_id -> rating` map from every one of its
+    /// current [`ZTHabitat::surrounding_species`] (via [`get_species_rating`], overwriting on a repeated
+    /// species key - matches real vanilla's own unconditional overwrite-after-lookup, not a
+    /// skip-if-present) and pushes it onto [`SPECIES_RATING_CACHE`]. Real vanilla builds this as a real
+    /// RB-tree and deep-copies it twice (a pass-by-value idiom, see the handover doc's Follow-up 2) into
+    /// the persisted vector before freeing both scratch copies; functionally equivalent to building the
+    /// map once here, since nothing else in the decompile corpus ever touches this cache (confirmed in
+    /// the handover doc) - see [`SPECIES_RATING_CACHE`]'s own doc comment for why that makes an
+    /// independent Rust-side store safe.
+    pub fn terrain_about_to_be_changed(&self, x: i32, y: i32, size: i32) {
+        let mut cache = SPECIES_RATING_CACHE.lock().unwrap();
+        cache.clear();
+
+        let mut habitat_ptrs: Vec<u32> = Vec::new();
+        for tile_x in x..x + size {
+            for tile_y in y..y + size {
+                let habitat_ptr = self.get_habitat_ptr(tile_x, tile_y);
+                if habitat_ptr == 0 {
+                    continue;
+                }
+                if unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.unknown_flag_0x2c != 0 {
+                    continue;
+                }
+                if habitat_ptrs.contains(&habitat_ptr) {
+                    continue;
+                }
+                habitat_ptrs.push(habitat_ptr);
+
+                let habitat = unsafe { mut_from_memory::<ZTHabitat>(habitat_ptr) };
+                habitat.set_dirty_characteristics();
+                habitat.species_list_dirty = 1;
+                if habitat.is_tank() {
+                    habitat.reset_unit_ai();
+                }
+            }
+        }
+
+        for habitat_ptr in habitat_ptrs {
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+            let mut ratings = HashMap::new();
+            for species_ptr in habitat.surrounding_species() {
+                let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
+                let rating = unsafe { get_species_rating(habitat_ptr, species_key) };
+                ratings.insert(species_key, rating);
+            }
+            cache.push(SpeciesRatingCacheEntry { habitat_ptr, ratings });
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::terrainChanged` (`ZTHabitatMgr_terrainChanged.c`/`.asm`): the consumer half
+    /// of the species-rating-cache pair [`Self::terrain_about_to_be_changed`] populates. Gated on
+    /// [`RVA_GAME_PAUSED_FLAG`] (a general pause/dialog-blocking flag, not cache-specific - see the
+    /// handover doc). Omits real vanilla's own dead-in-practice `GLOBAL_ZTApp` lazy-init guard (would
+    /// only fire before the app singleton is ever set, unreachable once any terrain-changed event can
+    /// occur - same class of dead guard this file already documents for other functions, e.g.
+    /// [`Self::reset_unit_ai`]'s own doc comment) and its bracketing `GetTickCount()` perf-timing calls.
+    ///
+    /// For each entry in [`SPECIES_RATING_CACHE`] (populated by the last
+    /// [`Self::terrain_about_to_be_changed`] run - **not** refreshed here; a habitat/species pair whose
+    /// real rating has drifted from its cached snapshot keeps re-triggering every tick until the next
+    /// terrain change resets the cache, matching real vanilla's own behavior, quirks included): marks
+    /// the habitat dirty ([`ZTHabitat::set_dirty_characteristics`], `species_list_dirty = 1`), then for
+    /// every one of its current [`ZTHabitat::surrounding_species`] compares a freshly computed
+    /// [`get_species_rating`] against the cached value (a first-seen species - not part of the last
+    /// snapshot - is inserted into the cache at `0.0` and compared against that, matching real vanilla's
+    /// own insert-if-absent shape), calling real vanilla `ZTHabitat::generateFaces` (smile on an
+    /// increase, frown on a decrease) and OR-ing its own return into this tick's overall smile/frown
+    /// flag. Real vanilla never writes the fresh value back into the cache after comparing - ported
+    /// faithfully, not "fixed".
+    ///
+    /// After each habitat's species loop, calls the already-ported
+    /// [`Self::update_amphibious_neighbors`]/[`Self::update_show_neighbors`] and sets the
+    /// still-unidentified `field_0x30` byte (`this_00->field_0x30 = 1` in the decompile - distinct from
+    /// the already-named `species_list_dirty` at `+0x31`; no reader found anywhere in this pass's own
+    /// scope). Finally plays `ZTWorldMgr::playSmileSound`/`playFrownSound` if any habitat's loop set the
+    /// corresponding flag.
+    pub fn terrain_changed(&self) {
+        if get_from_memory::<u8>(get_module_base("zoo.exe") as u32 + RVA_GAME_PAUSED_FLAG) != 0 {
+            return;
+        }
+
+        let mut smile = false;
+        let mut frown = false;
+        let mut habitat_ptrs: Vec<u32> = Vec::new();
+
+        {
+            // Scoped so `SPECIES_RATING_CACHE`'s lock is released before the neighbor-update calls
+            // below, which reach into arbitrary un-ported real vanilla code - `std::sync::Mutex` is not
+            // reentrant, so holding the lock across a call that (directly or indirectly) re-enters
+            // `terrain_changed`/`terrain_about_to_be_changed` on the same thread would self-deadlock
+            // silently (no exception, looks like a hang) rather than panic.
+            let mut cache = SPECIES_RATING_CACHE.lock().unwrap();
+            for entry in cache.iter_mut() {
+                if entry.habitat_ptr == 0 {
+                    continue;
+                }
+                habitat_ptrs.push(entry.habitat_ptr);
+                let habitat = unsafe { mut_from_memory::<ZTHabitat>(entry.habitat_ptr) };
+                habitat.set_dirty_characteristics();
+                habitat.species_list_dirty = 1;
+
+                for species_ptr in habitat.surrounding_species() {
+                    let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
+                    let fresh_rating = unsafe { get_species_rating(entry.habitat_ptr, species_key) };
+                    let cached_rating = *entry.ratings.entry(species_key).or_insert(0.0);
+                    if cached_rating < fresh_rating {
+                        let generated =
+                            unsafe { GENERATE_FACES.original()(entry.habitat_ptr as *const u32, species_ptr as *const u32, true, std::ptr::null()) };
+                        smile |= generated;
+                    } else if fresh_rating < cached_rating {
+                        let generated =
+                            unsafe { GENERATE_FACES.original()(entry.habitat_ptr as *const u32, species_ptr as *const u32, false, std::ptr::null()) };
+                        frown |= generated;
+                    }
+                }
+            }
+        }
+
+        for habitat_ptr in habitat_ptrs {
+            self.update_amphibious_neighbors(habitat_ptr);
+            self.update_show_neighbors(habitat_ptr);
+            save_to_memory::<u8>(habitat_ptr + 0x30, 1);
+        }
+
+        let world_ptr = globals().ztworldmgr_ptr() as u32;
+        if smile {
+            unsafe { ZTWORLDMGR_PLAY_SMILE_SOUND.original()(world_ptr as *const u32) };
+        }
+        if frown {
+            unsafe { ZTWORLDMGR_PLAY_FROWN_SOUND.original()(world_ptr as *const u32) };
         }
     }
 
@@ -2120,6 +2302,54 @@ const MAX_PATH_COST_RVA: u32 = 0x0023_5494;
 /// table. Not independently confirmed against a named symbol - same caveat as
 /// `RVA_TANK_WALL_TYPE_CHECK_ARG`'s own doc comment. RVA = `0x00638710 - 0x400000`.
 const RVA_HABITAT_TYPE_CHECK_ARG: u32 = 0x0023_8710;
+
+/// `DAT_00638588`'s RVA - a single byte `ZTHabitatMgr::terrainChanged` reads to gate its entire body
+/// (`if (DAT_00638588 == '\0') { ... }`). Per `species-rating-cache-identification-handover.md`, this
+/// reads as a general pause/dialog-blocking flag, not specific to the species-rating cache - not
+/// independently confirmed against any other reader, since nothing else in this codebase references this
+/// address yet. RVA = `0x00638588 - 0x400000`.
+const RVA_GAME_PAUSED_FLAG: u32 = 0x0023_8588;
+
+/// `ZTHabitat::getSpeciesRating`'s real signature, confirmed by reading `ZTHabitat_getSpeciesRating.asm`
+/// directly rather than trusting the `.c` decompile or `generated.rs`'s own `GET_SPECIES_RATING` entry:
+/// the prologue loads the function's *only* stack argument (the species catalog id) into `EDI` right
+/// after the leading `isTank` vtable dispatch, then reuses `EDI` across a long chain of `PUSH EDI` calls -
+/// which is exactly what the `.c` decompile's spurious `unaff_EDI` third parameter is (Ghidra mistaking
+/// this internal register reuse for a second incoming argument). The function ends `POP EDI; POP ESI;
+/// RET 0x4` - one 4-byte stack argument, no `FSTP` before the return, so the accumulated `FADD` chain's
+/// final value is left on `ST0` as the real return. Real signature:
+/// `unsafe extern "thiscall" fn(*const u32, i32) -> f32` - not `generated.rs`'s declared
+/// `fn(*const u32, *const f32, i32) -> *const f32`, which is the same x87-return mistyping this codebase's
+/// own `ZooStatus::getStatus`/`GET_STATUS` entry already hit (see `zoostatus.rs`), just not yet
+/// regenerated for this entry. Per `CLAUDE.md`'s standing rule this is a call-site transmute to the real
+/// signature, not a hand-edit of `generated.rs` itself - surface the real signature to whoever next runs
+/// the Ghidra/OOAnalyzer pass.
+unsafe fn get_species_rating(habitat_ptr: u32, species_key: i32) -> f32 {
+    let real_fn: unsafe extern "thiscall" fn(*const u32, i32) -> f32 = unsafe { mem::transmute(GET_SPECIES_RATING.address) };
+    unsafe { real_fn(habitat_ptr as *const u32, species_key) }
+}
+
+/// One entry of the species-rating cache `ZTHabitatMgr::terrainAboutToBeChanged`/`terrainChanged` share -
+/// see [`SPECIES_RATING_CACHE`]'s own doc comment.
+struct SpeciesRatingCacheEntry {
+    habitat_ptr: u32,
+    ratings: HashMap<i32, f32>,
+}
+
+/// Ports the per-run species-rating cache `ZTHabitatMgr::terrainAboutToBeChanged`/`terrainChanged` share
+/// via real vanilla's own file-scope `DAT_0063b9f0`/`_f4`/`_f8` vector of (real vanilla's own, invented
+/// placeholder name) `ZTHabitatSpeciesRatingCacheEntry` records - see
+/// `species-rating-cache-identification-handover.md` for the full identification trail.
+///
+/// Confirmed genuinely per-call scratch: `terrainAboutToBeChanged` clears it at the very top of every
+/// run (real vanilla's own `vector::erase(begin(), end())`), and no other function anywhere in the
+/// decompile corpus reads or writes it (checked in the handover doc) - `ZTHabitat::recalculateCharacteristics`
+/// phases 4/6 reuse the same *tree mechanics* but against their own separate, function-local trees, not
+/// this shared vector. So this is modeled as an independent Rust-side store rather than real vanilla
+/// memory (style 2 of `CLAUDE.md`'s reimplementation-pattern section) - nothing else needs to stay
+/// binary-compatible with it, and real vanilla's own RB-tree-per-habitat/double-copy-into-the-vector
+/// machinery (see the handover doc's Follow-ups 2/4) collapses to a plain `HashMap` per entry.
+static SPECIES_RATING_CACHE: LazyLock<Mutex<Vec<SpeciesRatingCacheEntry>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// Real vanilla's own unidentified per-entity worker (`ZTHabitatMgr_clearStaffHabitat.asm`'s only real
 /// payload call: `MOV ECX, entity; CALL FUN_0050c884` with `staff_ptr` pushed as its one stack argument) -
@@ -4924,6 +5154,7 @@ pub mod hooks_zthabitatmgr {
             HIGHLIGHT_HABITAT, REPLACE_FENCE_WITH_GATE, REPLACE_GATE, REPLACE_GATE_WITH_FENCE, SCENERY_ENTITY_CHANGE, TERRAIN_TILE_CHANGED,
             UNHIGHLIGHT_HABITAT, PATH_PLACED as ZTHABITATMGR_PATH_PLACED, PATH_REMOVED as ZTHABITATMGR_PATH_REMOVED, CHECK_ENTER_HABITAT,
             GET_OUTERMOST_TANK, GET_NEEDY_NESTED_TANK, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
+            BEFORE_ENTITY_CHANGE, TERRAIN_ABOUT_TO_BE_CHANGED, TERRAIN_CHANGED,
         },
     };
 
@@ -5280,6 +5511,23 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.entity_removed(tile as u32, entity_type as u32)
     }
 
+    /// Real vanilla is a plain free `stdcall` helper (`generated.rs`'s own signature has no `this`) -
+    /// see [`crate::zthabitatmgr::ZTHabitatMgr::before_entity_change`]'s own doc comment.
+    #[detour(BEFORE_ENTITY_CHANGE)]
+    unsafe extern "stdcall" fn before_entity_change(habitat_ptr: *const i32) {
+        ZTHabitatMgr::before_entity_change(habitat_ptr as u32)
+    }
+
+    #[detour(TERRAIN_ABOUT_TO_BE_CHANGED)]
+    unsafe extern "thiscall" fn terrain_about_to_be_changed(this: *const u32, x: i32, y: i32, size: i32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.terrain_about_to_be_changed(x, y, size)
+    }
+
+    #[detour(TERRAIN_CHANGED)]
+    unsafe extern "thiscall" fn terrain_changed(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.terrain_changed()
+    }
+
     #[detour(HILITE_AMPHIBIOUS_NEIGHBORS)]
     unsafe extern "thiscall" fn hilite_amphibious_neighbors(this: *const u32, hilite: i8) {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.hilite_amphibious_neighbors(hilite != 0)
@@ -5481,7 +5729,7 @@ pub mod hooks_zthabitatmgr {
     /// `(name, is_enabled)` per detour - lets the live battery's `ZTHABITATMGR_DETOURS_ENABLED` test
     /// catch a silently-failed `init_detours()` (error logged, game continues on vanilla) rather than
     /// looking green while every hooked production path still runs real vanilla.
-    pub fn detour_status() -> [(&'static str, bool); 94] {
+    pub fn detour_status() -> [(&'static str, bool); 97] {
         [
             ("GET_GATE_TILE_IN", GET_GATE_TILE_IN_DETOUR.is_enabled()),
             ("GET_GATE_TILE_OUT", GET_GATE_TILE_OUT_DETOUR.is_enabled()),
@@ -5521,6 +5769,9 @@ pub mod hooks_zthabitatmgr {
             ("ENTITY_PLACED", ENTITY_PLACED_DETOUR.is_enabled()),
             ("ENTITY_ABOUT_TO_BE_REMOVED", ENTITY_ABOUT_TO_BE_REMOVED_DETOUR.is_enabled()),
             ("ENTITY_REMOVED", ENTITY_REMOVED_DETOUR.is_enabled()),
+            ("BEFORE_ENTITY_CHANGE", BEFORE_ENTITY_CHANGE_DETOUR.is_enabled()),
+            ("TERRAIN_ABOUT_TO_BE_CHANGED", TERRAIN_ABOUT_TO_BE_CHANGED_DETOUR.is_enabled()),
+            ("TERRAIN_CHANGED", TERRAIN_CHANGED_DETOUR.is_enabled()),
             ("HILITE_AMPHIBIOUS_NEIGHBORS", HILITE_AMPHIBIOUS_NEIGHBORS_DETOUR.is_enabled()),
             ("HILITE_SHOW_NEIGHBORS", HILITE_SHOW_NEIGHBORS_DETOUR.is_enabled()),
             ("CHECK_AMPHIBIOUS_NEIGHBOR", CHECK_AMPHIBIOUS_NEIGHBOR_DETOUR.is_enabled()),

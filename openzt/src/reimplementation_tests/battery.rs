@@ -278,6 +278,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_zthabitatmgr_entity_placed_smoke_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITATMGR_TERRAIN_CHANGED_CLUSTER_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_terrain_changed_cluster_smoke_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_HILITE_NEIGHBORS_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_hilite_neighbors_roundtrip_live_test,
             },
