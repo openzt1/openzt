@@ -376,11 +376,12 @@ pub(super) mod detour_zoo_main {
             // animal in the habitat with an unidentified "death arrived" flag with no known reader, so the
             // real consequence of exercising it against a live zoo's real animals is unconfirmed.
             // ZTHABITAT_MOVE_GATE_TO_ROUNDTRIP_LIVE is deliberately NOT registered - see
-            // `ZTHabitat::move_gate_to`'s own doc comment: exercising it (even directly, bypassing the
-            // - deliberately unwired - detour) crash-captured twice into real vanilla `ZTFence::makeGate`'s
-            // own `setHealthy`/`dirtyHabitatEscapability` chain, tracing back to the same "entrance tile's
-            // own fence-slot array" uncertainty this file's own `getGate`/`getSize` correction note
-            // already flags as unresolved.
+            // `ZTHabitat::move_gate_to`/`move_gate_to_inner`'s own doc comments: the two correctness bugs
+            // the earlier crash-captures traced to are fixed (candidate discovery now matches `get_gate`'s
+            // own indexing, and a null-habitat-owner guard prevents the unguarded real-vanilla
+            // `dirtyHabitatEscapability` deref), but this still isn't detoured - moving a gate mutates real
+            // habitat/fence state with no known synthetic-safe candidate to exercise it against, the same
+            // "unsafe for automated testing" class as `nameHabitat`/`morphExhibit`.
             // Step 6k batch (zthabitatmgr-implementation-plan.md). Resets/re-derives shared
             // `tank_walk_visited_marker` state on `is_tank()` habitats only.
             RegisteredTest { name: "ZTHABITAT_GET_OUTERMOST_TANK_LIVE", run: tests::zthabitatmgr::run_habitat_get_outermost_tank_live_test },
@@ -398,6 +399,7 @@ pub(super) mod detour_zoo_main {
             },
             RegisteredTest { name: "ZTHABITATMGR_GET_TANK_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_get_tank_live_test },
             RegisteredTest { name: "ZTHABITATMGR_LEADS_TO_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_leads_to_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_GATE_LIVE", run: tests::zthabitatmgr::run_habitat_get_gate_live_test },
             RegisteredTest {
                 name: "ZTHABITATMGR_BREAK_AMPHIBIOUS_CONNECTION_SMOKE_LIVE",
                 run: tests::zthabitatmgr::run_zthabitatmgr_break_amphibious_connection_smoke_live_test,

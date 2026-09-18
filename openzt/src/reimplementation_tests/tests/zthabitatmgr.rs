@@ -146,6 +146,18 @@ pub(crate) fn run_habitat_get_popularity_live_test(failure_log: &mut Option<std:
     )
 }
 
+/// Comparison test for `ZTHabitat::getGate`: real vs. reimplemented, over every real habitat in the
+/// loaded zoo's own `exhibit_array`. Safe as a read-only comparison - real vanilla's own body only reads
+/// `entrance_tile_ptr`/`entrance_rotation` and the entrance tile's own fence slots, no mutation.
+pub(crate) fn run_habitat_get_gate_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_GATE_LIVE",
+        |ptr| unsafe { zthabitat::GET_GATE.original()(ptr) } as u32,
+        |habitat| habitat.get_gate(),
+    )
+}
+
 /// Real vanilla `doTankCheck` only allocates/frees its own local scratch vector (confirmed via its
 /// decompile - no field of `habitat`/any other object is mutated), so this is a safe read-only
 /// comparison over every real habitat in the loaded zoo, tank or not.

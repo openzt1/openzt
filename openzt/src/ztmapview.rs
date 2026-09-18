@@ -359,16 +359,16 @@ impl ZTMapView {
             if *animal_entity.is_egg() && !animal_entity_type.underwater {
                 return Err(ErrorStringId::EggsMustBePlacedOnLand);
             }
-            if *tank.water_level() < animal_entity_type.ztunit_type.bfunit_type.depth {
-                // TODO: Add an extra message for animals rather than objects
-                return Err(ErrorStringId::ObjectMustBePlacedInADeeperTank);
-            }
             // TankWithWater check; onlyUnderwater?
             if animal_entity_type.underwater
                 && !animal_entity.is_boxed()
                 && (!tank.is_filled() || *tank.water_level() < 1)
             {
                 return Err(ErrorStringId::AnimalMustBePlacedInATankWithWater);
+            }
+            if *tank.water_level() < animal_entity_type.ztunit_type.bfunit_type.depth {
+                // TODO: Add an extra message for animals rather than objects
+                return Err(ErrorStringId::ObjectMustBePlacedInADeeperTank);
             }
         }
 

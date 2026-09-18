@@ -2,19 +2,22 @@ use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour::{
     generated::{
         ambients::PLAY as AMBIENTS_PLAY,
-        bfentity::GET_TILE as BFENTITY_GET_TILE,
-        bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE},
+        bfentity::{GET_TILE as BFENTITY_GET_TILE, SET_WORLD_POS as BFENTITY_SET_WORLD_POS, DIR_TO_SET as BFENTITY_DIR_TO_SET},
+        bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE, WORLD_TO_VIRTUAL_0},
         bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
+        bftile::{GET_CORNER_ELEVATION as BFTILE_GET_CORNER_ELEVATION, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS, IS_IN_ZOO as BFTILE_IS_IN_ZOO, SNAP_TO_EDGE},
         bfunit::GET_PATH_COST as BFUNIT_GET_PATH_COST,
-        bftile::{GET_CORNER_ELEVATION as BFTILE_GET_CORNER_ELEVATION, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS, IS_IN_ZOO as BFTILE_IS_IN_ZOO},
+        bfworldmgr::ADD_ENTITY as BFWORLDMGR_ADD_ENTITY,
+        gxmixer::SET_SET as GXMIXER_SET_SET,
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4, DEALLOCATE as POOLALLOC_DEALLOCATE},
-        standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA, IS_ZOO_WALL, IS_ZOO_GATE},
+        standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA, IS_ZOO_WALL, IS_ZOO_GATE, MEMMOVE},
         standalone::WRITE_BYTES_TO_FILE,
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE, IS_WORTH_FIXING},
         ztanimal::{CAN_SERVICE, IS_SICKLY, IS_HUNGRY_AND_FOODLESS},
         ztkeeper::CLEANS_UP,
         ztunit::GET_HABITAT as ZTUNIT_GET_HABITAT,
+        ztmapview::ADD_UNDO_ACTION,
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR, SAVE as ZTSHOWINFO_SAVE},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
         zttankwall::SET_IS_COMBINED_CONNECTOR,
@@ -40,7 +43,7 @@ use openzt_detour::{
             GET_NUM_ANIMALS, GET_ALL_ANIMALS, GET_SURROUNDING_SPECIES, REMOVE_SPECIES,
             ACCEPT_DONATION, SET_TIME_LAST_SERVICED, TRIGGER_DEATH_ARRIVED,
             GET_OUTERMOST_TANK as ZTHABITAT_GET_OUTERMOST_TANK, SET_DETERIORATION as ZTHABITAT_SET_DETERIORATION,
-            UPDATE as ZTHABITAT_UPDATE, NEEDS_SERVICE, SEND_EVENT,
+            NEEDS_SERVICE, SEND_EVENT,
             GET_ANIMALS, GET_AMOUNT_KEEPER_FOOD, GET_FOOD_TO_LEAVE, GET_NUM_KEEPERS, IS_BEING_SERVICED,
             SEND_MAINT_WORKER_CLEANUP_EVENTS, GET_NUM_HUNGRY_FOODLESS_ANIMALS, GET_NUM_SICKLY_ANIMALS,
             GET_SICKLY_ANIMALS, GET_NEAREST_SICK_ANIMAL, GET_VIEWING_AREAS_WITH_GUESTS, HAS_BLDG, REMOVE_VIEWING_AREAS,
@@ -82,7 +85,7 @@ use crate::{
     ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG},
     ztshow::{call_entity_vtable_noargs, call_entity_vtable_u32_noargs, type_check, RVA_ANIMAL_TYPE_CHECK},
     ztshowinfo,
-    ztworldmgr::{Direction, ZTWorldMgr},
+    ztworldmgr::{Direction, IVec3, ZTWorldMgr},
     zoostatus::ZooStatus,
 };
 
@@ -557,6 +560,158 @@ impl ZTHabitatMgr {
         }
         save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 0);
         true
+    }
+
+    /// Ports `ZTHabitatMgr::createDoubleFence` (`ZTHabitatMgr_createDoubleFence.c`/`.asm`,
+    /// `generated.rs`'s `CREATE_DOUBLE_FENCE`) - despite its decompile namespace, a plain free `stdcall`
+    /// helper taking a single `ZTFence*` (real `.asm`: `RET 0x4`, no `this`-via-ECX at all), the same
+    /// misnaming pattern already documented for [`Self::replace_gate_with_fence`]/
+    /// [`Self::replace_fence_with_gate`]. The C decompile's own dozen `extraout_EAX`/`unaff_EBX`/
+    /// `unaff_retaddr` artifacts are all the standard "register value read right after an untyped call"
+    /// idiom already validated elsewhere in this file (e.g. `ZTHabitat::recalculate_characteristics`'s own
+    /// note) - not real corruption, confirmed by reading the raw `.asm` line-by-line; the 2 "unidentified
+    /// helpers" the roadmap doc previously flagged (`FUN_005fd10e`/`FUN_00629f1a`) are the same game-wide
+    /// fatal-assert/exit pair already encountered and deliberately not reproduced in `zoostatus.rs`'s
+    /// `calculate_sums` - dead code guarding an assert on a compile-time-constant non-empty debug string
+    /// that can never actually fire.
+    ///
+    /// Given an existing fence (`fence_ptr`), builds a second fence on the *opposite* side of the tile
+    /// boundary it sits on - used when a habitat boundary needs a fence visible from both sides. Steps
+    /// through `fence_ptr`'s own rotation to find the neighbouring tile; if the rotation is real (not the
+    /// `0xffffffff` "no direction" sentinel), computes the opposite direction and bails (`0`) if the
+    /// neighbour already has a fence facing back ([`ZTHabitat::fence_slot_by_index`] at that slot).
+    /// Otherwise snaps a position onto that edge ([`SNAP_TO_EDGE`]), converts it to a world position via
+    /// the already-ported [`ZTWorldMgr::tile_to_world`], spawns a new fence of the same catalog type via
+    /// the entity type's own `create` factory ([`call_entity_type_create`] on `fence_ptr`'s own
+    /// `entity_type_ptr` at `+0x128`), gives it the standard visual direction-set treatment (a real
+    /// `std::vector<ph_GXLLEAnimSet>`-style bounds-checked index read at `+0x74`/`+0x78`/`+0xcc`, feeding
+    /// [`BFENTITY_DIR_TO_SET`] then [`GXMIXER_SET_SET`]), positions it in world space
+    /// ([`WORLD_TO_VIRTUAL_0`] + [`BFENTITY_SET_WORLD_POS`]), adds it to the world
+    /// ([`BFWORLDMGR_ADD_ENTITY`]), and registers an undo action for the map editor
+    /// ([`ADD_UNDO_ACTION`]) - this last part makes this function, independent of
+    /// [`Self::snap_tank_walls_inward`] (its only known caller), a live-UI function in its own right: same
+    /// "unsafe for automated testing" class as `nameHabitat`/`morphExhibit`. **Deliberately not detoured**
+    /// for that reason - see the standalone comment near `MOVE_GATE_TO_1` in the detour module below.
+    ///
+    /// **Two real-vanilla quirks reproduced faithfully rather than "fixed", with one deliberate
+    /// deviation:** (1) real vanilla calls `ZTFence::makeFence` unconditionally even when the factory call
+    /// fails or returns a non-fence type (leaving its own `this_00` null) - genuinely dead in practice
+    /// since the factory always succeeds for a real fence's own catalog type, but this port guards it
+    /// (`return 0` instead) rather than handing a null pointer to a real vanilla function that itself does
+    /// no null check, matching this file's own established "dead in practice, defend anyway" convention
+    /// (see [`ZTHabitat::get_outermost_tank`]); (2) the undo-action description buffer is built from a
+    /// fixed global debug string ([`RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL`]) via a real
+    /// `PoolAlloc::allocate`/`memmove`, handed directly to `ZTMapView::addUndoAction` - a real, transient
+    /// allocator use never touched again by this function, so safe as a `PoolAlloc`-backed buffer per this
+    /// file's own convention (see [`construct_and_acquire_sound`] for the same "real allocator, immediately
+    /// handed to vanilla" pattern) - reproduced faithfully, unguarded, since it can't meaningfully fail.
+    pub fn create_double_fence(fence_ptr: u32) -> u32 {
+        if fence_ptr == 0 {
+            return 0;
+        }
+        let world = globals().ztworldmgr();
+        let world_map_ptr = globals().ztworldmgr_ptr() as u32;
+
+        let rotation: u32 = get_from_memory(fence_ptr + 0x12c);
+        let tile_ptr = unsafe { BFENTITY_GET_TILE.original()(fence_ptr as *const u32) } as u32;
+        let neighbour_ptr = if tile_ptr != 0 { get_neighbour_ptr(world, tile_ptr, Direction::from(rotation)) } else { 0 };
+        if neighbour_ptr == 0 {
+            // Real vanilla reads the neighbour tile's own position/fence-slot fields unconditionally a
+            // few lines further down (both to check for an existing fence facing back and to compute the
+            // new fence's own world position), with no null guard anywhere - dead in practice (a fence
+            // eligible for doubling always has a real neighbour tile), guarded defensively rather than
+            // reproduced, same convention as (1) above.
+            return 0;
+        }
+        let neighbour_tile = get_from_memory::<BFTile>(neighbour_ptr);
+
+        let direction = if rotation == 0xffff_ffff {
+            0xffff_ffff
+        } else {
+            let opposite = rotation.wrapping_sub(4) & 7;
+            if ZTHabitat::fence_slot_by_index(&neighbour_tile, (opposite as i32) / 2) != 0 {
+                return 0;
+            }
+            opposite
+        };
+
+        let mut snapped = [0i32; 3];
+        unsafe { SNAP_TO_EDGE.original()(snapped.as_mut_ptr() as *const u32, direction) };
+        let world_pos = world.tile_to_world(neighbour_tile.pos, IVec3::new(snapped[0], snapped[1], snapped[2]));
+
+        let entity_type_ptr: u32 = get_from_memory(fence_ptr + 0x128);
+        let new_fence_ptr = unsafe { call_entity_type_create(entity_type_ptr) };
+        if new_fence_ptr == 0 || !unsafe { entity_type_matches(new_fence_ptr, RVA_FENCE_TYPE_CHECK_ARG) } {
+            // Real vanilla calls `ZTFence::makeFence` unconditionally here even on a null/wrong-type
+            // `this_00` - see this method's own doc comment, deviation (1).
+            return 0;
+        }
+        unsafe { ZTFENCE_MAKE_FENCE.original()(new_fence_ptr as *const u32) };
+
+        let gxmixer_ptr = new_fence_ptr + 0x74;
+        let anim_index: u32 = get_from_memory(new_fence_ptr + 0xcc);
+        let vec_begin: u32 = get_from_memory(new_fence_ptr + 0x74);
+        let vec_end: u32 = get_from_memory(new_fence_ptr + 0x78);
+        let anim_set_ptr: u32 = if vec_end > vec_begin && anim_index < (vec_end - vec_begin) / 0xc {
+            get_from_memory(vec_begin + anim_index * 0xc)
+        } else {
+            0
+        };
+        let mut flip: bool = false;
+        let set_index = unsafe {
+            BFENTITY_DIR_TO_SET.original()(
+                new_fence_ptr as *const u32,
+                direction,
+                &mut flip as *mut bool as *const bool,
+                anim_set_ptr as *const u32,
+                std::ptr::null::<u32>(),
+            )
+        };
+        unsafe { GXMIXER_SET_SET.original()(gxmixer_ptr as *const u32, set_index, flip as u8) };
+
+        let mut virtual_pos = [0i32; 3];
+        unsafe {
+            WORLD_TO_VIRTUAL_0.original()(world_map_ptr as *const u32, virtual_pos.as_mut_ptr() as *const i32, &world_pos as *const IVec3 as *const i32)
+        };
+        save_to_memory(new_fence_ptr + 0xb4, virtual_pos[0]);
+        save_to_memory(new_fence_ptr + 0xb8, virtual_pos[1]);
+        save_to_memory(new_fence_ptr + 0xbc, virtual_pos[2]);
+        unsafe { BFENTITY_SET_WORLD_POS.original()(new_fence_ptr as *const u32, &world_pos as *const IVec3 as *const u32) };
+        save_to_memory(new_fence_ptr + 0x12c, direction);
+
+        unsafe { BFWORLDMGR_ADD_ENTITY.original()(world_map_ptr as *const u32, new_fence_ptr as *const u32) };
+
+        let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() };
+        let base = get_module_base("zoo.exe") as u32;
+        let label_ptr = base + RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL;
+        let mut len: u32 = 0;
+        while get_from_memory::<u8>(label_ptr + len) != 0 {
+            len += 1;
+        }
+        let buf_len = len + 1;
+        let buffer_ptr = unsafe { POOLALLOC_ALLOCATE.original()(buf_len) } as u32;
+        unsafe { MEMMOVE.original()(buffer_ptr as *const u32, label_ptr as *const u32, len) };
+        save_to_memory::<u8>(buffer_ptr + len, 0);
+        unsafe {
+            ADD_UNDO_ACTION.original()(
+                mapview_ptr,
+                1,
+                new_fence_ptr as i32,
+                0,
+                std::ptr::null::<u32>(),
+                0xffff_ffff,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null::<i32>(),
+                buffer_ptr as *const u32,
+                (buffer_ptr + len) as i32,
+                (buffer_ptr + buf_len) as i32,
+            )
+        };
+
+        new_fence_ptr
     }
 
     /// Ports `ZTHabitatMgr::replaceGate` (`ZTHabitatMgr_replaceGate.c`/`.asm`): converts
@@ -2091,21 +2246,30 @@ impl ZTHabitatMgr {
     /// through here reproduces real vanilla's own behavior exactly, at zero cost to the tractable part of
     /// this function.
     ///
-    /// Then calls the already-ported [`ZTHabitat::update`] vtable slot (`.hooked()`, so it transparently
-    /// reaches whichever override is actually installed - our own detour, or `ZTTankExhibit`'s own separate
-    /// address) on the manager's own "world" habitat ([`Self::pending_habitat_ptr`]) and on every habitat in
-    /// [`Self::exhibit_array`], passing `elapsed` through - matching real vanilla's own `.asm` exactly
-    /// (`this->mbr_0x18` first, then the array).
+    /// Then calls the `update` vtable slot (`+0x24`, [`call_vtable_slot_with_ptr`] - a genuine virtual
+    /// dispatch through each habitat's own vtable pointer, exactly matching
+    /// `ZTHabitatMgr_update.c`'s `(**(code **)(*(int *)*puVar1 + 0x24))(param_1)`) on the manager's own
+    /// "world" habitat ([`Self::pending_habitat_ptr`]) and on every habitat in [`Self::exhibit_array`],
+    /// passing `elapsed` through - matching real vanilla's own `.asm` exactly (`this->mbr_0x18` first,
+    /// then the array).
+    ///
+    /// Must be a real virtual dispatch, not a flat call through the base `ZTHabitat::update`'s own fixed
+    /// address (`.hooked()`/`.original()` alike): `ZTTankExhibit` overrides this slot with its own,
+    /// separate address (`0x0049625f`) that runs the tank's water-level fill/drain tick
+    /// (`ZTTankExhibit_update.c`) after delegating back into the base implementation - calling the base
+    /// address directly for every habitat, tank or not, skips that override entirely and silently starves
+    /// every tank's water level of its per-tick rise/fall (confirmed live regression: newly created and
+    /// resized tanks never filled with water).
     pub fn update(&self, elapsed: u32) {
         unsafe { UPDATE_GATES.original()(self as *const Self as *const u32) };
 
         if self.pending_habitat_ptr != 0 {
-            unsafe { ZTHABITAT_UPDATE.hooked()(self.pending_habitat_ptr as *const u32, elapsed) };
+            unsafe { call_vtable_slot_with_ptr(self.pending_habitat_ptr, 0x24, elapsed) };
         }
         for i in 0..self.exhibit_array.len() {
             let habitat_ptr = self.exhibit_array.get_ptr(i);
             if habitat_ptr != 0 {
-                unsafe { ZTHABITAT_UPDATE.hooked()(habitat_ptr as *const u32, elapsed) };
+                unsafe { call_vtable_slot_with_ptr(habitat_ptr, 0x24, elapsed) };
             }
         }
     }
@@ -2616,6 +2780,13 @@ pub(crate) const RVA_KEEPER_TYPE_CHECK_ARG: u32 = 0x0023_8760;
 /// reaction while a gate conversion is already underway. RVA = `0x00639148 - 0x400000`.
 const GATE_CONVERSION_IN_PROGRESS_RVA: u32 = 0x0023_9148;
 
+/// `DAT_00638084`'s RVA - a fixed, null-terminated debug/undo-action-description string
+/// `ZTHabitatMgr::createDoubleFence` copies (via a real `PoolAlloc::allocate`/`memmove`, matching
+/// `ZTHabitatMgr_createDoubleFence.asm`'s own byte-for-byte sequence) into a scratch buffer handed to
+/// `ZTMapView::addUndoAction`. Content not read/interpreted by this port - only its length and address
+/// matter. RVA = `0x00638084 - 0x400000`.
+const RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL: u32 = 0x0023_8084;
+
 /// Unidentified tail-call helper `ZTHabitatMgr::replaceGate`/`removeHabitat` both jump into
 /// (`JMP FUN_005b66d7`, not a normal `CALL` - it owns cleaning up its caller's own stack frame, the same
 /// implicit-stack-convention idiom `zthabitatmgr-implementation-plan.md` documents for
@@ -3062,6 +3233,22 @@ unsafe fn call_bfunit_tile_cost_vtable_slot(unit_ptr: u32, tile_ptr: u32) -> i32
     f(unit_ptr, tile_ptr)
 }
 
+/// Calls `BFEntityType`'s `create` vtable slot (`+0x24`, confirmed via `BFOverlayType_create.c` - the
+/// only decompiled instantiation, a base default implementation shared across entity-type subclasses
+/// rather than a `BFOverlayType`-specific override, matching the same "shared default across slots"
+/// idiom `BFEntityType.md`'s own raw vtable dump documents elsewhere in that same table) with a single
+/// `bool` argument (real vanilla always passes `false` at every known call site). Returns the newly
+/// spawned entity's own pointer, or `0`. [`ZTHabitatMgr::create_double_fence`]'s own entity factory call,
+/// and a genuine virtual dispatch (unlike most of this file's raw-pointer helpers), since different
+/// `*Type` subclasses could in principle override `create` itself, even though none has been observed
+/// doing so in this codebase.
+unsafe fn call_entity_type_create(entity_type_ptr: u32) -> u32 {
+    let vtable = get_from_memory::<u32>(entity_type_ptr);
+    let target = get_from_memory::<u32>(vtable + 0x24);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u8) -> u32>(target) };
+    f(entity_type_ptr, 0)
+}
+
 /// Tears down one of `ZTHabitat`'s two owned `SNDSound`s (`start_sound_ptr`/`end_sound_ptr`), per
 /// `ZTHabitat_setIsNotShowExhibit.c`'s identical teardown shape for both fields: a `+0x50` predicate
 /// check gating an optional `+0x60` "stop" call, then an unconditional `+0x0(1)` scalar-deleting-
@@ -3142,6 +3329,41 @@ impl ZTHabitat {
                 return ztwm.get_neighbour(&tile, Direction::from(self.entrance_rotation));
             }
         Some(tile)
+    }
+
+    /// Ports `ZTHabitat::getGate` (`ZTHabitat_getGate.c`/`.asm`, `generated.rs`'s `GET_GATE` at
+    /// `0x00492ca3`). The C decompile's own `(**(vtable+0x1c))(&CAST_ZTFence)` reads like a novel
+    /// "double-indirection" dispatch, but the raw `.asm` shows it's byte-for-byte [`entity_type_matches`] -
+    /// confirmed by cross-referencing `&CAST_ZTFence` against `ZTHabitatMgr_replaceFenceWithGate.c`/`.asm`
+    /// (already ported as [`ZTHabitatMgr::replace_fence_with_gate`], gated on the exact same
+    /// [`RVA_FENCE_TYPE_CHECK_ARG`] global) - same symbol, not a new mechanism.
+    ///
+    /// Real body: resolves `entrance_rotation / 2` (signed, round-toward-zero - the `.asm`'s own
+    /// `CDQ`/`SUB`/`SAR` idiom) as an index into [`Self::entrance_tile_ptr`]'s own `north_fence`/
+    /// `east_fence`/`south_fence`/`west_fence` slots (`+0x14/+0x18/+0x1c/+0x20`, the same fields
+    /// [`Self::tile_fence_in_direction`] already reads), returning that candidate only if it's a genuine
+    /// fence-family member ([`entity_type_matches`]/[`RVA_FENCE_TYPE_CHECK_ARG`]). Returns `0` for a null
+    /// `entrance_tile_ptr`, an `entrance_rotation` of `-1` (`0xffff_ffff`, real vanilla's own "no gate"
+    /// sentinel), a null candidate, or one that fails the type check.
+    ///
+    /// Unlike [`Self::tile_fence_in_direction`] (keyed on a full [`Direction`], `0` for any non-cardinal
+    /// value), this indexes directly by `entrance_rotation / 2` - the raw `.asm` computes a valid `0..=3`
+    /// slot for *any* rotation, even an odd/diagonal one, where `tile_fence_in_direction` would already
+    /// return `0`. Reproduced faithfully via [`Self::fence_slot_by_index`] rather than reusing
+    /// `tile_fence_in_direction`, even though a real entrance gate should only ever sit on a cardinal tile
+    /// edge in practice.
+    pub fn get_gate(&self) -> u32 {
+        if self.entrance_tile_ptr == 0 || self.entrance_rotation == 0xffff_ffff {
+            return 0;
+        }
+        let tile = get_from_memory::<BFTile>(self.entrance_tile_ptr);
+        let index = (self.entrance_rotation as i32) / 2;
+        let candidate = Self::fence_slot_by_index(&tile, index);
+        if candidate != 0 && unsafe { entity_type_matches(candidate, RVA_FENCE_TYPE_CHECK_ARG) } {
+            candidate
+        } else {
+            0
+        }
     }
 
     /// Ports `ZTHabitat::getOutermostTank` (`ZTHabitat_getOutermostTank.c`/`.asm`) - the C decompile's own
@@ -3275,11 +3497,26 @@ impl ZTHabitat {
         }
     }
 
+    /// The fence occupying `tile`'s own raw array slot `index` (`&tile->field_0x14 + index*4` in the
+    /// decompile) - [`Self::get_gate`]'s own index-based sibling to [`Self::tile_fence_in_direction`]'s
+    /// `Direction`-keyed lookup over the same four fields. `0` for an out-of-range index, matching this
+    /// file's own defensive convention for an unexpected value from a live, external caller.
+    fn fence_slot_by_index(tile: &BFTile, index: i32) -> u32 {
+        match index {
+            0 => tile.north_fence,
+            1 => tile.east_fence,
+            2 => tile.south_fence,
+            3 => tile.west_fence,
+            _ => 0,
+        }
+    }
+
     /// Ports `ZTHabitat::moveGateTo`'s internal 2-arg helper (`ZTHabitat_moveGateTo_0.c`/`.asm`,
     /// `generated.rs`'s `MOVE_GATE_TO_0` at `0x0046616c` - the C decompile's own struct-offset math is
     /// garbled, e.g. the final `setName` call's real target is confirmed via `.asm` as vtable `+0x1c`, not
-    /// the decompile's own nested-base guess). Demotes this habitat's current gate ([`GET_GATE`], still
-    /// real/un-ported) back into a plain fence and promotes `candidate_fence_ptr` into the new gate -
+    /// the decompile's own nested-base guess). Demotes this habitat's current gate (still called via
+    /// [`GET_GATE`]`.original()` here, not [`Self::get_gate`] - see that method's own doc comment) back
+    /// into a plain fence and promotes `candidate_fence_ptr` into the new gate -
     /// updating [`Self::entrance_tile_ptr`]/[`Self::entrance_rotation`] and giving the new gate this
     /// habitat's own name - but only when `candidate_fence_ptr` genuinely separates two different
     /// habitats (its own tile and the neighbour stepped through by its own rotation belong to different
@@ -3290,22 +3527,30 @@ impl ZTHabitat {
     /// directly (`entrance_tile_ptr`/`entrance_rotation`) and passed to real vanilla `getGate`/`setName`,
     /// same precondition [`Self::get_attractiveness`] documents.
     ///
-    /// **Not detoured - deliberately unverified, do not wire up without further investigation.**
-    /// Live-tested (calling this directly, bypassing any detour) against a real habitat's own current
-    /// gate and crash-captured twice, both times inside real, unmodified vanilla `ZTFence::makeGate` ->
-    /// `setHealthy` -> `dirtyHabitatEscapability`, which dereferences `+0x2c` on whatever
-    /// `ZTHabitatMgr::get_habitat_ptr` returns for `candidate_fence_ptr`'s own tile with **no null guard
-    /// at all** (`mov al, byte ptr [esi+0x2c]` with `esi=0`). The first run crashed because the picked
-    /// tile had no habitat owner at all; adding a precondition check (only proceed when
-    /// `get_habitat_ptr` on the fence's own tile is non-null) still crashed the *second* time at the
-    /// identical instruction, meaning `Self::tile_fence_in_direction`'s candidate-discovery lookup (used
-    /// by [`Self::move_gate_to`]) does not reliably find the same fence real vanilla `getGate`'s own more
-    /// involved logic would - this file's own "Correction: getSize/getGate are not leaf functions" note
-    /// already flags `getGate`'s real body as depending on a fence/tile-array layout subtlety
-    /// (`isCastClass`-shaped double indirection) this codebase doesn't yet model, and this crash is
-    /// concrete live evidence that `moveGateTo` inherits the same gap rather than being the
-    /// self-contained leaf this doc's own earlier scoping assumed. Needs that same fence/tile-array
-    /// question resolved before this can be trusted enough to detour or live-test again.
+    /// **Correctness bug fixed (2026-09-17).** Two independent bugs found via live crash-capture, both
+    /// now fixed:
+    ///
+    /// 1. [`Self::move_gate_to`]'s own candidate-discovery previously used
+    ///    [`Self::tile_fence_in_direction`] (a `Direction`-enum match, `0` for any non-cardinal value) to
+    ///    find `candidate_fence_ptr` - but real vanilla `ZTHabitat_moveGateTo_1.c` resolves it via the
+    ///    same raw `direction/2` array-index scheme [`Self::get_gate`] already uses
+    ///    (`*(&tile->field_0x14 + (direction/2)*4)`), which - unlike `tile_fence_in_direction` - still
+    ///    resolves a valid `0..=3` slot for a diagonal/non-cardinal `EDirection` (integer-truncated onto
+    ///    the preceding cardinal's own slot) instead of treating it as "no candidate". Fixed by switching
+    ///    `move_gate_to` to [`Self::fence_slot_by_index`], matching `get_gate`'s own approach.
+    /// 2. This function's own real vanilla body (`ZTFence::makeGate` -> `setHealthy` ->
+    ///    `dirtyHabitatEscapability`) unconditionally dereferences `+0x2c` on whatever
+    ///    `ZTHabitatMgr::get_habitat_ptr` returns for `candidate_fence_ptr`'s own tile, with **no null
+    ///    guard at all** (`mov al, byte ptr [esi+0x2c]` with `esi=0`) - a genuine bug in real vanilla
+    ///    itself, confirmed directly in `ZTFence_dirtyHabitatEscapability.c`. Live crash-captured twice by
+    ///    calling this directly (bypassing `move_gate_to`'s own candidate discovery) with a habitat's own
+    ///    current gate as `candidate_fence_ptr`: that fence's own tile (per `BFEntity::getTile`) is the
+    ///    *outside* tile, owned by no habitat, while the neighbour stepped through by its rotation is the
+    ///    *inside* tile the habitat itself owns - `owner == 0`, `neighbour_owner != 0`, so the
+    ///    `owner != neighbour_owner` check alone let it through into the unguarded real vanilla
+    ///    dereference. Guarded here the same "dead in practice, defend anyway" way this file already
+    ///    handles other unguarded-real-vanilla-deref edge cases (e.g. [`Self::get_outermost_tank`]):
+    ///    require `owner` itself to be non-null before proceeding.
     fn move_gate_to_inner(&self, candidate_fence_ptr: u32) -> bool {
         if candidate_fence_ptr == 0 {
             return false;
@@ -3329,7 +3574,7 @@ impl ZTHabitat {
         } else {
             0
         };
-        if owner == neighbour_owner {
+        if owner == 0 || owner == neighbour_owner {
             return false;
         }
 
@@ -3352,14 +3597,22 @@ impl ZTHabitat {
         true
     }
 
-    /// Ports `ZTHabitat::moveGateTo` (`ZTHabitat_moveGateTo.c`, `generated.rs`'s `MOVE_GATE_TO_1`):
-    /// resolves whatever fence currently occupies `tile_ptr`'s own slot in `direction_raw` (only when
+    /// Ports `ZTHabitat::moveGateTo` (`ZTHabitat_moveGateTo_1.c`, `generated.rs`'s `MOVE_GATE_TO_1`):
+    /// resolves whatever fence currently occupies `tile_ptr`'s own slot `direction_raw / 2` (only when
     /// it's genuinely a member of the fence/wall family, per [`entity_type_matches`]/
     /// [`RVA_FENCE_TYPE_CHECK_ARG`] - discarded (treated as no candidate) otherwise, matching real
     /// vanilla's own guard) and hands it to [`Self::move_gate_to_inner`]. `direction_raw == 0xffffffff`
-    /// (real vanilla's own "no direction" `EDirection` sentinel, outside `Direction`'s own enum domain -
-    /// never fed through [`Direction::from`], which would silently default it to `North`) always skips
-    /// straight to a null candidate.
+    /// (real vanilla's own "no direction" `EDirection` sentinel) always skips straight to a null
+    /// candidate.
+    ///
+    /// **Correctness bug fixed (2026-09-17):** previously used [`Self::tile_fence_in_direction`] (a
+    /// `Direction`-enum match, `0` for any non-cardinal value) for the candidate lookup. Real vanilla's
+    /// own `.c`/`.asm` instead does `*(&tile->field_0x14 + ((int)direction / 2) * 4)` - the exact same
+    /// raw index-by-`rotation/2` array scheme [`Self::get_gate`] already uses for this habitat's own
+    /// *current* gate - which still resolves a valid `0..=3` slot for a diagonal/non-cardinal
+    /// `EDirection` (truncated onto the preceding cardinal's own slot) rather than treating it as "no
+    /// candidate". Fixed by switching to [`Self::fence_slot_by_index`], matching `get_gate`'s own
+    /// approach and the real `.asm` exactly.
     ///
     /// Always returns `true` once past the null-tile guard - real vanilla's own return value is
     /// `CONCAT31(garbage, 1)` (see `CLAUDE.md`'s note on this decompile shape), i.e. the low byte is
@@ -3371,7 +3624,7 @@ impl ZTHabitat {
         }
         let candidate_ptr = if direction_raw != 0xffff_ffff {
             let tile = get_from_memory::<BFTile>(tile_ptr);
-            let fence_ptr = Self::tile_fence_in_direction(&tile, direction_raw);
+            let fence_ptr = Self::fence_slot_by_index(&tile, (direction_raw as i32) / 2);
             if fence_ptr != 0 && unsafe { entity_type_matches(fence_ptr, RVA_FENCE_TYPE_CHECK_ARG) } {
                 fence_ptr
             } else {
@@ -4298,6 +4551,12 @@ impl ZTHabitat {
     pub fn do_tank_check(&self) -> bool {
         let pairs = ZTHabitatMgr::snapshot_boundary_tile_pairs(self.boundary_tile_pairs_begin, self.boundary_tile_pairs_end);
         for (tile_a_ptr, tile_b_ptr) in pairs {
+            // A boundary-tile-pair entry can hold a null tile pointer while the pairs are stale
+            // (e.g. mid-bulldoze on a shared tank wall) - skipped defensively, same "dead in
+            // practice, defend anyway" convention as `Self::get_outermost_tank`.
+            if tile_a_ptr == 0 || tile_b_ptr == 0 {
+                continue;
+            }
             let tile_a = get_from_memory::<BFTile>(tile_a_ptr);
             let tile_b = get_from_memory::<BFTile>(tile_b_ptr);
 
@@ -5202,13 +5461,14 @@ pub mod hooks_zthabitatmgr {
             RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS,
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
+            MOVE_GATE_TO_1,
         },
         zthabitatmgr::{
             DO_TANK_CHECK, ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES, HABITAT_TILE_CHANGED,
             HIGHLIGHT_HABITAT, REPLACE_FENCE_WITH_GATE, REPLACE_GATE, REPLACE_GATE_WITH_FENCE, SCENERY_ENTITY_CHANGE, TERRAIN_TILE_CHANGED,
             UNHIGHLIGHT_HABITAT, PATH_PLACED as ZTHABITATMGR_PATH_PLACED, PATH_REMOVED as ZTHABITATMGR_PATH_REMOVED, CHECK_ENTER_HABITAT,
             GET_OUTERMOST_TANK, GET_NEEDY_NESTED_TANK, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
-            BEFORE_ENTITY_CHANGE, TERRAIN_ABOUT_TO_BE_CHANGED, TERRAIN_CHANGED,
+            BEFORE_ENTITY_CHANGE, TERRAIN_ABOUT_TO_BE_CHANGED, TERRAIN_CHANGED, CREATE_DOUBLE_FENCE,
         },
     };
 
@@ -5229,6 +5489,11 @@ pub mod hooks_zthabitatmgr {
             Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile) as i32,
             None => 0,
         }
+    }
+
+    #[detour(GET_GATE)]
+    unsafe extern "thiscall" fn get_gate(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_gate() as i32
     }
 
     #[detour(GET_ATTRACTIVENESS)]
@@ -5508,10 +5773,22 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.enter_new_month()
     }
 
-    // `MOVE_GATE_TO_1` is deliberately NOT detoured yet - see `ZTHabitat::move_gate_to`'s own doc
-    // comment for why (a live-tested crash traced back to the same "entrance tile's own fence-slot
-    // array" uncertainty this file's "Correction: getSize/getGate are not leaf functions" note already
-    // flags for `getGate`).
+    /// Both known correctness bugs are fixed (see `ZTHabitat::move_gate_to`/`move_gate_to_inner`'s own
+    /// doc comments). Enabled for manual/interactive live verification - moving a gate mutates real
+    /// habitat/fence state with no known synthetic-safe candidate, so this has no automated live test.
+    #[detour(MOVE_GATE_TO_1)]
+    unsafe extern "thiscall" fn move_gate_to(this: *const u32, tile_ptr: *const u32, direction_raw: u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.move_gate_to(tile_ptr as u32, direction_raw)
+    }
+
+    /// `ZTHabitatMgr::create_double_fence` is fully ported (see its own doc comment) but calls
+    /// `ZTMapView::addUndoAction` directly, making it a live-UI function in its own right regardless of
+    /// its caller (`snapTankWallsInward`, itself still un-ported) - same "unsafe for automated testing"
+    /// class as `nameHabitat`/`morphExhibit`. Enabled for manual/interactive live verification.
+    #[detour(CREATE_DOUBLE_FENCE)]
+    unsafe extern "stdcall" fn create_double_fence(fence_ptr: i32) -> *const i32 {
+        ZTHabitatMgr::create_double_fence(fence_ptr as u32) as *const i32
+    }
 
     /// Real vanilla is a plain free `stdcall` helper (`generated.rs`'s own signature has no `this`) -
     /// see [`crate::zthabitatmgr::ZTHabitatMgr::replace_gate_with_fence`]'s own doc comment.
@@ -5577,8 +5854,15 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.terrain_about_to_be_changed(x, y, size)
     }
 
+    /// `generated.rs`'s own `TERRAIN_CHANGED` entry now correctly reflects real vanilla's own `RET 0xc` -
+    /// `doDepthSuitability`'s own `.asm` pushes the identical `(x, y, size)` triple it just passed to
+    /// `terrainAboutToBeChanged` moments earlier. None of the three are read anywhere in `terrainChanged`'s
+    /// own decompiled body once the corrected prototype is applied (Ghidra confirms they're genuinely
+    /// dead - popped for stack balance, never used) - [`ZTHabitatMgr::terrain_changed`] itself takes none,
+    /// so they're accepted here and discarded, matching real vanilla's own behavior exactly rather than
+    /// guessing at a use for them.
     #[detour(TERRAIN_CHANGED)]
-    unsafe extern "thiscall" fn terrain_changed(this: *const u32) {
+    unsafe extern "thiscall" fn terrain_changed(this: *const u32, _x: i32, _y: i32, _size: i32) {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.terrain_changed()
     }
 
@@ -5788,10 +6072,11 @@ pub mod hooks_zthabitatmgr {
     /// `(name, is_enabled)` per detour - lets the live battery's `ZTHABITATMGR_DETOURS_ENABLED` test
     /// catch a silently-failed `init_detours()` (error logged, game continues on vanilla) rather than
     /// looking green while every hooked production path still runs real vanilla.
-    pub fn detour_status() -> [(&'static str, bool); 98] {
+    pub fn detour_status() -> [(&'static str, bool); 101] {
         [
             ("GET_GATE_TILE_IN", GET_GATE_TILE_IN_DETOUR.is_enabled()),
             ("GET_GATE_TILE_OUT", GET_GATE_TILE_OUT_DETOUR.is_enabled()),
+            ("GET_GATE", GET_GATE_DETOUR.is_enabled()),
             ("GET_ATTRACTIVENESS", GET_ATTRACTIVENESS_DETOUR.is_enabled()),
             ("HAS_KEEPER_ASSIGNED", HAS_KEEPER_ASSIGNED_DETOUR.is_enabled()),
             ("GET_SHOW_INFO_ID", GET_SHOW_INFO_ID_DETOUR.is_enabled()),
@@ -5888,6 +6173,8 @@ pub mod hooks_zthabitatmgr {
             ("ZTHABITATMGR_UPDATE", ZTHABITATMGR_UPDATE_DETOUR.is_enabled()),
             ("CAN_SEE_HABITAT_FROM_BUILDING", CAN_SEE_HABITAT_FROM_BUILDING_DETOUR.is_enabled()),
             ("CHECK_ENTER_HABITAT", CHECK_ENTER_HABITAT_DETOUR.is_enabled()),
+            ("MOVE_GATE_TO_1", MOVE_GATE_TO_1_DETOUR.is_enabled()),
+            ("CREATE_DOUBLE_FENCE", CREATE_DOUBLE_FENCE_DETOUR.is_enabled()),
         ]
     }
 }

@@ -65,6 +65,14 @@ OpenZT is a DLL injection framework for Zoo Tycoon (2001) written in Rust. It pr
 ./openzt.bat crash-capture                   # Writes to crash_capture_output.txt
 ./openzt.bat crash-capture --out <file>      # Writes to a custom file
 
+# Debug play (builds the real DLL, launches game under cdb WITH symbols loaded, play manually - a
+# symbolized register/stack dump is written automatically on the first crash; see "Getting Real Symbols
+# From a Live Crash" below for a bug that needs manual interaction to reproduce, not crash-capture's own
+# non-interactive test-DLL battery)
+./openzt.bat debug-play                      # Debug build, writes to debug_play_output.txt
+./openzt.bat debug-play --release            # Release build
+./openzt.bat debug-play --out <file>         # Writes to a custom file
+
 # Code quality checks
 ./openzt.bat check                           # Run cargo check on openzt
 ./openzt.bat clippy                          # Run cargo clippy on openzt
@@ -561,6 +569,59 @@ silently in the background, then read the log afterward.
 - Quote each `bp <addr> "<action>;g"` breakpoint action so cdb treats it as one multi-command string, and
   pass the *entire* breakpoint set as a **single** `-c` argument (`bp ...;bp ...;g`) - cdb does not chain
   multiple `-c` flags into a sequence, it only keeps the last one.
+
+### Getting Real Symbols From a Live Crash
+
+`./openzt.bat run`/`run --release` show a crashing frame as a bare `zoo+0xNNNNN`/`res-openzt.dll+0xNNNNN`
+offset with no function name, because nothing tells cdb where our own `.pdb` lives. For a bug that needs a
+human to actually play to reproduce (as opposed to `crash-capture`'s own non-interactive "run the test DLL's
+battery to completion or crash" shape, which never reaches a real playable state at all - it runs the
+`reimplementation-tests` battery and calls `std::process::exit()` immediately after), use:
+
+```bash
+./openzt.bat debug-play               # debug build
+./openzt.bat debug-play --release     # release build, matches a --release repro
+./openzt.bat debug-play --out x.txt   # custom output path (default debug_play_output.txt)
+```
+
+This builds the real (non-test) `openzt.dll`, launches `zoo.exe` under cdb with the matching `.pdb`'s
+directory on the symbol path, lets the game run fully interactively (play normally - cdb only watches), and
+on the first unhandled exception writes a properly symbolized `kv`/`r` dump before quitting. Reproduce the
+bug, then read the output file.
+
+**If doing this by hand instead** (e.g. to add custom breakpoints), the pieces `debug-play` automates:
+
+- Pass `-y "srv*;<path-to-target-profile-dir>"` (the directory containing `openzt.pdb`, e.g.
+  `target\i686-pc-windows-msvc\release`) - `srv*` alone only fetches Microsoft's own OS symbols, never our
+  own. The `.pdb` must be the one produced by the exact build currently deployed as `res-openzt.dll`;
+  rebuilding without redeploying (or vice versa) silently desyncs addresses from symbols.
+- `res-openzt` (with the hyphen, matching the actual filename) works for the module-*load* event filter
+  (`sxe ld:res-openzt`), but cdb sanitizes the module name to `res_openzt` (underscore) for its own
+  expression/symbol namespace - an expression like `ln res-openzt+0xNNNNN` fails outright ("Couldn't resolve
+  error"; the hyphen is parsed as subtraction) and must be written `ln res_openzt+0xNNNNN`.
+- Run `.reload /f res-openzt.dll` right after the module-load stop to force cdb to actually pick up the
+  symbol path for it - it doesn't always resolve automatically at load time.
+- Prefer letting the crash happen and reading cdb's own `kv`/`r` output over manually probing
+  `ln <module>+<offset>` ahead of time. `ln`'s "nearest symbol" search can land somewhere wildly unrelated
+  across a large gap with nothing symbolized in between - observed once resolving an address that was
+  actually inside `zthabitatmgr`'s own habitat code as "~19KB into a zip/crc32 decompression reader",
+  because nothing between the two had a distinct symbol cdb could see.
+- A **small, non-`pub` function has no distinct linkable symbol of its own** - this bites hardest inside a
+  `#[detour_mod] mod { ... }` block, where every detour trampoline (`#[detour(NAME)] unsafe extern
+  "<abi>" fn ...`) is private. A `kv` frame landing inside one shows up as the nearest `pub` symbol in that
+  same module instead (e.g. every private trampoline in `hooks_zthabitatmgr` prints as
+  `hooks_zthabitatmgr::init_detours+0xNNNN`) - don't read that as "the crash is inside `init_detours`" just
+  because that's the name in the trace. The actual crashing frame (if it's a `pub fn`, e.g. a class's own
+  ported method) usually still resolves correctly; it's specifically the *callers* one or two frames up,
+  landing inside another detour's own trampoline, that get this misattribution.
+- Only one debugger can attach to a process at a time. Attaching a second `cdb -p <pid>` session to a
+  process already running under a first cdb instance fails immediately (`Cannot debug pid ..., Win32 error
+  87`) - stop the first session (`Stop-Process` on the `zoo.exe` pid, not just closing the cdb window) before
+  attaching a second.
+- The Windows Event Log's own Application Error record for the crash (`Get-WinEvent -FilterHashtable
+  @{LogName='Application'; ProviderName='Application Error'}`) reports a bare "Fault offset" that's already
+  a plain module RVA, with no debugger needed at all - a fast first triage, and a good sanity check that a
+  live cdb capture's own `eip - <module ModLoad base>` lines up with what Windows independently recorded.
 
 ### Manual Testing
 
