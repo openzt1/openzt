@@ -57,17 +57,32 @@ pub fn map_from_memory<T>(address: impl MemAddr) -> &'static mut T {
 }
 
 pub fn get_from_memory<T>(address: impl MemAddr) -> T {
-    unsafe { ptr::read(address.as_u32() as *const T) }
+    unsafe { ptr::read_volatile(address.as_u32() as *const T) }
 }
 
 pub fn checked_get_from_memory<T: Checkable>(address: impl MemAddr) -> anyhow::Result<T> {
     let addr = address.as_u32();
     T::check(addr)?;
-    Ok(unsafe { ptr::read(addr as *const T) })
+    Ok(unsafe { ptr::read_volatile(addr as *const T) })
 }
 
 pub fn save_to_memory<T>(address: impl MemAddr, value: T) {
-    unsafe { ptr::write(address.as_u32() as *mut T, value) };
+    unsafe { ptr::write_volatile(address.as_u32() as *mut T, value) };
+}
+
+/// Interprets a raw vanilla return value as a bool using only its low byte, ignoring the upper 3 bytes.
+/// Ghidra frequently decompiles a function that really only sets `AL` as
+/// `return CONCAT31((int3)(garbage >> 8), local_flag)` (or the sibling shape `some_reg & 0xffffff00`,
+/// forcing the low byte to a fixed value while leaving the upper bytes as whatever was already in the
+/// register) - an explicitly undefined/garbage upper 3 bytes around the one real byte. Real vanilla
+/// callers always match this with `TEST AL, AL` (low byte only); comparing the full return value against
+/// `0` is a genuine bug that happens to work whenever the garbage bytes are zero and silently breaks once
+/// they aren't. Found twice so far - `ZooStatus::fChance` and `ZTHabitatMgr::createHabitat`'s
+/// `doTankCheck`/`ZTTankExhibit::removeIllegalEntities` reads - see `CLAUDE.md`'s reimplementation-pattern
+/// section. Always check the raw decompile's own `return` statements for `CONCAT31`/`extraout_*` before
+/// deciding whether a given call needs this instead of a plain `!= 0`.
+pub fn low_byte_bool(value: u32) -> bool {
+    (value & 0xff) != 0
 }
 
 #[cfg(target_os = "windows")]
@@ -115,11 +130,12 @@ pub fn get_string_from_memory_with_size(address: u32, size: u32) -> String {
 pub fn get_string_from_memory_bounded(start: u32, end: u32, buffer_end: u32) -> String {
     let mut bytes = Vec::new();
     let mut char_address = start;
-    while {
+    while char_address < end && char_address < buffer_end {
         let byte = get_from_memory::<u8>(char_address);
-        byte != 0 && char_address < end && char_address < buffer_end
-    } {
-        bytes.push(get_from_memory::<u8>(char_address));
+        if byte == 0 {
+            break;
+        }
+        bytes.push(byte);
         char_address += 1;
     }
     crate::encoding_utils::decode_game_text(&bytes)
@@ -336,28 +352,62 @@ impl<T> ZTArray<T> {
 
     /// The raw `(start_ptr, end_ptr, buffer_end_ptr)` triple, for callers that need to
     /// reconstruct/free the underlying buffer themselves.
+    ///
+    /// Reads through [`get_from_memory`] rather than a plain `self.start_ptr` field access: this
+    /// array's 3 words are live vanilla game memory that real, un-detoured vanilla code (or another
+    /// call through [`Self::set_raw_parts`]) can change independent of anything Rust's aliasing model
+    /// can see. `get_from_memory`'s volatile read is what keeps repeated calls from being treated as
+    /// re-derivable from a single load and cached/CSE'd - see [`Self::set_raw_parts`]'s own doc
+    /// comment for the write-side manifestation of the same hazard.
     pub fn raw_parts(&self) -> (u32, u32, u32) {
-        (self.start_ptr, self.end_ptr, self.buffer_end_ptr)
+        let addr = self as *const Self as u32;
+        (get_from_memory(addr), get_from_memory(addr + 4), get_from_memory(addr + 8))
+    }
+
+    /// Overwrites this array's own 3 live memory words in place (its own address, not a Rust-side
+    /// copy - `#[repr(C)]` guarantees `start_ptr`/`end_ptr`/`buffer_end_ptr` sit at `+0x0`/`+0x4`/`+0x8`
+    /// of `self`) - for callers reimplementing a real vanilla vector-growth method (e.g.
+    /// `ZTHabitatMgr::addHabitat`) that must mutate a live `ZTArray` field embedded in a larger live
+    /// game struct, which Rust's ownership model otherwise has no way to reach (the field is private,
+    /// and the containing struct is usually only reachable through a shared `&self`).
+    ///
+    /// Must go through [`save_to_memory`], not a plain `ptr::write` through a pointer derived from
+    /// `&self`: `&self` being a shared reference lets the optimizer assume the memory it points to is
+    /// never mutated for the reference's lifetime, and in a release build this was observed to
+    /// silently drop the write to `start_ptr` entirely (confirmed live: real vanilla code reading this
+    /// same field via completely independent, un-detoured machine code kept reading `0` after this
+    /// call, even though `end_ptr`/`buffer_end_ptr` read back correctly) while leaving the other two
+    /// words - each a separate, independently-optimizable store - untouched by whatever eliminated the
+    /// first. `save_to_memory`'s volatile write is never eliminated or reordered by the optimizer
+    /// regardless of that aliasing assumption.
+    pub fn set_raw_parts(&self, start_ptr: u32, end_ptr: u32, buffer_end_ptr: u32) {
+        let addr = self as *const Self as u32;
+        save_to_memory(addr, start_ptr);
+        save_to_memory(addr + 4, end_ptr);
+        save_to_memory(addr + 8, buffer_end_ptr);
     }
 
     pub fn len(&self) -> usize {
-        ((self.end_ptr - self.start_ptr) / 4) as usize
+        let (start, end, _) = self.raw_parts();
+        ((end - start) / 4) as usize
     }
 
     pub fn capacity(&self) -> usize {
-        ((self.buffer_end_ptr - self.start_ptr) / 4) as usize
+        let (start, _, buffer_end) = self.raw_parts();
+        ((buffer_end - start) / 4) as usize
     }
 
     pub fn get_ptr(&self, index: usize) -> u32 {
-        get_from_memory(self.start_ptr + (index * 4) as u32)
+        let (start, _, _) = self.raw_parts();
+        get_from_memory(start + (index * 4) as u32)
     }
 
     pub fn get(&self, index: usize) -> T {
-        get_from_memory::<T>(get_from_memory::<u32>(self.start_ptr + (index * 4) as u32))
+        get_from_memory::<T>(self.get_ptr(index))
     }
 
     pub fn set(&self, index: usize, value: T) {
-        save_to_memory(get_from_memory::<u32>(self.start_ptr + (index * 4) as u32), value);
+        save_to_memory(self.get_ptr(index), value);
     }
 
     pub fn get_vec(&self) -> Vec<T> {

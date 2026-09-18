@@ -1062,7 +1062,7 @@ pub struct ZTAnimalType {
     pub box_footprint: IVec3,           // 0x1D8
     pub family: i32,                    // 0x1E4
     pub genus: i32,                     // 0x1E8
-    pad01: [u8; 0x1F0 - 0x1EC],         // ----------------------- padding: 4 bytes
+    pub species: i32,                   // 0x1EC <--- unconfirmed: completes family/genus/species triplet, matches species-rating-cache key read at entity_type+0x1ec (see species-rating-cache-identification-handover.md)
     pub habitat: i32,                   // 0x1F0
     pub location: i32,                  // 0x1F4
     pub era: i32,                       // 0x1F8

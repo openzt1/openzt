@@ -1675,7 +1675,7 @@ pub fn show_info_save(this: u32, file: *const i8) -> bool {
     let mut ev_cursor = ev_begin;
     while ev_cursor != ev_end {
         let saved = unsafe { BFEVENT_SAVE.original()(ev_cursor as *const u32, file) };
-        ok &= saved & 0xff != 0;
+        ok &= saved;
         if !ok {
             return false;
         }
@@ -1694,7 +1694,7 @@ pub fn show_info_save(this: u32, file: *const i8) -> bool {
     ok &= write_field(this + 0x80, 4, file);
     ok &= write_field(this + 0x84, 4, file);
 
-    let show_ok = unsafe { ZTSHOW_SAVE.original()((this + 0x4) as *const u32, file as *const u32) != 0 };
+    let show_ok = unsafe { ZTSHOW_SAVE.original()((this + 0x4) as *const u32, file as *const u32) };
     ok && show_ok
 }
 
@@ -1887,7 +1887,7 @@ pub fn show_info_load(this: u32, file: *const u32, version: u32) -> bool {
     }
 
     let show_ok = unsafe { ZTSHOW_LOAD.original()((this + 0x4) as *const u32, file, version) };
-    ok && (show_ok & 0xff != 0)
+    ok && show_ok
 }
 
 #[detour_mod]
@@ -2002,9 +2002,11 @@ mod detours {
         get_show_unit_list(this as u32, unit_type_id) as i32
     }
 
+    // `check_unit`'s own return value deliberately packs `unit_type_id` into the upper bits on some
+    // paths (see its own doc comment) - only the low byte is the real success flag.
     #[detour(CHECK_UNIT)]
-    unsafe extern "thiscall" fn check_unit_detour(this: *const u32, unit_id: u32) -> u32 {
-        check_unit(this as u32, unit_id)
+    unsafe extern "thiscall" fn check_unit_detour(this: *const u32, unit_id: u32) -> bool {
+        check_unit(this as u32, unit_id) & 0xff != 0
     }
 
     /// `unit_id_ptr as u32`, not `*unit_id_ptr` - see the module doc comment's own Stage 8 section on why
@@ -2029,8 +2031,8 @@ mod detours {
     }
 
     #[detour(GATHER_UNITS)]
-    unsafe extern "thiscall" fn gather_units_detour(this: *const u32, unit_type_id: u32) -> u32 {
-        gather_units(this as u32, unit_type_id) as u32
+    unsafe extern "thiscall" fn gather_units_detour(this: *const u32, unit_type_id: u32) -> bool {
+        gather_units(this as u32, unit_type_id)
     }
 
     #[detour(ENTER_NEW_MONTH)]
@@ -2054,13 +2056,13 @@ mod detours {
     }
 
     #[detour(SAVE)]
-    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const i8) -> u32 {
-        show_info_save(this as u32, file) as u32
+    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const i8) -> bool {
+        show_info_save(this as u32, file)
     }
 
     #[detour(LOAD)]
-    unsafe extern "thiscall" fn load_detour(this: *const u32, file: *const u32, version: u32) -> u8 {
-        show_info_load(this as u32, file, version) as u8
+    unsafe extern "thiscall" fn load_detour(this: *const u32, file: *const u32, version: u32) -> bool {
+        show_info_load(this as u32, file, version)
     }
 
     /// `(name, is_enabled)` per detour - lets `reimplementation_tests`'s `ZTSHOWINFO_DETOURS_ENABLED`

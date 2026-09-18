@@ -314,8 +314,10 @@ pub(crate) const RVA_ANIMAL_TYPE_CHECK: u32 = 0x0023_8690;
 /// Raw no-arg virtual dispatch through an object's own vtable at `slot_offset`, returning `bool` - the
 /// shape both the habitat's `+0x20` slot (`start`'s owning-habitat check) and a unit's `+0x22c` slot
 /// (`start`'s per-unit show-state-needed check) share. No named symbol for either; raw calling convention
-/// confirmed via `.asm` push-order reads (no pushed args beyond `this`/`ECX`).
-unsafe fn call_entity_vtable_noargs(entity_ptr: u32, slot_offset: u32) -> bool {
+/// confirmed via `.asm` push-order reads (no pushed args beyond `this`/`ECX`). `pub(crate)`:
+/// `zthabitatmgr.rs`'s own `teardown_sound` reuses this for a real `SNDSound`'s `+0x50` predicate slot,
+/// the identical implicit-`this`-via-thiscall shape.
+pub(crate) unsafe fn call_entity_vtable_noargs(entity_ptr: u32, slot_offset: u32) -> bool {
     let vtable = get_from_memory::<u32>(entity_ptr);
     let target = get_from_memory::<u32>(vtable + slot_offset);
     let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> bool>(target) };
@@ -432,7 +434,7 @@ pub fn validate(this: u32, check_units: bool) -> i32 {
         node = get_from_memory::<u32>(sentinel);
         while node != sentinel {
             let unit_id = get_from_memory::<u32>(node + 0x8);
-            if unsafe { CHECK_UNIT.hooked()(show_info as *const u32, unit_id) } == 0 {
+            if !unsafe { CHECK_UNIT.hooked()(show_info as *const u32, unit_id) } {
                 return 4;
             }
             node = get_from_memory::<u32>(node);
@@ -622,7 +624,7 @@ pub fn start(this: u32) {
             // `.hooked()`, not `.original()`: `IS_STARTED` is now detoured by `ztshowinfo.rs` (Stage 2 of
             // `ztshowinfo-implementation-plan.md`) - see that plan's own "every stage that ports a
             // call-through-only method must switch its `.original()` call sites to `.hooked()`" rule.
-            let needs_state = (owning_show_info != 0 && unsafe { IS_STARTED.hooked()(owning_show_info as *const u32) } == 0)
+            let needs_state = (!owning_show_info.is_null() && unsafe { IS_STARTED.hooked()(owning_show_info) } == 0)
                 || !unsafe { call_entity_vtable_noargs(unit_ptr, 0x22c) };
             if needs_state {
                 let show_id = get_from_memory::<u16>(this + 0x6);
@@ -640,7 +642,7 @@ pub fn start(this: u32) {
     }
 
     let gather_result = unsafe { GATHER_UNITS.original()(this as *const u32) };
-    if gather_result == 0 {
+    if !gather_result {
         save_to_memory(this + 0x1e, 0u8);
         save_to_memory(this + 0x1f, 1u8);
         save_to_memory(this + 0x20, 0u8);
@@ -931,9 +933,9 @@ pub(crate) fn find_or_insert_pending_script_node(show_info: u32, unit_type_id: u
 /// nothing else mutates the tree's structure in between.
 ///
 /// **Deliberately not ported**: the config-file-driven default-admission-cost block (`BFConfigFile`/
-/// `s_shows.cfg`/`meth_0x46ec56`, gated behind an unrelated global flag) - `meth_0x46ec56` has no
-/// decompile/address anywhere in this repo, and this only affects admission pricing, not show-script
-/// correctness. Same class of deliberate skip as `start`'s own UI-toast/`GLOBAL_ZTAIMgr` gaps.
+/// `s_shows.cfg`/`ZTShowInfo::setAdmission`, gated behind an unrelated global flag) - this only affects
+/// admission pricing, not show-script correctness. Same class of deliberate skip as `start`'s own
+/// UI-toast/`GLOBAL_ZTAIMgr` gaps.
 pub fn add_script(show_info: u32, unit_type_id: u32, new_script_id: u16) -> bool {
     if new_script_id == 0 || new_script_id == 0xffff || unit_type_id == 0 {
         return false;

@@ -65,6 +65,14 @@ OpenZT is a DLL injection framework for Zoo Tycoon (2001) written in Rust. It pr
 ./openzt.bat crash-capture                   # Writes to crash_capture_output.txt
 ./openzt.bat crash-capture --out <file>      # Writes to a custom file
 
+# Debug play (builds the real DLL, launches game under cdb WITH symbols loaded, play manually - a
+# symbolized register/stack dump is written automatically on the first crash; see "Getting Real Symbols
+# From a Live Crash" below for a bug that needs manual interaction to reproduce, not crash-capture's own
+# non-interactive test-DLL battery)
+./openzt.bat debug-play                      # Debug build, writes to debug_play_output.txt
+./openzt.bat debug-play --release            # Release build
+./openzt.bat debug-play --out <file>         # Writes to a custom file
+
 # Code quality checks
 ./openzt.bat check                           # Run cargo check on openzt
 ./openzt.bat clippy                          # Run cargo clippy on openzt
@@ -562,6 +570,59 @@ silently in the background, then read the log afterward.
   pass the *entire* breakpoint set as a **single** `-c` argument (`bp ...;bp ...;g`) - cdb does not chain
   multiple `-c` flags into a sequence, it only keeps the last one.
 
+### Getting Real Symbols From a Live Crash
+
+`./openzt.bat run`/`run --release` show a crashing frame as a bare `zoo+0xNNNNN`/`res-openzt.dll+0xNNNNN`
+offset with no function name, because nothing tells cdb where our own `.pdb` lives. For a bug that needs a
+human to actually play to reproduce (as opposed to `crash-capture`'s own non-interactive "run the test DLL's
+battery to completion or crash" shape, which never reaches a real playable state at all - it runs the
+`reimplementation-tests` battery and calls `std::process::exit()` immediately after), use:
+
+```bash
+./openzt.bat debug-play               # debug build
+./openzt.bat debug-play --release     # release build, matches a --release repro
+./openzt.bat debug-play --out x.txt   # custom output path (default debug_play_output.txt)
+```
+
+This builds the real (non-test) `openzt.dll`, launches `zoo.exe` under cdb with the matching `.pdb`'s
+directory on the symbol path, lets the game run fully interactively (play normally - cdb only watches), and
+on the first unhandled exception writes a properly symbolized `kv`/`r` dump before quitting. Reproduce the
+bug, then read the output file.
+
+**If doing this by hand instead** (e.g. to add custom breakpoints), the pieces `debug-play` automates:
+
+- Pass `-y "srv*;<path-to-target-profile-dir>"` (the directory containing `openzt.pdb`, e.g.
+  `target\i686-pc-windows-msvc\release`) - `srv*` alone only fetches Microsoft's own OS symbols, never our
+  own. The `.pdb` must be the one produced by the exact build currently deployed as `res-openzt.dll`;
+  rebuilding without redeploying (or vice versa) silently desyncs addresses from symbols.
+- `res-openzt` (with the hyphen, matching the actual filename) works for the module-*load* event filter
+  (`sxe ld:res-openzt`), but cdb sanitizes the module name to `res_openzt` (underscore) for its own
+  expression/symbol namespace - an expression like `ln res-openzt+0xNNNNN` fails outright ("Couldn't resolve
+  error"; the hyphen is parsed as subtraction) and must be written `ln res_openzt+0xNNNNN`.
+- Run `.reload /f res-openzt.dll` right after the module-load stop to force cdb to actually pick up the
+  symbol path for it - it doesn't always resolve automatically at load time.
+- Prefer letting the crash happen and reading cdb's own `kv`/`r` output over manually probing
+  `ln <module>+<offset>` ahead of time. `ln`'s "nearest symbol" search can land somewhere wildly unrelated
+  across a large gap with nothing symbolized in between - observed once resolving an address that was
+  actually inside `zthabitatmgr`'s own habitat code as "~19KB into a zip/crc32 decompression reader",
+  because nothing between the two had a distinct symbol cdb could see.
+- A **small, non-`pub` function has no distinct linkable symbol of its own** - this bites hardest inside a
+  `#[detour_mod] mod { ... }` block, where every detour trampoline (`#[detour(NAME)] unsafe extern
+  "<abi>" fn ...`) is private. A `kv` frame landing inside one shows up as the nearest `pub` symbol in that
+  same module instead (e.g. every private trampoline in `hooks_zthabitatmgr` prints as
+  `hooks_zthabitatmgr::init_detours+0xNNNN`) - don't read that as "the crash is inside `init_detours`" just
+  because that's the name in the trace. The actual crashing frame (if it's a `pub fn`, e.g. a class's own
+  ported method) usually still resolves correctly; it's specifically the *callers* one or two frames up,
+  landing inside another detour's own trampoline, that get this misattribution.
+- Only one debugger can attach to a process at a time. Attaching a second `cdb -p <pid>` session to a
+  process already running under a first cdb instance fails immediately (`Cannot debug pid ..., Win32 error
+  87`) - stop the first session (`Stop-Process` on the `zoo.exe` pid, not just closing the cdb window) before
+  attaching a second.
+- The Windows Event Log's own Application Error record for the crash (`Get-WinEvent -FilterHashtable
+  @{LogName='Application'; ProviderName='Application Error'}`) reports a bare "Fault offset" that's already
+  a plain module RVA, with no debugger needed at all - a fast first triage, and a good sanity check that a
+  live cdb capture's own `eip - <module ModLoad base>` lines up with what Windows independently recorded.
+
 ### Manual Testing
 
 For features not covered by integration tests:
@@ -611,6 +672,32 @@ by `ztmarketing.rs`/`ztresearch.rs`/`ztthoughtmgr.rs`/`ztmegatilemgr.rs`.
   string-registry-aware `BFApp::loadString`). Calling `.original()` on a function you have *not* detoured is
   always safe. Calling it *from inside that same function's own detour* is not safe in release (see below) -
   use `<NAME>_DETOUR.call(...)` there regardless of profile.
+
+### Consuming a vanilla return value as a bool - check for undefined upper bytes
+
+Before comparing any `.original()(...)`/`.hooked()(...)` return value against `0` or otherwise treating it
+as a bool, open that function's own decompile and look at its literal `return` statements. Ghidra frequently
+decompiles a function that really only sets `AL` as `return CONCAT31((int3)(garbage >> 8), local_flag)` -
+explicitly packing an undefined/garbage upper 3 bytes around the one real byte - or the sibling shape
+`some_reg & 0xffffff00` (forcing the low byte to a fixed value while leaving the upper bytes as whatever was
+already in the register). Real vanilla callers always match this with `TEST AL, AL` (low byte only, never
+the full register). A full-width comparison against `0` is a genuine bug that happens to work whenever the
+garbage bytes are zero (e.g. an isolated call with a clean stack) and silently breaks once they aren't (e.g.
+a dense burst of repeated calls each leaving different register garbage behind) - so a narrow test passing
+is not strong evidence this class of bug is absent. Found twice so far in this codebase purely via live
+crashes/corruption (`ZooStatus::fChance`, and `ZTHabitatMgr::createHabitat`'s `doTankCheck`/
+`ZTTankExhibit::removeIllegalEntities` reads) - check for it proactively during any signature audit rather
+than waiting for a report. Use `util.rs`'s `low_byte_bool(value: u32) -> bool` at the call site instead of a
+raw `!= 0`/`== 0` comparison whenever a decompile shows this shape.
+
+**When you have live Ghidra access, prefer fixing the root cause over masking at every call site.** If the
+function's real C++ return type is genuinely `bool` (a membership/comparison test used as a yes/no gate at
+every caller, not a wider value callers happen to truncate), retype its return in Ghidra directly
+(`variables` → `set_prototype`, e.g. `bool isAmphibiousNeighbor(void * this, uint param_1)`) rather than
+leaving it `uint`/`undefined4` and masking with `low_byte_bool` on the Rust side. Ghidra then emits clean
+`return a != b;`-shaped code instead of the `CONCAT31` packing, for every caller at once. Reach for
+`low_byte_bool` only when you're not sure the real return type is `bool`, or when it's confirmed wider and
+callers are just reinterpreting it.
 
 ### Detouring a function (`#[detour_mod]` / `#[detour(NAME)]`)
 
@@ -705,6 +792,78 @@ looks like the game "just exited") - a reboot is sometimes needed to see a real 
 Build a leak-only teardown path for the side that might hold vanilla-allocated nodes (free only what your own
 code definitely allocated, deliberately leak the rest) rather than reusing a normal Box-walking cleanup - see
 `ztthoughtmgr.rs`'s `live_support::destroy_standalone_mgr_leaking_nodes` for a worked example.
+
+## Ghidra MCP (live identification work)
+
+When a Ghidra MCP server is connected, prefer it over manual decompile copy-paste for identification work
+(naming unnamed/`FUN_`/`cls_`/`meth_` helpers, resolving ICF-folded shared-label functions, fixing missed
+parameters). Gotchas hit in practice:
+
+- Most calls (`get_code`, `variables`, ...) are async - they return a `task_id`; poll with `get_task_status`
+  until it completes, don't assume the first response is the result.
+- `rename_symbol`/`batch_rename`: pass the **bare current function name** as `identifier` (e.g.
+  `meth_0x412fb8`) - not the namespace-qualified name (`BFTile::meth_0x412fb8`) and not the address, both of
+  which fail with "Function not found". `new_name` does accept a fully qualified name
+  (`msvc_std::list<uint>::erase`).
+- `variables` with `action: set_prototype`: pass `function_address` (address works here), and **omit the
+  calling-convention keyword** (`__thiscall` etc.) from the `prototype` string - including it fails with
+  "Can't resolve return type". Ghidra keeps the function's existing calling convention automatically.
+- Before applying a proposed name, `search_functions_by_name` for it first. A name can already exist at a
+  *different* address - proof the helper is one of this codebase's known ICF-folded/shared-label functions
+  with multiple real instantiations (same phenomenon as `cls_0x4012a6`/`meth_0x40a01d`). Renaming to a
+  colliding name fails outright rather than overwriting, so disambiguate (e.g. an address suffix) instead of
+  guessing blind.
+- Still applies even with live access: never hand-edit `generated.rs` directly (see above) - use Ghidra MCP to
+  confirm/apply names and fix signatures in the live project, then regenerate as usual.
+- To pin down an unknown container element size precisely (rather than guessing from context), find which
+  size-classed `PoolAlloc` freelist bucket (`DAT_006380XX`) its constructor/destructor pushes/pops from. The
+  bucket index formula seen throughout this codebase is `idx = (byteSize - 1) >> 3`, with the freelist array
+  at `DAT_00638000 + idx*4`; bucket `idx` covers sizes in `(idx*8, idx*8+8]`. Two different addresses that
+  both round to the same bucket are not proof they share a size - invert the formula to get the real range.
+- When a name collides with one already applied at a different address (`Function with name 'x' already
+  exists in namespace 'y'`), that's confirmation the helper is one of this codebase's known ICF-folded/
+  shared-label functions with multiple real instantiations - disambiguate (an address suffix, or a
+  byte-size tag like `tree24`/`tree36` when the instantiations genuinely differ in size) rather than
+  guessing which one is "real."
+- `rename_symbol`'s `identifier` matches by the function's **unqualified short name only** - it ignores the
+  namespace prefix, and resolves an ambiguous match (more than one function sharing that short name,
+  anywhere in the binary) to the **lowest address** among them, silently. Never reuse a short name across
+  two of your own renames, even under different namespaces you intend to keep distinct - check
+  `search_functions_by_name` on the exact short name for collisions (including pre-existing, unrelated ones)
+  before renaming. If a rename lands on the wrong address, fix it with a temporary-rename dance: rename the
+  wrongly-grabbed function to a throwaway placeholder, rename the real target (now uniquely resolvable),
+  then rename the placeholder back.
+- `create_function` at an address can fail with "may not contain valid code or may overlap an existing
+  function" even when the surrounding instruction boundaries are genuinely clean (confirmed via
+  `get_basic_blocks` on the neighboring functions and gap-filling `disassemble_at` first) - the real cause
+  wasn't identified. If it keeps failing after confirming clean boundaries, defining the function manually
+  in the Ghidra GUI is a reliable fallback; `get_code`/`get_basic_blocks` work normally on it afterward.
+
+## Cross-checking real names via the macOS decompile
+
+The Windows OOAnalyzer pass invents placeholder names (`meth_0x...`, `cls_0x...`, `FUN_...`) for everything
+it can't identify, but Zoo Tycoon's macOS build kept real, unstripped C++ symbol names. When a placeholder
+looks like it's a genuine **game-logic method** (a `ZTHabitat`/`ZTAnimal`/`BF*`-style class method, not a
+generic STL/allocator internal), check for a macOS decompile before inventing a name:
+
+- Real names live in `private/resources/macos-decompiles/` as `ClassName_methodName.c`. `Grep` there for the
+  class name first (e.g. `ZTHabitat_`) - if the specific method already has a file, read it directly.
+- If a Ghidra MCP session is connected, the user can also open the macOS binary as a second program
+  (`list_binaries` will show it once loaded; pass `program_name` to target it) and query it live the same way
+  as the Windows one - useful when the static export in `private/resources/macos-decompiles/` doesn't cover
+  the function you need, or looks stale.
+- **Match by structure, not just class name.** Confirm a macOS candidate by comparing the actual call
+  sequence/branch shape against the Windows decompile (same helper calls in the same order, same early-outs,
+  same loop shape) - don't accept a name just because it's the right class and "sounds right." Example from
+  this codebase: `ZTHabitat::getCloseOutsideTile`'s macOS body (walk neighbors, skip via `isAmphibiousNeighbor`,
+  collect survivors into a temp list, `rand() % size` to pick one, return a stored field) matched the Windows
+  `meth_0x448cb7` step-for-step, including the exact predicate call site that turned out to be
+  `isAmphibiousNeighbor` too - that's a real confirmation, not a guess.
+- **This technique is for game-logic methods, not compiler-generated internals.** STL/allocator helpers
+  (`vector<T>::_Insert_n`, `_Tree::insert`, etc.) get their own compiler- and platform-specific internal
+  shapes and mangled names on macOS (e.g. `_insert__Q23std42__list_deleter<PCv,...>`) that don't correspond
+  1:1 with the MSVC/Windows internals - don't go looking for a macOS name for those; keep using the
+  `msvc_std::*` generic-role naming convention instead.
 
 ## Code Quality
 

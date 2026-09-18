@@ -416,7 +416,7 @@ const RVA_GUEST_TYPE_CHECK_ARG: u32 = 0x0023_8700;
 
 /// Same mechanism as [`RVA_GUEST_TYPE_CHECK_ARG`], for the "corner entity" scenery-type check
 /// (`&DAT_00638670` in the decompile). RVA = `0x00638670 - 0x400000`.
-const RVA_SCENERY_TYPE_CHECK_ARG: u32 = 0x0023_8670;
+pub(crate) const RVA_SCENERY_TYPE_CHECK_ARG: u32 = 0x0023_8670;
 
 /// Shared "does this entity's type pass vanilla's isKindOf-style check" helper, used for both the
 /// guest-occupant check and the corner-entity scenery check in `recalculateCharacteristics` - both call

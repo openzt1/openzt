@@ -287,7 +287,7 @@ fn selected_habitat_and_unit_type() -> Option<(u32, u32)> {
 fn show_info_for_habitat(habitat_ptr: u32) -> u32 {
     let zt_show_info_ptr = get_from_memory::<u32>(habitat_ptr + 0x4);
     let show_info_id = if zt_show_info_ptr == 0 { 0u16 } else { get_from_memory::<u16>(zt_show_info_ptr + 0x70) };
-    unsafe { GET_SHOW_INFO.hooked()(globals().ztshowmgr_ptr() as *const u32, show_info_id) }
+    unsafe { GET_SHOW_INFO.hooked()(globals().ztshowmgr_ptr() as *const u32, show_info_id) as u32 }
 }
 
 /// Adds one real trick-list item (`item_ptr`, real vanilla memory, see [`find_trick_by_id`]) to the

@@ -100,7 +100,7 @@ use crate::{
     command_console::CommandError,
     globals::{get_module_base, globals},
     lua_fn,
-    util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory},
+    util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory},
     ztgamemgr_menumusichandler::MenuMusicHandler,
     ztsoundscape::ZTSoundscape,
     zoostatus::{self, ZooStatus},
@@ -585,7 +585,7 @@ impl ZTGameMgr {
 
         let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
         let zoostatus_result = unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.load(file, version);
-        if (zoostatus_result & 0xff) == 0 {
+        if !low_byte_bool(zoostatus_result) {
             return false;
         }
 
@@ -1019,13 +1019,13 @@ mod gamemgr_lifecycle_detours {
     }
 
     #[detour(SAVE)]
-    unsafe extern "thiscall" fn save(this: *const u32, file: *const u32) -> u32 {
-        unsafe { ref_from_memory::<ZTGameMgr>(this) }.save(file) as u32
+    unsafe extern "thiscall" fn save(this: *const u32, file: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.save(file)
     }
 
     #[detour(LOAD)]
-    unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> u8 {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.load(file, version) as u8
+    unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> bool {
+        unsafe { mut_from_memory::<ZTGameMgr>(this) }.load(file, version)
     }
 
     #[detour(UPDATE)]
@@ -1080,8 +1080,8 @@ mod gamemgr_finance_detours {
     }
 
     #[detour(IS_GAME_DATE)]
-    unsafe extern "thiscall" fn is_game_date(this: *const u32, day: u32, month: u32) -> u32 {
-        unsafe { ref_from_memory::<ZTGameMgr>(this) }.is_game_date(day, month) as u32
+    unsafe extern "thiscall" fn is_game_date(this: *const u32, day: u32, month: u32) -> bool {
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.is_game_date(day, month)
     }
 
     #[detour(IS_REAL_WORLD_DATE)]
