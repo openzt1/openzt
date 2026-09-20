@@ -101,6 +101,9 @@ REM Build Function
 REM ============================================================
 
 :build
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
 REM Set manifest path and DLL name
 IF DEFINED TEST_FLAG (
     SET MANIFEST_PATH=openzt-test-dll/Cargo.toml
@@ -167,6 +170,32 @@ IF "%ERRORLEVEL%"=="0" (
     exit /b 1
 )
 exit /b 0
+
+REM ============================================================
+REM Detour-Reentry Audit
+REM ============================================================
+REM Fails if any FunctionDef name is both #[detour(NAME)]'d and called via NAME.original() in the same
+REM file - .original() on a hooked address silently re-enters that detour in release builds (see
+REM openzt/scripts/check-detour-reentry.sh's own header comment for the full history/reasoning).
+
+:audit_detour_reentry
+REM Prefer Git for Windows' own bash.exe by well-known install path rather than trusting `where bash` -
+REM on a machine with WSL installed, `where bash` can resolve to C:\Windows\System32\bash.exe (the WSL
+REM launcher) instead, which doesn't understand a raw Windows path with backslashes and fails with
+REM "No such file or directory" on the script path itself.
+SET GIT_BASH=
+IF EXIST "%ProgramFiles%\Git\bin\bash.exe" SET GIT_BASH=%ProgramFiles%\Git\bin\bash.exe
+IF NOT DEFINED GIT_BASH IF EXIST "%ProgramFiles(x86)%\Git\bin\bash.exe" SET GIT_BASH=%ProgramFiles(x86)%\Git\bin\bash.exe
+IF NOT DEFINED GIT_BASH (
+    where bash >nul 2>nul
+    IF !errorlevel! NEQ 0 (
+        echo Warning: bash not found - skipping detour-reentry audit ^(install Git for Windows or add its bin\ to PATH^)
+        exit /b 0
+    )
+    SET GIT_BASH=bash
+)
+"!GIT_BASH!" "%~dp0openzt\scripts\check-detour-reentry.sh"
+exit /b !errorlevel!
 
 REM ============================================================
 REM Copy and Run Function
@@ -270,6 +299,9 @@ SHIFT
 GOTO crash_capture_args_loop
 
 :run_crash_capture
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
 echo Building openzttest.dll (release) for crash capture...
 cargo build --manifest-path openzt-test-dll/Cargo.toml --lib --target=i686-pc-windows-msvc --release
 
@@ -363,6 +395,9 @@ SHIFT
 GOTO debug_play_args_loop
 
 :run_debug_play
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
 SET BUILD_TYPE=debug
 SET BUILD_FLAGS=
 IF DEFINED RELEASE_FLAG (
@@ -500,6 +535,9 @@ SHIFT
 GOTO check_args_loop
 
 :run_check
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
 echo Running cargo check on !CHECK_MANIFEST!...
 cargo check --manifest-path !CHECK_MANIFEST! --target i686-pc-windows-msvc !CHECK_ARGS!
 

@@ -785,8 +785,24 @@ impl ZTResearchCategory {
         unsafe { ztresearchcategory::LOAD_CATEGORY.original()((self as *mut Self) as *const u32, reader) }
     }
 
+    /// Clears this category back to an empty, disabled-id state in place. Which implementation runs
+    /// depends on which arm of `research_config_reimplementation` is active: with `--features
+    /// vanilla-research-config` this category is still real-vanilla-allocated, so real vanilla's own
+    /// `clearCategory` runs (via `call_original_clear_category`, not `.original()` - see that function's
+    /// own doc comment for why); by default this category may be `Box`-allocated by this module's own
+    /// `loadBranches` reimplementation, so the matching Rust logic
+    /// (`destruction::reset_category_contents`) runs instead - calling real vanilla's `clearCategory` on
+    /// a `Box`-allocated category would be a cross-allocator hazard.
+    #[cfg(feature = "vanilla-research-config")]
     pub fn clear(&mut self) {
-        unsafe { ztresearchcategory::CLEAR_CATEGORY.original()((self as *mut Self) as *const u32) }
+        unsafe { research_config_reimplementation::detours::call_original_clear_category((self as *mut Self) as *const u32) }
+    }
+
+    /// See the `vanilla-research-config` arm's own doc comment on this method for why the two arms
+    /// differ.
+    #[cfg(not(feature = "vanilla-research-config"))]
+    pub fn clear(&mut self) {
+        research_config_reimplementation::destruction::reset_category_contents(self)
     }
 }
 
@@ -1090,12 +1106,21 @@ impl ZTResearchBranch {
         unsafe { ztresearchbranch::LOAD_BRANCH.original()((self as *mut Self) as *const u32, path) }
     }
 
-    /// Calls the vanilla `ZTResearchBranch::clearBranch`: resets `id` to `-1`, empties the cached
-    /// name/desc buffers, zeroes `icon`/`noprogicon`/`current_category`/`current_program`, destroys
-    /// and frees every category, and resets `category_array`/the funding table to empty (keeping
-    /// their allocated capacity).
+    /// Resets `id` to `-1`, empties the cached name/desc buffers, zeroes
+    /// `icon`/`noprogicon`/`current_category`/`current_program`, destroys and frees every category, and
+    /// resets `category_array`/the funding table to empty (keeping their allocated capacity). Which
+    /// implementation runs depends on which arm of `research_config_reimplementation` is active - see
+    /// `ZTResearchCategory::clear`'s own doc comment for the full reasoning (same cross-allocator
+    /// argument applies here, `Box`-allocated by default vs. real-vanilla-allocated under
+    /// `--features vanilla-research-config`).
+    #[cfg(feature = "vanilla-research-config")]
     pub fn clear_branch(&mut self) {
-        unsafe { ztresearchbranch::CLEAR_BRANCH.original()((self as *mut Self) as *const u32) }
+        unsafe { research_config_reimplementation::detours::call_original_clear_branch((self as *mut Self) as *const u32) }
+    }
+
+    #[cfg(not(feature = "vanilla-research-config"))]
+    pub fn clear_branch(&mut self) {
+        research_config_reimplementation::destruction::reset_branch_contents(self)
     }
 
     /// The vanilla "$400 (Min)"-style formatted text for the *currently selected* funding level (per
@@ -2764,7 +2789,7 @@ mod research_config_reimplementation {
     /// branches never fire on real vanilla objects and would be actively unsafe to run against ours
     /// (vanilla's `BFConfigFile::release` dereferences `tree_root` unconditionally).
     #[cfg(not(feature = "vanilla-research-config"))]
-    mod destruction {
+    pub(crate) mod destruction {
         use super::{raw_mem::*, *};
 
         /// Calls `destroy` on every non-null pointer in a raw `start_ptr..end_ptr` pointer array
@@ -2798,7 +2823,7 @@ mod research_config_reimplementation {
         /// Mirrors `ZTResearchCategory::clearCategory`: resets the category to an empty, disabled-id
         /// (but still `enabled`) state in place, destroying every program but keeping
         /// `program_array`'s own backing buffer.
-        pub(super) fn reset_category_contents(category: &mut ZTResearchCategory) {
+        pub(crate) fn reset_category_contents(category: &mut ZTResearchCategory) {
             category.id = -1;
             free_buffer_string(&category.cached_name);
             category.cached_name = alloc_buffer_string("");
@@ -2831,7 +2856,7 @@ mod research_config_reimplementation {
         /// Mirrors `ZTResearchBranch::clearBranch`: resets the branch to an empty, id `-1` state in
         /// place, destroying every category but keeping `category_array`'s own backing buffer, and
         /// emptying (but not freeing) the funding table.
-        pub(super) fn reset_branch_contents(branch: &mut ZTResearchBranch) {
+        pub(crate) fn reset_branch_contents(branch: &mut ZTResearchBranch) {
             branch.id = -1;
             free_buffer_string(&branch.cached_name);
             branch.cached_name = alloc_buffer_string("");
@@ -3059,7 +3084,7 @@ mod research_config_reimplementation {
     /// doc comment above).
     #[cfg(feature = "vanilla-research-config")]
     #[detour_mod]
-    mod detours {
+    pub(crate) mod detours {
         use std::{collections::HashSet, ffi::CStr};
 
         use openzt_detour::generated::{
@@ -3153,12 +3178,32 @@ mod research_config_reimplementation {
         unsafe extern "thiscall" fn ztresearch_program_dtor(this: *const u32) {
             unsafe { ZTRESEARCHPROGRAM_DESTRUCTOR_DETOUR.call(this) }
         }
+
+        /// Real vanilla `clearBranch`/`clearCategory`, reached via the macro-generated trampoline
+        /// rather than `CLEAR_BRANCH.original()`/`CLEAR_CATEGORY.original()` - both are also
+        /// `#[detour(...)]`'d in this same arm (and the other, mutually exclusive arm below), so in a
+        /// release build `.original()` would silently re-enter whichever arm's own detour is installed
+        /// instead of reaching real vanilla (see `ZTHabitatMgr::create_habitat`'s fix history in
+        /// `zthabitatmgr.rs` for the general bug class). Only used in *this* arm - real vanilla objects
+        /// stay vanilla-allocated here (only `loadBranches` is shadow-tested, everything else is a plain
+        /// passthrough, per the module doc comment above), so calling real vanilla's own teardown is
+        /// safe. The other (default) arm's `ZTResearchCategory::clear`/`ZTResearchBranch::clear_branch`
+        /// call `destruction::reset_category_contents`/`reset_branch_contents` directly instead -
+        /// calling real vanilla's `clearCategory`/`clearBranch` there would run vanilla's own free/delete
+        /// logic against the `Box`-allocated objects that arm constructs, a cross-allocator hazard (see
+        /// `CLAUDE.md`'s "Cross-allocator memory safety" section).
+        pub(crate) unsafe fn call_original_clear_branch(this: *const u32) {
+            unsafe { CLEAR_BRANCH_DETOUR.call(this) }
+        }
+        pub(crate) unsafe fn call_original_clear_category(this: *const u32) {
+            unsafe { CLEAR_CATEGORY_DETOUR.call(this) }
+        }
     }
 
     /// Default arm: full construction/destruction replacement - see the module doc comment above.
     #[cfg(not(feature = "vanilla-research-config"))]
     #[detour_mod]
-    mod detours {
+    pub(crate) mod detours {
         use std::{ffi::CStr, panic::AssertUnwindSafe};
 
         use openzt_detour::generated::{
