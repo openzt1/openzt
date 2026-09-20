@@ -433,14 +433,15 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTHABITAT_GET_AMOUNT_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_amount_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_FOOD_TO_LEAVE_LIVE", run: tests::zthabitatmgr::run_habitat_get_food_to_leave_live_test },
             RegisteredTest { name: "ZTHABITAT_HAS_BLDG_LIVE", run: tests::zthabitatmgr::run_habitat_has_bldg_live_test },
-            // ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS is deliberately NOT exercised by a live test -
-            // live-bisected (see ZTHabitat::send_maint_worker_cleanup_events's own doc comment): a bounded
-            // diagnostic walk of the owned-tile list alone completes cleanly, but the real `sendEvent`
-            // call-through itself hangs/crashes silently (no exception logged) the moment it's actually
-            // invoked in this stripped reimplementation-tests harness - same "no known safe way to
-            // exercise this live" reasoning as `ZTHabitatMgr::trigger_death_arrived`/`fence_replaced`.
-            // Detoured (byte-for-byte reproducing real vanilla's own call graph adds no new risk over
-            // baseline) and covered by `DETOURS_ENABLED` only.
+            // ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS is deliberately NOT exercised by a live test.
+            // It previously hung/crashed silently (no exception logged) the moment `sendEvent`'s real
+            // call-through was genuinely invoked - root cause was `generated.rs`'s `SEND_EVENT` carrying a
+            // zero-arg signature for what's actually a 6-stack-arg thiscall (`RET 0x18`), corrupting the
+            // caller's stack on every call; fixed by regenerating that entry and passing the real args (see
+            // ZTHabitat::send_maint_worker_cleanup_events's own doc comment). Not yet covered by a live test
+            // beyond `DETOURS_ENABLED` since exercising it needs a real habitat with owned scenery tiles and
+            // a live `GLOBAL_ZTAIMgr` - same "no known safe fabricated-fixture shape yet" gap as
+            // `ZTHabitatMgr::trigger_death_arrived`/`fence_replaced`.
             RegisteredTest {
                 name: "ZTHABITAT_GET_SICKLY_ANIMALS_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_sickly_animals_matches_real_live_test,

@@ -3921,7 +3921,7 @@ pub mod zthabitat {
     pub const GET_NEAR_CLEAR_TILE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> i32> = FunctionDef{address: 0x004e7a7d, function_type: PhantomData};
     pub const GET_SURROUNDING_SPECIES: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const i32> = FunctionDef{address: 0x004fb11c, function_type: PhantomData};
     pub const REMOVE_SPECIES: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x004fbe4f, function_type: PhantomData};
-    pub const SEND_EVENT: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004ffe80, function_type: PhantomData};
+    pub const SEND_EVENT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u16, u32, u8, u32, u16, u16)> = FunctionDef{address: 0x004ffe80, function_type: PhantomData};
     pub const ADD_TO_BUILDING_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const u32)> = FunctionDef{address: 0x00507150, function_type: PhantomData};
     pub const ADDITIONAL_SCENERY_SUITABILITY_CHANGE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, *const i32)> = FunctionDef{address: 0x00507645, function_type: PhantomData};
     pub const ADD_AMPHIBIOUS_NEIGHBOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u8> = FunctionDef{address: 0x005078d3, function_type: PhantomData};

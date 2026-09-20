@@ -462,8 +462,7 @@ impl ZTHabitatMgr {
             }
 
             let base = get_module_base("zoo.exe") as u32;
-            let ztapp_ptr: u32 = get_from_memory(base + GLOBAL_ZTAPP_RVA);
-            let gate_flag: u8 = if ztapp_ptr != 0 { get_from_memory(ztapp_ptr + 0x441) } else { 0 };
+            let gate_flag: u8 = get_from_memory(base + RVA_APP_INIT_SUCCESS_BASE + 0x441);
             let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
             let mapview_active = mapview_ptr != 0 && get_from_memory::<u8>(mapview_ptr + 0x378) != 0;
             let start_filled = gate_flag == 0 && !mapview_active;
@@ -598,7 +597,7 @@ impl ZTHabitatMgr {
     /// where each platform's naming diverges but the logic matches exactly).
     ///
     /// Real body, in order:
-    /// 1. **Load-time fast path**: if a save is currently loading ([`RVA_GLOBAL_ZTAPP`]'s `+0x441` byte)
+    /// 1. **Load-time fast path**: if a save is currently loading ([`RVA_APP_INIT_SUCCESS_BASE`]'s `+0x441` byte)
     ///    at format version > `0x14` ([`RVA_SAVE_FILE_VERSION`]), walks the load-time candidate-gate table
     ///    ([`RVA_LOAD_CANDIDATE_GATES_BEGIN`]/`_END`) for a record whose tile resolves to `habitat_ptr`
     ///    with a non-negative validity flag - returns `true` immediately if found, skipping everything
@@ -637,23 +636,20 @@ impl ZTHabitatMgr {
         let mgr_ptr = self as *const Self as u32;
         let base = get_module_base("zoo.exe") as u32;
 
-        let zt_app_ptr: u32 = get_from_memory(base + RVA_GLOBAL_ZTAPP);
-        if zt_app_ptr != 0 {
-            let load_in_progress: u8 = get_from_memory(zt_app_ptr + 0x441);
-            let file_version: u32 = get_from_memory(base + RVA_SAVE_FILE_VERSION);
-            if load_in_progress != 0 && file_version > 0x14 {
-                let begin: u32 = get_from_memory(base + RVA_LOAD_CANDIDATE_GATES_BEGIN);
-                let end: u32 = get_from_memory(base + RVA_LOAD_CANDIDATE_GATES_END);
-                let mut record = begin;
-                while record != end {
-                    let x: i32 = get_from_memory(record);
-                    let y: i32 = get_from_memory(record + 4);
-                    let valid_flag: i32 = get_from_memory(record + 0x14);
-                    if valid_flag >= 0 && self.get_habitat_ptr(x, y) == habitat_ptr {
-                        return true;
-                    }
-                    record += 0x128;
+        let load_in_progress: u8 = get_from_memory(base + RVA_APP_INIT_SUCCESS_BASE + 0x441);
+        let file_version: u32 = get_from_memory(base + RVA_SAVE_FILE_VERSION);
+        if load_in_progress != 0 && file_version > 0x14 {
+            let begin: u32 = get_from_memory(base + RVA_LOAD_CANDIDATE_GATES_BEGIN);
+            let end: u32 = get_from_memory(base + RVA_LOAD_CANDIDATE_GATES_END);
+            let mut record = begin;
+            while record != end {
+                let x: i32 = get_from_memory(record);
+                let y: i32 = get_from_memory(record + 4);
+                let valid_flag: i32 = get_from_memory(record + 0x14);
+                if valid_flag >= 0 && self.get_habitat_ptr(x, y) == habitat_ptr {
+                    return true;
                 }
+                record += 0x128;
             }
         }
 
@@ -833,8 +829,8 @@ impl ZTHabitatMgr {
     ///    direction). If it's a real fence/wall ([`is_wall`]), takes the **short branch**: when `direction`
     ///    is a real cardinal direction and `tile_ptr`'s own fence in that direction is specifically a
     ///    `ZTTankWall` ([`RVA_TANK_WALL_TYPE_CHECK_ARG`]) *and* a save is currently loading
-    ///    (`ZTUI::gameopts::loadInProgress`'s backing store - [`RVA_GLOBAL_ZTAPP`]'s own `+0x441` byte,
-    ///    same singleton/offset [`Self::place_gate`] and `ZTHabitat::reset_unit_ai` already read), snaps
+    ///    (`ZTUI::gameopts::loadInProgress`'s backing store - [`RVA_APP_INIT_SUCCESS_BASE`]'s own `+0x441`
+    ///    byte, same fixed address [`Self::place_gate`] and `ZTHabitat::reset_unit_ai` already read), snaps
     ///    the tank occupying `tile_ptr` ([`Self::get_tank`]) back inward
     ///    ([`SNAP_TANK_WALLS_INWARD`]/[`Self::do_show_check`]/`ZTTankExhibit::updateTankInfo`). Either
     ///    way, calls through to still-un-ported `checkExhibitMorph` and re-derives both neighbour kinds
@@ -894,8 +890,7 @@ impl ZTHabitatMgr {
                 let tile = get_from_memory::<BFTile>(tile_ptr);
                 let fence_here = ZTHabitat::fence_slot_by_index(&tile, (direction / 2) as i32);
                 if fence_here != 0 && unsafe { entity_type_matches(fence_here, RVA_TANK_WALL_TYPE_CHECK_ARG) } {
-                    let zt_app_ptr: u32 = get_from_memory(base + RVA_GLOBAL_ZTAPP);
-                    let load_in_progress = zt_app_ptr != 0 && get_from_memory::<u8>(zt_app_ptr + 0x441) != 0;
+                    let load_in_progress = get_from_memory::<u8>(base + RVA_APP_INIT_SUCCESS_BASE + 0x441) != 0;
                     if load_in_progress {
                         let tank_ptr = self.get_tank(tile_ptr);
                         if tank_ptr != 0 {
@@ -1108,7 +1103,7 @@ impl ZTHabitatMgr {
     ///    `(tile_ptr, direction)` (i.e. its own gate sat right where the fence was removed) - the *other*
     ///    side, unless it's the "world" habitat, in which case a fence-replace is queued instead of a
     ///    gate-placement. Neither queue is touched if neither side's entrance matches. Either way, then -
-    ///    gated on `ZTApp`'s own `appInitSuccess` byte ([`RVA_GLOBAL_ZTAPP`]`+0x440`, one byte before
+    ///    gated on `ZTApp`'s own `appInitSuccess` byte ([`RVA_APP_INIT_SUCCESS_BASE`]`+0x440`, one byte before
     ///    `fence_placed`'s own `+0x441` `loadInProgress` read) - applies the queue immediately via
     ///    `updateGates` rather than waiting for the next tick, then calls through to `checkExhibitMorph`
     ///    and re-derives both neighbour kinds.
@@ -1283,8 +1278,7 @@ impl ZTHabitatMgr {
             save_to_memory::<u32>(self_addr + 0x50, opposite.unwrap_or(0xffff_ffff));
         }
 
-        let zt_app_ptr: u32 = get_from_memory(base + RVA_GLOBAL_ZTAPP);
-        let app_init_success = zt_app_ptr != 0 && get_from_memory::<u8>(zt_app_ptr + 0x440) != 0;
+        let app_init_success = get_from_memory::<u8>(base + RVA_APP_INIT_SUCCESS_BASE + 0x440) != 0;
         if app_init_success {
             unsafe { UPDATE_GATES.original()(mgr_ptr) };
         }
@@ -1594,7 +1588,7 @@ impl ZTHabitatMgr {
     ///    [`Self::create_double_fence`]`(fence_b)`.
     /// 3. Else, if `fence_a` is absent and `fence_b` is present and [`is_tank_wall`]: resolves the habitat
     ///    occupying `tile_b`. While the game isn't mid-load ([`ZTUI::gameopts::loadInProgress`],
-    ///    `RVA_GLOBAL_ZTAPP+0x441`) - if that habitat is missing or not a real tank
+    ///    [`RVA_APP_INIT_SUCCESS_BASE`]`+0x441`) - if that habitat is missing or not a real tank
     ///    ([`ZTHabitat::do_tank_check`]), snaps `fence_b` back onto its own tile edge
     ///    ([`ZTFENCE_JUMP_TILE_EDGE`]) and posts a real map-editor undo action (action id `10`, the same
     ///    fixed debug label [`RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL`] [`Self::create_double_fence`] uses) -
@@ -1612,15 +1606,23 @@ impl ZTHabitatMgr {
     /// synthetic-safe input - detoured for manual/interactive live verification, not covered by an
     /// automated live test.
     pub fn snap_tank_walls_inward(&self, tank_ptr: u32) {
+        let base = get_module_base("zoo.exe") as u32;
+        // Real vanilla sets this for the entire body (ZTHabitatMgr_snapTankWallsInward.c:44/213) - it's
+        // the same fencePlaced/fenceRemoved reentrancy guard [`Self::replace_gate_with_fence`]/
+        // [`Self::replace_fence_with_gate`] already set around their own conversions. Without it,
+        // create_double_fence's/jump_tile_edge's own BFWorldMgr::addEntity call recurses straight back
+        // into fence_placed while this loop is still mid-flight, and each such reentrant call can itself
+        // conclude "disconnected from the zoo entrance" and spawn an extra, permanently-degenerate
+        // habitat (empty boundary pairs, no resize/placeGate) - the exact "several duplicate tank
+        // exhibits with no water/height controls" bug this fixes.
+        save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 1);
         unsafe { ZTTANKEXHIBIT_CLEAR_WALL_VECTOR.original()(tank_ptr as i32) };
 
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(tank_ptr) };
         let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
 
         let world_map_ptr = globals().ztworldmgr_ptr() as u32;
-        let base = get_module_base("zoo.exe") as u32;
-        let ztapp_ptr: u32 = get_from_memory(base + RVA_GLOBAL_ZTAPP);
-        let load_in_progress = ztapp_ptr != 0 && get_from_memory::<u8>(ztapp_ptr + 0x441) != 0;
+        let load_in_progress = get_from_memory::<u8>(base + RVA_APP_INIT_SUCCESS_BASE + 0x441) != 0;
 
         for (tile_a_ptr, tile_b_ptr) in pairs {
             // A boundary-tile-pair entry can hold a null tile pointer (e.g. mid-bulldoze on a shared tank
@@ -1716,6 +1718,7 @@ impl ZTHabitatMgr {
                 }
             }
         }
+        save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 0);
     }
 
     /// Ports `ZTHabitatMgr::createDoubleFence` (`ZTHabitatMgr_createDoubleFence.c`/`.asm`,
@@ -3961,7 +3964,32 @@ const RVA_INFINITE_PATH_COST: u32 = 0x0023_5494;
 /// byte field (`ZTUI::gameopts::loadInProgress`'s backing store, confirmed via `gameopts_loadInProgress.c`'s
 /// clean `return DAT_00638589;` body and `gameopts_loadFile.c`'s own `DAT_00638589 = 1;` write - one byte
 /// past `ztgamemgr.rs`'s already-documented `+0x440` `appInitSuccess` field). RVA = `0x00638154 - 0x400000`.
+///
+/// **Do not dereference this as a live pointer to read the `+0x440`/`+0x441` fields - use
+/// [`RVA_APP_INIT_SUCCESS_BASE`] instead.** See that constant's own doc comment for why: this slot is not a
+/// stable object pointer for that purpose, even though it looks like one from the decompile alone.
 const RVA_GLOBAL_ZTAPP: u32 = 0x0023_8154;
+
+/// The real, fixed base address every `appInitSuccess`(`+0x440`)/`loadInProgress`(`+0x441`) read in this file
+/// actually resolves to - confirmed directly from `gameopts_loadInProgress.asm`/`ZTGameMgr_stop.asm`, which
+/// both compile to the identical shape `MOV EAX, GLOBAL_ZTApp; TEST EAX,EAX; JZ .init; ...; .init: MOV dword
+/// ptr GLOBAL_ZTApp, ZTApp::handleMessages; .common: MOV EAX, appInitSuccess; MOV AL, [EAX+0x440_or_0x441]`.
+/// The `TEST EAX,EAX`/`JZ` only gates a *side-effect* write (stashing `ZTApp::handleMessages`'s address into
+/// [`RVA_GLOBAL_ZTAPP`]'s slot as a run-once sentinel) - both branches converge on the same `MOV EAX,
+/// appInitSuccess` before the actual field read, so the field is always read from this fixed address,
+/// **never** through [`RVA_GLOBAL_ZTAPP`]'s own stored value.
+///
+/// Every call site in this file that instead did `ztapp_ptr = *(RVA_GLOBAL_ZTAPP); flag =
+/// *(ztapp_ptr+0x440/0x441)` was reading through a live bug, not a faithful port: once *any* one of these
+/// inlined accessors has executed even once, `RVA_GLOBAL_ZTAPP`'s slot permanently holds
+/// `ZTApp::handleMessages`'s address (`0x441880`) as that leftover sentinel - not a real `ZTApp*` - so every
+/// such read was dereferencing `[0x441880 + 0x440/0x441]`, effectively-random bytes inside the `.text`
+/// section near that function. Live-confirmed (via a temporary diagnostic during the
+/// [`ZTHabitatMgr::snap_tank_walls_inward`] crash investigation - see its own doc comment) that this made
+/// `load_in_progress` read persistently non-zero throughout ordinary interactive play, long after any real
+/// loading screen had finished, while the true fixed-address read correctly came back `0`. RVA =
+/// `0x00638148 - 0x400000`.
+const RVA_APP_INIT_SUCCESS_BASE: u32 = 0x0023_8148;
 
 /// `DAT_00639188`'s RVA - the currently-loading save file's own format version (`ZTUI::gameopts::
 /// getFileVersion`'s backing store, set once by `gameopts_loadFile.c`'s own `deallocate(&DAT_00639188,...)`
@@ -5207,16 +5235,16 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference - `self`'s own address is passed directly into
     /// [`SEND_EVENT`].
     ///
-    /// **No live test exercises this directly** - live-bisected (a temporary bounded diagnostic walk of
-    /// just the owned-tile list, with no `SEND_EVENT` call, completed cleanly in well under 100 nodes for
-    /// every real habitat), the real, un-ported `SEND_EVENT` call-through itself hangs/crashes the whole
-    /// battery silently (no exception logged, matching the `openzt.log` "went quiet" signature `CLAUDE.md`
-    /// documents for this class of failure) the moment it's genuinely invoked in this stripped
-    /// reimplementation-tests harness - presumably real vanilla's own `sendEvent` reaches UI/event-queue
-    /// infrastructure this harness never initializes. Detoured anyway (byte-for-byte reproducing real
-    /// vanilla's own call graph adds no new risk over baseline) and covered by `DETOURS_ENABLED` only -
-    /// same "no known safe way to exercise this live" reasoning as [`Self::trigger_death_arrived`]/
-    /// `ZTHabitatMgr::fence_replaced`.
+    /// **`SEND_EVENT`'s real args, per `ZTHabitat_sendMaintWorkerCleanupEvents.asm`'s own call site**: six
+    /// stack args (`RET 0x18`), not the zero `generated.rs` previously carried - `(event_id: u16 = 0x2730,
+    /// _unused: u32 = 0, category: u8 = 0x4d, tile_ptr: u32, _unused: u16 = 0, 1u16)`. `0x4d` is `'M'`
+    /// (maintenance) - `ztshowinfo.rs`'s own analogous `sendEvent` forward uses `0x53` (`'S'`, show) in the
+    /// same slot, confirming this is a real per-source event-category tag rather than a coincidence. Calling
+    /// through with the old zero-arg signature read six garbage stack dwords as these args and then popped
+    /// 0x18 bytes of the *caller's* stack on return that were never pushed - genuine stack corruption on
+    /// every call, live-confirmed (via `cdb`, an actually-hung real `zoo.exe` process) to hang the whole game
+    /// on exit once a loaded save's habitats reached this cleanup path, not just the stripped
+    /// reimplementation-tests harness this was previously suspected to be confined to.
     pub fn send_maint_worker_cleanup_events(&self) {
         if self.is_tank() {
             return;
@@ -5232,7 +5260,7 @@ impl ZTHabitat {
             let flag_a: u32 = get_from_memory(entity_type_ptr + 0x11c);
             let flag_b: u8 = get_from_memory(entity_type_ptr + 0x12c);
             if flag_a != 0 || flag_b != 0 {
-                unsafe { SEND_EVENT.original()(self_addr as *const u32) };
+                unsafe { SEND_EVENT.original()(self_addr as *const u32, 0x2730, 0, 0x4d, tile_ptr, 0, 1) };
             }
         }
     }
@@ -5981,12 +6009,8 @@ impl ZTHabitat {
     /// against `.asm` not just the decompile - see that field's own doc comment), calling vtable slot
     /// `+0x100` on each occupant; then the same for the gate-out tile's own occupants, if any.
     ///
-    /// Gated on the same live `GLOBAL_ZTApp` singleton [`GLOBAL_ZTAPP_RVA`] resolves, one byte further
-    /// into the object than `ZTGameMgr::stop`'s own `appInitSuccess` read (`+0x441` rather than `+0x440`)
-    /// - a distinct flag, semantics otherwise unconfirmed beyond gating this entire method when set. A
-    /// null `GLOBAL_ZTApp` is treated as "not ready" and skips the whole body, same reasoning as
-    /// `ZTGameMgr::stop`'s own doc comment gives for not reproducing the real "lazily assign a bogus
-    /// sentinel" branch.
+    /// Gated on the same `loadInProgress` flag [`RVA_APP_INIT_SUCCESS_BASE`]`+0x441` resolves elsewhere in
+    /// this file (see that constant's own doc comment) - skips the whole body while a save is loading.
     ///
     /// The real body's `GLOBAL_ZTWorldMgr != -8` guard is, like [`Self::validate_positions`]'s own
     /// identical guard, dead in practice - checked here as `GLOBAL_ZTWorldMgr != 0` instead (equivalent
@@ -5996,11 +6020,7 @@ impl ZTHabitat {
     /// [`Self::get_attractiveness`].
     pub fn reset_unit_ai(&self) {
         let base = get_module_base("zoo.exe") as u32;
-        let ztapp_ptr: u32 = get_from_memory(base + GLOBAL_ZTAPP_RVA);
-        if ztapp_ptr == 0 {
-            return;
-        }
-        let gate_flag: u8 = get_from_memory(ztapp_ptr + 0x441);
+        let gate_flag: u8 = get_from_memory(base + RVA_APP_INIT_SUCCESS_BASE + 0x441);
         if gate_flag != 0 {
             return;
         }
