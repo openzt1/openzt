@@ -430,6 +430,39 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_GET_NUM_HUNGRY_FOODLESS_ANIMALS_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_num_hungry_foodless_animals_live_test,
             },
+            RegisteredTest { name: "ZTHABITAT_GET_NUM_ADULT_ANIMALS_LIVE", run: tests::zthabitatmgr::run_habitat_get_num_adult_animals_live_test },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_ADULT_ANIMALS_BY_SPECIES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_num_adult_animals_by_species_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_SPECIES_ANIMALS_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_species_animals_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_ADULT_GENDER_SPECIES_ANIMALS_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_adult_gender_species_animals_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_ANIMAL_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_animal_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_BABY_BORN_BONUS_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_baby_born_bonus_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_ANGRY_ANIMALS_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_num_angry_animals_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_SICK_ANIMALS_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_num_sick_animals_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_AVG_ANIMAL_HAPPINESS_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_avg_animal_happiness_live_test,
+            },
             RegisteredTest { name: "ZTHABITAT_GET_AMOUNT_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_amount_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_FOOD_TO_LEAVE_LIVE", run: tests::zthabitatmgr::run_habitat_get_food_to_leave_live_test },
             RegisteredTest { name: "ZTHABITAT_HAS_BLDG_LIVE", run: tests::zthabitatmgr::run_habitat_has_bldg_live_test },
@@ -461,6 +494,18 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_REMOVE_VIEWING_AREAS_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_remove_viewing_areas_roundtrip_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_FORMAT_HABITAT_MESSAGE_LIVE",
+                run: tests::zthabitatmgr::run_format_habitat_message_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_FIND_BETTER_GATES_FOR_NEIGHBORS_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_find_better_gates_for_neighbors_smoke_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_UPDATE_GATES_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_update_gates_smoke_live_test,
             },
             // ZTHABITATMGR_FENCE_REPLACED is deliberately NOT exercised by a live test - it calls through
             // unconditionally to still-un-ported real vanilla `checkExhibitMorph`/`morphExhibit`, whose own

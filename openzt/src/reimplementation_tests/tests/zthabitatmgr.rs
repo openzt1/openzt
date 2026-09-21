@@ -8,7 +8,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use tracing::error;
 
-use crate::globals::globals;
+use crate::globals::{get_module_base, globals};
 use crate::reimplementation_tests::harness::write_success_line;
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory};
@@ -1546,6 +1546,514 @@ pub(crate) fn run_habitat_get_num_animals_live_test(failure_log: &mut Option<std
     direct || with_neighbors
 }
 
+/// Real called before reimpl deliberately, same `characteristics_dirty` ordering rationale as
+/// [`run_habitat_get_attractiveness_live_test`] - both `false` (direct-occupant count alone) and `true`
+/// (additionally summing every amphibious neighbor's own count) are exercised over every live habitat.
+pub(crate) fn run_habitat_get_num_adult_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let direct = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_ADULT_ANIMALS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_ADULT_ANIMALS_0.original()(ptr, false) },
+        |habitat| habitat.get_num_adult_animals(false),
+    );
+    let with_neighbors = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_ADULT_ANIMALS_WITH_NEIGHBORS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_ADULT_ANIMALS_0.original()(ptr, true) },
+        |habitat| habitat.get_num_adult_animals(true),
+    );
+    direct || with_neighbors
+}
+
+/// `getNumAdultAnimals`'s species overload is only non-trivial for species actually present, so this
+/// derives each habitat's own distinct species ids from its animals (`entity_type+0x1ec`, the same read
+/// real vanilla `getSpeciesAnimals` compares against) plus one guaranteed-absent id to exercise the
+/// empty-scratch-vector path, then compares real vs reimpl for every id under both `include_neighbors`
+/// values - same per-habitat exhaustive shape as [`run_habitat_get_amount_keeper_food_live_test`].
+pub(crate) fn run_habitat_get_num_adult_animals_by_species_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NUM_ADULT_ANIMALS_BY_SPECIES_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut species_ids: Vec<i32> = Vec::new();
+        for animal_ptr in habitat.get_all_animals(false) {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let species_id: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+            if !species_ids.contains(&species_id) {
+                species_ids.push(species_id);
+            }
+        }
+        species_ids.push(i32::MAX);
+        for species_id in species_ids {
+            for include_neighbors in [false, true] {
+                let real = unsafe { zthabitat::GET_NUM_ADULT_ANIMALS_1.original()(ptr as *const u32, species_id, include_neighbors) };
+                let reimpl = habitat.get_num_adult_animals_by_species(species_id, include_neighbors);
+                if real != reimpl {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), species_id={}, include_neighbors={}: real={}, reimpl={}",
+                        i, ptr, species_id, include_neighbors, real, reimpl
+                    ));
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Content comparison (sorted, not pointer-identity) for `getSpeciesAnimals`' own out-param vector,
+/// per habitat over every distinct species id present in its animals (`entity_type+0x1ec`) plus one
+/// guaranteed-absent id to exercise the empty-vector path - same per-habitat exhaustive shape as
+/// [`run_habitat_get_num_adult_animals_by_species_live_test`]. Also asserts the species-matching
+/// invariant directly over real vanilla's own output: every animal it returns matches the requested
+/// species id. Both scratch vectors are freed afterward via [`free_event_vector_buffer`] (matching
+/// each side's own real tail exactly - not a `PoolAlloc::deallocate` call).
+pub(crate) fn run_habitat_get_species_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_SPECIES_ANIMALS_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut species_ids: Vec<i32> = Vec::new();
+        for animal_ptr in habitat.get_all_animals(false) {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let species_id: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+            if !species_ids.contains(&species_id) {
+                species_ids.push(species_id);
+            }
+        }
+        species_ids.push(i32::MAX);
+        for species_id in species_ids {
+            let mut real_vector = [0u32; 3];
+            unsafe { zthabitat::GET_SPECIES_ANIMALS.original()(ptr as *const u32, species_id, real_vector.as_mut_ptr() as *const i32) };
+            let real_animals: Vec<u32> = (real_vector[0]..real_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+            free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+            let mut reimpl_vector = [0u32; 3];
+            habitat.get_species_animals(species_id, reimpl_vector.as_mut_ptr() as u32);
+            let reimpl_animals: Vec<u32> = (reimpl_vector[0]..reimpl_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+            free_event_vector_buffer(reimpl_vector[0], reimpl_vector[2] - reimpl_vector[0]);
+
+            for &animal_ptr in &real_animals {
+                let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+                let animal_species: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+                if animal_species != species_id {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), species_id={}: real returned animal {:#010x} of species {}",
+                        i, ptr, species_id, animal_ptr, animal_species
+                    ));
+                }
+            }
+            let mut real_sorted = real_animals.clone();
+            real_sorted.sort_unstable();
+            let mut reimpl_sorted = reimpl_animals.clone();
+            reimpl_sorted.sort_unstable();
+            if real_sorted != reimpl_sorted {
+                failures.push(format!(
+                    "habitat {} ({:#010x}), species_id={}: real={:?}, reimpl={:?}",
+                    i, ptr, species_id, real_animals, reimpl_animals
+                ));
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Content comparison (sorted, not pointer-identity) for `getAdultGenderSpeciesAnimals`' own out-param
+/// vector, per habitat over every distinct species id present in its animals (`entity_type+0x1ec`)
+/// plus one guaranteed-absent id to exercise the empty-vector path - same per-habitat exhaustive
+/// shape as [`run_habitat_get_species_animals_live_test`]. Each species is queried under three
+/// requested gender strings - `"Female"`/`"Male"` (the two real caller `ZTAnimal::fGetMate` builds
+/// from the asking animal's own gender text) and `""` (the zero-length-compare path, matching every
+/// adult of the species). The requested string object is built here with the
+/// `{start_ptr, end_ptr, buffer_end_ptr}` header layout both sides read (real vanilla's callee reads
+/// only the first two dwords). Also asserts the filters' invariants directly over real vanilla's own
+/// output: every animal it returns is an adult (`'m'`/`'f'` at `entity_type+0xa4`), matches the
+/// requested species id, and carries the requested gender text in its own `animal+0x26c`/`+0x270`
+/// span. Both scratch vectors are freed afterward via [`free_event_vector_buffer`] (matching each
+/// side's own real tail exactly - not a `PoolAlloc::deallocate` call).
+pub(crate) fn run_habitat_get_adult_gender_species_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_ADULT_GENDER_SPECIES_ANIMALS_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut species_ids: Vec<i32> = Vec::new();
+        for animal_ptr in habitat.get_all_animals(false) {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let species_id: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+            if !species_ids.contains(&species_id) {
+                species_ids.push(species_id);
+            }
+        }
+        species_ids.push(i32::MAX);
+        for species_id in species_ids {
+            for gender_text in [&b"Female"[..], &b"Male"[..], &b""[..]] {
+                let mut gender_buf = gender_text.to_vec();
+                gender_buf.push(0);
+                let gender_start = gender_buf.as_ptr() as u32;
+                let gender_header: [u32; 3] = [
+                    gender_start,
+                    gender_start + gender_text.len() as u32,
+                    gender_start + gender_text.len() as u32 + 1,
+                ];
+
+                let mut real_vector = [0u32; 3];
+                unsafe {
+                    zthabitat::GET_ADULT_GENDER_SPECIES_ANIMALS.original()(
+                        ptr as *const u32,
+                        gender_header.as_ptr() as *const i8,
+                        species_id,
+                        real_vector.as_mut_ptr() as *const i32,
+                    )
+                };
+                let real_animals: Vec<u32> = (real_vector[0]..real_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+                free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+                let mut reimpl_vector = [0u32; 3];
+                habitat.get_adult_gender_species_animals(gender_header.as_ptr() as u32, species_id, reimpl_vector.as_mut_ptr() as u32);
+                let reimpl_animals: Vec<u32> = (reimpl_vector[0]..reimpl_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+                free_event_vector_buffer(reimpl_vector[0], reimpl_vector[2] - reimpl_vector[0]);
+
+                for &animal_ptr in &real_animals {
+                    let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+                    let animal_species: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+                    let gender_tag: u8 = get_from_memory(get_from_memory::<u32>(animal_type_ptr + 0xa4));
+                    let text_start: u32 = get_from_memory(animal_ptr + 0x26c);
+                    let text_end: u32 = get_from_memory(animal_ptr + 0x270);
+                    let own_text: Vec<u8> = (text_start..text_end).map(get_from_memory::<u8>).collect();
+                    if !(gender_tag == b'm' || gender_tag == b'f')
+                        || animal_species != species_id
+                        || own_text != gender_text
+                    {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}), species_id={}, gender={:?}: real returned animal {:#010x} (species {}, gender tag {}, text {:?})",
+                            i, ptr, species_id, gender_text, animal_ptr, animal_species, gender_tag as char, own_text
+                        ));
+                    }
+                }
+                let mut real_sorted = real_animals.clone();
+                real_sorted.sort_unstable();
+                let mut reimpl_sorted = reimpl_animals.clone();
+                reimpl_sorted.sort_unstable();
+                if real_sorted != reimpl_sorted {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), species_id={}, gender={:?}: real={:?}, reimpl={:?}",
+                        i, ptr, species_id, gender_text, real_animals, reimpl_animals
+                    ));
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// The shared game RNG state's RVA (`DAT_00638060`) that `ZTHabitat::update` and `get_random_animal`
+/// advance through the classic MSVC LCG. Re-declared here per the repo's no-shared-consts precedent
+/// (`zthabitatmgr.rs` carries the original).
+const GAME_RNG_RVA: u32 = 0x00638060 - 0x400000;
+
+/// One MSVC LCG advance over the shared game RNG state: `state = state * 0x343fd + 0x269ec3` with
+/// full 32-bit wrap - `zthabitatmgr.rs`'s own `lcg_next`, duplicated per the same no-shared-consts
+/// precedent.
+fn lcg_next(state: u32) -> u32 {
+    state.wrapping_mul(0x343fd).wrapping_add(0x269ec3)
+}
+
+/// Shared assertion for [`run_habitat_get_random_animal_live_test`]: one observed draw (`side` is
+/// `"real"` or `"reimpl"`) over the habitat's settled `all_animals` array must return the pointer at
+/// index `(lcg_next(seed_before) >> 0x10 & 0x7fff) % count`, and the shared game RNG state must read
+/// exactly `lcg_next(seed_before)` afterward - or, when `count == 0`, return null and leave the seed
+/// untouched. Returns whether the draw failed.
+fn assert_habitat_random_animal_draw(
+    failure_log: &mut Option<std::fs::File>,
+    test_name: &str,
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    begin: u32,
+    count: u32,
+    seed_before: u32,
+    seed_after: u32,
+    drawn_ptr: u32,
+) -> bool {
+    let expected_rng = lcg_next(seed_before);
+    let (expected_ptr, rng_ok) = if count == 0 {
+        (0, seed_after == seed_before)
+    } else {
+        let index = ((expected_rng >> 0x10) & 0x7fff) % count;
+        (get_from_memory::<u32>(begin + index * 4), seed_after == expected_rng)
+    };
+    if drawn_ptr == expected_ptr && rng_ok {
+        return false;
+    }
+    let msg = format!(
+        "habitat {} ({:#010x}) {} draw: got {:#010x}, expected {:#010x}; rng {:#010x} -> {:#010x}, expected {:#010x}",
+        habitat_index, habitat_ptr, side, drawn_ptr, expected_ptr, seed_before, seed_after, expected_rng
+    );
+    error!("{}: {}", test_name, msg);
+    if let Some(log_file) = failure_log {
+        let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+    }
+    true
+}
+
+/// Per live habitat, settles any pending `characteristics_dirty` recalculate with one unasserted real
+/// vanilla draw first, then checks one reimplementation draw and one further real draw against the
+/// shared game RNG state directly: each must return the animal pointer at exactly the
+/// `(lcg_next(seed) >> 0x10 & 0x7fff) % count` slot of the settled `all_animals` array and leave
+/// `DAT_00638060` at exactly `lcg_next(seed)`. Real vanilla's own draws are asserted against the same
+/// formula, so the formula itself is validated against vanilla behavior, not just cross-agreement.
+/// The empty-habitat path (`count == 0`: null return, seed untouched) is covered only when the loaded
+/// zoo has an animal-free exhibit.
+pub(crate) fn run_habitat_get_random_animal_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_RANDOM_ANIMAL_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        unsafe { zthabitat::GET_RANDOM_ANIMAL.original()(ptr as *const std::ffi::c_void) };
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let count = (end - begin) >> 2;
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let reimpl_ptr = habitat.get_random_animal();
+        fail_flag |= assert_habitat_random_animal_draw(
+            failure_log,
+            test_name,
+            "reimpl",
+            i,
+            ptr,
+            begin,
+            count,
+            seed_before,
+            get_from_memory(rng_addr),
+            reimpl_ptr,
+        );
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let real_ptr = unsafe { zthabitat::GET_RANDOM_ANIMAL.original()(ptr as *const std::ffi::c_void) };
+        fail_flag |= assert_habitat_random_animal_draw(
+            failure_log,
+            test_name,
+            "real",
+            i,
+            ptr,
+            begin,
+            count,
+            seed_before,
+            get_from_memory(rng_addr),
+            real_ptr,
+        );
+    }
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// One pass of [`run_habitat_add_baby_born_bonus_live_test`]: snapshots every habitat animal's pending
+/// happiness-change accumulator (`animal+0x2ac`), invokes one side with `type_ptr`, asserts the
+/// decompile's own contract against the pristine snapshot - every animal whose entity-type species id
+/// (read from `entity_type+0x1ec`, real vanilla's own filter) matches `type_ptr`'s gains exactly
+/// `type_ptr`'s `baby_born_change` (`+0x31c`) and every non-member is untouched - then restores the
+/// snapshot unconditionally, so both sides see identical input state and the live game is left exactly
+/// as the pass found it.
+fn assert_baby_born_bonus_pass(
+    failures: &mut Vec<String>,
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    animal_ptrs: &[u32],
+    type_ptr: u32,
+    call: impl FnOnce(),
+) {
+    let species_id: i32 = get_from_memory(type_ptr + 0x1ec);
+    let bonus: i32 = get_from_memory(type_ptr + 0x31c);
+    let before: Vec<i32> = animal_ptrs.iter().map(|&a| get_from_memory(a + 0x2ac)).collect();
+    call();
+    for (index, &animal_ptr) in animal_ptrs.iter().enumerate() {
+        let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+        let expected = if get_from_memory::<i32>(animal_type_ptr + 0x1ec) == species_id {
+            before[index].wrapping_add(bonus)
+        } else {
+            before[index]
+        };
+        let actual: i32 = get_from_memory(animal_ptr + 0x2ac);
+        if actual != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}) {}, type {:#010x} (species {}, bonus {}): animal {:#010x} accumulator {}, expected {}",
+                habitat_index, habitat_ptr, side, type_ptr, species_id, bonus, animal_ptr, actual, expected
+            ));
+        }
+    }
+    for (index, &animal_ptr) in animal_ptrs.iter().enumerate() {
+        save_to_memory(animal_ptr + 0x2ac, before[index]);
+    }
+}
+
+/// `addBabyBornBonus` mutates live animal state, so this verifies each side against the decompile's own
+/// contract over pristine input rather than cross-comparing after the fact. Per habitat, every
+/// `ZTAnimalType` present anywhere in the zoo (real type pointers, so both sides read a real bonus
+/// value) is passed to real vanilla first, then - after [`assert_baby_born_bonus_pass`] restored every
+/// accumulator - to the reimplementation. The habitat/type cross-product also covers the
+/// empty-scratch-vector path on both sides: whenever the species is absent from this habitat, the pass
+/// asserts nothing changed at all. Real vanilla's internal `getSpeciesAnimals` re-enters the Rust port
+/// (same detour shape as [`run_habitat_get_num_adult_animals_by_species_live_test`]), and
+/// `recalculateCharacteristics` (triggered by either side's `characteristics_dirty` lazy-recalc) never
+/// writes `+0x2ac`, so the snapshots stay valid within the synchronous, single-threaded pass - no game
+/// tick can interleave.
+pub(crate) fn run_habitat_add_baby_born_bonus_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ADD_BABY_BORN_BONUS_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    // Union of the zoo's real `ZTAnimalType` pointers, in habitat order.
+    let mut type_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        for animal_ptr in unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_all_animals(false) {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            if !type_ptrs.contains(&animal_type_ptr) {
+                type_ptrs.push(animal_type_ptr);
+            }
+        }
+    }
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let animal_ptrs: Vec<u32> = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_all_animals(false).collect();
+        for &type_ptr in &type_ptrs {
+            assert_baby_born_bonus_pass(&mut failures, "real", i, ptr, &animal_ptrs, type_ptr, || unsafe {
+                zthabitat::ADD_BABY_BORN_BONUS.original()(ptr as *const u32, type_ptr as *const u32)
+            });
+            assert_baby_born_bonus_pass(&mut failures, "reimpl", i, ptr, &animal_ptrs, type_ptr, || {
+                unsafe { ref_from_memory::<ZTHabitat>(ptr) }.add_baby_born_bonus(type_ptr)
+            });
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Real called before reimpl deliberately, same `characteristics_dirty` ordering rationale as
+/// [`run_habitat_get_attractiveness_live_test`] - both `false` (direct-occupant count alone) and `true`
+/// (additionally summing every amphibious neighbor's own count) are exercised over every live habitat.
+pub(crate) fn run_habitat_get_num_angry_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let direct = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_ANGRY_ANIMALS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_ANGRY_ANIMALS.original()(ptr, false) },
+        |habitat| habitat.get_num_angry_animals(false),
+    );
+    let with_neighbors = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_ANGRY_ANIMALS_WITH_NEIGHBORS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_ANGRY_ANIMALS.original()(ptr, true) },
+        |habitat| habitat.get_num_angry_animals(true),
+    );
+    direct || with_neighbors
+}
+
+/// Real called before reimpl deliberately, same `characteristics_dirty` ordering rationale as
+/// [`run_habitat_get_attractiveness_live_test`] - both `false` (direct-occupant count alone) and `true`
+/// (additionally summing every amphibious neighbor's own count) are exercised over every live habitat.
+pub(crate) fn run_habitat_get_num_sick_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let direct = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_SICK_ANIMALS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_SICK_ANIMALS.original()(ptr, false) },
+        |habitat| habitat.get_num_sick_animals(false),
+    );
+    let with_neighbors = compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_NUM_SICK_ANIMALS_WITH_NEIGHBORS_LIVE",
+        |ptr| unsafe { zthabitat::GET_NUM_SICK_ANIMALS.original()(ptr, true) },
+        |habitat| habitat.get_num_sick_animals(true),
+    );
+    direct || with_neighbors
+}
+
+/// Real called before reimpl deliberately, same `characteristics_dirty` ordering rationale as
+/// [`run_habitat_get_attractiveness_live_test`]. Unlike the sibling count getters this takes no
+/// `include_neighbors` flag (real vanilla reads the single cached field and returns), so there is
+/// no with-neighbors variant - one comparison per live habitat.
+pub(crate) fn run_habitat_get_avg_animal_happiness_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_over_live_habitats(
+        failure_log,
+        "ZTHABITAT_GET_AVG_ANIMAL_HAPPINESS_LIVE",
+        |ptr| unsafe { zthabitat::GET_AVG_ANIMAL_HAPPINESS.original()(ptr) },
+        |habitat| habitat.get_avg_animal_happiness(),
+    )
+}
+
 /// `ZTHabitat::getAllAnimals` always returns the same `&this->field_0x6c` pointer regardless of `sort`,
 /// only conditionally reordering the vector's own contents first - comparing that pointer would be
 /// meaningless, so this compares the sorted *contents* instead. Real vanilla is called first (`sort =
@@ -2918,4 +3426,81 @@ pub(crate) fn run_habitat_remove_viewing_areas_roundtrip_live_test(failure_log: 
         }
         true
     }
+}
+
+pub(crate) fn run_format_habitat_message_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_FORMAT_HABITAT_MESSAGE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+
+        let string_id = 0x2523;
+        let mut real_out = [0u32; 3];
+        unsafe { zthabitatmgr::FORMAT_HABITAT_MESSAGE.original()(real_out.as_mut_ptr(), string_id, ptr as i32) };
+        let real_bytes: Vec<u8> = if real_out[0] != 0 && real_out[1] >= real_out[0] {
+            (real_out[0]..real_out[1]).map(get_from_memory::<u8>).collect()
+        } else {
+            Vec::new()
+        };
+        if real_out[0] != 0 {
+            free_event_vector_buffer(real_out[0], real_out[2] - real_out[0]);
+        }
+
+        let mut reimpl_out = [0u32; 3];
+        ZTHabitatMgr::format_habitat_message(reimpl_out.as_mut_ptr(), string_id, ptr);
+        let reimpl_bytes: Vec<u8> = if reimpl_out[0] != 0 && reimpl_out[1] >= reimpl_out[0] {
+            (reimpl_out[0]..reimpl_out[1]).map(get_from_memory::<u8>).collect()
+        } else {
+            Vec::new()
+        };
+        if reimpl_out[0] != 0 {
+            free_event_vector_buffer(reimpl_out[0], reimpl_out[2] - reimpl_out[0]);
+        }
+
+        if real_bytes != reimpl_bytes {
+            let real_str = String::from_utf8_lossy(&real_bytes);
+            let reimpl_str = String::from_utf8_lossy(&reimpl_bytes);
+            failures.push(format!("habitat {} ({:#010x}): real={:?}, reimpl={:?}", i, ptr, real_str, reimpl_str));
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+pub(crate) fn run_find_better_gates_for_neighbors_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_FIND_BETTER_GATES_FOR_NEIGHBORS_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    habitat_mgr.find_better_gates_for_neighbors(0);
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 && unsafe { ref_from_memory::<ZTHabitat>(ptr) }.is_tank() {
+            habitat_mgr.find_better_gates_for_neighbors(ptr);
+        }
+    }
+
+    write_success_line(failure_log, test_name);
+    false
+}
+
+pub(crate) fn run_update_gates_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_UPDATE_GATES_SMOKE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    habitat_mgr.update_gates();
+    write_success_line(failure_log, test_name);
+    false
 }
