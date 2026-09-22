@@ -56,6 +56,15 @@ mod binary_parsing;
 /// Encoding utilities for handling text from game files with various encodings (UTF-8, Windows ANSI code pages).
 mod encoding_utils;
 
+/// Win32 SYSTEMTIME and FILETIME tick conversion utilities.
+pub mod systemtime;
+
+/// Basic 2D and 3D geometry types and directions.
+pub mod geom;
+
+/// Vanilla MSVC std::vector layout compatibility types.
+pub mod vanilla_vector;
+
 /// ZTAF Animation file format parsing, writing and some modification methods.
 ///
 /// Based on documentation at <https://github.com/jbostoen/ZTStudio/wiki/ZT1-Graphics-Explained>
@@ -68,8 +77,11 @@ mod bfentitytype;
 /// block (e.g. the ZTResearch* classes); this module models its raw memory layout.
 mod bfconfigfile;
 
-/// ztgamemgr module has commands to interact with the live zoo stats such as cash, num animals, species, guests, etc. via the vanilla ZTGameMgr class.
-mod ztgamemgr;
+/// ztgame module has commands to interact with the live zoo stats such as cash, num animals, species, guests, etc. via the vanilla ZTGameMgr class, and MenuMusicHandler.
+mod ztgame;
+pub(crate) use ztgame as ztgamemgr;
+#[allow(unused_imports)]
+pub(crate) use ztgame::menu_music_handler as ztgamemgr_menumusichandler;
 
 /// zoostatus module - vanilla ZooStatus reimplementation, see
 /// openzt/plans/zoostatus-implementation-plan.md. ZooStatus is the finance/rating tracker ZTGameMgr
@@ -78,15 +90,12 @@ mod ztgamemgr;
 /// block. Stage 8 adds this module's own address-level detours (`zoostatus::init()` below).
 mod zoostatus;
 
-/// ztgamemgr_menumusichandler module reimplements ZTGameMgr::MenuMusicHandler, a self-contained leaf
-/// class embedded/pointed to by ZTGameMgr - see openzt/plans/menumusichandler-implementation-plan.md.
-mod ztgamemgr_menumusichandler;
-
 /// ztmapview is the main view in zoo tycoon, all map interaction is done through this class.
 pub mod ztmapview;
 
-/// zthabitatmgr module has commands to interact with habitats/exhibits/tanks via the vanilla ZTHabitatMgr class.
-mod zthabitatmgr;
+/// zthabitat module has commands to interact with habitats/exhibits/tanks via the vanilla ZTHabitatMgr class.
+mod zthabitat;
+pub(crate) use zthabitat as zthabitatmgr;
 
 /// ztresearch module has structs and methods for the vanilla ZTResearchMgr/ZTResearchBranch/ZTResearchCategory/ZTResearchProgram
 /// classes, which drive the zoo's research tree, funding levels and program completion effects.
@@ -96,9 +105,10 @@ mod ztresearch;
 /// ZTMarketingFundingLevel classes, which drive the zoo's marketing spend and funding-level selection.
 mod ztmarketing;
 
-/// ztthoughtmgr module has structs and methods for the vanilla ZTThoughtMgr/ZTThought classes, which
+/// ztthought module has structs and methods for the vanilla ZTThoughtMgr/ZTThought classes, which
 /// track the "thought bubble" messages guests/animals display (e.g. "caught prey").
-mod ztthoughtmgr;
+pub mod ztthought;
+pub use ztthought as ztthoughtmgr;
 
 /// ztmegatilemgr module has structs and methods for the vanilla ZTMegatileMgr/ZTMegatile classes, which
 /// recalculate terrain "megatile" (5x5 tile block) guest-density/esthetic-bonus characteristics.
@@ -265,9 +275,8 @@ mod zoo_init {
         if cfg!(feature = "experimental") {
             info!("Feature 'experimental' enabled");
             ztadvterrainmgr::init();
-            ztgamemgr::init();
+            ztgame::init();
             zoostatus::init();
-            ztgamemgr_menumusichandler::init();
             experimental::init();
             ztmapview::init();
             zthabitatmgr::init();
