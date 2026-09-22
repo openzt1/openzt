@@ -13,8 +13,8 @@ mod capture_ztlog;
 /// functions for registering commands with a function callback and hooks so that a command is run every game update
 mod command_console;
 
-/// Commands and functions for reading entities and entity types from the ZTWorldMgr class
-pub mod ztworldmgr;
+mod ztworld;
+pub(crate) use ztworld as ztworldmgr;
 
 mod resource_manager;
 
@@ -107,8 +107,8 @@ mod ztmarketing;
 
 /// ztthought module has structs and methods for the vanilla ZTThoughtMgr/ZTThought classes, which
 /// track the "thought bubble" messages guests/animals display (e.g. "caught prey").
-pub mod ztthought;
-pub use ztthought as ztthoughtmgr;
+mod ztthought;
+pub(crate) use ztthought as ztthoughtmgr;
 
 /// ztmegatilemgr module has structs and methods for the vanilla ZTMegatileMgr/ZTMegatile classes, which
 /// recalculate terrain "megatile" (5x5 tile block) guest-density/esthetic-bonus characteristics.
@@ -118,38 +118,21 @@ mod ztmegatilemgr;
 /// zoo-achievement awards and the award.cfg catalogue.
 mod ztawardmgr;
 
-/// ztshowscriptmgr module has structs and methods for the vanilla ZTShowScriptMgr/ZTShowScript/
-/// ZTShowScriptItem classes - Stage 1 (core data model) of the show-script reimplementation, see
-/// openzt/plans/ztshowscriptmgr-implementation-plan.md.
-mod ztshowscriptmgr;
-
-/// ztshowmgr module - Stage 2 (struct + constructor + registered-shows store + the config-driven
-/// `initShowParams`) of the vanilla ZTShowMgr reimplementation, see
-/// openzt/plans/ztshowmgr-implementation-plan.md. The real vanilla constructor keeps running for the
-/// live global by design - its tail-call into the now-detoured `initShowParams` runs the Rust port.
-mod ztshowmgr;
-
-/// ztshow module - Stage 2 (ZTShow/ZTShowInfo raw-access call sites) of the show-script
-/// reimplementation, see openzt/plans/ztshowscriptmgr-implementation-plan.md.
+/// ztshow module contains the Marine Mania show subsystem:
+/// ZTShow, ZTShowInfo, ZTShowMgr, ZTShowScriptMgr, ZTShowState, ZTShowScriptState, ZTShowUI.
 mod ztshow;
-
-/// ztshowstate module - Stage 1 (full ZTShowState port: init/clear/save/load) of the ZTShowInfo +
-/// ZTShowState reimplementation, see openzt/plans/ztshowinfo-implementation-plan.md.
-mod ztshowstate;
-
-/// ztshowscriptstate module - the vanilla ZTShowScriptState per-(unit, show) show-progress record
-/// (struct + init/load/save/setNextItem/getNumItems), see
-/// openzt/plans/ztshowscriptstate-implementation-plan.md.
-mod ztshowscriptstate;
-
-/// ztshowinfo module - Stage 2 (status predicates: isReady/isStarted/isStopped/hasKeeper/needsKeeper/
-/// getScheduledShowKeeperType/getScheduledShowScript) of the ZTShowInfo + ZTShowState reimplementation,
-/// see openzt/plans/ztshowinfo-implementation-plan.md.
-mod ztshowinfo;
-
-/// ztshowui module - Stage 4 (UI consumers: showpanel_fillTrickLists/_copyListToScript) of the
-/// show-script reimplementation, see openzt/plans/ztshowscriptmgr-implementation-plan.md.
-mod ztshowui;
+#[allow(unused_imports)]
+pub(crate) use ztshow::info as ztshowinfo;
+#[allow(unused_imports)]
+pub(crate) use ztshow::mgr as ztshowmgr;
+#[allow(unused_imports)]
+pub(crate) use ztshow::script as ztshowscriptmgr;
+#[allow(unused_imports)]
+pub(crate) use ztshow::script_state as ztshowscriptstate;
+#[allow(unused_imports)]
+pub(crate) use ztshow::state as ztshowstate;
+#[allow(unused_imports)]
+pub(crate) use ztshow::ui as ztshowui;
 
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
@@ -285,13 +268,7 @@ mod zoo_init {
             ztthoughtmgr::init();
             ztmegatilemgr::init();
             ztawardmgr::init();
-            ztshowscriptmgr::init();
             ztshow::init();
-            ztshowstate::init();
-            ztshowscriptstate::init();
-            ztshowinfo::init();
-            ztshowmgr::init();
-            ztshowui::init();
             ztguest::init();
             ambients::init();
             ztsoundscape::init();

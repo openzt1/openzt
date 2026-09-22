@@ -5,9 +5,13 @@
 
 pub mod thought;
 pub mod mgr;
+pub mod live_support;
 
-pub use thought::*;
+#[allow(unused_imports)]
+pub use thought::ZTThought;
 pub use mgr::*;
+#[allow(unused_imports)]
+pub use live_support::*;
 
 /// Registers this module's live detours.
 pub fn init() {
