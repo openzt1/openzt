@@ -2,7 +2,10 @@
 //! `openzt/src/zthabitatmgr.rs`) against real vanilla over the live, loaded zoo's own habitat grid.
 
 use openzt_detour::generated::{
-    bfentity::GET_TILE as BFENTITY_GET_TILE, bfmap::WORLD_TO_TILE, standalone::OPERATOR_NEW, zthabitat, zthabitatmgr, ztviewingarea,
+    bfentity::GET_TILE as BFENTITY_GET_TILE,
+    bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE},
+    standalone::OPERATOR_NEW,
+    zthabitat, zthabitatmgr, ztviewingarea,
 };
 use std::fmt::Debug;
 use std::io::Write;
@@ -15,8 +18,8 @@ use crate::util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memo
 use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
 use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
 use crate::zthabitatmgr::{
-    free_event_vector_buffer, hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat, ZTHabitatMgr, IS_RIGHT_SALINITY,
-    RVA_KEEPER_TYPE_CHECK_ARG,
+    call_bfunit_tile_cost_vtable_slot, free_event_vector_buffer, hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat,
+    ZTHabitatMgr, IS_RIGHT_SALINITY, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
 };
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -1903,7 +1906,399 @@ pub(crate) fn run_habitat_get_random_animal_live_test(failure_log: &mut Option<s
     fail_flag
 }
 
-/// One pass of [`run_habitat_add_baby_born_bonus_live_test`]: snapshots every habitat animal's pending
+/// Shared assertion for [`run_habitat_get_random_tile_live_test`]: one observed draw (`side` is
+/// `"real"` or `"reimpl"`) over the habitat's snapshotted owned-tile list must return the payload at
+/// index `(lcg_next(seed_before) >> 0x10 & 0x7fff) % count`, and the shared game RNG state must read
+/// exactly `lcg_next(seed_before)` afterward - or, when `count == 0`, return null and leave the seed
+/// untouched. Returns whether the draw failed.
+fn assert_habitat_random_tile_draw(
+    failure_log: &mut Option<std::fs::File>,
+    test_name: &str,
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    tiles: &[u32],
+    seed_before: u32,
+    seed_after: u32,
+    drawn_ptr: u32,
+) -> bool {
+    let expected_rng = lcg_next(seed_before);
+    let count = tiles.len() as u32;
+    let (expected_ptr, rng_ok) = if count == 0 {
+        (0, seed_after == seed_before)
+    } else {
+        let index = ((expected_rng >> 0x10) & 0x7fff) % count;
+        (tiles[index as usize], seed_after == expected_rng)
+    };
+    if drawn_ptr == expected_ptr && rng_ok {
+        return false;
+    }
+    let msg = format!(
+        "habitat {} ({:#010x}) {} draw: got {:#010x}, expected {:#010x}; rng {:#010x} -> {:#010x}, expected {:#010x}",
+        habitat_index, habitat_ptr, side, drawn_ptr, expected_ptr, seed_before, seed_after, expected_rng
+    );
+    error!("{}: {}", test_name, msg);
+    if let Some(log_file) = failure_log {
+        let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+    }
+    true
+}
+
+/// Per live habitat, checks one reimplementation draw and one real vanilla draw against the shared
+/// game RNG state directly: each must return the `BFTile*` payload at exactly the
+/// `(lcg_next(seed) >> 0x10 & 0x7fff) % count` slot of the habitat's owned-tile list and leave
+/// `DAT_00638060` at exactly `lcg_next(seed)`. The list is snapshotted once per habitat via the same
+/// sentinel walk real vanilla's `getSize(this, false)` counts (both draws read that synchronous,
+/// unmutated list, so the snapshot is both sides' shared ground truth). Real vanilla's own draws are
+/// asserted against the same formula, so the formula itself is validated against vanilla behavior,
+/// not just cross-agreement. Unlike the animal draw test there is no settle draw - `getRandomTile`'s
+/// count path (`getSize`, false arm) touches no `characteristics_dirty` recalculate. The
+/// empty-habitat path (`count == 0`: null return, seed untouched) is covered only when the loaded zoo
+/// has a tile-free exhibit.
+pub(crate) fn run_habitat_get_random_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_RANDOM_TILE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let reimpl_ptr = habitat.get_random_tile();
+        fail_flag |= assert_habitat_random_tile_draw(
+            failure_log,
+            test_name,
+            "reimpl",
+            i,
+            ptr,
+            &tiles,
+            seed_before,
+            get_from_memory(rng_addr),
+            reimpl_ptr,
+        );
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let real_ptr = unsafe { zthabitat::GET_RANDOM_TILE.original()(ptr as *const u32) };
+        fail_flag |= assert_habitat_random_tile_draw(
+            failure_log,
+            test_name,
+            "real",
+            i,
+            ptr,
+            &tiles,
+            seed_before,
+            get_from_memory(rng_addr),
+            real_ptr,
+        );
+    }
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// This test's own oracle for `BFMap::isCloseDirection` (`BFMap_isCloseDirection.c`): `actual` sits
+/// within one step of `reference` on the 8-direction compass. Written out from the decompile's own
+/// per-direction chain rather than a modular-distance formula - the decompile compares exact integer
+/// values, so an out-of-range `reference` (the `-1`/`0xffffffff` sentinel the rotation fields use)
+/// matches nothing, which a `rem_euclid` formulation would get wrong.
+fn is_close_direction(reference: i32, actual: i32) -> bool {
+    match reference {
+        0 => actual == 0 || actual == 1 || actual == 7,
+        1 => actual == 0 || actual == 1 || actual == 2,
+        2 => actual == 1 || actual == 2 || actual == 3,
+        3 => actual == 2 || actual == 3 || actual == 4,
+        4 => actual == 3 || actual == 4 || actual == 5,
+        5 => actual == 4 || actual == 5 || actual == 6,
+        6 => actual == 5 || actual == 6 || actual == 7,
+        7 => actual == 6 || actual == 7 || actual == 0,
+        _ => false,
+    }
+}
+
+/// Shared assertion for the two directional-tile draw tests: one observed draw (`side` is `"real"` or
+/// `"reimpl"`) must return the tile pointer at index `(lcg_next(seed_before) >> 0x10 & 0x7fff) % count`
+/// of `expected_list` - the side's own candidate set when non-empty, otherwise the full owned-tile list
+/// both sides' `getRandomTile` fallback draws from - and the shared game RNG state must read exactly
+/// `lcg_next(seed_before)` afterward. An empty `expected_list` (tile-free habitat) expects a null
+/// return and an untouched seed. Returns whether the draw failed.
+fn assert_directional_tile_draw(
+    failure_log: &mut Option<std::fs::File>,
+    test_name: &str,
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    expected_list: &[u32],
+    seed_before: u32,
+    seed_after: u32,
+    drawn_ptr: u32,
+) -> bool {
+    let expected_rng = lcg_next(seed_before);
+    let (expected_ptr, rng_ok) = if expected_list.is_empty() {
+        (0, seed_after == seed_before)
+    } else {
+        let index = ((expected_rng >> 0x10) & 0x7fff) % expected_list.len() as u32;
+        (expected_list[index as usize], seed_after == expected_rng)
+    };
+    if drawn_ptr == expected_ptr && rng_ok {
+        return false;
+    }
+    let msg = format!(
+        "habitat {} ({:#010x}) {} draw: got {:#010x}, expected {:#010x} (of {} candidates); rng {:#010x} -> {:#010x}, expected {:#010x}",
+        habitat_index, habitat_ptr, side, drawn_ptr, expected_ptr, expected_list.len(), seed_before, seed_after, expected_rng
+    );
+    error!("{}: {}", test_name, msg);
+    if let Some(log_file) = failure_log {
+        let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+    }
+    true
+}
+
+/// Builds one side's expected candidate list for [`run_habitat_get_random_tile_in_direction_live_test`]:
+/// every snapshotted owned tile whose real `BFMap::getDirection` direction from `from_tile` passes the
+/// [`is_close_direction`] oracle for `reference`.
+fn directional_tile_candidates(tiles: &[u32], from_tile: u32, reference: i32) -> Vec<u32> {
+    tiles
+        .iter()
+        .copied()
+        .filter(|&tile| {
+            let dir = unsafe { BFMAP_GET_DIRECTION_0.original()(from_tile as i32, tile as i32) };
+            is_close_direction(reference, dir)
+        })
+        .collect()
+}
+
+/// Per live habitat, sweeps every real `EDirection` (0-7) plus the `-1`/`0xffffffff` "no direction"
+/// sentinel the rotation fields carry, checking one reimplementation draw and one real vanilla draw per
+/// direction against the shared game RNG state directly. Each side's expected candidate set is rebuilt
+/// from the [`is_close_direction`] oracle over the real `BFMap::getDirection` results (undetoured
+/// vanilla, the same call both sides make) over the habitat's snapshotted owned-tile list, and each
+/// draw must return the `(lcg_next(seed) >> 0x10 & 0x7fff) % count` slot of that set - or, when the
+/// set is empty, of the full list both sides' `getRandomTile` fallback draws from - leaving
+/// `DAT_00638060` at exactly `lcg_next(seed)`. The from-tile is the habitat's own first owned tile, so
+/// `getDirection` always sees a real `BFTile*` (the null-from-tile path is not forced: real vanilla
+/// resolves it to the same empty candidate set this oracle already covers).
+pub(crate) fn run_habitat_get_random_tile_in_direction_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_RANDOM_TILE_IN_DIRECTION_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let from_tile = tiles.first().copied().unwrap_or(0);
+        for direction in [0u32, 1, 2, 3, 4, 5, 6, 7, 0xffff_ffff] {
+            let candidates = directional_tile_candidates(&tiles, from_tile, direction as i32);
+            let expected_list: &[u32] = if candidates.is_empty() { &tiles } else { &candidates };
+
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let reimpl_ptr = habitat.get_random_tile_in_direction(from_tile, direction);
+            fail_flag |= assert_directional_tile_draw(
+                failure_log,
+                test_name,
+                "reimpl",
+                i,
+                ptr,
+                expected_list,
+                seed_before,
+                get_from_memory(rng_addr),
+                reimpl_ptr,
+            );
+
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let real_ptr =
+                unsafe { zthabitat::GET_RANDOM_TILE_IN_DIRECTION.original()(ptr as *const u32, from_tile as *const u32, direction) } as u32;
+            fail_flag |= assert_directional_tile_draw(
+                failure_log,
+                test_name,
+                "real",
+                i,
+                ptr,
+                expected_list,
+                seed_before,
+                get_from_memory(rng_addr),
+                real_ptr,
+            );
+        }
+    }
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Per live habitat, drives both sides with each of the habitat's own animals (real `ZTUnit`
+/// subclasses, the function's real caller shape - `ZTUnit_getRandomClearTileAhead.c`'s own parameter),
+/// checking one reimplementation draw and one real vanilla draw per unit against the shared game RNG
+/// state directly. Each side's expected candidate set is rebuilt from the [`is_close_direction`]
+/// oracle over the unit's real state - its `+0x12c` facing (the `(rotation - 4) & 7` opposite, the
+/// `0xffffffff` sentinel left as-is), its real current tile (`BFEntity::getTile`, undetoured), the
+/// real vtable `+0x164` path-cost dispatch ([`call_bfunit_tile_cost_vtable_slot`], real
+/// `getTerrainCost`-family vanilla) against the shared [`MAX_PATH_COST_RVA`] bound - over the
+/// habitat's snapshotted owned-tile list. Each draw must return the
+/// `(lcg_next(seed) >> 0x10 & 0x7fff) % count` slot of that set - or, when empty, of the full list
+/// both sides' `getRandomTile` fallback draws from - leaving `DAT_00638060` at exactly
+/// `lcg_next(seed)`. Animal-free habitats contribute no draws (staff/keeper units are not iterated -
+/// they are not members of `all_animals`).
+pub(crate) fn run_habitat_get_random_clear_tile_ahead_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_RANDOM_CLEAR_TILE_AHEAD_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        for u in 0..(end.wrapping_sub(begin)) / 4 {
+            let unit: u32 = get_from_memory(begin + u * 4);
+            if unit == 0 {
+                continue;
+            }
+            let rotation: u32 = get_from_memory(unit + 0x12c);
+            let heading = if rotation == 0xffff_ffff { rotation } else { rotation.wrapping_sub(4) & 7 };
+            let unit_tile = unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) };
+            let candidates: Vec<u32> = tiles
+                .iter()
+                .copied()
+                .filter(|&tile| {
+                    let cost = unsafe { call_bfunit_tile_cost_vtable_slot(unit, tile) };
+                    if cost >= max_cost {
+                        return false;
+                    }
+                    let dir = unsafe { BFMAP_GET_DIRECTION_0.original()(unit_tile, tile as i32) };
+                    !is_close_direction(heading as i32, dir)
+                })
+                .collect();
+            let expected_list: &[u32] = if candidates.is_empty() { &tiles } else { &candidates };
+
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let reimpl_ptr = habitat.get_random_clear_tile_ahead(unit);
+            fail_flag |= assert_directional_tile_draw(
+                failure_log,
+                test_name,
+                "reimpl",
+                i,
+                ptr,
+                expected_list,
+                seed_before,
+                get_from_memory(rng_addr),
+                reimpl_ptr,
+            );
+
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let real_ptr = unsafe { zthabitat::GET_RANDOM_CLEAR_TILE_AHEAD.original()(ptr as *const u32, unit as *const u32) } as u32;
+            fail_flag |= assert_directional_tile_draw(
+                failure_log,
+                test_name,
+                "real",
+                i,
+                ptr,
+                expected_list,
+                seed_before,
+                get_from_memory(rng_addr),
+                real_ptr,
+            );
+        }
+    }
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Per live habitat, drives both sides of `addClearTiles` over the full `(animal, check_path)` cross
+/// product - the null animal (real vanilla's own short-circuit: neither the cost gate nor the path
+/// check runs) plus each of the habitat's own animals (real `ZTAnimal` subclasses, the function's real
+/// caller shape via `getRandomClearTile`), each with `check_path` false and true. The extracted tile
+/// lists are compared element-for-element in owned-tile-list order - the walk both sides iterate is
+/// the same synchronous list, so order is deterministic. Also asserts the decompile's own filter
+/// contract directly over real vanilla's output: every returned tile's four direct-entity slots
+/// (`+0x4..+0x10`) are null and its entity list at `+0x0` is empty. `check_path=true` runs real
+/// vanilla's own `BFAIMgr::checkPath` pathfinder on both sides - the same consecutive-call shape
+/// real vanilla's own `getRandomClearTile` already performs per subhabitat, so back-to-back runs
+/// can't shift either side's result. Both scratch vectors are freed afterward via
+/// [`free_event_vector_buffer`] (matching each side's own real tail exactly - not a
+/// `PoolAlloc::deallocate` call).
+pub(crate) fn run_habitat_add_clear_tiles_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ADD_CLEAR_TILES_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let animals: Vec<u32> = (0..(end.wrapping_sub(begin)) / 4)
+            .map(|u| get_from_memory::<u32>(begin + u * 4))
+            .filter(|&a| a != 0)
+            .collect();
+        for animal in std::iter::once(0u32).chain(animals) {
+            for check_path in [false, true] {
+                let mut real_vector = [0u32; 3];
+                unsafe {
+                    zthabitat::ADD_CLEAR_TILES.original()(ptr as *const u32, real_vector.as_mut_ptr() as i32, animal as *const u32, check_path)
+                };
+                let real_tiles: Vec<u32> = (real_vector[0]..real_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+                free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+                let mut reimpl_vector = [0u32; 3];
+                habitat.add_clear_tiles(reimpl_vector.as_mut_ptr() as u32, animal, check_path);
+                let reimpl_tiles: Vec<u32> = (reimpl_vector[0]..reimpl_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+                free_event_vector_buffer(reimpl_vector[0], reimpl_vector[2] - reimpl_vector[0]);
+
+                for &tile in &real_tiles {
+                    let entity_slots_clear = [0x4u32, 0x8, 0xc, 0x10].iter().all(|&off| get_from_memory::<u32>(tile + off) == 0);
+                    let head: u32 = get_from_memory(tile);
+                    if !entity_slots_clear || get_from_memory::<u32>(head) != head {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}), animal={:#010x}, check_path={}: real returned occupied tile {:#010x}",
+                            i, ptr, animal, check_path, tile
+                        ));
+                    }
+                }
+                if real_tiles != reimpl_tiles {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), animal={:#010x}, check_path={}: real ({:?}) != reimpl ({:?})",
+                        i, ptr, animal, check_path, real_tiles, reimpl_tiles
+                    ));
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
 /// happiness-change accumulator (`animal+0x2ac`), invokes one side with `type_ptr`, asserts the
 /// decompile's own contract against the pristine snapshot - every animal whose entity-type species id
 /// (read from `entity_type+0x1ec`, real vanilla's own filter) matches `type_ptr`'s gains exactly

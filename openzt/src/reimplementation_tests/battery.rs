@@ -448,6 +448,22 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_get_random_animal_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_tile_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_TILE_IN_DIRECTION_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_tile_in_direction_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_CLEAR_TILE_AHEAD_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_clear_tile_ahead_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_CLEAR_TILES_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_clear_tiles_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_ADD_BABY_BORN_BONUS_LIVE",
                 run: tests::zthabitatmgr::run_habitat_add_baby_born_bonus_live_test,
             },
