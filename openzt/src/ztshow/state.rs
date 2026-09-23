@@ -468,21 +468,6 @@ mod detours {
     unsafe extern "thiscall" fn load_detour(this: *const u32, file: *const u32, version: u32) -> bool {
         show_state_load(this as u32, file, version)
     }
-
-    /// `(name, is_enabled)` per detour - lets `reimplementation_tests`'s `ZTSHOWSTATE_DETOURS_ENABLED`
-    /// catch a silently-failed `init_detours()` the same way `ztgamemgr_menumusichandler`/`ztsoundscape`/
-    /// `zoostatus` already do for their own detour sets (see each of their own `pub(crate) mod
-    /// live_support`), rather than a comparison test's own real-vs-rust output happening to coincide by
-    /// chance (as `init`'s own live test did here before this existed - see the module doc comment's
-    /// `openzt-test-dll`-vs-`reimplementation_tests::init()` wiring note).
-    pub(crate) fn status() -> [(&'static str, bool); 4] {
-        [
-            ("INIT", INIT_DETOUR.is_enabled()),
-            ("CLEAR", CLEAR_DETOUR.is_enabled()),
-            ("SAVE", SAVE_DETOUR.is_enabled()),
-            ("LOAD", LOAD_DETOUR.is_enabled()),
-        ]
-    }
 }
 
 /// **Wiring note**: this module's detours are installed from two different places depending on how the
@@ -543,7 +528,7 @@ pub(crate) mod live_support {
     }
 
     /// See `detours::status()`'s own doc comment.
-    pub(crate) fn detour_status() -> [(&'static str, bool); 4] {
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
         super::detours::status()
     }
 }

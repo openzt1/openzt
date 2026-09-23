@@ -324,7 +324,7 @@ mod menu_music_handler_detours {
         unsafe { mut_from_memory::<MenuMusicHandler>(this) }.update(delta);
     }
 
-    /// Live-test access to the real vanilla bodies and to the detours' installation state. Once
+    /// Live-test access to the real vanilla bodies. Once
     /// `init_detours()` has patched these five addresses, `.original()` on them re-enters the Rust
     /// detours above instead of reaching vanilla in release builds (it's a raw address cast there -
     /// the exact trap `reimplementation_tests::init()`'s ztawardmgr comment documents); debug builds
@@ -352,18 +352,6 @@ mod menu_music_handler_detours {
 
         pub(crate) fn update(this: *const u32, delta: u32) {
             unsafe { super::UPDATE_DETOUR.call(this, delta) }
-        }
-
-        /// `(name, is_enabled)` per detour - the battery asserts all five to catch a silently-failed
-        /// `init_detours()` (error logged, game continues on vanilla).
-        pub(crate) fn status() -> [(&'static str, bool); 5] {
-            [
-                ("CONSTRUCTOR", super::CONSTRUCTOR_DETOUR.is_enabled()),
-                ("INIT", super::INIT_DETOUR.is_enabled()),
-                ("START_PLAY", super::START_PLAY_DETOUR.is_enabled()),
-                ("START_FADE", super::START_FADE_DETOUR.is_enabled()),
-                ("UPDATE", super::UPDATE_DETOUR.is_enabled()),
-            ]
         }
     }
 }
@@ -453,9 +441,9 @@ pub(crate) mod live_support {
         menu_music_handler_detours::test_real::update(this, delta)
     }
 
-    /// `(name, is_enabled)` per detour - see `menu_music_handler_detours::test_real::status`.
-    pub(crate) fn detour_status() -> [(&'static str, bool); 5] {
-        menu_music_handler_detours::test_real::status()
+    /// `(name, is_enabled)` per detour - see `menu_music_handler_detours::status`.
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
+        menu_music_handler_detours::status()
     }
 }
 

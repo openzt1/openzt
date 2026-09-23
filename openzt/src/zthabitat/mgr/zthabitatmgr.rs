@@ -1,49 +1,24 @@
-use openzt_detour::{
-    generated::{
-        bfaimgr::CHECK_PATH as BFAIMGR_CHECK_PATH,
+use openzt_detour::generated::{
         bfentity::{DIR_TO_SET as BFENTITY_DIR_TO_SET, GET_TILE as BFENTITY_GET_TILE, SET_WORLD_POS as BFENTITY_SET_WORLD_POS
-    },bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION, WORLD_TO_TILE, WORLD_TO_VIRTUAL_0},
+    },bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE, WORLD_TO_VIRTUAL_0},
         bftile::{
             ADD_EDGE as BFTILE_ADD_EDGE, GET_CORNER_ELEVATION as BFTILE_GET_CORNER_ELEVATION, IS_GENTLY_SLOPED as BFTILE_IS_GENTLY_SLOPED,
-            IS_IN_ZOO as BFTILE_IS_IN_ZOO, REMOVE_EDGE as BFTILE_REMOVE_EDGE, SNAP_TO_EDGE, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
+            IS_IN_ZOO as BFTILE_IS_IN_ZOO, REMOVE_EDGE as BFTILE_REMOVE_EDGE, SNAP_TO_EDGE,
         },
         bfuimgr::DISPLAY_MESSAGE_1 as BFUIMGR_DISPLAY_MESSAGE_1,
         bfunit::GET_PATH_COST as BFUNIT_GET_PATH_COST,
         bfworldmgr::{ADD_ENTITY as BFWORLDMGR_ADD_ENTITY, GET_TYPE as BFWORLDMGR_GET_TYPE, REMOVE_ENTITY as BFWORLDMGR_REMOVE_ENTITY, VERIFY_ENTITY_0 as BFWORLDMGR_VERIFY_ENTITY_0},
         gxmixer::SET_SET as GXMIXER_SET_SET,
-        msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
         msvc_std_vectorbyte::VECTORBYTE,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
-        standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA, WRITE_BYTES_TO_FILE},
-        ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY},
+        standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            ADD_AMPHIBIOUS_NEIGHBOR, ADD_CLEAR_TILES, ADD_HABITAT_TILES, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
-            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_ALL_ANIMALS, GET_AMOUNT_KEEPER_FOOD,
-            GET_ANIMALS, GET_AVG_ANIMAL_HAPPINESS, GET_EVENTS, GET_FOOD_TO_LEAVE, GET_GATE, GET_GATE_TILE_IN as ZTHABITAT_GET_GATE_TILE_IN,
-            GET_NEAREST_SICK_ANIMAL, GET_NUM_ANGRY_ANIMALS, GET_NUM_ANIMALS, GET_NUM_HUNGRY_FOODLESS_ANIMALS, GET_NUM_KEEPERS,
-            GET_NUM_SICKLY_ANIMALS, GET_NUM_SICK_ANIMALS, GET_OUTERMOST_TANK as ZTHABITAT_GET_OUTERMOST_TANK, GET_RANDOM_ANIMAL,
-            GET_RANDOM_CLEAR_TILE_AHEAD, GET_RANDOM_TILE, GET_RANDOM_TILE_IN_DIRECTION, GET_SHOW_PORTAL, GET_SIZE, GET_SPECIES_ANIMALS,
-            GET_SPECIES_RATING, GET_SURROUNDING_SPECIES, GET_VIEWING_AREAS_WITH_GUESTS, HAS_BLDG, HILITE_AMPHIBIOUS_NEIGHBORS,
-            HILITE_SHOW_NEIGHBORS, IS_BEING_SERVICED, NEEDS_SERVICE, RECALCULATE_CHARACTERISTICS, REMOVE_HABITAT_TILES, REMOVE_SPECIES,
-            REMOVE_VIEWING_AREAS, RESET_UNIT_AI, RESIZE as ZTHABITAT_RESIZE, REVISE_SPECIES_LIST, SAVE as ZTHABITAT_SAVE, SEND_EVENT,
-            SEND_MAINT_WORKER_CLEANUP_EVENTS, SET_DETERIORATION as ZTHABITAT_SET_DETERIORATION,
-            SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS, SET_NAME as ZTHABITAT_SET_NAME, SET_TIME_LAST_SERVICED,
-            TRIGGER_DEATH_ARRIVED, UPDATE_PORTALS, VALIDATE_POSITIONS,
+            ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
+            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_GATE_TILE_IN as ZTHABITAT_GET_GATE_TILE_IN, GET_SHOW_PORTAL, GET_SIZE, RESIZE as ZTHABITAT_RESIZE, SET_DETERIORATION as ZTHABITAT_SET_DETERIORATION, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{
-            ADD_HABITAT as ZTHABITATMGR_ADD_HABITAT, AFTER_ENTITY_CHANGE, BEFORE_ENTITY_CHANGE, BREAK_AMPHIBIOUS_CONNECTION, CAN_FIND_PATH,
-            CAN_SEE_HABITAT_FROM_BUILDING, CAN_SEE_SHOW_FROM_BUILDING, CHECK_AMPHIBIOUS_NEIGHBOR, CHECK_ENTER_HABITAT, CHECK_EXHIBIT_MORPH,
-            CHECK_GATE, CHECK_SHOW_NEIGHBOR, CREATE_DOUBLE_FENCE, CREATE_HABITAT as ZTHABITATMGR_CREATE_HABITAT, DECREMENT_HABITAT_NUM,
-            DO_SHOW_CHECK, DO_TANK_CHECK, ENTER_NEW_MONTH, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
-            FENCE_PLACED, FENCE_REMOVED, FENCE_REPLACED, FILL_ZOO_EXTERIOR, FIND_BEST_PLACE_FOR_GATE, FIND_BETTER_GATES_FOR_NEIGHBORS,
-            FORMAT_HABITAT_MESSAGE, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NEEDY_NESTED_TANK, GET_NEXT_FENCE_PAIR, GET_NUM_FAMILIES,
-            GET_NUM_SPECIES, GET_OUTERMOST_TANK, GET_TANK, GET_ZOO_ENTRANCE_TILE, HABITAT_SEEN_FROM_BUILDING, HABITAT_TILE_CHANGED, LEADS_TO,
-            MARK_ZOO_EXTERIOR, MERGE_TANKS, MORPH_EXHIBIT, NAME_HABITAT, PATH_PLACED as ZTHABITATMGR_PATH_PLACED,
-            PATH_REMOVED as ZTHABITATMGR_PATH_REMOVED, PLACE_GATE, RECALCULATE_DETERIORATION, REMOVE_HABITAT_0, REPLACE_FENCE_WITH_GATE,
-            REPLACE_GATE, REPLACE_GATE_WITH_FENCE, SCENERY_ENTITY_CHANGE, SNAP_TANK_WALLS_INWARD, SPLIT_TANK, SPLIT_TANK_INTO_LAND,
-            TERRAIN_ABOUT_TO_BE_CHANGED, TERRAIN_CHANGED, TERRAIN_TILE_CHANGED, UNHIGHLIGHT_HABITAT, UPDATE as ZTHABITATMGR_UPDATE,
-            UPDATE_AMPHIBIOUS_NEIGHBORS_0, UPDATE_AMPHIBIOUS_NEIGHBORS_1, UPDATE_GATES, UPDATE_SHOW_NEIGHBORS_0, UPDATE_SHOW_NEIGHBORS_1,
+            AFTER_ENTITY_CHANGE, CHECK_EXHIBIT_MORPH, DECREMENT_HABITAT_NUM, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND,
         },
         zttankexhibit::{
             ADD_TANK_WALL as ZTTANKEXHIBIT_ADD_TANK_WALL, CLEAR_WALL_VECTOR as ZTTANKEXHIBIT_CLEAR_WALL_VECTOR,
@@ -51,24 +26,18 @@ use openzt_detour::{
             REMOVE_ILLEGAL_ENTITIES as ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES, UPDATE_TANK_INFO as ZTTANKEXHIBIT_UPDATE_TANK_INFO,
         },
         ztmapview::ADD_UNDO_ACTION,
+        ztstaff::REMOVE_ASSIGNED_HABITAT as ZTSTAFF_REMOVE_ASSIGNED_HABITAT,
         zttankwall::SET_IS_COMBINED_CONNECTOR,
+        ztui_buyh::REFRESH as ZTUI_BUYH_REFRESH,
         ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
         ztui_habitatinfo::ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT,
-        ztui_showpanel::SET_EXHIBIT,
-        ztviewingarea::{
-            ADD_TILE as ZTVIEWINGAREA_ADD_TILE, CONSTRUCTOR as ZTVIEWINGAREA_CONSTRUCTOR, DESTRUCTOR as ZTVIEWINGAREA_DESTRUCTOR,
-            GET_EWEXTENT as ZTVIEWINGAREA_GET_EWEXTENT, GET_NSEXTENT as ZTVIEWINGAREA_GET_NSEXTENT,
-            RECALCULATE_CHARACTERISTICS as ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS, REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
-            UPDATE_AMBIENTS as ZTVIEWINGAREA_UPDATE_AMBIENTS,
-        },
+        ztviewingarea::REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
         ztvisibilitytesting::TEST_LOS,
         ztworldmgr::{
             PLAY_FROWN_SOUND as ZTWORLDMGR_PLAY_FROWN_SOUND, PLAY_SMILE_SOUND as ZTWORLDMGR_PLAY_SMILE_SOUND,
             UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS,
         },
-    },
-    FunctionDef,
-};
+    };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
@@ -352,7 +321,8 @@ impl ZTHabitatMgr {
     ///
     /// On the append path, also calls through to real vanilla `ZTUI::habitatinfo::addHabitat`, sets
     /// the shared "habitat list changed" dirty flag ([`HABITAT_LIST_DIRTY_RVA`]), and calls the
-    /// unidentified no-arg helper [`FUN_0044BB5F`] - all three exactly as vanilla's own tail does.
+    /// `ZTUI::buyh::refresh` ([`ZTUI_BUYH_REFRESH`], which enables or disables the place-gate button to
+    /// match whether any habitats exist) - all three exactly as vanilla's own tail does.
     pub fn add_habitat(&self, habitat_ptr: u32) {
         let deferred: u8 = get_from_memory(habitat_ptr + 0x2c);
         if deferred != 0 {
@@ -390,7 +360,7 @@ impl ZTHabitatMgr {
         unsafe { ZTUI_HABITATINFO_ADD_HABITAT.original()(habitat_ptr as *const i32) };
         let base = get_module_base("zoo.exe") as u32;
         save_to_memory::<u8>(base + HABITAT_LIST_DIRTY_RVA, 1);
-        unsafe { FUN_0044BB5F.original()() };
+        unsafe { ZTUI_BUYH_REFRESH.original()() };
     }
 
     /// Ports `ZTHabitatMgr::createHabitat` (`ZTHabitatMgr_createHabitat.c`/`.asm`) as an orchestrator:
@@ -2284,24 +2254,16 @@ impl ZTHabitatMgr {
     /// [`Self::pending_gate_fence_ptr`] back into a plain fence via [`Self::replace_gate_with_fence`] -
     /// but only after confirming it's still a live entity in `GLOBAL_ZTWorldMgr`'s own `entity_array`
     /// (real vanilla's own defensive re-check; see [`crate::ztworldmgr::ZTWorldMgr::entity_array`]) -
-    /// then clears the field. If the field is set but genuinely isn't found among a *non-empty*
-    /// `entity_array` (real vanilla's own inconsistency-guard branch, never attested by any real call
-    /// site), calls through the unidentified [`FUN_005B66D7`] and returns **without** clearing the field,
-    /// matching real vanilla's own early return exactly.
+    /// then clears the field. The field is cleared on every path - null field, empty `entity_array`,
+    /// or a stashed pointer that isn't found. Real vanilla's not-found exit is an out-of-line block
+    /// at `0x005b66d7` (`POP ESI; POP EDI; ADD ESP, 8; JMP 0x0050b15b`) that rejoins the body with
+    /// the found-flag clear, skips `replaceGateWithFence`, and falls through to the shared
+    /// `MOV [ESI+0x54], 0` tail at `0x0041eca2`.
     pub fn replace_gate(&self) {
         let self_addr = self as *const Self as u32;
         let gate_ptr = self.pending_gate_fence_ptr;
-        if gate_ptr != 0 {
-            let world = globals().ztworldmgr();
-            let mut entities = world.entity_array().peekable();
-            if entities.peek().is_some() {
-                if entities.any(|e| e == gate_ptr) {
-                    Self::replace_gate_with_fence(gate_ptr);
-                } else {
-                    unsafe { FUN_005B66D7.original()() };
-                    return;
-                }
-            }
+        if gate_ptr != 0 && globals().ztworldmgr().entity_array().any(|e| e == gate_ptr) {
+            Self::replace_gate_with_fence(gate_ptr);
         }
         save_to_memory::<u32>(self_addr + 0x54, 0);
     }
@@ -3371,20 +3333,20 @@ impl ZTHabitatMgr {
     /// helper - the `.asm`'s own `RET 0x4` pops only the one stack argument and nothing in the body reads
     /// `ECX`/`this` at all, the same misnaming pattern already documented for
     /// [`Self::replace_gate_with_fence`]/[`ZTHabitat::highlight`]. Walks the live `GLOBAL_ZTWorldMgr`'s
-    /// own [`ZTWorldMgr::entity_array`], and for every non-null entry whose own
-    /// [`RVA_HABITAT_TYPE_CHECK_ARG`] `isCastClass` check passes, calls through to the real, unidentified
-    /// per-entry worker [`FUN_0050C884`] with `staff_ptr`.
+    /// own [`ZTWorldMgr::entity_array`], and for every non-null entry that is a `ZTStaff`
+    /// ([`RVA_STAFF_TYPE_CHECK_ARG`] `isCastClass` check), calls
+    /// `ZTStaff::removeAssignedHabitat(staff, habitat_ptr)` ([`ZTSTAFF_REMOVE_ASSIGNED_HABITAT`],
+    /// undetoured `.original()` call-through) to drop `habitat_ptr` from that staff member's
+    /// assigned-habitat list. Real caller: `ZTHabitatMgr::removeHabitat`, passing the habitat being
+    /// removed.
     ///
-    /// Deliberately not exercised by an active live test with a synthesized `staff_ptr` - same reasoning
-    /// as `ZTHabitat::move_gate_to`: [`FUN_0050C884`]'s own body is unidentified and may dereference its
-    /// argument, and this harness has no existing helper for finding a real `ZTStaff*` to pass instead.
-    /// The detour is still installed (byte-for-byte reproducing real vanilla's own call graph adds no new
-    /// risk over baseline) and covered by the `DETOURS_ENABLED` wiring check.
-    pub fn clear_staff_habitat(staff_ptr: u32) {
+    /// Not exercised by a live test: every call mutates real staff assignments. The detour is covered
+    /// by the `DETOURS_ENABLED` wiring check.
+    pub fn clear_staff_habitat(habitat_ptr: u32) {
         let world = globals().ztworldmgr();
         for entity_ptr in world.entity_array() {
-            if entity_ptr != 0 && unsafe { entity_type_matches(entity_ptr, RVA_HABITAT_TYPE_CHECK_ARG) } {
-                unsafe { FUN_0050C884.original()(entity_ptr as *const u32, staff_ptr as *const u32) };
+            if entity_ptr != 0 && unsafe { entity_type_matches(entity_ptr, RVA_STAFF_TYPE_CHECK_ARG) } {
+                unsafe { ZTSTAFF_REMOVE_ASSIGNED_HABITAT.original()(entity_ptr as *const u32, habitat_ptr as *const u32) };
             }
         }
     }

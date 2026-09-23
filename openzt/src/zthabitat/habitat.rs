@@ -1,46 +1,24 @@
 use nt_time::{time::UtcDateTime, FileTime};
-use openzt_detour::{
-    generated::{
+use openzt_detour::generated::{
         ambients::PLAY as AMBIENTS_PLAY,
         bfaimgr::CHECK_PATH as BFAIMGR_CHECK_PATH,
-        bfentity::{DIR_TO_SET as BFENTITY_DIR_TO_SET, GET_TILE as BFENTITY_GET_TILE, SET_WORLD_POS as BFENTITY_SET_WORLD_POS
-    },bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION, WORLD_TO_TILE, WORLD_TO_VIRTUAL_0},
-        bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
+        bfentity::GET_TILE as BFENTITY_GET_TILE,bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION},
         bftile::{
-            ADD_EDGE as BFTILE_ADD_EDGE, GET_CORNER_ELEVATION as BFTILE_GET_CORNER_ELEVATION, IS_GENTLY_SLOPED as BFTILE_IS_GENTLY_SLOPED,
-            IS_IN_ZOO as BFTILE_IS_IN_ZOO, REMOVE_EDGE as BFTILE_REMOVE_EDGE, SNAP_TO_EDGE, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
+            IS_IN_ZOO as BFTILE_IS_IN_ZOO, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         },
-        bfuimgr::DISPLAY_MESSAGE_1 as BFUIMGR_DISPLAY_MESSAGE_1,
-        bfunit::GET_PATH_COST as BFUNIT_GET_PATH_COST,
-        bfworldmgr::{ADD_ENTITY as BFWORLDMGR_ADD_ENTITY, GET_TYPE as BFWORLDMGR_GET_TYPE, REMOVE_ENTITY as BFWORLDMGR_REMOVE_ENTITY, VERIFY_ENTITY_0 as BFWORLDMGR_VERIFY_ENTITY_0},
-        gxmixer::SET_SET as GXMIXER_SET_SET,
-        msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
-        msvc_std_vectorbyte::VECTORBYTE,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
-        standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA, WRITE_BYTES_TO_FILE},
+        standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
         ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY},
-        ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
+        ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            ACCEPT_DONATION, ADD_BABY_BORN_BONUS, ADD_CLEAR_TILES, ADD_HABITAT_TILES, ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL,
-            CLEAR_AMPHIBIOUS_NEIGHBORS, CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_ADULT_GENDER_SPECIES_ANIMALS,
-            GET_ALL_ANIMALS, GET_AMOUNT_KEEPER_FOOD, GET_ANIMALS, GET_AVG_ANIMAL_HAPPINESS, GET_EVENTS, GET_FOOD_TO_LEAVE, GET_GATE,
-            GET_GATE_TILE_IN as ZTHABITAT_GET_GATE_TILE_IN, GET_NEAREST_SICK_ANIMAL, GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1,
-            GET_NUM_ANGRY_ANIMALS, GET_NUM_ANIMALS, GET_NUM_HUNGRY_FOODLESS_ANIMALS, GET_NUM_KEEPERS, GET_NUM_SICKLY_ANIMALS, GET_NUM_SICK_ANIMALS,
-            GET_OUTERMOST_TANK as ZTHABITAT_GET_OUTERMOST_TANK, GET_RANDOM_ANIMAL, GET_RANDOM_CLEAR_TILE_AHEAD, GET_RANDOM_TILE,
-            GET_RANDOM_TILE_IN_DIRECTION, GET_SHOW_PORTAL, GET_SIZE, GET_SPECIES_ANIMALS, GET_SPECIES_RATING, GET_SURROUNDING_SPECIES,
-            GET_VIEWING_AREAS_WITH_GUESTS, HAS_BLDG, HILITE_AMPHIBIOUS_NEIGHBORS, HILITE_SHOW_NEIGHBORS, IS_BEING_SERVICED, NEEDS_SERVICE,
-            RECALCULATE_CHARACTERISTICS, REMOVE_HABITAT_TILES, REMOVE_SPECIES, REMOVE_VIEWING_AREAS, RESET_UNIT_AI, RESIZE as ZTHABITAT_RESIZE,
-            REVISE_SPECIES_LIST, SAVE as ZTHABITAT_SAVE, SEND_EVENT, SEND_MAINT_WORKER_CLEANUP_EVENTS, SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
-            SET_DETERIORATION as ZTHABITAT_SET_DETERIORATION, SET_NAME as ZTHABITAT_SET_NAME, SET_TIME_LAST_SERVICED, TRIGGER_DEATH_ARRIVED,
-            UPDATE_PORTALS, VALIDATE_POSITIONS,
+            GET_EVENTS, GET_SIZE, NEEDS_SERVICE,
+            RECALCULATE_CHARACTERISTICS,
+            REVISE_SPECIES_LIST, SEND_EVENT,
+            UPDATE_PORTALS,
         },
         ztkeeper::CLEANS_UP,
-        ztmapview::ADD_UNDO_ACTION,
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR, SAVE as ZTSHOWINFO_SAVE},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
-        zttankwall::SET_IS_COMBINED_CONNECTOR,
-        ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
-        ztui_habitatinfo::ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT,
         ztui_showpanel::SET_EXHIBIT,
         ztunit::GET_HABITAT as ZTUNIT_GET_HABITAT,
         ztviewingarea::{
@@ -49,14 +27,7 @@ use openzt_detour::{
             RECALCULATE_CHARACTERISTICS as ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS, REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
             UPDATE_AMBIENTS as ZTVIEWINGAREA_UPDATE_AMBIENTS,
         },
-        ztvisibilitytesting::TEST_LOS,
-        ztworldmgr::{
-            PLAY_FROWN_SOUND as ZTWORLDMGR_PLAY_FROWN_SOUND, PLAY_SMILE_SOUND as ZTWORLDMGR_PLAY_SMILE_SOUND,
-            UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS,
-        },
-    },
-    FunctionDef,
-};
+    };
 use getset::Getters;
 use std::fmt;
 
@@ -74,7 +45,6 @@ use crate::{
 };
 use super::mgr::zthabitatmgr::ZTHabitatMgr;
 use super::support::*;
-use super::tank_exhibit::ZTTankExhibit;
 
 #[derive(Debug, Getters)]
 #[repr(C)]
@@ -200,6 +170,44 @@ impl ZTHabitat {
                 return ztwm.get_neighbour(&tile, Direction::from(self.entrance_rotation));
             }
         Some(tile)
+    }
+
+    /// Ports `ZTHabitat::getGateTilePassIn` (`ZTHabitat_getGateTilePassIn.c`/`.asm`,
+    /// `generated.rs`'s `GET_GATE_TILE_PASS_IN`) - the whole function is a two-call composition:
+    /// resolve the "in" gate tile ([`Self::get_gate_tile_in`]) and hand unit + tile to
+    /// [`Self::get_adjacent_clear_tile`], whose picked tile rides through as the return (the `.asm`
+    /// tail - `CALL getAdjacentClearTile`; `POP ESI`; `RET 0x4` - never touches `EAX`, and every
+    /// caller consumes it: `ZTGoalKeeperHabitat::decide`'s `MOV EDI, EAX` / `TEST EDI, EDI` /
+    /// `BFUnit::getPath` chain, `ZTGoalTrickFood::decide`). Both legs use the call-the-port
+    /// convention: real vanilla composes the two at their own (both detoured) addresses, so every
+    /// caller's composition re-enters the Rust ports under the live battery. The `.asm`'s
+    /// `MOV ECX, ESI` ahead of the second call is a dead write - the `stdcall` callee never reads
+    /// `ECX` (the same unused-`this` shape [`Self::get_adjacent_clear_tile`]'s own note describes).
+    ///
+    /// A habitat without a usable gate tile resolves to a null tile pointer, which
+    /// [`Self::get_adjacent_clear_tile`]'s own null guard passes back unchanged without touching the
+    /// shared RNG state - exactly real vanilla's composition of `getGateTileIn`'s null return
+    /// through `getAdjacentClearTile`'s `base_tile != 0` guard.
+    pub fn get_gate_tile_pass_in(&self, unit_ptr: u32) -> u32 {
+        let gate_tile_ptr = self
+            .get_gate_tile_in()
+            .map(|tile| globals().ztworldmgr().get_ptr_from_bftile(&tile))
+            .unwrap_or(0);
+        Self::get_adjacent_clear_tile(unit_ptr, gate_tile_ptr)
+    }
+
+    /// Ports `ZTHabitat::getGateTilePassOut` (`ZTHabitat_getGateTilePassOut.c`/`.asm`,
+    /// `generated.rs`'s `GET_GATE_TILE_PASS_OUT`) - [`Self::get_gate_tile_pass_in`]'s exact mirror
+    /// with "out" in place of "in" ([`Self::get_gate_tile_out`]). Same ride-through `EAX` return,
+    /// consumed by `ZTGuest`/`ZTGuide`/`ZTStaff::pickRandomDest` (`ZTGuest_pickRandomDest.asm`'s own
+    /// `TEST EAX, EAX` / `ADD EAX, 0x34` reads the picked tile's position fields straight out of the
+    /// return). Same dead `MOV ECX, ESI` in the `.asm`, same null-gate pass-through.
+    pub fn get_gate_tile_pass_out(&self, unit_ptr: u32) -> u32 {
+        let gate_tile_ptr = self
+            .get_gate_tile_out()
+            .map(|tile| globals().ztworldmgr().get_ptr_from_bftile(&tile))
+            .unwrap_or(0);
+        Self::get_adjacent_clear_tile(unit_ptr, gate_tile_ptr)
     }
 
     /// Ports `ZTHabitat::getGate` (`ZTHabitat_getGate.c`/`.asm`, `generated.rs`'s `GET_GATE` at
@@ -988,6 +996,439 @@ impl ZTHabitat {
         }
     }
 
+    /// Ports `ZTHabitat::getRandomClearTile` overload 0 (`ZTHabitat_getRandomClearTile_0.c`/`.asm`,
+    /// `generated.rs`'s `GET_RANDOM_CLEAR_TILE_0`): the two-line delegator - one
+    /// [`Self::get_random_animal`] draw, forwarded straight into the animal-taking overload
+    /// ([`Self::get_random_clear_tile_for_animal`], a direct sibling call matching real vanilla's own
+    /// call into the now-detoured overload-1 address, which re-enters this port under the live battery).
+    /// A null draw is forwarded like any other: real vanilla performs no early-out, and the overload-1
+    /// body itself gates only on the candidate pool's own emptiness.
+    ///
+    /// The `.asm`'s tail (`CALL getRandomClearTile`; `POP ESI`; `RET 0x8`) never touches `EAX`, so the
+    /// overload-1 result rides through as the return, and both real callers
+    /// (`ZTGoalPutFood::decide`, [`Self::get_near_clear_tile`], each passing `false`/`false`) consume it.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_random_clear_tile_default(&self, check_path: bool, subhabs: bool) -> u32 {
+        let animal = self.get_random_animal();
+        self.get_random_clear_tile_for_animal(animal, check_path, subhabs)
+    }
+
+    /// Ports `ZTHabitat::getRandomClearTile` overload 1 (`ZTHabitat_getRandomClearTile_1.c`/`.asm`,
+    /// `generated.rs`'s `GET_RANDOM_CLEAR_TILE_1`; the macOS decompile `ZTHabitat_getRandomClearTile.c`
+    /// is this same overload and corroborates every step): gathers the clear-tile candidate pool into
+    /// the same zero-initialized scratch `std::vector<BFTile*>` real vanilla's own stack-local is (the
+    /// `.asm`'s three zero stores) - [`Self::add_clear_tiles`] for `this`, then one call per amphibious
+    /// neighbor when `subhabs` is set, walked in [`walk_neighbor_tree`] order with the habitat payload
+    /// read from node `+0x10` (the same tree the dirty-gated count getters recurse; each call is the
+    /// call-the-port convention - real vanilla calls `addClearTiles` at its now-detoured address, which
+    /// re-enters this file's port under the live battery). `animal_ptr` may be null - [`Self::add_clear_tiles`]
+    /// treats it as its own short-circuit, so the pool degenerates to "every unoccupied owned tile".
+    ///
+    /// When the pool is non-empty, advances `DAT_00638060` with exactly one MSVC LCG step ([`lcg_next`])
+    /// and returns the tile at index `(seed >> 0x10 & 0x7fff) % count` (on a `u32` the shift/mask pair
+    /// equals the `.asm`'s `SAR 0x10` + `AND 0x7fff`, and the modulo is the same unsigned `DIV`); an
+    /// empty pool returns null without touching the shared game RNG state (the `.asm`'s emptiness `JZ`
+    /// sits before the `IMUL`/`ADD` pair, same shape as [`Self::get_random_animal`]). The scratch
+    /// buffer is freed by **capacity** via [`free_event_vector_buffer`] - the decompile's own tail (the
+    /// same manual freelist-bucket/`operator_delete` split, not a `PoolAlloc::deallocate` call).
+    ///
+    /// The real body's `GLOBAL_ZTWorldMgr == 0xfffffff8` "world not initialized" guard is dead in
+    /// practice, like [`Self::validate_positions`]'s own identical guard - checked here as
+    /// `GLOBAL_ZTWorldMgr != 0` instead (equivalent for every real value, and additionally guards the
+    /// one case the real check cannot).
+    ///
+    /// The one caller passing a real animal is `ZTAnimal::fCheckReproduction` (the egg-laying siting
+    /// pick, `(animal, false, true)`), which consumes the return; the other path in is overload 0's
+    /// delegation above.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    pub fn get_random_clear_tile_for_animal(&self, animal_ptr: u32, check_path: bool, subhabs: bool) -> u32 {
+        let world = globals().ztworldmgr_ptr() as u32;
+        if world == 0 {
+            return 0;
+        }
+        let mut scratch_vector = [0u32; 3];
+        self.add_clear_tiles(scratch_vector.as_mut_ptr() as u32, animal_ptr, check_path);
+        if subhabs {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }
+                    .add_clear_tiles(scratch_vector.as_mut_ptr() as u32, animal_ptr, check_path);
+            }
+        }
+        let begin = scratch_vector[0];
+        let picked = if scratch_vector[1] != begin {
+            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
+            save_to_memory(rng_addr, rng);
+            let count = (scratch_vector[1] - begin) >> 2;
+            let index = ((rng >> 0x10) & 0x7fff) % count;
+            get_from_memory::<u32>(begin + index * 4)
+        } else {
+            0
+        };
+        free_event_vector_buffer(begin, scratch_vector[2].wrapping_sub(begin));
+        picked
+    }
+
+    /// Ports `ZTHabitat::getAdjacentClearTile` (`ZTHabitat_getAdjacentClearTile.c`/`.asm`, `generated.rs`'s
+    /// `GET_ADJACENT_CLEAR_TILE`): despite the `ZTHabitat::` Ghidra namespace this is a genuine free
+    /// function - `stdcall`, no `this` - that reaches everything through the `GLOBAL_ZTWorldMgr`/
+    /// `GLOBAL_ZTHabitatMgr` globals instead. The macOS decompile confirms the same shape: its own
+    /// 3-parameter signature carries an unused leading `param_1` (an OOAnalyzer namespace-inference
+    /// artifact, never read in the body) alongside the two real arguments - `param_2` (the unit, used
+    /// only for the cost-vtable dispatch below) and `param_3` (`base_tile`, used for everything else) -
+    /// matching the Windows `.asm`'s own 2-argument `stdcall` exactly.
+    ///
+    /// Scans `base_tile`'s 8 neighboring map coordinates in real vanilla's own loop order (dx outer,
+    /// -1/0/1; dy inner, -1/0/1; the `(0,0)` self tile skipped) - this order matters, since the final
+    /// random pick indexes into the candidate list built in this order. A neighbor coordinate qualifies
+    /// when it is within the live map's own bounds ([`crate::ztworldmgr::ZTWorldMgr::map_x_size`]/
+    /// `map_y_size`), is occupied by the same habitat as `base_tile`
+    /// ([`crate::zthabitatmgr::ZTHabitatMgr::get_habitat_ptr`] on both sides - reproducing real vanilla's
+    /// own raw, unchecked grid-cell dereference exactly, including its `0 == 0` "both tiles ownerless"
+    /// pass-through, since every neighbor here is already confirmed in-bounds), and is affordable to
+    /// `unit` - the unnamed `BFUnit` vtable `+0x164` slot ([`call_bfunit_tile_cost_vtable_slot`], the
+    /// same `getTerrainCost`-family dispatch [`Self::add_clear_tiles`]/[`Self::get_random_clear_tile_ahead`]
+    /// use) must not exactly equal the shared [`MAX_PATH_COST_RVA`] "unreachable" sentinel (a full-width
+    /// `i32` comparison, not a bool - the Windows `.c`'s own `CONCAT31`/`vftptr_0x0[1]` render of this
+    /// call site is Ghidra struct garbage; the macOS listing's plain two-arg virtual dispatch at the
+    /// platform's own `+0x16c` slot settles the real shape, same corroboration as [`Self::add_clear_tiles`]).
+    ///
+    /// A non-empty candidate list advances `DAT_00638060` with exactly one MSVC LCG step ([`lcg_next`])
+    /// and returns the tile at index `(seed >> 0x10 & 0x7fff) % count`; an empty list returns `base_tile`
+    /// itself, untouched, without advancing the shared RNG state (the `.asm`'s own count check gates the
+    /// `IMUL`/`ADD` pair) - unlike [`Self::get_random_tile_in_direction`]/[`Self::get_random_clear_tile_ahead`]'s
+    /// own empty-list fallback to a *different* random draw ([`Self::get_random_tile`]), this function's
+    /// empty-list tail is a plain, RNG-free pass-through of its own input tile. The real world/habitat-
+    /// manager/`base_tile` null guards (`&GLOBAL_ZTWorldMgr->field_0x8 != 0`, `GLOBAL_ZTHabitatMgr != 0`,
+    /// `base_tile != 0`) are checked here as `GLOBAL_ZTWorldMgr != 0` (dead in practice for the first,
+    /// like this file's other `0xfffffff8`-sentinel guards - see [`Self::get_random_clear_tile_for_animal`]'s
+    /// own note) alongside the other two, all short-circuiting to `base_tile` unchanged.
+    pub fn get_adjacent_clear_tile(unit_ptr: u32, base_tile_ptr: u32) -> u32 {
+        let world_ptr = globals().ztworldmgr_ptr() as u32;
+        let habitat_mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+        if world_ptr == 0 || habitat_mgr_ptr == 0 || base_tile_ptr == 0 {
+            return base_tile_ptr;
+        }
+        let world = globals().ztworldmgr();
+        let habitat_mgr = globals().zthabitatmgr();
+        let base_tile = get_from_memory::<BFTile>(base_tile_ptr);
+        let base_x = base_tile.pos.x;
+        let base_y = base_tile.pos.y;
+        let base_habitat = habitat_mgr.get_habitat_ptr(base_x, base_y);
+        let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+
+        let mut candidates: Vec<u32> = Vec::new();
+        for dx in -1i32..=1 {
+            for dy in -1i32..=1 {
+                if dx == 0 && dy == 0 {
+                    continue;
+                }
+                let cand_x = base_x + dx;
+                let cand_y = base_y + dy;
+                if cand_x < 0 || cand_y < 0 || cand_x as u32 >= world.map_x_size || cand_y as u32 >= world.map_y_size {
+                    continue;
+                }
+                if habitat_mgr.get_habitat_ptr(cand_x, cand_y) != base_habitat {
+                    continue;
+                }
+                let candidate_tile_ptr = world.get_tile_ptr(cand_x as u32, cand_y as u32);
+                let cost = unsafe { call_bfunit_tile_cost_vtable_slot(unit_ptr, candidate_tile_ptr) };
+                if cost == max_cost {
+                    continue;
+                }
+                candidates.push(candidate_tile_ptr);
+            }
+        }
+
+        if candidates.is_empty() {
+            return base_tile_ptr;
+        }
+        let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+        let rng = lcg_next(get_from_memory::<u32>(rng_addr));
+        save_to_memory(rng_addr, rng);
+        let index = ((rng >> 0x10) & 0x7fff) % candidates.len() as u32;
+        candidates[index as usize]
+    }
+
+    /// Ports `ZTHabitat::getNearestClearTile` (`generated.rs`'s `GET_NEAREST_CLEAR_TILE`, IDA listing
+    /// of `sub_48AC91`): scans every owned tile in [`walk_tile_list`] order for the one closest to
+    /// `unit`'s current tile that `unit` could actually stand on, returning it as a raw tile pointer
+    /// (`0` when nothing qualifies or the early guards fail). Deterministic - the walk has no own
+    /// candidate list and no draw of its own; the only RNG use is [`Self::get_random_animal`]'s
+    /// internal draw (one `DAT_00638060` advance when the habitat has animals, none when it
+    /// doesn't), whose result gates only the reachability check below.
+    ///
+    /// Guards, in order, all returning `0` without touching the RNG: the world global
+    /// (real vanilla's dead `GLOBAL_ZTWorldMgr == 0xfffffff8` sentinel, ported as the equivalent
+    /// `!= 0` check like this file's other guards), a null `unit_ptr`, and a null
+    /// `BFEntity::getTile(unit)` ([`BFENTITY_GET_TILE`], a pure field read).
+    ///
+    /// Per candidate tile, in the IDA listing's own order:
+    ///
+    /// 1. squared Cartesian distance from `unit`'s tile (`BFTile` pos at `+0x34`/`+0x38`, read as
+    ///    `i32`; Windows inlines the `dx*dx + dy*dy`, macOS calls `BFMap::distanceCartesianSquared`;
+    ///    either tile null -> `0x7fffffff`) must be **strictly below** the best so far - first tile in
+    ///    walk order wins ties;
+    /// 2. the four direct-entity slots at `tile+0x4..+0x10` all null (the same block
+    ///    [`Self::add_clear_tiles`] checks);
+    /// 3. the entity list at `tile+0x0` empty - real vanilla builds a throwaway `std::list<uint>`
+    ///    range-copy of it and consumes that only as `count <= 0`, so the port reads the list's own
+    ///    emptiness and reproduces none of the copy/`PoolAlloc` teardown (same internal-temporaries
+    ///    rule as [`Self::add_clear_tiles`]);
+    /// 4. the path cost (the unnamed `BFUnit` vtable `+0x164` slot, [`call_bfunit_tile_cost_vtable_slot`])
+    ///    must be **strictly below** the shared [`MAX_PATH_COST_RVA`] "unreachable" sentinel (IDA
+    ///    renders the sentinel as literal 20; read live here like everywhere else). The strict
+    ///    comparison is this function's own shape: [`Self::add_clear_tiles`],
+    ///    [`Self::get_adjacent_clear_tile`] and [`Self::get_near_clear_tile`] all use full-width
+    ///    `!=` against the same global;
+    /// 5. when the [`Self::get_random_animal`] draw returned a real animal,
+    ///    `BFAIMgr::checkPath` ([`BFAIMGR_CHECK_PATH`] undetoured `.original()` call-through) must
+    ///    report that animal's current tile reaches the candidate - the mover is the drawn animal
+    ///    itself (`checkPath(mgr, getTile(animal), tile, animal)`), the same settled shape
+    ///    [`Self::get_near_clear_tile`]'s `.asm` shows explicitly.
+    ///
+    /// An accepting tile updates the running best; the final best rides out as the return. The
+    /// animal's tile and the AI-mgr global are read once before the walk - nothing in the loop can
+    /// move the animal or swap the global (same hoisting [`Self::add_clear_tiles`] documents).
+    ///
+    /// The Windows `.asm` export of this function is truncated mid-body (stops after the prologue and
+    /// early guards, same phenomenon as [`Self::add_clear_tiles`]'s own truncated export); the IDA
+    /// listing is the ground truth for the loop, and the macOS decompile corroborates the check order
+    /// and accept-shape (`best = tile; best_dist = dist`) step-for-step.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_nearest_clear_tile(&self, unit_ptr: u32) -> u32 {
+        if globals().ztworldmgr_ptr() as u32 == 0 {
+            return 0;
+        }
+        if unit_ptr == 0 {
+            return 0;
+        }
+        let unit_tile = unsafe { BFENTITY_GET_TILE.original()(unit_ptr as *const u32) } as u32;
+        if unit_tile == 0 {
+            return 0;
+        }
+        let random_animal = self.get_random_animal();
+        let ai_mgr_ptr = globals().ztaimgr_ptr() as u32;
+        let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+        let animal_tile = if random_animal != 0 {
+            (unsafe { BFENTITY_GET_TILE.original()(random_animal as *const u32) }) as u32
+        } else {
+            0
+        };
+        let mut best_tile = 0u32;
+        let mut best_dist = 0x7fff_ffffi32;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + 0x8);
+            let dist: i32 = if tile == 0 {
+                0x7fff_ffff
+            } else {
+                let dx: i32 = get_from_memory::<i32>(unit_tile + 0x34).wrapping_sub(get_from_memory::<i32>(tile + 0x34));
+                let dy: i32 = get_from_memory::<i32>(unit_tile + 0x38).wrapping_sub(get_from_memory::<i32>(tile + 0x38));
+                dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+            };
+            if dist >= best_dist {
+                continue;
+            }
+            if get_from_memory::<u32>(tile + 0x4) != 0
+                || get_from_memory::<u32>(tile + 0x8) != 0
+                || get_from_memory::<u32>(tile + 0xc) != 0
+                || get_from_memory::<u32>(tile + 0x10) != 0
+            {
+                continue;
+            }
+            let list_head: u32 = get_from_memory(tile);
+            if get_from_memory::<u32>(list_head) != list_head {
+                continue;
+            }
+            if unsafe { call_bfunit_tile_cost_vtable_slot(unit_ptr, tile) } >= max_cost {
+                continue;
+            }
+            if random_animal != 0 {
+                let reachable = low_byte_bool(unsafe {
+                    BFAIMGR_CHECK_PATH.original()(
+                        ai_mgr_ptr as *const u32,
+                        animal_tile as *const u32,
+                        tile as *const u32,
+                        random_animal as *const u32,
+                    )
+                });
+                if !reachable {
+                    continue;
+                }
+            }
+            best_tile = tile;
+            best_dist = dist;
+        }
+        best_tile
+    }
+
+    /// Ports `ZTHabitat::getNearClearTile` (`ZTHabitat_getNearClearTile.c`/`.asm`,
+    /// `generated.rs`'s `GET_NEAR_CLEAR_TILE`): gathers the owned tiles "near" `unit` that it could
+    /// stand on into the same zero-initialized scratch `std::vector<BFTile*>` real vanilla's own
+    /// stack-local is, picks one at random, and falls back through
+    /// [`Self::get_nearest_clear_tile`] -> [`Self::get_random_clear_tile_default`]`(false, false)`
+    /// when the pool comes out empty (or the picked element is null - the `.asm`'s null-pick test
+    /// sits *after* the LCG advance, so even that impossible-on-real-tiles path consumes its draw).
+    /// Real caller: `ZTGoalPutFood::decide`, passing the keeper as `unit` and its target animal as
+    /// `animal`.
+    ///
+    /// The plan's own `getNearClearTile(ZTUnit* unit, BFTile* ref_tile)` gloss is wrong: the second
+    /// parameter is a **`ZTAnimal*`** - the `checkPath` source/mover, nullable, never used as a
+    /// reference tile (macOS prototype comment `(ZTKeeper *, ZTAnimal *)`, Windows `.asm` `RET 0x8`).
+    ///
+    /// Guards, in order, all returning `0` without touching the RNG: the world global (the same
+    /// `0xfffffff8`-sentinel convention as [`Self::get_nearest_clear_tile`]), a null `unit_ptr`, and
+    /// a null `BFEntity::getTile(unit)`.
+    ///
+    /// Per owned tile ([`walk_tile_list`] order - the order that decides which candidate the pick
+    /// indexes), checks in the `.asm`'s own order:
+    ///
+    /// 1. **not** in the unit's reserved-tile vector at `unit+0x27c..+0x280` - the Windows inline of
+    ///    `ZTStaff::isInvalidTile` (macOS calls it by name; same linear `begin..end` scan, whose
+    ///    macOS field offsets are the platform's own `+0x244`/`+0x248`). The vector's meaning beyond
+    ///    this function is unconfirmed, so it stays raw;
+    /// 2. the four direct-entity slots at `tile+0x4..+0x10` all null (same block as
+    ///    [`Self::add_clear_tiles`]);
+    /// 3. the entity list at `tile+0x0` empty - same throwaway-list-copy/emptiness-read shape as
+    ///    [`Self::add_clear_tiles`]/[`Self::get_nearest_clear_tile`];
+    /// 4. the path cost ([`call_bfunit_tile_cost_vtable_slot`]) **must not equal** the shared
+    ///    [`MAX_PATH_COST_RVA`] sentinel - full-width `!=` here, unlike
+    ///    [`Self::get_nearest_clear_tile`]'s strict `<` against the same global;
+    /// 5. the tile is not [`Self::get_gate_tile_in`]'s tile - resolved once before the walk (nothing
+    ///    in the loop can move the gate) via the port (the detoured `GET_GATE_TILE_IN` address, so
+    ///    real vanilla's own call re-enters it under the battery). A habitat without a usable gate
+    ///    resolves to a null tile pointer no candidate can equal, so every tile passes - exactly the
+    ///    real comparison's own behavior against a null return;
+    /// 6. squared Cartesian distance from `unit`'s tile **below 10** (unsigned compare against the
+    ///    literal, `.asm` `CMP %EAX, 0xa` / `JC`; either tile null -> `0x7fffffff`);
+    /// 7. when `animal_ptr` is non-null, `BFAIMgr::checkPath`
+    ///    ([`BFAIMGR_CHECK_PATH`] undetoured `.original()` call-through) must report the animal's
+    ///    current tile reaches the candidate - the mover is the animal itself;
+    /// 8. bit `0x4` of the flag byte at `tile+0x85` clear (the same unconfirmed-flag read
+    ///    [`Self::get_num_sickly_animals`]/[`Self::get_nearest_sick_animal`] make; reproduced raw -
+    ///    no corroborating name anywhere in the corpus).
+    ///
+    /// A tile passing everything is pushed ([`vector_push_pool_alloc4`]). The non-empty pool
+    /// advances `DAT_00638060` with exactly one MSVC LCG step ([`lcg_next`]) and returns the tile at
+    /// index `(seed >> 0x10 & 0x7fff) % count`; an empty pool falls back without touching the shared
+    /// RNG state (the `.asm`'s emptiness `JZ` sits before the `IMUL`/`ADD` pair). The scratch buffer
+    /// is freed by **capacity** via [`free_event_vector_buffer`] - the `.asm`'s own tail. Both
+    /// fallback legs are detoured addresses real vanilla calls directly, so the port calls the
+    /// sibling ports (call-the-port convention, same as [`Self::get_gate_tile_pass_in`]'s
+    /// composition); the chain *does* advance the RNG when the habitat has animals, through
+    /// [`Self::get_nearest_clear_tile`]'s internal [`Self::get_random_animal`] draw.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_near_clear_tile(&self, unit_ptr: u32, animal_ptr: u32) -> u32 {
+        if globals().ztworldmgr_ptr() as u32 == 0 {
+            return 0;
+        }
+        if unit_ptr == 0 {
+            return 0;
+        }
+        let unit_tile = unsafe { BFENTITY_GET_TILE.original()(unit_ptr as *const u32) } as u32;
+        if unit_tile == 0 {
+            return 0;
+        }
+        let ai_mgr_ptr = globals().ztaimgr_ptr() as u32;
+        let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+        let gate_tile_ptr = self
+            .get_gate_tile_in()
+            .map(|tile| globals().ztworldmgr().get_ptr_from_bftile(&tile))
+            .unwrap_or(0);
+        let animal_tile = if animal_ptr != 0 {
+            (unsafe { BFENTITY_GET_TILE.original()(animal_ptr as *const u32) }) as u32
+        } else {
+            0
+        };
+        let invalid_begin: u32 = get_from_memory(unit_ptr + 0x27c);
+        let invalid_end: u32 = get_from_memory(unit_ptr + 0x280);
+        let mut scratch_vector = [0u32; 3];
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + 0x8);
+            let mut reserved = false;
+            let mut cursor = invalid_begin;
+            while cursor != invalid_end {
+                if get_from_memory::<u32>(cursor) == tile {
+                    reserved = true;
+                    break;
+                }
+                cursor += 4;
+            }
+            if reserved {
+                continue;
+            }
+            if get_from_memory::<u32>(tile + 0x4) != 0
+                || get_from_memory::<u32>(tile + 0x8) != 0
+                || get_from_memory::<u32>(tile + 0xc) != 0
+                || get_from_memory::<u32>(tile + 0x10) != 0
+            {
+                continue;
+            }
+            let list_head: u32 = get_from_memory(tile);
+            if get_from_memory::<u32>(list_head) != list_head {
+                continue;
+            }
+            if unsafe { call_bfunit_tile_cost_vtable_slot(unit_ptr, tile) } == max_cost {
+                continue;
+            }
+            if tile == gate_tile_ptr {
+                continue;
+            }
+            let dist: u32 = if tile == 0 {
+                0x7fff_ffff
+            } else {
+                let dx: i32 = get_from_memory::<i32>(unit_tile + 0x34).wrapping_sub(get_from_memory::<i32>(tile + 0x34));
+                let dy: i32 = get_from_memory::<i32>(unit_tile + 0x38).wrapping_sub(get_from_memory::<i32>(tile + 0x38));
+                (dx.wrapping_mul(dx) as u32).wrapping_add(dy.wrapping_mul(dy) as u32)
+            };
+            if dist >= 10 {
+                continue;
+            }
+            if animal_ptr != 0 {
+                let reachable = low_byte_bool(unsafe {
+                    BFAIMGR_CHECK_PATH.original()(
+                        ai_mgr_ptr as *const u32,
+                        animal_tile as *const u32,
+                        tile as *const u32,
+                        animal_ptr as *const u32,
+                    )
+                });
+                if !reachable {
+                    continue;
+                }
+            }
+            if get_from_memory::<u8>(tile + 0x85) & 4 != 0 {
+                continue;
+            }
+            vector_push_pool_alloc4(scratch_vector.as_mut_ptr() as u32, tile);
+        }
+        let begin = scratch_vector[0];
+        let mut picked = 0u32;
+        if scratch_vector[1] != begin {
+            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
+            save_to_memory(rng_addr, rng);
+            let count = (scratch_vector[1] - begin) >> 2;
+            let index = ((rng >> 0x10) & 0x7fff) % count;
+            picked = get_from_memory::<u32>(begin + index * 4);
+        }
+        free_event_vector_buffer(begin, scratch_vector[2].wrapping_sub(begin));
+        if picked != 0 {
+            return picked;
+        }
+        let nearest = self.get_nearest_clear_tile(unit_ptr);
+        if nearest != 0 {
+            return nearest;
+        }
+        self.get_random_clear_tile_default(false, false)
+    }
+
     /// Ports `ZTHabitat::addBabyBornBonus` (`ZTHabitat_addBabyBornBonus.c`/`.asm`, `generated.rs`'s
     /// `ADD_BABY_BORN_BONUS`): `ZTAnimal::doReproduceCheck`'s birth celebration. Builds the same
     /// zero-initialized scratch `std::vector<ZTAnimal*>` real vanilla's own stack-local is (the `.asm`'s
@@ -1026,16 +1467,15 @@ impl ZTHabitat {
     /// (`.asm`-confirmed `LEA EAX,[ESI+0x6c]`) in place before yielding it - real vanilla always returns
     /// the same vector pointer regardless of `sort`, only conditionally reordering its contents first.
     ///
-    /// Real vanilla's own sort is an inlined MSVC introsort; reimplemented here as a plain Rust
-    /// `sort_by`, calling through to the real, unidentified comparator (`FUN_004690cd`, address known
-    /// directly from the decompile's own call site, `bool __cdecl(ZTAnimal*, ZTAnimal*)` - no
-    /// `generated.rs` entry exists since Ghidra's OOAnalyzer pass never named it) rather than
-    /// reimplementing its own comparison logic. This is a pure in-place reorder of an already-allocated
+    /// Real vanilla's own sort is an inlined MSVC introsort over the comparator at `0x004690cd`
+    /// (`bool __cdecl(BFEntity*, BFEntity*)`, unnamed in the Windows binary): `std::string operator<`
+    /// on the two entities' `name` strings (`+0x108` begin / `+0x10c` end) - an unsigned byte-wise
+    /// compare over the shorter length, then shorter-first. That is exactly Rust's `[u8]` ordering, so
+    /// the port sorts by [`entity_name_bytes`]. This is a pure in-place reorder of an already-allocated
     /// real vanilla array - no allocation on either side - so there is no cross-allocator risk (per
-    /// `CLAUDE.md`'s own `PoolAlloc` caveat) in using Rust's own sort algorithm instead of vanilla's; the
-    /// two are not guaranteed to visit equal-order ties identically (`sort_by` is not given vanilla's own
-    /// tie-breaking rule, only its `<` predicate), but both converge on the same final ordering for any
-    /// genuinely distinct keys.
+    /// `CLAUDE.md`'s own `PoolAlloc` caveat) in using Rust's own sort algorithm instead of vanilla's. The
+    /// two agree on the ordering of distinctly-named animals; animals sharing a name may end up in a
+    /// different relative order (Rust's sort is stable, vanilla's introsort is not).
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::species_list`].
     pub fn get_all_animals(&self, sort: bool) -> impl Iterator<Item = u32> {
@@ -1046,15 +1486,7 @@ impl ZTHabitat {
         let end = self.all_animals_end;
         if sort && end > begin {
             let mut animals: Vec<u32> = (begin..end).step_by(4).map(get_from_memory::<u32>).collect();
-            animals.sort_by(|&a, &b| {
-                if unsafe { GET_ALL_ANIMALS_SORT_COMPARATOR.original()(a, b) } {
-                    std::cmp::Ordering::Less
-                } else if unsafe { GET_ALL_ANIMALS_SORT_COMPARATOR.original()(b, a) } {
-                    std::cmp::Ordering::Greater
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            });
+            animals.sort_by_cached_key(|&animal| entity_name_bytes(animal));
             for (i, &animal_ptr) in animals.iter().enumerate() {
                 save_to_memory(begin + (i as u32) * 4, animal_ptr);
             }
@@ -1938,6 +2370,9 @@ impl ZTHabitat {
     /// Ports `ZTHabitat::isRightSalinity` (vtable `+0x28`) base default. A plain `ZTHabitat` has no
     /// water/salinity concept at all (only `ZTTankExhibit` does - see that class's own override,
     /// `zttankexhibit::IS_RIGHT_SALINITY`, left un-ported); the base implementation is a constant `true`.
+    /// That slot's address (`0x00446995`, `generated.rs`'s `bfentity::VF_RETURN1_1`) is a shared
+    /// `return true` stub other vtables also point at, so its detour runs for those classes too - this
+    /// port never reads `self`, which keeps that harmless.
     pub fn is_right_salinity(&self, _animal_type: *const u32) -> bool {
         true
     }

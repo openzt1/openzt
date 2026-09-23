@@ -232,59 +232,6 @@ mod zoostatus_detours {
     unsafe extern "thiscall" fn get_status(this: *const u32, category: i32, when: i32, index: i32) -> f32 {
         unsafe { ref_from_memory::<ZooStatus>(this) }.get_status(category, when, index)
     }
-
-    /// Live-test access to each detour's installation state. Once `init_detours()` has patched these
-    /// 36 addresses, `.original()` on them re-enters the Rust detours above instead of reaching vanilla
-    /// in release builds (a raw address cast there); debug builds route `.original()` through the hook
-    /// registry's trampolines instead, unaffected by hook state - see
-    /// `ztgamemgr_menumusichandler.rs`'s `menu_music_handler_detours::test_real` doc comment for the
-    /// full per-profile rationale this mirrors. Lives inside the detour module because the
-    /// macro-generated `*_DETOUR` statics are module-private.
-    #[cfg(feature = "reimplementation-tests")]
-    pub(crate) mod test_real {
-        /// `(name, is_enabled)` per detour - the battery asserts all 36 to catch a silently-failed
-        /// `init_detours()` (error logged, game continues on vanilla).
-        pub(crate) fn status() -> [(&'static str, bool); 36] {
-            [
-                ("INIT", super::INIT_DETOUR.is_enabled()),
-                ("OVERRIDE", super::OVERRIDE_DETOUR.is_enabled()),
-                ("RESET_FINANCE_INFO", super::RESET_FINANCE_INFO_DETOUR.is_enabled()),
-                ("SPEND_CONSTRUCTION", super::SPEND_CONSTRUCTION_DETOUR.is_enabled()),
-                ("SPEND_BUILDING_UPKEEP", super::SPEND_BUILDING_UPKEEP_DETOUR.is_enabled()),
-                ("SPEND_GUIDE_WAGES", super::SPEND_GUIDE_WAGES_DETOUR.is_enabled()),
-                ("BUY_ANIMAL", super::BUY_ANIMAL_DETOUR.is_enabled()),
-                ("SPEND_KEEPER_WAGES", super::SPEND_KEEPER_WAGES_DETOUR.is_enabled()),
-                ("SPEND_MAINT_WAGES", super::SPEND_MAINT_WAGES_DETOUR.is_enabled()),
-                ("SPEND_MARKETING", super::SPEND_MARKETING_DETOUR.is_enabled()),
-                ("SPEND_RESEARCH", super::SPEND_RESEARCH_DETOUR.is_enabled()),
-                ("REFUND_ANIMAL_COST", super::REFUND_ANIMAL_COST_DETOUR.is_enabled()),
-                ("REFUND_CONSTRUCTION", super::REFUND_CONSTRUCTION_DETOUR.is_enabled()),
-                ("INCREASE_DONATIONS", super::INCREASE_DONATIONS_DETOUR.is_enabled()),
-                ("INCREASE_ENDOWMENT", super::INCREASE_ENDOWMENT_DETOUR.is_enabled()),
-                ("INCREASE_SHOW_ADMISSION", super::INCREASE_SHOW_ADMISSION_DETOUR.is_enabled()),
-                ("BUY_PEOPLE_FOOD", super::BUY_PEOPLE_FOOD_DETOUR.is_enabled()),
-                ("CHANGE_ENDOWMENT_MEMBERS", super::CHANGE_ENDOWMENT_MEMBERS_DETOUR.is_enabled()),
-                ("ANIMAL_ESCAPED", super::ANIMAL_ESCAPED_DETOUR.is_enabled()),
-                ("ADMISSION_MESSAGE", super::ADMISSION_MESSAGE_DETOUR.is_enabled()),
-                ("NEWGUEST_CHECKS", super::NEWGUEST_CHECKS_DETOUR.is_enabled()),
-                ("MESSAGE_CHECKS", super::MESSAGE_CHECKS_DETOUR.is_enabled()),
-                ("RATING_CHECKS", super::RATING_CHECKS_DETOUR.is_enabled()),
-                ("F_GRANT_DONATION", super::F_GRANT_DONATION_DETOUR.is_enabled()),
-                ("F_ZOO_MESSAGE", super::F_ZOO_MESSAGE_DETOUR.is_enabled()),
-                ("SET_ADULT_ADMISSION_PRICE", super::SET_ADULT_ADMISSION_PRICE_DETOUR.is_enabled()),
-                ("SHOW_PRICES", super::SHOW_PRICES_DETOUR.is_enabled()),
-                ("CALCULATE_SUMS", super::CALCULATE_SUMS_DETOUR.is_enabled()),
-                ("UPDATE", super::UPDATE_DETOUR.is_enabled()),
-                ("SAVE", super::SAVE_DETOUR.is_enabled()),
-                ("LOAD", super::LOAD_DETOUR.is_enabled()),
-                ("HEAL_ANIMAL", super::HEAL_ANIMAL_DETOUR.is_enabled()),
-                ("PURCHASE_FOOD", super::PURCHASE_FOOD_DETOUR.is_enabled()),
-                ("INCREASE_ADMISSIONS_INCOME", super::INCREASE_ADMISSIONS_INCOME_DETOUR.is_enabled()),
-                ("INCREASE_ADMISSIONS", super::INCREASE_ADMISSIONS_DETOUR.is_enabled()),
-                ("GET_STATUS", super::GET_STATUS_DETOUR.is_enabled()),
-            ]
-        }
-    }
 }
 
 /// Registers this module's 36 live detours (see [`zoostatus_detours`]'s own doc comment for what's
@@ -314,9 +261,9 @@ pub fn init() {
 pub(crate) mod live_support {
     use super::*;
 
-    /// `(name, is_enabled)` per detour - see `zoostatus_detours::test_real::status`.
-    pub(crate) fn detour_status() -> [(&'static str, bool); 36] {
-        zoostatus_detours::test_real::status()
+    /// `(name, is_enabled)` per detour - see `zoostatus_detours::status`.
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
+        zoostatus_detours::status()
     }
 }
 

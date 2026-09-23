@@ -2,6 +2,8 @@
 //! `openzt/src/zthabitatmgr.rs`) against real vanilla over the live, loaded zoo's own habitat grid.
 
 use openzt_detour::generated::{
+    bfaimgr::CHECK_PATH as BFAIMGR_CHECK_PATH,
+    bfentity,
     bfentity::GET_TILE as BFENTITY_GET_TILE,
     bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE},
     standalone::OPERATOR_NEW,
@@ -15,11 +17,12 @@ use crate::globals::{get_module_base, globals};
 use crate::reimplementation_tests::harness::write_success_line;
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory};
+use crate::ztmapview::BFTile;
 use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
 use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
 use crate::zthabitatmgr::{
-    call_bfunit_tile_cost_vtable_slot, free_event_vector_buffer, hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat,
-    ZTHabitatMgr, IS_RIGHT_SALINITY, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
+    call_bfunit_tile_cost_vtable_slot, entity_name_bytes, free_event_vector_buffer, hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat,
+    ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
 };
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -29,7 +32,7 @@ use crate::zthabitatmgr::{
 /// `ZTHABITATMGR_*`/`ZTHABITAT_*` tests so a wiring failure is visible first.
 pub(crate) fn run_zthabitatmgr_detours_enabled_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTHABITATMGR_DETOURS_ENABLED";
-    let disabled: Vec<&'static str> = hooks_zthabitatmgr::detour_status().into_iter().filter(|(_, enabled)| !enabled).map(|(name, _)| name).collect();
+    let disabled: Vec<&'static str> = hooks_zthabitatmgr::status().into_iter().filter(|(_, enabled)| !enabled).map(|(name, _)| name).collect();
     if disabled.is_empty() {
         write_success_line(failure_log, test_name);
         false
@@ -101,7 +104,7 @@ pub(crate) fn run_habitat_has_keeper_assigned_live_test(failure_log: &mut Option
     compare_over_live_habitats(
         failure_log,
         "ZTHABITAT_HAS_KEEPER_ASSIGNED_LIVE",
-        |ptr| unsafe { zthabitat::HAS_KEEPER_ASSIGNED.original()(ptr) != 0 },
+        |ptr| unsafe { zthabitat::HAS_KEEPER_ASSIGNED.original()(ptr) },
         |habitat| habitat.has_keeper_assigned(),
     )
 }
@@ -191,7 +194,7 @@ pub(crate) fn run_habitat_is_right_salinity_live_test(failure_log: &mut Option<s
         if habitat.is_tank() {
             continue;
         }
-        let real = unsafe { IS_RIGHT_SALINITY.original()(ptr as *const u32, std::ptr::null()) };
+        let real = unsafe { bfentity::VF_RETURN1_1.original()(ptr as *const u32, 0) };
         let reimpl = habitat.is_right_salinity(std::ptr::null());
         if real != reimpl {
             error!("{}: mismatch at habitat {} ({:#010x}): real={:?}, reimpl={:?}", test_name, i, ptr, real, reimpl);
@@ -2022,13 +2025,14 @@ fn is_close_direction(reference: i32, actual: i32) -> bool {
     }
 }
 
-/// Shared assertion for the two directional-tile draw tests: one observed draw (`side` is `"real"` or
+/// Shared assertion for the random tile-draw tests: one observed draw (`side` is `"real"` or
 /// `"reimpl"`) must return the tile pointer at index `(lcg_next(seed_before) >> 0x10 & 0x7fff) % count`
-/// of `expected_list` - the side's own candidate set when non-empty, otherwise the full owned-tile list
-/// both sides' `getRandomTile` fallback draws from - and the shared game RNG state must read exactly
-/// `lcg_next(seed_before)` afterward. An empty `expected_list` (tile-free habitat) expects a null
-/// return and an untouched seed. Returns whether the draw failed.
-fn assert_directional_tile_draw(
+/// of `expected_list` and leave the shared game RNG state at exactly `lcg_next(seed_before)` afterward.
+/// `expected_list` is the side's own candidate set - for the directional tests, the full owned-tile
+/// list both sides' `getRandomTile` fallback draws from when that set comes out empty; for
+/// `getRandomClearTile` overload 1, the pool as-is (an empty pool expects a null return and an
+/// untouched seed - no fallback exists there). Returns whether the draw failed.
+fn assert_lcg_tile_draw(
     failure_log: &mut Option<std::fs::File>,
     test_name: &str,
     side: &str,
@@ -2104,7 +2108,7 @@ pub(crate) fn run_habitat_get_random_tile_in_direction_live_test(failure_log: &m
 
             let seed_before: u32 = get_from_memory(rng_addr);
             let reimpl_ptr = habitat.get_random_tile_in_direction(from_tile, direction);
-            fail_flag |= assert_directional_tile_draw(
+            fail_flag |= assert_lcg_tile_draw(
                 failure_log,
                 test_name,
                 "reimpl",
@@ -2119,7 +2123,7 @@ pub(crate) fn run_habitat_get_random_tile_in_direction_live_test(failure_log: &m
             let seed_before: u32 = get_from_memory(rng_addr);
             let real_ptr =
                 unsafe { zthabitat::GET_RANDOM_TILE_IN_DIRECTION.original()(ptr as *const u32, from_tile as *const u32, direction) } as u32;
-            fail_flag |= assert_directional_tile_draw(
+            fail_flag |= assert_lcg_tile_draw(
                 failure_log,
                 test_name,
                 "real",
@@ -2191,7 +2195,7 @@ pub(crate) fn run_habitat_get_random_clear_tile_ahead_live_test(failure_log: &mu
 
             let seed_before: u32 = get_from_memory(rng_addr);
             let reimpl_ptr = habitat.get_random_clear_tile_ahead(unit);
-            fail_flag |= assert_directional_tile_draw(
+            fail_flag |= assert_lcg_tile_draw(
                 failure_log,
                 test_name,
                 "reimpl",
@@ -2205,7 +2209,7 @@ pub(crate) fn run_habitat_get_random_clear_tile_ahead_live_test(failure_log: &mu
 
             let seed_before: u32 = get_from_memory(rng_addr);
             let real_ptr = unsafe { zthabitat::GET_RANDOM_CLEAR_TILE_AHEAD.original()(ptr as *const u32, unit as *const u32) } as u32;
-            fail_flag |= assert_directional_tile_draw(
+            fail_flag |= assert_lcg_tile_draw(
                 failure_log,
                 test_name,
                 "real",
@@ -2298,6 +2302,776 @@ pub(crate) fn run_habitat_add_clear_tiles_matches_real_live_test(failure_log: &m
         }
         true
     }
+}
+
+/// Builds one expected candidate pool for the `getRandomClearTile` overload tests: real vanilla
+/// `addClearTiles` (`.original()` call-through - the trampoline in the debug battery, the raw address
+/// in release, where it re-enters the port that `ZTHABITAT_ADD_CLEAR_TILES_MATCHES_REAL_LIVE`
+/// cross-validated) appended into one shared scratch vector exactly as vanilla overload 1 builds its
+/// own - `habitat_ptr` first, then each amphibious neighbor in `neighbors` ([`walk_neighbor_tree`])
+/// order when `subhabs` is set. The scratch buffer is freed via [`free_event_vector_buffer`]
+/// (vanilla's own tail shape) before the extracted list is returned.
+fn vanilla_clear_tile_pool(habitat_ptr: u32, neighbors: &[u32], animal: u32, check_path: bool, subhabs: bool) -> Vec<u32> {
+    let mut scratch_vector = [0u32; 3];
+    unsafe {
+        zthabitat::ADD_CLEAR_TILES.original()(habitat_ptr as *const u32, scratch_vector.as_mut_ptr() as i32, animal as *const u32, check_path);
+    }
+    if subhabs {
+        for &neighbor in neighbors {
+            unsafe {
+                zthabitat::ADD_CLEAR_TILES.original()(neighbor as *const u32, scratch_vector.as_mut_ptr() as i32, animal as *const u32, check_path);
+            }
+        }
+    }
+    let pool: Vec<u32> = (scratch_vector[0]..scratch_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+    free_event_vector_buffer(scratch_vector[0], scratch_vector[2].wrapping_sub(scratch_vector[0]));
+    pool
+}
+
+/// Per live habitat, drives both sides of `getRandomClearTile` overload 1 over the full
+/// `(animal, check_path, subhabs)` cross product - the null animal plus each of the habitat's own
+/// animals (the real caller `ZTAnimal::fCheckReproduction` passes a real animal; the null shape
+/// reaches it through overload 0's delegation on animal-free exhibits), each with `check_path` false
+/// and true and `subhabs` false and true. Each side's expected pool is rebuilt per draw via
+/// [`vanilla_clear_tile_pool`] - the same synchronous, unmutated tile state both draws walk - and
+/// each draw must return the `(lcg_next(seed) >> 0x10 & 0x7fff) % count` slot of that pool, or null
+/// with the seed untouched when the pool comes out empty, leaving `DAT_00638060` at exactly
+/// `lcg_next(seed)` ([`assert_lcg_tile_draw`]).
+pub(crate) fn run_habitat_get_random_clear_tile_for_animal_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_RANDOM_CLEAR_TILE_FOR_ANIMAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head)
+            .map(|node| get_from_memory::<u32>(node + 0x10))
+            .collect();
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let animals: Vec<u32> = (0..(end.wrapping_sub(begin)) / 4)
+            .map(|u| get_from_memory::<u32>(begin + u * 4))
+            .filter(|&a| a != 0)
+            .collect();
+        for animal in std::iter::once(0u32).chain(animals) {
+            for check_path in [false, true] {
+                for subhabs in [false, true] {
+                    let pool = vanilla_clear_tile_pool(ptr, &neighbors, animal, check_path, subhabs);
+
+                    let seed_before: u32 = get_from_memory(rng_addr);
+                    let reimpl_ptr = habitat.get_random_clear_tile_for_animal(animal, check_path, subhabs);
+                    if assert_lcg_tile_draw(
+                        failure_log,
+                        test_name,
+                        "reimpl",
+                        i,
+                        ptr,
+                        &pool,
+                        seed_before,
+                        get_from_memory(rng_addr),
+                        reimpl_ptr,
+                    ) {
+                        failures.push(format!("habitat {} (pool of {}), animal={:#010x}, check_path={}, subhabs={}", i, pool.len(), animal, check_path, subhabs));
+                    }
+
+                    let seed_before: u32 = get_from_memory(rng_addr);
+                    let real_ptr =
+                        unsafe { zthabitat::GET_RANDOM_CLEAR_TILE_1.original()(ptr as *const u32, animal as *const u32, check_path, subhabs) };
+                    if assert_lcg_tile_draw(
+                        failure_log,
+                        test_name,
+                        "real",
+                        i,
+                        ptr,
+                        &pool,
+                        seed_before,
+                        get_from_memory(rng_addr),
+                        real_ptr,
+                    ) {
+                        failures.push(format!("habitat {} (pool of {}), animal={:#010x}, check_path={}, subhabs={}", i, pool.len(), animal, check_path, subhabs));
+                    }
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Asserts one observed overload-0 composition draw against the full two-step LCG chain over
+/// `seed_before`: the `getRandomAnimal` draw (its `(seed >> 0x10 & 0x7fff) % count` slot of the
+/// settled `all_animals` array - raw slots, nulls included, exactly what real vanilla indexes - or
+/// null with no advance when the array is empty), then the overload-1 pick over the
+/// [`vanilla_clear_tile_pool`] built from exactly that animal. The expected final seed is one advance
+/// per non-empty stage: two total when both drew, one when only the pool was non-empty, zero when
+/// neither was. The pool is built inside the assertion (the draws themselves mutate no tile state, so
+/// it sees the same state both sides drew from). Returns whether the draw failed.
+fn assert_clear_tile_composition_draw(
+    failure_log: &mut Option<std::fs::File>,
+    test_name: &str,
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    animals: &[u32],
+    neighbors: &[u32],
+    seed_before: u32,
+    seed_after: u32,
+    drawn_ptr: u32,
+) -> bool {
+    let count = animals.len() as u32;
+    let (seed_after_animal, animal) = if count != 0 {
+        let seed = lcg_next(seed_before);
+        let index = ((seed >> 0x10) & 0x7fff) % count;
+        (seed, animals[index as usize])
+    } else {
+        (seed_before, 0)
+    };
+    let pool = vanilla_clear_tile_pool(habitat_ptr, neighbors, animal, false, true);
+    let (expected_ptr, expected_seed) = if pool.is_empty() {
+        (0, seed_after_animal)
+    } else {
+        let seed = lcg_next(seed_after_animal);
+        let index = ((seed >> 0x10) & 0x7fff) % pool.len() as u32;
+        (pool[index as usize], seed)
+    };
+    if drawn_ptr == expected_ptr && seed_after == expected_seed {
+        return false;
+    }
+    let msg = format!(
+        "habitat {} ({:#010x}) {} composition draw: got {:#010x}, expected {:#010x} (pool of {}, animal {:#010x} of {} slots); rng {:#010x} -> {:#010x}, expected {:#010x}",
+        habitat_index, habitat_ptr, side, drawn_ptr, expected_ptr, pool.len(), animal, count, seed_before, seed_after, expected_seed
+    );
+    error!("{}: {}", test_name, msg);
+    if let Some(log_file) = failure_log {
+        let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+    }
+    true
+}
+
+/// Per live habitat, drives both sides of `getRandomClearTile` overload 0 - the delegation
+/// composition: one `getRandomAnimal` draw forwarded into overload 1 (driven with `subhabs` set so
+/// the pool spans the amphibious neighbors too; `check_path` clear, matching both real callers' own
+/// `(false, false)` arguments). One unasserted real draw settles any pending `characteristics_dirty`
+/// recalculate first - the recalc can rebuild `all_animals`, so the test's count snapshot must be
+/// post-recalc - then each side's observed draw is asserted against the full two-step chain
+/// ([`assert_clear_tile_composition_draw`]): returned tile AND final `DAT_00638060`. The real side's
+/// picked tile is `zthabitat::GET_RANDOM_CLEAR_TILE_0`'s own (EAX-riding) return.
+pub(crate) fn run_habitat_get_random_clear_tile_default_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_RANDOM_CLEAR_TILE_DEFAULT_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut fail_flag = false;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head)
+            .map(|node| get_from_memory::<u32>(node + 0x10))
+            .collect();
+
+        // Settle: one unasserted real draw triggers any pending lazy recalculate and leaves
+        // `all_animals` exactly as both observed draws will see it.
+        unsafe { zthabitat::GET_RANDOM_CLEAR_TILE_0.original()(ptr as *const u32, false, true) };
+
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let animals: Vec<u32> = (0..(end.wrapping_sub(begin)) / 4).map(|u| get_from_memory::<u32>(begin + u * 4)).collect();
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let reimpl_ptr = habitat.get_random_clear_tile_default(false, true);
+        fail_flag |= assert_clear_tile_composition_draw(
+            failure_log,
+            test_name,
+            "reimpl",
+            i,
+            ptr,
+            &animals,
+            &neighbors,
+            seed_before,
+            get_from_memory(rng_addr),
+            reimpl_ptr,
+        );
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let real_ptr = unsafe { zthabitat::GET_RANDOM_CLEAR_TILE_0.original()(ptr as *const u32, false, true) } as u32;
+        fail_flag |= assert_clear_tile_composition_draw(
+            failure_log,
+            test_name,
+            "real",
+            i,
+            ptr,
+            &animals,
+            &neighbors,
+            seed_before,
+            get_from_memory(rng_addr),
+            real_ptr,
+        );
+    }
+    if !fail_flag {
+        write_success_line(failure_log, test_name);
+    }
+    fail_flag
+}
+
+/// Shared assertion for [`run_habitat_get_adjacent_clear_tile_live_test`]: unlike [`assert_lcg_tile_draw`],
+/// an empty candidate set expects `base_tile` itself back with the seed untouched (this function's own
+/// RNG-free pass-through), not a fallback draw from a wider list. A non-empty set expects the
+/// `(lcg_next(seed_before) >> 0x10 & 0x7fff) % count` slot and the seed advanced to exactly that value.
+fn assert_adjacent_clear_tile_draw(
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    base_tile: u32,
+    candidates: &[u32],
+    seed_before: u32,
+    seed_after: u32,
+    drawn_ptr: u32,
+) -> Option<String> {
+    let (expected_ptr, rng_ok) = if candidates.is_empty() {
+        (base_tile, seed_after == seed_before)
+    } else {
+        let expected_rng = lcg_next(seed_before);
+        let index = ((expected_rng >> 0x10) & 0x7fff) % candidates.len() as u32;
+        (candidates[index as usize], seed_after == expected_rng)
+    };
+    if drawn_ptr == expected_ptr && rng_ok {
+        return None;
+    }
+    Some(format!(
+        "habitat {} ({:#010x}) {} draw at base_tile {:#010x}: got {:#010x}, expected {:#010x} (of {} candidates); rng {:#010x} -> {:#010x}",
+        habitat_index, habitat_ptr, side, base_tile, drawn_ptr, expected_ptr, candidates.len(), seed_before, seed_after
+    ))
+}
+
+/// Per live habitat with at least one real animal (`unit` = the habitat's own first animal - a real
+/// `ZTUnit`-derived entity, matching real vanilla's own unchecked dereference of it; animal-free
+/// habitats are skipped, same rationale as this file's other unit-taking tests), sweeps every owned
+/// tile as `base_tile` and checks one reimplementation call and one real vanilla call directly against
+/// the shared game RNG state via [`assert_adjacent_clear_tile_draw`]. Each side's expected candidate set
+/// is rebuilt from a plain re-scan of `base_tile`'s 8 neighbor coordinates (real vanilla's own
+/// dx-outer/dy-inner loop order) against the live map's own bounds, [`ZTHabitatMgr::get_habitat_ptr`]
+/// (both sides, undetoured - the same raw "0 == 0 ownerless tiles match" comparison real vanilla
+/// performs), and the real vtable `+0x164` path-cost dispatch ([`call_bfunit_tile_cost_vtable_slot`])
+/// against the shared [`MAX_PATH_COST_RVA`] sentinel by exact equality - the same oracle
+/// [`ZTHabitat::get_adjacent_clear_tile`]'s own doc comment describes.
+pub(crate) fn run_habitat_get_adjacent_clear_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_ADJACENT_CLEAR_TILE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let world = globals().ztworldmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let Some(unit) = (0..(end.wrapping_sub(begin)) / 4).map(|u| get_from_memory::<u32>(begin + u * 4)).find(|&a| a != 0) else {
+            continue;
+        };
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        for &base_tile in &tiles {
+            let base_x: i32 = get_from_memory(base_tile + 0x34);
+            let base_y: i32 = get_from_memory(base_tile + 0x38);
+            let base_habitat = habitat_mgr.get_habitat_ptr(base_x, base_y);
+            let mut candidates: Vec<u32> = Vec::new();
+            for dx in -1i32..=1 {
+                for dy in -1i32..=1 {
+                    if dx == 0 && dy == 0 {
+                        continue;
+                    }
+                    let cand_x = base_x + dx;
+                    let cand_y = base_y + dy;
+                    if cand_x < 0 || cand_y < 0 || cand_x as u32 >= world.map_x_size || cand_y as u32 >= world.map_y_size {
+                        continue;
+                    }
+                    if habitat_mgr.get_habitat_ptr(cand_x, cand_y) != base_habitat {
+                        continue;
+                    }
+                    let candidate_tile_ptr = world.get_tile_ptr(cand_x as u32, cand_y as u32);
+                    let cost = unsafe { call_bfunit_tile_cost_vtable_slot(unit, candidate_tile_ptr) };
+                    if cost == max_cost {
+                        continue;
+                    }
+                    candidates.push(candidate_tile_ptr);
+                }
+            }
+
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let reimpl_ptr = ZTHabitat::get_adjacent_clear_tile(unit, base_tile);
+            if let Some(msg) =
+                assert_adjacent_clear_tile_draw("reimpl", i, ptr, base_tile, &candidates, seed_before, get_from_memory(rng_addr), reimpl_ptr)
+            {
+                failures.push(msg);
+            }
+
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let real_ptr = unsafe { zthabitat::GET_ADJACENT_CLEAR_TILE.original()(unit as *const u32, base_tile as *const u32) } as u32;
+            if let Some(msg) =
+                assert_adjacent_clear_tile_draw("real", i, ptr, base_tile, &candidates, seed_before, get_from_memory(rng_addr), real_ptr)
+            {
+                failures.push(msg);
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Oracle for [`run_habitat_get_nearest_clear_tile_live_test`]: the first owned tile in walk order
+/// achieving the strict minimum squared distance to `unit_tile` among tiles passing the full filter -
+/// 4 direct-entity slots null, entity list empty, the real path-cost dispatch strictly below
+/// [`MAX_PATH_COST_RVA`], and - when `random_animal` is non-null - real `BFAIMgr::checkPath` from the
+/// drawn animal's tile with that animal as mover. Returns the expected tile (`0` when nothing
+/// qualifies). `random_animal` is the caller's *predicted* `getRandomAnimal` slot - the port and real
+/// vanilla both draw it internally, so the oracle must gate on exactly that animal.
+fn nearest_clear_tile_oracle(tiles: &[u32], unit_ptr: u32, unit_tile: u32, random_animal: u32, max_cost: i32) -> u32 {
+    let ai_mgr_ptr = globals().ztaimgr_ptr() as u32;
+    let animal_tile = if random_animal != 0 {
+        (unsafe { BFENTITY_GET_TILE.original()(random_animal as *const u32) }) as u32
+    } else {
+        0
+    };
+    let mut best_tile = 0u32;
+    let mut best_dist = 0x7fff_ffffi32;
+    for &tile in tiles {
+        let dist: i32 = if tile == 0 || unit_tile == 0 {
+            0x7fff_ffff
+        } else {
+            let dx: i32 = get_from_memory::<i32>(unit_tile + 0x34).wrapping_sub(get_from_memory::<i32>(tile + 0x34));
+            let dy: i32 = get_from_memory::<i32>(unit_tile + 0x38).wrapping_sub(get_from_memory::<i32>(tile + 0x38));
+            dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+        };
+        if dist >= best_dist {
+            continue;
+        }
+        let entity_slots_clear = [0x4u32, 0x8, 0xc, 0x10].iter().all(|&off| get_from_memory::<u32>(tile + off) == 0);
+        if !entity_slots_clear {
+            continue;
+        }
+        let head: u32 = get_from_memory(tile);
+        if get_from_memory::<u32>(head) != head {
+            continue;
+        }
+        if unsafe { call_bfunit_tile_cost_vtable_slot(unit_ptr, tile) } >= max_cost {
+            continue;
+        }
+        if random_animal != 0 {
+            let reachable = low_byte_bool(unsafe {
+                BFAIMGR_CHECK_PATH.original()(ai_mgr_ptr as *const u32, animal_tile as *const u32, tile as *const u32, random_animal as *const u32)
+            });
+            if !reachable {
+                continue;
+            }
+        }
+        best_tile = tile;
+        best_dist = dist;
+    }
+    best_tile
+}
+
+/// Per live habitat with at least one real animal (`unit` = the habitat's own first animal, a real
+/// `ZTUnit`-derived entity; animal-free habitats are skipped, same rationale as this file's other
+/// unit-taking tests), checks one reimplementation call and one restored-seed real vanilla call
+/// against a fully independent oracle: settles any pending `characteristics_dirty` recalculate with
+/// one unasserted real vanilla draw first (the function's own internal `getRandomAnimal` would
+/// otherwise recalculate inside the asserted draws), predicts the internal `getRandomAnimal` slot
+/// from the current seed without burning a draw (raw slots, nulls included - exactly what vanilla
+/// indexes; null with no advance when the array is empty), rebuilds the expected best tile with
+/// [`nearest_clear_tile_oracle`], and requires both sides to return it while leaving `DAT_00638060`
+/// at exactly `lcg_next(seed)` when the habitat has animals - unchanged otherwise (the guards
+/// precede the draw). Real vanilla's own call is asserted against the same oracle, so the oracle
+/// itself is validated against vanilla behavior, not just cross-agreement.
+pub(crate) fn run_habitat_get_nearest_clear_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NEAREST_CLEAR_TILE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        unsafe { zthabitat::GET_RANDOM_ANIMAL.original()(ptr as *const std::ffi::c_void) };
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let count = (end.wrapping_sub(begin)) / 4;
+        let Some(unit) = (0..count).map(|u| get_from_memory::<u32>(begin + u * 4)).find(|&a| a != 0) else {
+            continue;
+        };
+        let unit_tile = unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) } as u32;
+        if unit_tile == 0 {
+            continue;
+        }
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        let seed_at_predict: u32 = get_from_memory(rng_addr);
+        let expected_rng = lcg_next(seed_at_predict);
+        let random_animal = if count == 0 {
+            0
+        } else {
+            let index = ((expected_rng >> 0x10) & 0x7fff) % count;
+            get_from_memory::<u32>(begin + index * 4)
+        };
+        let expected_tile = nearest_clear_tile_oracle(&tiles, unit, unit_tile, random_animal, max_cost);
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let reimpl_ptr = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_nearest_clear_tile(unit);
+        let seed_after: u32 = get_from_memory(rng_addr);
+        let rng_ok = if count == 0 { seed_after == seed_before } else { seed_after == expected_rng };
+        if reimpl_ptr != expected_tile || !rng_ok {
+            failures.push(format!(
+                "habitat {} ({:#010x}) reimpl: got {:#010x}, expected {:#010x}; rng {:#010x} -> {:#010x} (expected {:#010x}); animals {}, predicted animal {:#010x}",
+                i, ptr, reimpl_ptr, expected_tile, seed_before, seed_after, expected_rng, count, random_animal
+            ));
+        }
+
+        save_to_memory(rng_addr, seed_before);
+        let real_ptr = unsafe { zthabitat::GET_NEAREST_CLEAR_TILE.original()(ptr as *const u32, unit as *const u32) } as u32;
+        let seed_after: u32 = get_from_memory(rng_addr);
+        let rng_ok = if count == 0 { seed_after == seed_before } else { seed_after == expected_rng };
+        if real_ptr != expected_tile || !rng_ok {
+            failures.push(format!(
+                "habitat {} ({:#010x}) real: got {:#010x}, expected {:#010x}; rng {:#010x} -> {:#010x} (expected {:#010x}); animals {}, predicted animal {:#010x}",
+                i, ptr, real_ptr, expected_tile, seed_before, seed_after, expected_rng, count, random_animal
+            ));
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Oracle candidate set for [`run_habitat_get_near_clear_tile_live_test`]: the owned tiles passing
+/// all 8 `.asm` checks in walk order - the raw `unit+0x27c..+0x280` reserved-vector scan
+/// (`ZTStaff::isInvalidTile`'s Windows inline), 4 direct-entity slots null, entity list empty, the
+/// real path-cost dispatch full-width-unequal to [`MAX_PATH_COST_RVA`], not the resolved gate tile
+/// (a null gate tile passes every candidate), squared distance to `unit_tile` below 10 (unsigned),
+/// real `BFAIMgr::checkPath` from `animal_tile` when the mover is non-null, and the `tile+0x85 & 4`
+/// flag clear. Seed-independent - the function draws nothing before its pick.
+fn near_clear_tile_candidates(tiles: &[u32], unit_ptr: u32, unit_tile: u32, animal_ptr: u32, gate_tile_ptr: u32, max_cost: i32) -> Vec<u32> {
+    let ai_mgr_ptr = globals().ztaimgr_ptr() as u32;
+    let animal_tile = if animal_ptr != 0 {
+        (unsafe { BFENTITY_GET_TILE.original()(animal_ptr as *const u32) }) as u32
+    } else {
+        0
+    };
+    let reserved_begin: u32 = get_from_memory(unit_ptr + 0x27c);
+    let reserved_end: u32 = get_from_memory(unit_ptr + 0x280);
+    let mut candidates = Vec::new();
+    for &tile in tiles {
+        let mut reserved = false;
+        let mut cursor = reserved_begin;
+        while cursor != reserved_end {
+            if get_from_memory::<u32>(cursor) == tile {
+                reserved = true;
+                break;
+            }
+            cursor += 4;
+        }
+        if reserved {
+            continue;
+        }
+        let entity_slots_clear = [0x4u32, 0x8, 0xc, 0x10].iter().all(|&off| get_from_memory::<u32>(tile + off) == 0);
+        if !entity_slots_clear {
+            continue;
+        }
+        let head: u32 = get_from_memory(tile);
+        if get_from_memory::<u32>(head) != head {
+            continue;
+        }
+        if unsafe { call_bfunit_tile_cost_vtable_slot(unit_ptr, tile) } == max_cost {
+            continue;
+        }
+        if tile == gate_tile_ptr {
+            continue;
+        }
+        let dx: i32 = get_from_memory::<i32>(unit_tile + 0x34).wrapping_sub(get_from_memory::<i32>(tile + 0x34));
+        let dy: i32 = get_from_memory::<i32>(unit_tile + 0x38).wrapping_sub(get_from_memory::<i32>(tile + 0x38));
+        let dist = (dx.wrapping_mul(dx) as u32).wrapping_add(dy.wrapping_mul(dy) as u32);
+        if dist >= 10 {
+            continue;
+        }
+        if animal_ptr != 0 {
+            let reachable = low_byte_bool(unsafe {
+                BFAIMGR_CHECK_PATH.original()(ai_mgr_ptr as *const u32, animal_tile as *const u32, tile as *const u32, animal_ptr as *const u32)
+            });
+            if !reachable {
+                continue;
+            }
+        }
+        if get_from_memory::<u8>(tile + 0x85) & 4 != 0 {
+            continue;
+        }
+        candidates.push(tile);
+    }
+    candidates
+}
+
+/// With `unit` = the first live `ZTKeeper` in the world's `entity_array` (real caller shape
+/// `ZTGoalPutFood::decide`: the keeper plus its target animal - and required, not just faithful: the
+/// function reads the `ZTStaff`-only reserved-tile vector at `unit+0x27c..+0x280`, which on any
+/// non-staff unit is unrelated data; the test skips when the zoo has no keeper), drives both sides
+/// of `getNearClearTile` per live habitat over the null mover plus each of the habitat's own animals. Each side's expected candidate set is rebuilt per draw via [`near_clear_tile_candidates`]
+/// with the port's own resolved gate tile - seed-independent, since the function draws nothing before
+/// its pick. A non-empty set expects the `(lcg_next(seed) >> 0x10 & 0x7fff) % count` slot and
+/// `DAT_00638060` at exactly `lcg_next(seed)` on both sides, each asserted absolutely; an empty set
+/// exercises the fallback chain (`getNearestClearTile` -> `getRandomClearTile(false, false)`, whose
+/// own draws the Stage 6/11 tests plus [`run_habitat_get_nearest_clear_tile_live_test`] already
+/// validate absolutely) and asserts restored-seed cross-agreement of both the returned tile and the
+/// final seed. A pending `characteristics_dirty` recalculate is settled with one unasserted real
+/// vanilla draw per habitat first, same as [`run_habitat_get_nearest_clear_tile_live_test`].
+pub(crate) fn run_habitat_get_near_clear_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NEAR_CLEAR_TILE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let world = globals().ztworldmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+
+    let keeper_ptr = world.entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+    let Some(unit) = keeper_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    };
+    let unit_tile = (unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) }) as u32;
+    if unit_tile == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: live ZTKeeper has no tile)", test_name));
+        return false;
+    }
+    // `unit+0x27c..+0x280` is a `ZTStaff`-only vector; fail loudly rather than let a malformed one
+    // send the reserved-tile scan (both sides') walking unbounded memory.
+    let reserved_begin: u32 = get_from_memory(unit + 0x27c);
+    let reserved_end: u32 = get_from_memory(unit + 0x280);
+    if reserved_end < reserved_begin || (reserved_end - reserved_begin) % 4 != 0 || reserved_end - reserved_begin > 0x10000 {
+        let msg = format!("keeper {:#010x} reserved-tile vector malformed: {:#010x}..{:#010x}", unit, reserved_begin, reserved_end);
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        unsafe { zthabitat::GET_RANDOM_ANIMAL.original()(ptr as *const std::ffi::c_void) };
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let animals: Vec<u32> = (0..(end.wrapping_sub(begin)) / 4)
+            .map(|u| get_from_memory::<u32>(begin + u * 4))
+            .filter(|&a| a != 0)
+            .collect();
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let gate_tile_ptr = habitat
+            .get_gate_tile_in()
+            .map(|tile| world.get_ptr_from_bftile(&tile))
+            .unwrap_or(0);
+        for animal in std::iter::once(0u32).chain(animals) {
+            let candidates = near_clear_tile_candidates(&tiles, unit, unit_tile, animal, gate_tile_ptr, max_cost);
+
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let reimpl_ptr = habitat.get_near_clear_tile(unit, animal);
+            let reimpl_seed: u32 = get_from_memory(rng_addr);
+            save_to_memory(rng_addr, seed_before);
+            let real_ptr = unsafe { zthabitat::GET_NEAR_CLEAR_TILE.original()(ptr as *const u32, unit as *const u32, animal as *const u32) } as u32;
+            let real_seed: u32 = get_from_memory(rng_addr);
+
+            if !candidates.is_empty() {
+                let expected_rng = lcg_next(seed_before);
+                let expected_tile = candidates[(((expected_rng >> 0x10) & 0x7fff) % candidates.len() as u32) as usize];
+                for (side, drawn, seed_after) in [("reimpl", reimpl_ptr, reimpl_seed), ("real", real_ptr, real_seed)] {
+                    let rng_ok = seed_after == expected_rng;
+                    if drawn != expected_tile || !rng_ok {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}), animal={:#010x}: {} got {:#010x}, expected {:#010x} (of {} candidates); rng {:#010x} -> {:#010x} (expected {:#010x})",
+                            i, ptr, animal, side, drawn, expected_tile, candidates.len(), seed_before, seed_after, expected_rng
+                        ));
+                    }
+                }
+            } else if reimpl_ptr != real_ptr || reimpl_seed != real_seed {
+                failures.push(format!(
+                    "habitat {} ({:#010x}), animal={:#010x}: empty fallback disagreement - reimpl ({:#010x}, rng {:#010x}) vs real ({:#010x}, rng {:#010x})",
+                    i, ptr, animal, reimpl_ptr, reimpl_seed, real_ptr, real_seed
+                ));
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Shared driver for the two gate-pass resolver tests ([`run_habitat_get_gate_tile_pass_in_live_test`] /
+/// [`run_habitat_get_gate_tile_pass_out_live_test`]): per habitat with at least one real animal
+/// (`unit` = the habitat's own first animal, a real `ZTUnit`-derived entity - matching the functions'
+/// own real callers `ZTGoalKeeperHabitat`/`ZTGoalTrickFood::decide` and
+/// `ZTGuest`/`ZTGuide`/`ZTStaff::pickRandomDest`, which all pass a live unit; animal-free habitats are
+/// skipped, same rationale as this file's other unit-taking tests), resolves the expected gate tile
+/// with the port's own getter, rebuilds the expected candidate set from that tile's own coordinates
+/// with the same undetoured oracle [`run_habitat_get_adjacent_clear_tile_live_test`] uses, and checks
+/// one reimplementation call and one real vanilla call directly against the shared game RNG state via
+/// [`assert_adjacent_clear_tile_draw`]. Real vanilla's composition re-enters the same detoured
+/// gate-tile-getter and `getAdjacentClearTile` ports under the battery, so this cross-checks the Pass
+/// functions' own plumbing - argument marshaling, the ride-through `EAX` return, detour enablement -
+/// against the shared callee behavior; a habitat without a usable gate contributes the null-gate path
+/// (null return, seed untouched) on both sides via the helper's own empty-set branch.
+fn run_gate_tile_pass_live_test(
+    failure_log: &mut Option<std::fs::File>,
+    test_name: &str,
+    gate_of: impl Fn(&ZTHabitat) -> Option<BFTile>,
+    pass_of: impl Fn(&ZTHabitat, u32) -> u32,
+    real: impl Fn(u32, u32) -> u32,
+) -> bool {
+    let habitat_mgr = globals().zthabitatmgr();
+    let world = globals().ztworldmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let Some(unit) = (0..(end.wrapping_sub(begin)) / 4).map(|u| get_from_memory::<u32>(begin + u * 4)).find(|&a| a != 0) else {
+            continue;
+        };
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let gate_tile = gate_of(habitat);
+        let (gate_ptr, candidates): (u32, Vec<u32>) = match &gate_tile {
+            None => (0, Vec::new()),
+            Some(tile) => {
+                let base_x = tile.pos.x;
+                let base_y = tile.pos.y;
+                let base_habitat = habitat_mgr.get_habitat_ptr(base_x, base_y);
+                let mut candidates = Vec::new();
+                for dx in -1i32..=1 {
+                    for dy in -1i32..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let cand_x = base_x + dx;
+                        let cand_y = base_y + dy;
+                        if cand_x < 0 || cand_y < 0 || cand_x as u32 >= world.map_x_size || cand_y as u32 >= world.map_y_size {
+                            continue;
+                        }
+                        if habitat_mgr.get_habitat_ptr(cand_x, cand_y) != base_habitat {
+                            continue;
+                        }
+                        let candidate_tile_ptr = world.get_tile_ptr(cand_x as u32, cand_y as u32);
+                        let cost = unsafe { call_bfunit_tile_cost_vtable_slot(unit, candidate_tile_ptr) };
+                        if cost == max_cost {
+                            continue;
+                        }
+                        candidates.push(candidate_tile_ptr);
+                    }
+                }
+                (world.get_ptr_from_bftile(tile), candidates)
+            }
+        };
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let reimpl_ptr = pass_of(habitat, unit);
+        if let Some(msg) =
+            assert_adjacent_clear_tile_draw("reimpl", i, ptr, gate_ptr, &candidates, seed_before, get_from_memory(rng_addr), reimpl_ptr)
+        {
+            failures.push(msg);
+        }
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let real_ptr = real(ptr, unit);
+        if let Some(msg) =
+            assert_adjacent_clear_tile_draw("real", i, ptr, gate_ptr, &candidates, seed_before, get_from_memory(rng_addr), real_ptr)
+        {
+            failures.push(msg);
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+pub(crate) fn run_habitat_get_gate_tile_pass_in_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_gate_tile_pass_live_test(
+        failure_log,
+        "ZTHABITAT_GET_GATE_TILE_PASS_IN_LIVE",
+        |h| h.get_gate_tile_in(),
+        |h, unit| h.get_gate_tile_pass_in(unit),
+        |habitat_ptr, unit| unsafe { zthabitat::GET_GATE_TILE_PASS_IN.original()(habitat_ptr as *const u32, unit as *const u32) } as u32,
+    )
+}
+
+pub(crate) fn run_habitat_get_gate_tile_pass_out_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_gate_tile_pass_live_test(
+        failure_log,
+        "ZTHABITAT_GET_GATE_TILE_PASS_OUT_LIVE",
+        |h| h.get_gate_tile_out(),
+        |h, unit| h.get_gate_tile_pass_out(unit),
+        |habitat_ptr, unit| unsafe { zthabitat::GET_GATE_TILE_PASS_OUT.original()(habitat_ptr as *const u32, unit as *const u32) } as u32,
+    )
 }
 /// happiness-change accumulator (`animal+0x2ac`), invokes one side with `type_ptr`, asserts the
 /// decompile's own contract against the pristine snapshot - every animal whose entity-type species id
@@ -2450,17 +3224,18 @@ pub(crate) fn run_habitat_get_avg_animal_happiness_live_test(failure_log: &mut O
 }
 
 /// `ZTHabitat::getAllAnimals` always returns the same `&this->field_0x6c` pointer regardless of `sort`,
-/// only conditionally reordering the vector's own contents first - comparing that pointer would be
-/// meaningless, so this compares the sorted *contents* instead. Real vanilla is called first (`sort =
-/// true`), settling the live array into its real ordering; the reimplementation is then called (also
-/// `sort = true`) over that now-already-sorted array. Since both call through to the identical real
-/// comparator ([`GET_ALL_ANIMALS_SORT_COMPARATOR`] internally), re-sorting an already-correctly-sorted
-/// array is expected to be a no-op, so the reimplementation's own output should match real vanilla's
-/// exactly, element-for-element.
+/// only conditionally reordering the vector's own contents first - so this compares sorted *contents*.
+/// Per habitat, real vanilla sorts first (`sort = true`) and its output is asserted non-decreasing
+/// under [`entity_name_bytes`] ordering - validating the reimplemented name comparator against the
+/// real one at `0x004690cd`. The live array is then **reversed** in place so the reimplementation
+/// has real sorting work to do, sorted by the port, and compared to vanilla's result: element-for-element
+/// when every name is distinct, by name sequence when names repeat (vanilla's introsort and Rust's stable
+/// sort may order equal names differently). Vanilla's own ordering is written back afterward, so later
+/// tests see the array exactly as vanilla left it.
 pub(crate) fn run_habitat_get_all_animals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTHABITAT_GET_ALL_ANIMALS_LIVE";
     let habitat_mgr = globals().zthabitatmgr();
-    let mut fail_flag = false;
+    let mut failures: Vec<String> = Vec::new();
     for i in 0..habitat_mgr.exhibit_array().len() {
         let ptr = habitat_mgr.exhibit_array().get_ptr(i);
         if ptr == 0 {
@@ -2470,23 +3245,42 @@ pub(crate) fn run_habitat_get_all_animals_live_test(failure_log: &mut Option<std
         let begin: u32 = get_from_memory(ptr + 0x6c);
         let end: u32 = get_from_memory(ptr + 0x70);
         let real_animals: Vec<u32> = (begin..end).step_by(4).map(get_from_memory::<u32>).collect();
+        let real_names: Vec<Vec<u8>> = real_animals.iter().map(|&a| entity_name_bytes(a)).collect();
+        if real_names.windows(2).any(|pair| pair[0] > pair[1]) {
+            failures.push(format!(
+                "habitat {i} ({ptr:#010x}): real vanilla's order is not name-sorted under the ported comparator: {:?}",
+                real_names.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect::<Vec<_>>()
+            ));
+        }
 
+        for (slot, &animal) in real_animals.iter().rev().enumerate() {
+            save_to_memory(begin + slot as u32 * 4, animal);
+        }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
         let reimpl_animals: Vec<u32> = habitat.get_all_animals(true).collect();
+        let reimpl_names: Vec<Vec<u8>> = reimpl_animals.iter().map(|&a| entity_name_bytes(a)).collect();
+        let names_distinct = real_names.windows(2).all(|pair| pair[0] != pair[1]);
+        let matches = if names_distinct { reimpl_animals == real_animals } else { reimpl_names == real_names };
+        if !matches {
+            failures.push(format!("habitat {i} ({ptr:#010x}): real={real_animals:?}, reimpl={reimpl_animals:?}"));
+        }
 
-        if real_animals != reimpl_animals {
-            let msg = format!("mismatch at habitat {i} ({ptr:#010x}): real={real_animals:?}, reimpl={reimpl_animals:?}");
-            error!("{}: {}", test_name, msg);
-            if let Some(log_file) = failure_log {
-                let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
-            }
-            fail_flag = true;
+        for (slot, &animal) in real_animals.iter().enumerate() {
+            save_to_memory(begin + slot as u32 * 4, animal);
         }
     }
-    if !fail_flag {
+    if failures.is_empty() {
         write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
     }
-    fail_flag
 }
 
 /// Compares the real vanilla `surrounding_species_begin`/`_end` vector (reached through real

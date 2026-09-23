@@ -45,13 +45,13 @@ mod detours {
     }
 
     #[detour(HAS_KEEPER)]
-    unsafe extern "thiscall" fn has_keeper_detour(this: *const u32) -> u32 {
-        has_keeper(this as u32) as u32
+    unsafe extern "thiscall" fn has_keeper_detour(this: *const u32) -> bool {
+        has_keeper(this as u32)
     }
 
     #[detour(NEEDS_KEEPER)]
-    unsafe extern "thiscall" fn needs_keeper_detour(this: *const u32, unit_type_id: u32) -> u32 {
-        needs_keeper(this as u32, unit_type_id) as u32
+    unsafe extern "thiscall" fn needs_keeper_detour(this: *const u32, unit_type_id: u32) -> bool {
+        needs_keeper(this as u32, unit_type_id)
     }
 
     #[detour(GET_SCHEDULED_SHOW_KEEPER_TYPE)]
@@ -201,45 +201,6 @@ mod detours {
     unsafe extern "thiscall" fn add_script_detour(this: *const u32, unit_type_id: u32, new_script_id: u16) -> bool {
         add_script(this as u32, unit_type_id, new_script_id)
     }
-
-    pub(crate) fn status() -> [(&'static str, bool); 34] {
-        [
-            ("GET_SCHEDULED_SHOW_SCRIPT", GET_SCHEDULED_SHOW_SCRIPT_DETOUR.is_enabled()),
-            ("IS_READY", IS_READY_DETOUR.is_enabled()),
-            ("IS_STARTED", IS_STARTED_DETOUR.is_enabled()),
-            ("IS_STOPPED", IS_STOPPED_DETOUR.is_enabled()),
-            ("HAS_KEEPER", HAS_KEEPER_DETOUR.is_enabled()),
-            ("NEEDS_KEEPER", NEEDS_KEEPER_DETOUR.is_enabled()),
-            ("GET_SCHEDULED_SHOW_KEEPER_TYPE", GET_SCHEDULED_SHOW_KEEPER_TYPE_DETOUR.is_enabled()),
-            ("INCREMENT_ATTENDANCE", INCREMENT_ATTENDANCE_DETOUR.is_enabled()),
-            ("INCREMENT_RECEIPTS", INCREMENT_RECEIPTS_DETOUR.is_enabled()),
-            ("ADD_SHOW", ADD_SHOW_DETOUR.is_enabled()),
-            ("REMOVE_SHOW", REMOVE_SHOW_DETOUR.is_enabled()),
-            ("CREATE_DEFAULT_SCRIPT", CREATE_DEFAULT_SCRIPT_DETOUR.is_enabled()),
-            ("SET_SHOW_FREQUENCY", SET_SHOW_FREQUENCY_DETOUR.is_enabled()),
-            ("RECALCULATE_SCHEDULE", RECALCULATE_SCHEDULE_DETOUR.is_enabled()),
-            ("GET_EVENTS", GET_EVENTS_DETOUR.is_enabled()),
-            ("SEND_EVENT", SEND_EVENT_DETOUR.is_enabled()),
-            ("LISTEN", LISTEN_DETOUR.is_enabled()),
-            ("CLEANUP_EVENTS", CLEANUP_EVENTS_DETOUR.is_enabled()),
-            ("GET_NUM_UNITS", GET_NUM_UNITS_DETOUR.is_enabled()),
-            ("GET_SHOW_UNIT_LIST", GET_SHOW_UNIT_LIST_DETOUR.is_enabled()),
-            ("CHECK_UNIT", CHECK_UNIT_DETOUR.is_enabled()),
-            ("REMOVE_UNIT", REMOVE_UNIT_DETOUR.is_enabled()),
-            ("ADD_UNIT_TO_LIST", ADD_UNIT_TO_LIST_DETOUR.is_enabled()),
-            ("ADD_UNIT", ADD_UNIT_DETOUR.is_enabled()),
-            ("GATHER_UNITS", GATHER_UNITS_DETOUR.is_enabled()),
-            ("ENTER_NEW_MONTH", ENTER_NEW_MONTH_DETOUR.is_enabled()),
-            ("UPDATE", UPDATE_DETOUR.is_enabled()),
-            ("SET_SHOW_INFO_ID", SET_SHOW_INFO_ID_DETOUR.is_enabled()),
-            ("UPDATE_FROM_LOAD", UPDATE_FROM_LOAD_DETOUR.is_enabled()),
-            ("SAVE", SAVE_DETOUR.is_enabled()),
-            ("LOAD", LOAD_DETOUR.is_enabled()),
-            ("CHECK_UNIT_TYPE", CHECK_UNIT_TYPE_DETOUR.is_enabled()),
-            ("CHECK_PENDING_SCRIPTS", CHECK_PENDING_SCRIPTS_DETOUR.is_enabled()),
-            ("ADD_SCRIPT", ADD_SCRIPT_DETOUR.is_enabled()),
-        ]
-    }
 }
 
 pub fn init() {
@@ -250,7 +211,7 @@ pub fn init() {
 
 #[cfg(feature = "reimplementation-tests")]
 pub(crate) mod live_support {
-    pub(crate) fn detour_status() -> [(&'static str, bool); 34] {
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
         super::detours::status()
     }
 

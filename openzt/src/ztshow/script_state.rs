@@ -287,22 +287,6 @@ mod detours {
         create_show_script_state(this as u32, key)
     }
 
-    /// `(name, is_enabled)` per detour - lets `reimplementation_tests`'s `ZTSHOWSCRIPTSTATE_DETOURS_ENABLED`
-    /// catch a silently-failed `init_detours()` the same way `ztshowstate`/`ztgamemgr_menumusichandler`/
-    /// `ztsoundscape` already do for their own detour sets (see each of their own `status()`/`live_support`),
-    /// rather than a comparison test's own real-vs-rust output happening to coincide by chance.
-    pub(crate) fn status() -> [(&'static str, bool); 7] {
-        [
-            ("INIT", INIT_DETOUR.is_enabled()),
-            ("LOAD", LOAD_DETOUR.is_enabled()),
-            ("SAVE", SAVE_DETOUR.is_enabled()),
-            ("SET_NEXT_ITEM_0", SET_NEXT_ITEM_0_DETOUR.is_enabled()),
-            ("SET_NEXT_ITEM_1", SET_NEXT_ITEM_1_DETOUR.is_enabled()),
-            ("GET_NUM_ITEMS", GET_NUM_ITEMS_DETOUR.is_enabled()),
-            ("CREATE_SHOW_SCRIPT_STATE", CREATE_SHOW_SCRIPT_STATE_DETOUR.is_enabled()),
-        ]
-    }
-
     /// Trampolines to the real vanilla bodies for the battery's "real vanilla" pole - live inside the
     /// detour module because the generated `*_DETOUR` statics are module-private. `.original()` on a
     /// hooked address is a raw cast in release and would re-enter this port's own detour there (debug
@@ -357,7 +341,7 @@ pub(crate) mod live_support {
     use openzt_detour::generated::standalone::OPERATOR_DELETE;
 
     /// `(name, is_enabled)` per detour - see `detours::status()`'s own doc comment.
-    pub(crate) fn detour_status() -> [(&'static str, bool); 7] {
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
         super::detours::status()
     }
 

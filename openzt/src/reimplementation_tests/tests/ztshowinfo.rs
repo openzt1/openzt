@@ -545,15 +545,15 @@ pub(crate) fn run_ztshowinfo_keeper_predicates_live_test(failure_log: &mut Optio
 
     let rust_has_keeper = unsafe { HAS_KEEPER.hooked()(rust_info as *const u32) };
     let real_has_keeper = unsafe { HAS_KEEPER.original()(real_info as *const u32) };
-    if (rust_has_keeper != 0) != (real_has_keeper != 0) {
-        failures.push(format!("hasKeeper mismatch: rust={rust_has_keeper:#x} real={real_has_keeper:#x}"));
+    if rust_has_keeper != real_has_keeper {
+        failures.push(format!("hasKeeper mismatch: rust={rust_has_keeper:?} real={real_has_keeper:?}"));
     }
 
     let rust_needs_keeper_match = unsafe { NEEDS_KEEPER.hooked()(rust_info as *const u32, rust_keeper_type) };
     let real_needs_keeper_match = unsafe { NEEDS_KEEPER.original()(real_info as *const u32, real_keeper_type) };
-    if (rust_needs_keeper_match != 0) != (real_needs_keeper_match != 0) {
+    if rust_needs_keeper_match != real_needs_keeper_match {
         failures.push(format!(
-            "needsKeeper(keeper_type) mismatch: rust={rust_needs_keeper_match:#x} real={real_needs_keeper_match:#x}"
+            "needsKeeper(keeper_type) mismatch: rust={rust_needs_keeper_match:?} real={real_needs_keeper_match:?}"
         ));
     }
 
@@ -561,12 +561,12 @@ pub(crate) fn run_ztshowinfo_keeper_predicates_live_test(failure_log: &mut Optio
     let mismatched_type_id = unit_type_id.wrapping_add(0x7fff_ffff);
     let rust_needs_keeper_miss = unsafe { NEEDS_KEEPER.hooked()(rust_info as *const u32, mismatched_type_id) };
     let real_needs_keeper_miss = unsafe { NEEDS_KEEPER.original()(real_info as *const u32, mismatched_type_id) };
-    if (rust_needs_keeper_miss != 0) != (real_needs_keeper_miss != 0) {
+    if rust_needs_keeper_miss != real_needs_keeper_miss {
         failures.push(format!(
-            "needsKeeper(mismatched id) mismatch: rust={rust_needs_keeper_miss:#x} real={real_needs_keeper_miss:#x}"
+            "needsKeeper(mismatched id) mismatch: rust={rust_needs_keeper_miss:?} real={real_needs_keeper_miss:?}"
         ));
     }
-    if rust_needs_keeper_miss != 0 {
+    if rust_needs_keeper_miss {
         failures.push("needsKeeper should be false for a unit_type_id that never matches the scheduled keeper type".to_string());
     }
 

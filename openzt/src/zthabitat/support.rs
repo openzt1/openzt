@@ -8,7 +8,6 @@ use openzt_detour::{
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
         zthabitat::GET_SPECIES_RATING,
     },
-    FunctionDef,
 };
 use std::{
     collections::HashMap,
@@ -27,18 +26,6 @@ use crate::{
 use super::habitat::ZTHabitat;
 use super::mgr::zthabitatmgr::ZTHabitatMgr;
 
-/// `ZTHabitat::isRightSalinity` (vtable `+0x28`) has no per-function decompile - only `ZTTankExhibit`'s
-/// own override (`zttankexhibit::IS_RIGHT_SALINITY`, `0x004936df`) was captured by the Ghidra pass. Per
-/// `FunctionDef::new`'s own doc comment, this is defined locally (address confirmed directly against
-/// `private/docs/vtables/ZTHabitat.md`'s own raw vtable dump) rather than hand-editing `generated.rs`.
-pub const IS_RIGHT_SALINITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef::new(0x00446995);
-
-/// Unidentified no-argument helper `ZTHabitatMgr::addHabitat`/`removeHabitat_0`/`removeHabitat_1` all
-/// call immediately after setting [`HABITAT_LIST_DIRTY_RVA`] - confirmed directly via
-/// `ZTHabitatMgr_addHabitat.asm`'s own tail (`CALL habitatinfo::addHabitat; MOV byte ptr DAT_00639144,
-/// 0x1; CALL FUN_0044bb5f`). No per-function decompile/`.meta` exists for `0x0044bb5f`.
-pub const FUN_0044BB5F: FunctionDef<unsafe extern "cdecl" fn()> = FunctionDef::new(0x0044bb5f);
-
 /// `DAT_00639144`'s RVA - a shared "habitat list changed" dirty byte flag, set by
 /// `ZTHabitatMgr::addHabitat`/`removeHabitat_0`/`removeHabitat_1`/`nameLoadedHabitats` and cleared by
 /// `ZTUI::habitatinfo::update` once it's refreshed the habitat list UI off the back of it (confirmed via
@@ -54,14 +41,12 @@ pub const HABITAT_LIST_DIRTY_RVA: u32 = 0x0023_9144;
 /// from the same bound. RVA = `0x00635494 - 0x400000`.
 pub const MAX_PATH_COST_RVA: u32 = 0x0023_5494;
 
-/// `isCastClass` type-tag constant (`&DAT_00638710`) `ZTHabitatMgr::clearStaffHabitat`'s own per-entity
-/// gate uses before handing an `entity_array` entry to [`FUN_0050C884`] - most likely `ZTHabitat`'s own
-/// family tag (this function's whole purpose, per its name, is walking every *habitat* to drop a staff
-/// member's assignment from it), sitting between the already-named [`RVA_FENCE_TYPE_CHECK_ARG`]
-/// (`0x638660`) and [`RVA_TANK_WALL_TYPE_CHECK_ARG`] (`0x638720`) in what looks like the same class-tag
-/// table. Not independently confirmed against a named symbol - same caveat as
-/// `RVA_TANK_WALL_TYPE_CHECK_ARG`'s own doc comment. RVA = `0x00638710 - 0x400000`.
-pub const RVA_HABITAT_TYPE_CHECK_ARG: u32 = 0x0023_8710;
+/// `isCastClass` type-tag constant for `ZTStaff` (`&CAST_ZTStaff`, `0x00638710`) -
+/// `ZTHabitatMgr::clearStaffHabitat`'s per-entity gate before it calls
+/// `ZTStaff::removeAssignedHabitat` on an `entity_array` entry. Sits between
+/// [`RVA_FENCE_TYPE_CHECK_ARG`] (`0x638660`) and [`RVA_TANK_WALL_TYPE_CHECK_ARG`] (`0x638720`) in the
+/// same class-tag table. RVA = `0x00638710 - 0x400000`.
+pub const RVA_STAFF_TYPE_CHECK_ARG: u32 = 0x0023_8710;
 
 /// `DAT_00638588`'s RVA - a single byte `ZTHabitatMgr::terrainChanged` reads to gate its entire body
 /// (`if (DAT_00638588 == '\0') { ... }`). Per `species-rating-cache-identification-handover.md`, this
@@ -111,20 +96,6 @@ pub struct SpeciesRatingCacheEntry {
 /// machinery (see the handover doc's Follow-ups 2/4) collapses to a plain `HashMap` per entry.
 pub static SPECIES_RATING_CACHE: LazyLock<Mutex<Vec<SpeciesRatingCacheEntry>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
-/// Real vanilla's own unidentified per-entity worker (`ZTHabitatMgr_clearStaffHabitat.asm`'s only real
-/// payload call: `MOV ECX, entity; CALL FUN_0050c884` with `staff_ptr` pushed as its one stack argument) -
-/// called through unmodified rather than reimplemented, matching this file's own [`FUN_0044BB5F`]/
-/// [`FUN_005B66D7`] precedent for a genuinely unidentified helper: no decompile/`.meta` exists for
-/// `0x0050c884` to identify its real name or body.
-pub const FUN_0050C884: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef::new(0x0050c884);
-
-/// `ZTHabitat::getAllAnimals`'s own real sort comparator (`ZTHabitat_getAllAnimals.c`'s own repeated
-/// `FUN_004690cd(a, b)` calls throughout its inlined MSVC introsort) - a genuinely unidentified helper,
-/// same precedent as [`FUN_0044BB5F`]/[`FUN_0050C884`]: no decompile/`.meta` exists for `0x004690cd`
-/// beyond the address itself, embedded directly in the caller's own decompile. Called through rather
-/// than reimplemented so [`ZTHabitat::get_all_animals`]'s own Rust-side sort produces the exact same
-/// final ordering as real vanilla's, without needing this comparator's own logic understood.
-pub const GET_ALL_ANIMALS_SORT_COMPARATOR: FunctionDef<unsafe extern "cdecl" fn(u32, u32) -> bool> = FunctionDef::new(0x004690cd);
 
 /// Base of vanilla's shared small-object freelist bucket array, bucketed by `(byte_capacity - 1) >> 3` -
 /// the same `DAT_00638000` family `ambients.rs`'s `RVA_GROUP_ARRAY_FREELIST_BUCKETS` already documents
@@ -203,6 +174,16 @@ pub fn rotate_month_fields(habitat_ptr: u32) {
     let current_upkeep: f32 = get_from_memory(habitat_ptr + 0x108);
     save_to_memory::<f32>(habitat_ptr + 0x108, 0.0);
     save_to_memory(habitat_ptr + 0x10c, current_upkeep);
+}
+
+/// The raw bytes of a live entity's `name` string (`BFEntity+0x108` begin / `+0x10c` end, the
+/// `ZTBufferString` `ztworld/entity.rs` maps). Comparing two of these with Rust's `[u8]` ordering is
+/// exactly vanilla's name comparator at `0x004690cd` (`std::string operator<`: unsigned byte-wise over
+/// the shorter length, then shorter-first) - see [`ZTHabitat::get_all_animals`].
+pub fn entity_name_bytes(entity_ptr: u32) -> Vec<u8> {
+    let begin: u32 = get_from_memory(entity_ptr + 0x108);
+    let end: u32 = get_from_memory(entity_ptr + 0x10c);
+    (begin..end).map(get_from_memory::<u8>).collect()
 }
 
 /// Walks a `ZTHabitat::owned_tiles_ptr`-shaped sentinel field's real, live value (`sentinel_addr` - the
@@ -311,7 +292,7 @@ pub const RVA_TANK_WALL_TYPE_CHECK_ARG: u32 = 0x0023_8720;
 /// decompile calls it `CAST_ZTKeeper`, matching `ZTKeeper::cleansUp`'s own identical self-check). Not
 /// independently confirmed against a named symbol - `ZTKeeperType_isClass.c`'s own
 /// `DAT_00638764 - CAST_ZTKeeper` byte-range read places it at `0x00638760`, which lands exactly on the
-/// same `0x10`-spaced isCastClass tag table [`RVA_HABITAT_TYPE_CHECK_ARG`]/[`RVA_TANK_WALL_TYPE_CHECK_ARG`]
+/// same `0x10`-spaced isCastClass tag table [`RVA_STAFF_TYPE_CHECK_ARG`]/[`RVA_TANK_WALL_TYPE_CHECK_ARG`]
 /// already document (`...0x638750, 0x638760, 0x638770...`, consistent spacing on both sides) - same
 /// caveat as those two. RVA = `0x00638760 - 0x400000`.
 pub const RVA_KEEPER_TYPE_CHECK_ARG: u32 = 0x0023_8760;
@@ -402,16 +383,6 @@ pub const RVA_TEMP_KEEPER_CREATE_FLAG: u32 = 0x0023_51a4;
 /// already document independently). [`ZTHabitatMgr::display_gate_placement_message`] needs its own copy
 /// since `zoostatus.rs`'s is `pub(super)`. RVA = `0x00638de0 - 0x400000`.
 pub const RVA_GLOBAL_BFUIMGR: u32 = 0x0023_8de0;
-
-/// Unidentified tail-call helper `ZTHabitatMgr::replaceGate`/`removeHabitat` both jump into
-/// (`JMP FUN_005b66d7`, not a normal `CALL` - it owns cleaning up its caller's own stack frame, the same
-/// implicit-stack-convention idiom `zthabitatmgr-implementation-plan.md` documents for
-/// `fillZooExterior`'s `FUN_005947c3`) when a stashed gate-fence pointer isn't found in
-/// `GLOBAL_ZTWorldMgr`'s own `entity_array` - an inconsistency-guard branch that real callers never
-/// actually reach in practice (a stashed pointer always came from a real, live world entity). No
-/// decompile/`.meta` exists for `0x005b66d7` to identify its real name or purpose further; surfaced here
-/// rather than hand-edited into `generated.rs` per `CLAUDE.md`.
-pub const FUN_005B66D7: FunctionDef<unsafe extern "cdecl" fn()> = FunctionDef::new(0x005b66d7);
 
 /// `ZTHabitat::addContiguousSpan`'s real fence-passability check (`ZTHabitat_addContiguousSpan.asm`,
 /// confirmed identical at all five inlined call sites), **not** `standalone::IS_ZOO_WALL`/`isZooWall`

@@ -26,7 +26,6 @@ use crate::{
     util::{mut_from_memory, ref_from_memory},
 };
 use super::habitat::ZTHabitat;
-use super::support::*;
 
 fn command_get_zt_habitat_mgr(_args: Vec<&str>) -> Result<String, CommandError> {
     let zt_habitat_mgr = globals().zthabitatmgr();
@@ -51,8 +50,11 @@ fn command_get_zt_habitats(_args: Vec<&str>) -> Result<String, CommandError> {
 pub mod hooks_zthabitatmgr {
     use super::*;
     use openzt_detour::generated::{
+        bfentity::VF_RETURN1_1 as IS_RIGHT_SALINITY,
         zthabitat::{
-            GET_ATTRACTIVENESS, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
+            GET_ATTRACTIVENESS, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, GET_GATE_TILE_PASS_IN, GET_GATE_TILE_PASS_OUT,
+            GET_NEAR_CLEAR_TILE, GET_NEAREST_CLEAR_TILE,
+            GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
             SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE, BLOCK_SERVICE,
             GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1,
             RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS,
@@ -89,6 +91,20 @@ pub mod hooks_zthabitatmgr {
         }
     }
 
+    /// Both gate-pass resolvers compose a gate-tile getter with `getAdjacentClearTile`, whose picked
+    /// tile rides through as the return - the `.asm` tails never touch `EAX` and every real caller
+    /// consumes it (`ZTGoalKeeperHabitat`/`ZTGoalTrickFood::decide`, `ZTGuest`/`ZTGuide::pickRandomDest`),
+    /// so the detours keep `generated.rs`'s honest `BFTile*` return.
+    #[detour(GET_GATE_TILE_PASS_IN)]
+    unsafe extern "thiscall" fn get_gate_tile_pass_in(this: *const u32, unit: *const u32) -> *const u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_gate_tile_pass_in(unit as u32) as *const u32
+    }
+
+    #[detour(GET_GATE_TILE_PASS_OUT)]
+    unsafe extern "thiscall" fn get_gate_tile_pass_out(this: *const u32, unit: *const u32) -> *const u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_gate_tile_pass_out(unit as u32) as *const u32
+    }
+
     #[detour(GET_GATE)]
     unsafe extern "thiscall" fn get_gate(this: *const u32) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_gate() as i32
@@ -100,8 +116,8 @@ pub mod hooks_zthabitatmgr {
     }
 
     #[detour(HAS_KEEPER_ASSIGNED)]
-    unsafe extern "thiscall" fn has_keeper_assigned(this: *const u32) -> u8 {
-        unsafe { ref_from_memory::<ZTHabitat>(this) }.has_keeper_assigned() as u8
+    unsafe extern "thiscall" fn has_keeper_assigned(this: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.has_keeper_assigned()
     }
 
     #[detour(GET_SHOW_INFO_ID)]
@@ -129,9 +145,11 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_habitat_ptr(pos_x, pos_y)
     }
 
+    /// `ZTHabitat::isRightSalinity`'s base slot (vtable `+0x28`) is `generated.rs`'s `bfentity::VF_RETURN1_1`,
+    /// a constant-`true` stub other vtables share - see [`ZTHabitat::is_right_salinity`].
     #[detour(IS_RIGHT_SALINITY)]
-    unsafe extern "thiscall" fn is_right_salinity(this: *const u32, animal_type: *const u32) -> bool {
-        unsafe { ref_from_memory::<ZTHabitat>(this) }.is_right_salinity(animal_type)
+    unsafe extern "thiscall" fn is_right_salinity(this: *const u32, animal_type: u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.is_right_salinity(animal_type as *const u32)
     }
 
     #[detour(LISTEN)]
@@ -245,9 +263,45 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.add_clear_tiles(out_vector as u32, animal as u32, check_path)
     }
 
+    /// The `(check_path, subhabs)` delegator - one `getRandomAnimal` draw forwarded into the
+    /// animal-taking overload, returning the picked `BFTile*` (both real callers read it).
+    #[detour(GET_RANDOM_CLEAR_TILE_0)]
+    unsafe extern "thiscall" fn get_random_clear_tile_default(this: *const u32, check_path: bool, subhabs: bool) -> *const u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_clear_tile_default(check_path, subhabs) as *const u32
+    }
+
+    /// `generated.rs`'s own entry is `thiscall` (nullable `ZTAnimal*`) returning the picked `BFTile*`
+    /// (null when the candidate pool comes out empty).
+    #[detour(GET_RANDOM_CLEAR_TILE_1)]
+    unsafe extern "thiscall" fn get_random_clear_tile_for_animal(this: *const u32, animal: *const u32, check_path: bool, subhabs: bool) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_clear_tile_for_animal(animal as u32, check_path, subhabs)
+    }
+
     #[detour(ADD_BABY_BORN_BONUS)]
     unsafe extern "thiscall" fn add_baby_born_bonus(this: *const u32, species_type: *const u32) {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.add_baby_born_bonus(species_type as u32)
+    }
+
+    /// `generated.rs`'s own entry is `stdcall`, no `this` - see [`ZTHabitat::get_adjacent_clear_tile`]'s
+    /// own doc comment for why real vanilla needs none here.
+    #[detour(GET_ADJACENT_CLEAR_TILE)]
+    unsafe extern "stdcall" fn get_adjacent_clear_tile(unit: *const u32, base_tile: *const u32) -> i32 {
+        ZTHabitat::get_adjacent_clear_tile(unit as u32, base_tile as u32) as i32
+    }
+
+    /// `generated.rs`'s own entry is `thiscall` (`ZTUnit*`) returning the tile-as-int (`0` when
+    /// nothing qualifies or the early guards fail).
+    #[detour(GET_NEAREST_CLEAR_TILE)]
+    unsafe extern "thiscall" fn get_nearest_clear_tile(this: *const u32, unit: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_nearest_clear_tile(unit as u32) as i32
+    }
+
+    /// `generated.rs`'s own entry is `thiscall` (`ZTUnit*` mover, nullable `ZTAnimal*`
+    /// checkPath source - not a `BFTile*` ref tile, see [`ZTHabitat::get_near_clear_tile`]'s own doc
+    /// comment) returning the tile-as-int.
+    #[detour(GET_NEAR_CLEAR_TILE)]
+    unsafe extern "thiscall" fn get_near_clear_tile(this: *const u32, unit: *const u32, animal: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_near_clear_tile(unit as u32, animal as u32) as i32
     }
 
     #[detour(GET_ANIMALS)]
@@ -644,8 +698,8 @@ pub mod hooks_zthabitatmgr {
     /// Real vanilla is a plain free `stdcall` helper (no `this`) - see
     /// [`ZTHabitatMgr::clear_staff_habitat`]'s own doc comment.
     #[detour(CLEAR_STAFF_HABITAT)]
-    unsafe extern "stdcall" fn clear_staff_habitat(staff: *const u32) {
-        ZTHabitatMgr::clear_staff_habitat(staff as u32)
+    unsafe extern "stdcall" fn clear_staff_habitat(habitat: *const u32) {
+        ZTHabitatMgr::clear_staff_habitat(habitat as u32)
     }
 
     #[detour(GET_TANK)]
@@ -858,129 +912,6 @@ pub mod hooks_zthabitatmgr {
             cand_b_ref,
             check_in_zoo,
         ) as u32
-    }
-
-    /// `(name, is_enabled)` per detour - lets the live battery's `ZTHABITATMGR_DETOURS_ENABLED` test
-    /// catch a silently-failed `init_detours()` (error logged, game continues on vanilla) rather than
-    /// looking green while every hooked production path still runs real vanilla.
-    pub fn detour_status() -> [(&'static str, bool); 115] {
-        [
-            ("GET_GATE_TILE_IN", GET_GATE_TILE_IN_DETOUR.is_enabled()),
-            ("GET_GATE_TILE_OUT", GET_GATE_TILE_OUT_DETOUR.is_enabled()),
-            ("GET_GATE", GET_GATE_DETOUR.is_enabled()),
-            ("GET_ATTRACTIVENESS", GET_ATTRACTIVENESS_DETOUR.is_enabled()),
-            ("HAS_KEEPER_ASSIGNED", HAS_KEEPER_ASSIGNED_DETOUR.is_enabled()),
-            ("GET_SHOW_INFO_ID", GET_SHOW_INFO_ID_DETOUR.is_enabled()),
-            ("IS_SHOW_STOPPED", IS_SHOW_STOPPED_DETOUR.is_enabled()),
-            ("GET_POPULARITY", GET_POPULARITY_DETOUR.is_enabled()),
-            ("GET_HABITAT", GET_HABITAT_DETOUR.is_enabled()),
-            ("IS_RIGHT_SALINITY", IS_RIGHT_SALINITY_DETOUR.is_enabled()),
-            ("LISTEN", LISTEN_DETOUR.is_enabled()),
-            ("SET_IS_SHOW_EXHIBIT", SET_IS_SHOW_EXHIBIT_DETOUR.is_enabled()),
-            ("SET_IS_NOT_SHOW_EXHIBIT", SET_IS_NOT_SHOW_EXHIBIT_DETOUR.is_enabled()),
-            ("VALIDATE_POSITIONS", VALIDATE_POSITIONS_DETOUR.is_enabled()),
-            ("REMOVE_HABITAT_TILES", REMOVE_HABITAT_TILES_DETOUR.is_enabled()),
-            ("RESET_UNIT_AI", RESET_UNIT_AI_DETOUR.is_enabled()),
-            ("ADD_HABITAT_TILES", ADD_HABITAT_TILES_DETOUR.is_enabled()),
-            ("UPDATE", UPDATE_DETOUR.is_enabled()),
-            ("ZTHABITAT_SAVE", ZTHABITAT_SAVE_DETOUR.is_enabled()),
-            ("ZTHABITATMGR_SAVE", ZTHABITATMGR_SAVE_DETOUR.is_enabled()),
-            ("ZTHABITATMGR_ADD_HABITAT", ZTHABITATMGR_ADD_HABITAT_DETOUR.is_enabled()),
-            ("ZTHABITATMGR_CREATE_HABITAT", ZTHABITATMGR_CREATE_HABITAT_DETOUR.is_enabled()),
-            ("GET_ZOO_ENTRANCE_TILE", GET_ZOO_ENTRANCE_TILE_DETOUR.is_enabled()),
-            ("GET_AVERAGE_HABITAT_ATTRACTIVENESS", GET_AVERAGE_HABITAT_ATTRACTIVENESS_DETOUR.is_enabled()),
-            ("GET_NUM_FAMILIES", GET_NUM_FAMILIES_DETOUR.is_enabled()),
-            ("GET_NUM_SPECIES", GET_NUM_SPECIES_DETOUR.is_enabled()),
-            ("HIGHLIGHT_HABITAT", HIGHLIGHT_HABITAT_DETOUR.is_enabled()),
-            ("UNHIGHLIGHT_HABITAT", UNHIGHLIGHT_HABITAT_DETOUR.is_enabled()),
-            ("ENTER_NEW_MONTH", ENTER_NEW_MONTH_DETOUR.is_enabled()),
-            ("REPLACE_GATE_WITH_FENCE", REPLACE_GATE_WITH_FENCE_DETOUR.is_enabled()),
-            ("REPLACE_FENCE_WITH_GATE", REPLACE_FENCE_WITH_GATE_DETOUR.is_enabled()),
-            ("REPLACE_GATE", REPLACE_GATE_DETOUR.is_enabled()),
-            ("HABITAT_TILE_CHANGED", HABITAT_TILE_CHANGED_DETOUR.is_enabled()),
-            ("TERRAIN_TILE_CHANGED", TERRAIN_TILE_CHANGED_DETOUR.is_enabled()),
-            ("SCENERY_ENTITY_CHANGE", SCENERY_ENTITY_CHANGE_DETOUR.is_enabled()),
-            ("ENTITY_ABOUT_TO_BE_PLACED", ENTITY_ABOUT_TO_BE_PLACED_DETOUR.is_enabled()),
-            ("ENTITY_PLACED", ENTITY_PLACED_DETOUR.is_enabled()),
-            ("ENTITY_ABOUT_TO_BE_REMOVED", ENTITY_ABOUT_TO_BE_REMOVED_DETOUR.is_enabled()),
-            ("ENTITY_REMOVED", ENTITY_REMOVED_DETOUR.is_enabled()),
-            ("BEFORE_ENTITY_CHANGE", BEFORE_ENTITY_CHANGE_DETOUR.is_enabled()),
-            ("TERRAIN_ABOUT_TO_BE_CHANGED", TERRAIN_ABOUT_TO_BE_CHANGED_DETOUR.is_enabled()),
-            ("TERRAIN_CHANGED", TERRAIN_CHANGED_DETOUR.is_enabled()),
-            ("HILITE_AMPHIBIOUS_NEIGHBORS", HILITE_AMPHIBIOUS_NEIGHBORS_DETOUR.is_enabled()),
-            ("HILITE_SHOW_NEIGHBORS", HILITE_SHOW_NEIGHBORS_DETOUR.is_enabled()),
-            ("CHECK_AMPHIBIOUS_NEIGHBOR", CHECK_AMPHIBIOUS_NEIGHBOR_DETOUR.is_enabled()),
-            ("UPDATE_AMPHIBIOUS_NEIGHBORS_1", UPDATE_AMPHIBIOUS_NEIGHBORS_1_DETOUR.is_enabled()),
-            ("UPDATE_AMPHIBIOUS_NEIGHBORS_0", UPDATE_AMPHIBIOUS_NEIGHBORS_0_DETOUR.is_enabled()),
-            ("CHECK_SHOW_NEIGHBOR", CHECK_SHOW_NEIGHBOR_DETOUR.is_enabled()),
-            ("UPDATE_SHOW_NEIGHBORS_1", UPDATE_SHOW_NEIGHBORS_1_DETOUR.is_enabled()),
-            ("UPDATE_SHOW_NEIGHBORS_0", UPDATE_SHOW_NEIGHBORS_0_DETOUR.is_enabled()),
-            ("DO_SHOW_CHECK", DO_SHOW_CHECK_DETOUR.is_enabled()),
-            ("CAN_SEE_SHOW_FROM_BUILDING", CAN_SEE_SHOW_FROM_BUILDING_DETOUR.is_enabled()),
-            ("HABITAT_SEEN_FROM_BUILDING", HABITAT_SEEN_FROM_BUILDING_DETOUR.is_enabled()),
-            ("CAN_FIND_PATH", CAN_FIND_PATH_DETOUR.is_enabled()),
-            ("CLEAR_PATHFINDING", CLEAR_PATHFINDING_DETOUR.is_enabled()),
-            ("CLEAR_STAFF_HABITAT", CLEAR_STAFF_HABITAT_DETOUR.is_enabled()),
-            ("GET_NUM_ANIMALS", GET_NUM_ANIMALS_DETOUR.is_enabled()),
-            ("GET_ANIMALS", GET_ANIMALS_DETOUR.is_enabled()),
-            ("GET_AMOUNT_KEEPER_FOOD", GET_AMOUNT_KEEPER_FOOD_DETOUR.is_enabled()),
-            ("GET_FOOD_TO_LEAVE", GET_FOOD_TO_LEAVE_DETOUR.is_enabled()),
-            ("GET_NUM_KEEPERS", GET_NUM_KEEPERS_DETOUR.is_enabled()),
-            ("IS_BEING_SERVICED", IS_BEING_SERVICED_DETOUR.is_enabled()),
-            ("SEND_MAINT_WORKER_CLEANUP_EVENTS", SEND_MAINT_WORKER_CLEANUP_EVENTS_DETOUR.is_enabled()),
-            ("GET_NUM_HUNGRY_FOODLESS_ANIMALS", GET_NUM_HUNGRY_FOODLESS_ANIMALS_DETOUR.is_enabled()),
-            ("GET_NUM_SICKLY_ANIMALS", GET_NUM_SICKLY_ANIMALS_DETOUR.is_enabled()),
-            ("GET_NUM_ANGRY_ANIMALS", GET_NUM_ANGRY_ANIMALS_DETOUR.is_enabled()),
-            ("GET_NUM_SICK_ANIMALS", GET_NUM_SICK_ANIMALS_DETOUR.is_enabled()),
-            ("GET_SICKLY_ANIMALS", GET_SICKLY_ANIMALS_DETOUR.is_enabled()),
-            ("GET_NEAREST_SICK_ANIMAL", GET_NEAREST_SICK_ANIMAL_DETOUR.is_enabled()),
-            ("GET_VIEWING_AREAS_WITH_GUESTS", GET_VIEWING_AREAS_WITH_GUESTS_DETOUR.is_enabled()),
-            ("HAS_BLDG", HAS_BLDG_DETOUR.is_enabled()),
-            ("REMOVE_VIEWING_AREAS", REMOVE_VIEWING_AREAS_DETOUR.is_enabled()),
-            ("GET_ALL_ANIMALS", GET_ALL_ANIMALS_DETOUR.is_enabled()),
-            ("GET_SURROUNDING_SPECIES", GET_SURROUNDING_SPECIES_DETOUR.is_enabled()),
-            ("REMOVE_SPECIES", REMOVE_SPECIES_DETOUR.is_enabled()),
-            ("ZTHABITAT_SET_DIRTY_CHARACTERISTICS", ZTHABITAT_SET_DIRTY_CHARACTERISTICS_DETOUR.is_enabled()),
-            ("ACCEPT_DONATION", ACCEPT_DONATION_DETOUR.is_enabled()),
-            ("SET_TIME_LAST_SERVICED", SET_TIME_LAST_SERVICED_DETOUR.is_enabled()),
-            ("TRIGGER_DEATH_ARRIVED", TRIGGER_DEATH_ARRIVED_DETOUR.is_enabled()),
-            ("RECALCULATE_VIEWING_AREAS", RECALCULATE_VIEWING_AREAS_DETOUR.is_enabled()),
-            ("ADD_VIEWING_AREA", ADD_VIEWING_AREA_DETOUR.is_enabled()),
-            ("REMOVE_VIEWING_AREA", REMOVE_VIEWING_AREA_DETOUR.is_enabled()),
-            ("REMOVE_FROM_ALL_VAS", REMOVE_FROM_ALL_VAS_DETOUR.is_enabled()),
-            ("RECREATE_OAS", RECREATE_OAS_DETOUR.is_enabled()),
-            ("ZTHABITAT_PATH_PLACED", ZTHABITAT_PATH_PLACED_DETOUR.is_enabled()),
-            ("ZTHABITATMGR_PATH_PLACED", ZTHABITATMGR_PATH_PLACED_DETOUR.is_enabled()),
-            ("ZTHABITATMGR_PATH_REMOVED", ZTHABITATMGR_PATH_REMOVED_DETOUR.is_enabled()),
-            ("GET_TANK", GET_TANK_DETOUR.is_enabled()),
-            ("ZTHABITAT_GET_OUTERMOST_TANK", ZTHABITAT_GET_OUTERMOST_TANK_DETOUR.is_enabled()),
-            ("GET_OUTERMOST_TANK", GET_OUTERMOST_TANK_DETOUR.is_enabled()),
-            ("ZTHABITAT_GET_NEEDY_NESTED_TANK", ZTHABITAT_GET_NEEDY_NESTED_TANK_DETOUR.is_enabled()),
-            ("GET_NEEDY_NESTED_TANK", GET_NEEDY_NESTED_TANK_DETOUR.is_enabled()),
-            ("LEADS_TO", LEADS_TO_DETOUR.is_enabled()),
-            ("BREAK_AMPHIBIOUS_CONNECTION", BREAK_AMPHIBIOUS_CONNECTION_DETOUR.is_enabled()),
-            ("FENCE_REPLACED", FENCE_REPLACED_DETOUR.is_enabled()),
-            ("FENCE_PLACED", FENCE_PLACED_DETOUR.is_enabled()),
-            ("FENCE_REMOVED", FENCE_REMOVED_DETOUR.is_enabled()),
-            ("RECALCULATE_DETERIORATION", RECALCULATE_DETERIORATION_DETOUR.is_enabled()),
-            ("FILL_ZOO_EXTERIOR", FILL_ZOO_EXTERIOR_DETOUR.is_enabled()),
-            ("MARK_ZOO_EXTERIOR", MARK_ZOO_EXTERIOR_DETOUR.is_enabled()),
-            ("ZTHABITATMGR_UPDATE", ZTHABITATMGR_UPDATE_DETOUR.is_enabled()),
-            ("CAN_SEE_HABITAT_FROM_BUILDING", CAN_SEE_HABITAT_FROM_BUILDING_DETOUR.is_enabled()),
-            ("CHECK_ENTER_HABITAT", CHECK_ENTER_HABITAT_DETOUR.is_enabled()),
-            ("MOVE_GATE_TO_1", MOVE_GATE_TO_1_DETOUR.is_enabled()),
-            ("CREATE_DOUBLE_FENCE", CREATE_DOUBLE_FENCE_DETOUR.is_enabled()),
-            ("SNAP_TANK_WALLS_INWARD", SNAP_TANK_WALLS_INWARD_DETOUR.is_enabled()),
-            ("PLACE_GATE", PLACE_GATE_DETOUR.is_enabled()),
-            ("MORPH_EXHIBIT", MORPH_EXHIBIT_DETOUR.is_enabled()),
-            ("MOVE_GATE_TO_0", MOVE_GATE_TO_0_DETOUR.is_enabled()),
-            ("UPDATE_GATES", UPDATE_GATES_DETOUR.is_enabled()),
-            ("FORMAT_HABITAT_MESSAGE", FORMAT_HABITAT_MESSAGE_DETOUR.is_enabled()),
-            ("FIND_BEST_PLACE_FOR_GATE", FIND_BEST_PLACE_FOR_GATE_DETOUR.is_enabled()),
-            ("FIND_BETTER_GATES_FOR_NEIGHBORS", FIND_BETTER_GATES_FOR_NEIGHBORS_DETOUR.is_enabled()),
-            ("CHECK_GATE", CHECK_GATE_DETOUR.is_enabled()),
-            ("GET_NEXT_FENCE_PAIR", GET_NEXT_FENCE_PAIR_DETOUR.is_enabled()),
-        ]
     }
 }
 

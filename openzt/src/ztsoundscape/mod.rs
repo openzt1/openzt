@@ -53,7 +53,7 @@ mod soundscape_detours {
         unsafe { mut_from_memory::<ZTSoundscape>(this) }.update(delta);
     }
 
-    /// Live-test access to the real vanilla bodies and to the detours' installation state.
+    /// Live-test access to the real vanilla bodies.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) mod test_real {
         use std::ffi::c_void;
@@ -74,14 +74,6 @@ mod soundscape_detours {
 
         pub(crate) fn update(this: *const c_void, delta: i32) {
             unsafe { super::UPDATE_DETOUR.call(this, delta) }
-        }
-
-        pub(crate) fn status() -> [(&'static str, bool); 3] {
-            [
-                ("CONSTRUCTOR", super::CONSTRUCTOR_DETOUR.is_enabled()),
-                ("INIT", super::INIT_DETOUR.is_enabled()),
-                ("UPDATE", super::UPDATE_DETOUR.is_enabled()),
-            ]
         }
     }
 }
@@ -142,8 +134,8 @@ pub mod live_support {
         soundscape_detours::test_real::update(this, delta)
     }
 
-    pub fn detour_status() -> [(&'static str, bool); 3] {
-        soundscape_detours::test_real::status()
+    pub fn detour_status() -> Vec<(&'static str, bool)> {
+        soundscape_detours::status()
     }
 }
 

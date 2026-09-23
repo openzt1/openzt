@@ -464,6 +464,34 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_add_clear_tiles_matches_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_CLEAR_TILE_FOR_ANIMAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_clear_tile_for_animal_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_CLEAR_TILE_DEFAULT_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_clear_tile_default_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_ADJACENT_CLEAR_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_adjacent_clear_tile_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NEAREST_CLEAR_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_nearest_clear_tile_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NEAR_CLEAR_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_near_clear_tile_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_GATE_TILE_PASS_IN_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_gate_tile_pass_in_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_GATE_TILE_PASS_OUT_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_gate_tile_pass_out_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_ADD_BABY_BORN_BONUS_LIVE",
                 run: tests::zthabitatmgr::run_habitat_add_baby_born_bonus_live_test,
             },
