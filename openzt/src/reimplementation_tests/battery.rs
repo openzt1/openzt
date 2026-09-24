@@ -484,6 +484,58 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_get_near_clear_tile_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_GET_NEAREST_CLEAR_WATER_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_nearest_clear_water_tile_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_LAND_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_land_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_WATER_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_water_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_UNDERWATER_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_underwater_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_LAND_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_land_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_WATER_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_water_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_UNDERWATER_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_underwater_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_LAND_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_num_land_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_WATER_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_num_water_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_UNDERWATER_TILES_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_num_underwater_tiles_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_LAND_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_land_tile_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_WATER_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_water_tile_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_UNDERWATER_TILE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_underwater_tile_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_GET_GATE_TILE_PASS_IN_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_gate_tile_pass_in_live_test,
             },
@@ -494,6 +546,10 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_ADD_BABY_BORN_BONUS_LIVE",
                 run: tests::zthabitatmgr::run_habitat_add_baby_born_bonus_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE",
+                run: tests::zthabitatmgr::run_habitat_trigger_keeper_arrived_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_GET_NUM_ANGRY_ANIMALS_LIVE",
@@ -509,6 +565,10 @@ pub(super) mod detour_zoo_main {
             },
             RegisteredTest { name: "ZTHABITAT_GET_AMOUNT_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_amount_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_FOOD_TO_LEAVE_LIVE", run: tests::zthabitatmgr::run_habitat_get_food_to_leave_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_NUM_KEEPER_FOOD_TILES_LIVE", run: tests::zthabitatmgr::run_habitat_get_num_keeper_food_tiles_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_SMALLEST_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_smallest_keeper_food_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_NEAREST_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_nearest_keeper_food_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_RANDOM_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_random_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_HAS_BLDG_LIVE", run: tests::zthabitatmgr::run_habitat_has_bldg_live_test },
             // ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS is deliberately NOT exercised by a live test.
             // It previously hung/crashed silently (no exception logged) the moment `sendEvent`'s real

@@ -8,7 +8,7 @@ use openzt_detour::generated::{
         },
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
-        ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY},
+        ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY, SET_KEEPER_ARRIVES},
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             GET_EVENTS, GET_SIZE, NEEDS_SERVICE,
@@ -97,7 +97,7 @@ pub struct ZTHabitat {
     pub avg_animal_happiness: i32,   // 0x0e8 // ZTHabitat::getAvgAnimalHappiness's cached average animal happiness (`.asm`-confirmed `MOV %EAX,[ESI+0xe8]`) - zeroed (when num_animals is 0) or set to sum-of-happiness/num_animals by recalculateCharacteristics's own animal census (one `animal+0x18` happiness read per animal, per ZTHabitat_recalculateCharacteristics.c). See Self::get_avg_animal_happiness.
     pub time_last_serviced: u32,     // 0x0ec // ZTHabitat::setTimeLastServiced's own written field (`this->mbr_0xec`, `.asm`-confirmed) - a timestamp, presumably compared against ZTScenarioTimer to gate keeper-service scheduling, though no reader was found anywhere in this pass's own scope (see Self::set_time_last_serviced).
     pub num_keepers: i32,            // 0x0f0 // Cached count of assigned keepers (subtype `0x6e`) tallied by recalculateCharacteristics's own owned-tile census, per `ZTHabitat_getNumKeepers.c`'s `*(int*)&this->field_0xf0`. See Self::get_num_keepers.
-    pub pad4b: [u8; 0x4],            // ----------------------- padding: 4 bytes (0x0f4-0x0f8, not yet reverse-engineered)
+    pub scheduled_service_counter: i32, // 0x0f4 // `ZTHabitat::setScheduledForService`'s own counter (`.asm`-confirmed `MOV %EAX,[ECX+0xf4]`; the macOS decompile reads its own `+0x108`): `true` → +1, `false` → -1 clamped at 0. `triggerKeeperArrived`'s inlined `setScheduledForService(this, false)` is its other writer - always the decrement arm, since real vanilla hardcodes the bool clear (see `Self::trigger_keeper_arrived`). See `ZTHabitat_setScheduledForService.c`.
     pub attractiveness: i32,         // 0x0f8 // ZTHabitat::getAttractiveness's cached result, recomputed by recalculateCharacteristics when characteristics_dirty is set.
     pub current_donations: f32,     // 0xfc
     pub last_donations: f32,        // 0x100
@@ -132,6 +132,38 @@ pub struct ZTHabitat {
 // non-tank habitat (`get_from_memory::<ZTHabitat>`) over-read past its true 0x178-byte allocation.
 const _: () = assert!(std::mem::size_of::<ZTHabitat>() == 0x178);
 
+/// The shared per-tile gate every keeper-food walker applies ([`Self::get_num_keeper_food_tiles`],
+/// [`Self::get_smallest_keeper_food`], [`Self::get_nearest_keeper_food`], [`Self::get_random_keeper_food`]):
+/// `tile_ptr`'s occupant (`tile+0x10`) must be non-null, pass the `ZTFood` type-cast
+/// ([`entity_type_matches`] with [`RVA_ZTFOOD_TYPE_CHECK_ARG`]), and its own type's `+0x168`
+/// keeper-food-category word (the entity's type is `*(entity+0x128)`) must equal `category`.
+///
+/// The Windows bodies render two back-to-back `isCastClass(DAT_006386c0)` calls on the same type
+/// pointer - the inlined `getKeeperFoodType`'s own type-cast re-checking the predicate the first call
+/// already answered - with deliberate crash stubs on the false/null paths
+/// (`XOR %EAX, %EAX; MOV %EAX, [%EAX+0x168]`, dereferencing address `0x168`). The port performs the
+/// gate once; [`entity_type_matches`]'s internal null-type guard (returns false) covers the stub's
+/// null-type arm, same established deviation as [`Self::send_maint_worker_cleanup_events`].
+fn keeper_food_category_matches(tile_ptr: u32, category: u32) -> bool {
+    let entity_ptr: u32 = get_from_memory(tile_ptr + 0x10);
+    entity_ptr != 0
+        && unsafe { entity_type_matches(entity_ptr, RVA_ZTFOOD_TYPE_CHECK_ARG) }
+        && get_from_memory::<u32>(get_from_memory::<u32>(entity_ptr + 0x128) + 0x168) == category
+}
+
+/// The squared straight-line distance [`Self::get_nearest_keeper_food`]'s two comparisons use: plain
+/// `dx*dx + dy*dy` (the Windows inline's own `SUB`/`IMUL`/`ADD` sequence, wrapping arithmetic matching
+/// `IMUL` overflow) between the reference tile's and the candidate's raw `+0x34`/`+0x38` coordinates.
+/// Either pointer null -> `0x7fffffff`, which can never be beaten by the strict-`<` best tracking - so
+/// a null reference tile makes every candidate tie at the sentinel and nothing wins.
+fn keeper_food_distance_squared(reference_tile: u32, candidate_tile: u32) -> i32 {
+    if reference_tile == 0 || candidate_tile == 0 {
+        return 0x7fff_ffff;
+    }
+    let dx = get_from_memory::<i32>(reference_tile + 0x34).wrapping_sub(get_from_memory::<i32>(candidate_tile + 0x34));
+    let dy = get_from_memory::<i32>(reference_tile + 0x38).wrapping_sub(get_from_memory::<i32>(candidate_tile + 0x38));
+    dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+}
 
 impl ZTHabitat {
     pub(crate) const TANK_VTABLE_PTR: u32 = 0x006312bc;
@@ -1429,6 +1461,303 @@ impl ZTHabitat {
         self.get_random_clear_tile_default(false, false)
     }
 
+    /// Ports `ZTHabitat::getNearestClearWaterTile` (`ZTHabitat_getNearestClearWaterTile.c`/`.asm`,
+    /// `generated.rs`'s `GET_NEAREST_CLEAR_WATER_TILE`): scans the habitat's own owned tiles for the
+    /// water tile nearest `ref_tile_ptr` and returns it (null when nothing qualifies). Real caller:
+    /// `ZTGoalDrinkWater::decide`, passing `BFEntity::getTile(entity)` - the asking animal's own
+    /// tile - as the reference point.
+    ///
+    /// The plan's own walkthrough is wrong on both counts: the decompile never calls
+    /// `getWaterTiles` (it walks [`Self::owned_tiles_ptr`] directly), and the parameter is a
+    /// **`BFTile*`** reference point (macOS prototype comment `(BFTile *)`), not a `ZTUnit*`.
+    ///
+    /// Fully deterministic - no RNG draw, no `characteristics_dirty` recalculate. The world global
+    /// guard (`GLOBAL_ZTWorldMgr + 8 == 0`, the same `0xfffffff8` sentinel as
+    /// [`Self::get_nearest_clear_tile`]) returns null; the port uses the shared `!= 0` convention.
+    /// Per owned tile ([`walk_tile_list`] order - the order that decides which candidate wins
+    /// ties), two filters:
+    ///
+    /// 1. the water-class flag `tile+0x83 & 3` set - the exact filter real vanilla's own
+    ///    `addWaterTiles` applies (`ZTHabitat_addWaterTiles.c`; the inverse of the read
+    ///    [`Self::get_num_sickly_animals`] makes against the same byte);
+    /// 2. the byte at `tile+0x80` not `0xa` - an exclusion `addWaterTiles` lacks; no corroborating
+    ///    name for that byte anywhere in the corpus, reproduced raw.
+    ///
+    /// The distance is the Windows inline of `BFMap::distanceCartesianSquared` - plain
+    /// `dx*dx + dy*dy` between the reference tile's and the candidate's raw `+0x34`/`+0x38`
+    /// coordinates; the map pointer the macOS decompile passes is never read by the inlined math.
+    /// Either tile null -> `0x7fffffff` (the candidate-null check is dead - the flag filter above
+    /// already dereferenced the tile - kept for decompile fidelity). The best-tracking keeps the
+    /// first candidate unconditionally and replaces only on strictly smaller distance
+    /// (`.asm` `TEST %EDI, %EDI` / `CMP %EAX, %EBP` / `JGE`), so a null reference tile - every
+    /// candidate at `0x7fffffff` - still selects the first filter-passing tile in walk order, and
+    /// distance ties go to the earlier tile.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_nearest_clear_water_tile(&self, ref_tile_ptr: u32) -> u32 {
+        if globals().ztworldmgr_ptr() as u32 == 0 {
+            return 0;
+        }
+        let mut best_tile = 0u32;
+        let mut best_dist = 0x7fff_ffffi32;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + 0x8);
+            if get_from_memory::<u8>(tile + 0x83) & 3 == 0 || get_from_memory::<u8>(tile + 0x80) == 0xa {
+                continue;
+            }
+            let dist: i32 = if tile == 0 || ref_tile_ptr == 0 {
+                0x7fff_ffff
+            } else {
+                let dx: i32 = get_from_memory::<i32>(ref_tile_ptr + 0x34).wrapping_sub(get_from_memory::<i32>(tile + 0x34));
+                let dy: i32 = get_from_memory::<i32>(ref_tile_ptr + 0x38).wrapping_sub(get_from_memory::<i32>(tile + 0x38));
+                dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+            };
+            if best_tile == 0 || dist < best_dist {
+                best_tile = tile;
+                best_dist = dist;
+            }
+        }
+        best_tile
+    }
+
+    /// Shared owned-tile walk behind the three biome-classification filters below
+    /// (`ZTHabitat_addLandTiles.c`/`_addWaterTiles.c`/`_addUnderwaterTiles.c` - three byte-for-byte
+    /// identical `.asm` bodies apart from the predicate): walks [`Self::owned_tiles_ptr`]
+    /// ([`walk_tile_list`]), reads each node's `BFTile*` payload at `+0x8`, and pushes the tiles whose
+    /// predicate passes onto the real vanilla `std::vector<BFTile*>` out-param at `out_vector_ptr`
+    /// ([`vector_push_pool_alloc4_pool_dealloc`] - the `PoolAlloc::allocate`-doubling-growth/
+    /// `PoolAlloc::deallocate`-teardown shape all three decompiles' own inlined push-backs use).
+    /// Deterministic on all three: no RNG draw, no `characteristics_dirty` recalculate.
+    fn add_tiles_matching(&self, out_vector_ptr: u32, tile_qualifies: impl Fn(u32) -> bool) {
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + 0x8);
+            if tile_qualifies(tile) {
+                vector_push_pool_alloc4_pool_dealloc(out_vector_ptr, tile);
+            }
+        }
+    }
+
+    /// Ports `ZTHabitat::addLandTiles` (`ZTHabitat_addLandTiles.c`/`.asm`, `generated.rs`'s
+    /// `ADD_LAND_TILES`): appends every owned tile with the land-class bit set (`tile+0x85 & 0x20`)
+    /// onto the real vanilla `std::vector<BFTile*>` out-param at `out_vector_ptr`. The macOS decompile
+    /// applies the same tri-partite structure through its own bitfield packing (dedicated bit
+    /// `byte+0x8d & 4` at byte address +8 from Windows', water bits `byte+0x8b >> 6`); the Windows
+    /// `.asm` is authoritative for this port. The plan's "filters non-water terrain tiles" gloss is
+    /// imprecise: land and water are **independent bits** - a tile can carry both, and this filter
+    /// takes the land bit alone. What the triplet guarantees is union coverage (every owned tile
+    /// lands in at least one of [`Self::add_land_tiles`]/[`Self::add_water_tiles`]/
+    /// [`Self::add_underwater_tiles`]: land bit set -> land; water bits set -> water; both clear ->
+    /// underwater); exclusivity is only empirical, asserted by no decompile. The `& 4` bit at the
+    /// same `+0x85` byte is the unrelated sickly-animal tile flag [`Self::get_num_sickly_animals`]
+    /// reads.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn add_land_tiles(&self, out_vector_ptr: u32) {
+        self.add_tiles_matching(out_vector_ptr, |tile| get_from_memory::<u8>(tile + 0x85) & 0x20 != 0);
+    }
+
+    /// Ports `ZTHabitat::addWaterTiles` (`ZTHabitat_addWaterTiles.c`/`.asm`, `generated.rs`'s
+    /// `ADD_WATER_TILES`): appends every owned tile with the water-class flags set
+    /// (`tile+0x83 & 3 != 0` - the same two-bit read [`Self::get_nearest_clear_water_tile`] filters on;
+    /// macOS byte+0x8b bits 6-7) onto the real vanilla `std::vector<BFTile*>` out-param at
+    /// `out_vector_ptr`. Land (`tile+0x85 & 0x20`) is not consulted - see [`Self::add_land_tiles`]'s
+    /// union-vs-exclusivity note. Unlike [`Self::get_nearest_clear_water_tile`] there is no
+    /// `tile+0x80 != 0xa` exclusion: the water-class flags are the whole predicate.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn add_water_tiles(&self, out_vector_ptr: u32) {
+        self.add_tiles_matching(out_vector_ptr, |tile| get_from_memory::<u8>(tile + 0x83) & 3 != 0);
+    }
+
+    /// Ports `ZTHabitat::addUnderwaterTiles` (`ZTHabitat_addUnderwaterTiles.c`/`.asm`,
+    /// `generated.rs`'s `ADD_UNDERWATER_TILES`): appends every owned tile with **both** the
+    /// water-class flags and the land-class bit clear (`tile+0x83 & 3 == 0 && tile+0x85 & 0x20 == 0`)
+    /// onto the real vanilla `std::vector<BFTile*>` out-param at `out_vector_ptr` - the triplet's
+    /// catch-all complement, not a dedicated bit (the plan's `water_level > 0` gloss matches no
+    /// decompiled check; on macOS it's this function that owns the dedicated `byte+0x8d & 4` bit, with
+    /// land as the catch-all - the roles swap between platforms, the tri-partite structure doesn't).
+    /// The plan's "submerged tank tiles" reading is at best the empirical intent; the decompiled
+    /// predicate is exactly this negation.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn add_underwater_tiles(&self, out_vector_ptr: u32) {
+        self.add_tiles_matching(out_vector_ptr, |tile| {
+            get_from_memory::<u8>(tile + 0x83) & 3 == 0 && get_from_memory::<u8>(tile + 0x85) & 0x20 == 0
+        });
+    }
+
+    /// Shared recursive aggregation behind the three biome-tile getters below
+    /// (`ZTHabitat_getLandTiles.c`/`_getWaterTiles.c`/`_getUnderwaterTiles.c` - three byte-for-byte
+    /// identical `.asm` bodies apart from the callee): one call to the matching
+    /// [`Self::add_tiles_matching`]-sibling for `this`, then an in-order [`walk_neighbor_tree`] walk
+    /// over [`Self::amphibious_neighbors_head`] calling the same sibling per neighbor into the same
+    /// out-vector, the habitat payload read from node `+0x10` (each sibling call is the call-the-port
+    /// convention - real vanilla calls `add*Tiles` at their now-detoured addresses, which re-enter
+    /// this file's ports under the live battery, the same shape as
+    /// [`Self::get_random_clear_tile_for_animal`]'s subhabitat loop). Deterministic on all three: no
+    /// RNG draw, no `characteristics_dirty` recalculate.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    fn get_tiles_aggregating(&self, out_vector_ptr: u32, add_tiles: impl Fn(&Self, u32)) {
+        add_tiles(self, out_vector_ptr);
+        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            add_tiles(unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }, out_vector_ptr);
+        }
+    }
+
+    /// Ports `ZTHabitat::getLandTiles` (`ZTHabitat_getLandTiles.c`/`.asm`, `generated.rs`'s
+    /// `GET_LAND_TILES`): appends every land-class tile of `this` **and every amphibious neighbor**
+    /// onto the real vanilla `std::vector<BFTile*>` out-param at `out_vector_ptr` - the recursive
+    /// aggregator wrapping [`Self::add_land_tiles`] via [`Self::get_tiles_aggregating`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    pub fn get_land_tiles(&self, out_vector_ptr: u32) {
+        self.get_tiles_aggregating(out_vector_ptr, Self::add_land_tiles);
+    }
+
+    /// Ports `ZTHabitat::getWaterTiles` (`ZTHabitat_getWaterTiles.c`/`.asm`, `generated.rs`'s
+    /// `GET_WATER_TILES`): the recursive aggregator wrapping [`Self::add_water_tiles`] - see
+    /// [`Self::get_land_tiles`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    pub fn get_water_tiles(&self, out_vector_ptr: u32) {
+        self.get_tiles_aggregating(out_vector_ptr, Self::add_water_tiles);
+    }
+
+    /// Ports `ZTHabitat::getUnderwaterTiles` (`ZTHabitat_getUnderwaterTiles.c`/`.asm`,
+    /// `generated.rs`'s `GET_UNDERWATER_TILES`): the recursive aggregator wrapping
+    /// [`Self::add_underwater_tiles`] - see [`Self::get_land_tiles`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    pub fn get_underwater_tiles(&self, out_vector_ptr: u32) {
+        self.get_tiles_aggregating(out_vector_ptr, Self::add_underwater_tiles);
+    }
+
+    /// Shared count-only wrapper behind the three biome-tile count getters below
+    /// (`ZTHabitat_getNumLandTiles.c`/`_getNumWaterTiles.c`/`_getNumUnderwaterTiles.c` - three
+    /// otherwise byte-for-byte identical `.asm` bodies apart from the callee): builds the same
+    /// zero-initialized 12-byte stack scratch `std::vector<BFTile*>` real vanilla's own frame is,
+    /// calls the matching [`Self::get_tiles_aggregating`] getter into it, computes
+    /// `(end - begin) >> 2`, and only then frees the scratch buffer via [`free_event_vector_buffer`]
+    /// by **byte capacity** (the same manual freelist-bucket/`operator_delete` split, not a
+    /// `PoolAlloc::deallocate` call). The count comes out **before** the teardown on purpose: the
+    /// freelist push overwrites the buffer's first word (`begin` itself), so the `.asm` stows the
+    /// count in `ESI` across it. The `.asm`'s `SAR 2`/`SHL 2` round-trip on the byte capacity is a
+    /// no-op - a `BFTile*` vector's byte size is always a multiple of 4 - so the port passes the raw
+    /// subtraction.
+    ///
+    /// Deterministic on all three: no RNG draw, no `characteristics_dirty` recalculate.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    fn get_num_tiles_aggregating(&self, get_tiles: impl Fn(&Self, u32)) -> i32 {
+        let mut scratch_vector = [0u32; 3];
+        get_tiles(self, scratch_vector.as_mut_ptr() as u32);
+        let count = (scratch_vector[1] as i32).wrapping_sub(scratch_vector[0] as i32) >> 2;
+        free_event_vector_buffer(scratch_vector[0], scratch_vector[2].wrapping_sub(scratch_vector[0]));
+        count
+    }
+
+    /// Ports `ZTHabitat::getNumLandTiles` (`ZTHabitat_getNumLandTiles.c`/`.asm`, `generated.rs`'s
+    /// `GET_NUM_LAND_TILES`): the count-only wrapper over [`Self::get_land_tiles`] - see
+    /// [`Self::get_num_tiles_aggregating`]. Real vanilla's sole caller (`ZTAnimal::doWaterCheck`)
+    /// consumes the full-width signed return against per-species thresholds without truncating it.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_num_land_tiles(&self) -> i32 {
+        self.get_num_tiles_aggregating(Self::get_land_tiles)
+    }
+
+    /// Ports `ZTHabitat::getNumWaterTiles` (`ZTHabitat_getNumWaterTiles.c`/`.asm`, `generated.rs`'s
+    /// `GET_NUM_WATER_TILES`): the count-only wrapper over [`Self::get_water_tiles`] - see
+    /// [`Self::get_num_tiles_aggregating`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_num_water_tiles(&self) -> i32 {
+        self.get_num_tiles_aggregating(Self::get_water_tiles)
+    }
+
+    /// Ports `ZTHabitat::getNumUnderwaterTiles` (`ZTHabitat_getNumUnderwaterTiles.c`/`.asm`,
+    /// `generated.rs`'s `GET_NUM_UNDERWATER_TILES`): the count-only wrapper over
+    /// [`Self::get_underwater_tiles`] - see [`Self::get_num_tiles_aggregating`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_num_underwater_tiles(&self) -> i32 {
+        self.get_num_tiles_aggregating(Self::get_underwater_tiles)
+    }
+
+    /// Shared random-draw wrapper behind the three biome-tile random getters below
+    /// (`ZTHabitat_getRandomLandTile.c`/`_getRandomWaterTile.c`/`_getRandomUnderwaterTile.c` - three
+    /// otherwise byte-for-byte identical `.asm` bodies apart from the callee): builds the same
+    /// zero-initialized 12-byte stack scratch `std::vector<BFTile*>` real vanilla's own frame is, calls
+    /// the matching [`Self::get_tiles_aggregating`] getter into it, and computes `(end - begin) >> 2`.
+    /// Only a strictly positive count reaches the draw - the `.asm`'s signed `TEST %ESI,%ESI`/`JLE`
+    /// gate sits before any RNG touch, so an empty pool returns null and leaves `DAT_00638060` alone -
+    /// and the picked tile (`(seed >> 0x10 & 0x7fff) % count` after exactly one MSVC LCG step,
+    /// [`lcg_next`], new value stored and used) is read out of the buffer **before** the teardown,
+    /// since the freelist push overwrites the buffer's first word (`begin` itself). The scratch buffer
+    /// is freed via [`free_event_vector_buffer`] by **byte capacity** - the `.asm`'s own
+    /// `TEST %EAX,%EAX`/`JZ`-guarded manual freelist-bucket/`operator_delete` split (the `SAR 2`/
+    /// `SHL 2` round-trip on the capacity is a no-op - a `BFTile*` vector's byte size is always a
+    /// multiple of 4).
+    ///
+    /// No fallback draw on an empty pool, unlike [`Self::pick_random_candidate_tile`]'s tail - the
+    /// `.asm`'s `JLE` target goes straight to the teardown-and-return-null path. Deterministic apart
+    /// from the one LCG advance: no `characteristics_dirty` recalculate anywhere in these bodies.
+    /// `generated.rs`'s `-> i32` return for all three entries is an ABI-identical wart - EAX carries a
+    /// tile pointer (or null) - so the port keeps `u32` and the detour casts.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    fn get_random_tiles_aggregating(&self, get_tiles: impl Fn(&Self, u32)) -> u32 {
+        let mut scratch_vector = [0u32; 3];
+        get_tiles(self, scratch_vector.as_mut_ptr() as u32);
+        let count = (scratch_vector[1] as i32).wrapping_sub(scratch_vector[0] as i32) >> 2;
+        let picked = if count > 0 {
+            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
+            save_to_memory(rng_addr, rng);
+            let index = ((rng >> 0x10) & 0x7fff) % count as u32;
+            get_from_memory(scratch_vector[0] + index * 4) // pick BEFORE teardown: the freelist push overwrites begin
+        } else {
+            0
+        };
+        free_event_vector_buffer(scratch_vector[0], scratch_vector[2].wrapping_sub(scratch_vector[0]));
+        picked
+    }
+
+    /// Ports `ZTHabitat::getRandomLandTile` (`ZTHabitat_getRandomLandTile.c`/`.asm`, `generated.rs`'s
+    /// `GET_RANDOM_LAND_TILE`): the random-draw wrapper over [`Self::get_land_tiles`] - see
+    /// [`Self::get_random_tiles_aggregating`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_random_land_tile(&self) -> u32 {
+        self.get_random_tiles_aggregating(Self::get_land_tiles)
+    }
+
+    /// Ports `ZTHabitat::getRandomWaterTile` (`ZTHabitat_getRandomWaterTile.c`/`.asm`,
+    /// `generated.rs`'s `GET_RANDOM_WATER_TILE`): the random-draw wrapper over
+    /// [`Self::get_water_tiles`] - see [`Self::get_random_tiles_aggregating`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_random_water_tile(&self) -> u32 {
+        self.get_random_tiles_aggregating(Self::get_water_tiles)
+    }
+
+    /// Ports `ZTHabitat::getRandomUnderwaterTile` (`ZTHabitat_getRandomUnderwaterTile.c`/`.asm`,
+    /// `generated.rs`'s `GET_RANDOM_UNDERWATER_TILE`): the random-draw wrapper over
+    /// [`Self::get_underwater_tiles`] - see [`Self::get_random_tiles_aggregating`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_random_underwater_tile(&self) -> u32 {
+        self.get_random_tiles_aggregating(Self::get_underwater_tiles)
+    }
+
     /// Ports `ZTHabitat::addBabyBornBonus` (`ZTHabitat_addBabyBornBonus.c`/`.asm`, `generated.rs`'s
     /// `ADD_BABY_BORN_BONUS`): `ZTAnimal::doReproduceCheck`'s birth celebration. Builds the same
     /// zero-initialized scratch `std::vector<ZTAnimal*>` real vanilla's own stack-local is (the `.asm`'s
@@ -1577,6 +1906,213 @@ impl ZTHabitat {
             total -= self.get_amount_keeper_food(category as u32, include_neighbors);
         }
         total.max(0)
+    }
+
+    /// Ports `ZTHabitat::getNumKeeperFoodTiles` (`ZTHabitat_getNumKeeperFoodTiles.c`/`.asm`,
+    /// `generated.rs`'s `GET_NUM_KEEPER_FOOD_TILES`): counts this habitat's own owned tiles whose occupant
+    /// is a `ZTFood` entity of keeper-food category `category`. Walks the owned-tile list
+    /// ([`walk_tile_list`] over [`Self::owned_tiles_ptr`]), reads each tile's occupant
+    /// ([`crate::ztmapview::BFTile::entity_ptr`]), gates on [`entity_type_matches`] with
+    /// [`RVA_ZTFOOD_TYPE_CHECK_ARG`], and compares the surviving entity's type's `+0x168`
+    /// keeper-food-category word against `category` (the macOS build reads the equivalent through
+    /// `ZTFood::getKeeperFoodType` at `type+0x14c` - platforms pack the type descriptor differently; the
+    /// Windows `.asm` is authoritative). Unlike [`Self::get_amount_keeper_food`] this is deterministic and
+    /// read-only: no `characteristics_dirty` recalc, no RNG, no amphibious-neighbor recursion.
+    ///
+    /// The Windows `.c` renders a second `(...+0x1c)(&DAT_006386c0, entity)` vtable call whose false path
+    /// reads absolute address `0x168` (a crash). That second call is real but provably redundant - a
+    /// back-to-back re-check of the same predicate on the same type pointer (the inlined
+    /// `getKeeperFoodType`'s own type-cast), whose false/null paths are crash stubs, not reachable
+    /// behavior; the stack arithmetic that made Ghidra read it as a second stack argument is the entity
+    /// spill slot, and `ZTHabitat_getRandomKeeperFood.c` renders the identical pattern with one arg. The
+    /// port performs the gate once ([`keeper_food_category_matches`]);
+    /// [`entity_type_matches`]'s internal null-type guard (returns false) deviates from vanilla's
+    /// unchecked crash-on-null deref, same established deviation as
+    /// [`Self::send_maint_worker_cleanup_events`].
+    ///
+    /// Sole caller: `ZTHabitat::getRandomKeeperFood` (undetoured), which vanilla routes through the
+    /// detour once installed.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_num_keeper_food_tiles(&self, category: u32) -> i32 {
+        let mut count: i32 = 0;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+            if keeper_food_category_matches(tile_ptr, category) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Ports `ZTHabitat::getSmallestKeeperFood` (`ZTHabitat_getSmallestKeeperFood.c`/`.asm`,
+    /// `generated.rs`'s `GET_SMALLEST_KEEPER_FOOD`): returns the food entity of keeper-food category
+    /// `category` carrying the smallest `entity+0x154` quantity (macOS reads the equivalent through its
+    /// own `ZTFood+0x120` layout) among this habitat's own owned tiles, ties going to the first in
+    /// owned-tile-list order (strict `<` against the `0x7fffffff` sentinel). The own hit is returned
+    /// immediately - the amphibious neighbors are consulted only when the own pool is empty and
+    /// `include_neighbors` is set, each neighbor ([`walk_neighbor_tree`] order) resolving its own
+    /// internal minimum through the same function with `include_neighbors = false`, the parent then
+    /// comparing the *returned entity's* amount against its running best (strict `<`), not re-walking
+    /// the neighbor's tiles itself.
+    ///
+    /// The first parameter is a **`BFTile*`** reference tile (macOS prototype
+    /// `(BFTile *, ZTFoodType::EKeeperFoodType, bool)`), which this function never reads - it only
+    /// threads it down the subhab recursion.
+    ///
+    /// The Windows `.c` render is a degraded cold-split fragment: the own-walk body ends in
+    /// `JMP FUN_005c6f30` (the optimizer-split subhab tail) whose argument list is spill-slot garbage;
+    /// the real body and the `RET 0xc` epilogue are in the same `.asm` listing, and the subhab tail's
+    /// semantics come from the clean macOS decompile. The `GLOBAL_ZTWorldMgr + 8 == 0` "world not
+    /// initialized" guard (the same `0xfffffff8` sentinel as [`Self::get_nearest_clear_water_tile`]'s)
+    /// returns null; the port uses the shared `== 0` convention.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live.
+    #[allow(clippy::only_used_in_recursion)] // the reference tile is threaded down the subhab recursion unread, vanilla's own shape
+    pub fn get_smallest_keeper_food(&self, tile_ptr: u32, category: u32, include_neighbors: bool) -> u32 {
+        if globals().ztworldmgr_ptr() as u32 == 0 {
+            return 0;
+        }
+        let mut best_entity: u32 = 0;
+        let mut best_amount = 0x7fff_ffffi32;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let candidate_tile = get_from_memory::<TileListNode>(node).payload;
+            if !keeper_food_category_matches(candidate_tile, category) {
+                continue;
+            }
+            let entity_ptr: u32 = get_from_memory(candidate_tile + 0x10);
+            let amount: i32 = get_from_memory(entity_ptr + 0x154);
+            if amount < best_amount {
+                best_amount = amount;
+                best_entity = entity_ptr;
+            }
+        }
+        if best_entity != 0 {
+            return best_entity;
+        }
+        if include_neighbors {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                let candidate =
+                    unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_smallest_keeper_food(tile_ptr, category, false);
+                if candidate != 0 {
+                    let amount: i32 = get_from_memory(candidate + 0x154);
+                    if amount < best_amount {
+                        best_amount = amount;
+                        best_entity = candidate;
+                    }
+                }
+            }
+        }
+        best_entity
+    }
+
+    /// Ports `ZTHabitat::getNearestKeeperFood` (`ZTHabitat_getNearestKeeperFood.c`/`.asm`,
+    /// `generated.rs`'s `GET_NEAREST_KEEPER_FOOD`): returns the own food entity of keeper-food category
+    /// `category` whose host tile is spatially nearest to the **`BFTile*`** reference tile `tile_ptr`
+    /// (macOS prototype `(BFTile *, ZTFoodType::EKeeperFoodType, bool)`; the distance is
+    /// [`keeper_food_distance_squared`] over raw `+0x34`/`+0x38` reads), ties going to the first in
+    /// owned-tile-list order (strict `<`). A null reference tile leaves every candidate at the
+    /// `0x7fffffff` sentinel, so nothing wins and the result is null. Same early-return-own-hit /
+    /// consult-neighbors-only-when-own-empty shape as [`Self::get_smallest_keeper_food`], except each
+    /// neighbor's returned candidate is re-distanced through its *actual* tile - real vanilla calls
+    /// `BFEntity::getTile` on the result (which may have moved off the tile its amount was read from)
+    /// before the parent compare.
+    ///
+    /// The Windows `.c` is clean and authoritative. Guard/return-type notes as
+    /// [`Self::get_smallest_keeper_food`].
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live.
+    pub fn get_nearest_keeper_food(&self, tile_ptr: u32, category: u32, include_neighbors: bool) -> u32 {
+        if globals().ztworldmgr_ptr() as u32 == 0 {
+            return 0;
+        }
+        let mut best_entity: u32 = 0;
+        let mut best_dist = 0x7fff_ffffi32;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let candidate_tile = get_from_memory::<TileListNode>(node).payload;
+            if !keeper_food_category_matches(candidate_tile, category) {
+                continue;
+            }
+            let entity_ptr: u32 = get_from_memory(candidate_tile + 0x10);
+            let dist = keeper_food_distance_squared(tile_ptr, candidate_tile);
+            if dist < best_dist {
+                best_dist = dist;
+                best_entity = entity_ptr;
+            }
+        }
+        if best_entity != 0 {
+            return best_entity;
+        }
+        if include_neighbors {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                let candidate =
+                    unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_nearest_keeper_food(tile_ptr, category, false);
+                if candidate != 0 {
+                    let candidate_tile = unsafe { BFENTITY_GET_TILE.original()(candidate as *const u32) } as u32;
+                    let dist = keeper_food_distance_squared(tile_ptr, candidate_tile);
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best_entity = candidate;
+                    }
+                }
+            }
+        }
+        best_entity
+    }
+
+    /// Ports `ZTHabitat::getRandomKeeperFood` (`ZTHabitat_getRandomKeeperFood.c`/`.asm`,
+    /// `generated.rs`'s `GET_RANDOM_KEEPER_FOOD`): uniform random pick over the own keeper-food pool of
+    /// `category` - the count comes from [`Self::get_num_keeper_food_tiles`] (call-the-port convention:
+    /// real vanilla's own `CALL getNumKeeperFoodTiles` hits that entry's detour address too, re-entering
+    /// the port under the live battery), and a non-empty pool advances the shared game RNG
+    /// ([`lcg_next`] over `DAT_00638060`, same one-step shape as
+    /// [`Self::get_random_clear_tile_for_animal`]) exactly once and returns the
+    /// `((rng >> 0x10) & 0x7fff) % count`-th matching entity in owned-tile-list order. An empty pool
+    /// returns the first non-null neighbor hit (each neighbor resolving through the same function with
+    /// `include_neighbors = false`) when `include_neighbors` is set - the RNG is untouched on that
+    /// path - and null otherwise. The count/pick gate shares [`keeper_food_category_matches`] with the
+    /// count, so both walks agree by construction. Unlike the other two food getters there is no
+    /// `GLOBAL_ZTWorldMgr` guard (the `.asm` goes straight to the count call), and the walk-exhausted
+    /// `return 0` tail is dead (the pick target is always inside the walked count) - kept for shape.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
+    /// each neighbor visited must also be live.
+    #[allow(clippy::only_used_in_recursion)] // the reference tile is threaded down the subhab recursion unread, vanilla's own shape
+    pub fn get_random_keeper_food(&self, tile_ptr: u32, category: u32, include_neighbors: bool) -> u32 {
+        let count = self.get_num_keeper_food_tiles(category);
+        if count < 1 {
+            if include_neighbors {
+                for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                    let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                    let hit =
+                        unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_random_keeper_food(tile_ptr, category, false);
+                    if hit != 0 {
+                        return hit;
+                    }
+                }
+            }
+            return 0;
+        }
+        let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+        let rng = lcg_next(get_from_memory::<u32>(rng_addr));
+        save_to_memory(rng_addr, rng);
+        let target = ((rng >> 0x10) & 0x7fff) % count as u32;
+        let mut counter: u32 = 0;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let candidate_tile = get_from_memory::<TileListNode>(node).payload;
+            if !keeper_food_category_matches(candidate_tile, category) {
+                continue;
+            }
+            if counter == target {
+                return get_from_memory(candidate_tile + 0x10);
+            }
+            counter += 1;
+        }
+        0
     }
 
     /// Ports `ZTHabitat::getNumKeepers` (`ZTHabitat_getNumKeepers.c`, `generated.rs`'s `GET_NUM_KEEPERS`):
@@ -2057,6 +2593,41 @@ impl ZTHabitat {
             for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
                 let neighbor_ptr: u32 = get_from_memory(node + 0x10);
                 unsafe { mut_from_memory::<ZTHabitat>(neighbor_ptr) }.set_time_last_serviced(time, false);
+            }
+        }
+    }
+
+    /// Ports `ZTHabitat::triggerKeeperArrived` (`ZTHabitat_triggerKeeperArrived.c`/`.asm`): recalculates
+    /// via the still-deferred real vanilla `recalculateCharacteristics` when `characteristics_dirty` is
+    /// set (the same call-through shape every other dirty-gated method here uses), then inlines
+    /// `setScheduledForService(this, false)` - real vanilla hardcodes the bool clear (the macOS `.c`
+    /// passes `'\0'`, the Windows `.asm` feeds the branch a literal `PUSH 0x0`, leaving the increment
+    /// arm dead), so the only live effect is [`Self::scheduled_service_counter`] decremented once,
+    /// clamped at 0 - then walks the real vanilla `all_animals_begin`/`_end` vector calling the
+    /// undetoured `ZTAnimal::setKeeperArrives` on every animal (which assigns `1` to the animal's own
+    /// `+0x39c` flag byte only when its own `canService(animal, keeper)` low byte passes - the flag is
+    /// assigned, never cleared, here). Real vanilla's loop has no null-animal skip, reproduced as-is.
+    /// When `scheduled` is set, the same notification recurses into every amphibious neighbor with
+    /// `scheduled = false` - real vanilla's own self-call sits at the (detoured) function address, so
+    /// under a hook the recursion re-enters this port (same documented shape as
+    /// [`Self::set_time_last_serviced`]'s propagation, and one level deep for the same reason).
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::trigger_death_arrived`] - `self`'s own address is passed straight into the
+    /// `recalculateCharacteristics` call-through above.
+    pub fn trigger_keeper_arrived(&mut self, keeper_ptr: u32, scheduled: bool) {
+        if self.characteristics_dirty != 0 {
+            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+        }
+        self.scheduled_service_counter = (self.scheduled_service_counter.wrapping_sub(1)).max(0);
+        for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
+            let animal_ptr: u32 = get_from_memory(addr);
+            unsafe { SET_KEEPER_ARRIVES.original()(animal_ptr as *const u32, keeper_ptr as *const u32) };
+        }
+        if scheduled {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                unsafe { mut_from_memory::<ZTHabitat>(neighbor_ptr) }.trigger_keeper_arrived(keeper_ptr, false);
             }
         }
     }

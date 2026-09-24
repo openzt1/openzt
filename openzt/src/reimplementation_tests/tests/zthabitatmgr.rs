@@ -7,6 +7,7 @@ use openzt_detour::generated::{
     bfentity::GET_TILE as BFENTITY_GET_TILE,
     bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE},
     standalone::OPERATOR_NEW,
+    ztanimal::CAN_SERVICE as ZTANIMAL_CAN_SERVICE,
     zthabitat, zthabitatmgr, ztviewingarea,
 };
 use std::fmt::Debug;
@@ -22,7 +23,7 @@ use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
 use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
 use crate::zthabitatmgr::{
     call_bfunit_tile_cost_vtable_slot, entity_name_bytes, free_event_vector_buffer, hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat,
-    ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
+    ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG,
 };
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -509,19 +510,19 @@ pub(crate) fn run_habitat_add_habitat_tiles_roundtrip_live_test(failure_log: &mu
 
 /// Smoke test only, like [`run_habitat_listen_smoke_live_test`]/[`run_habitat_validate_positions_smoke_live_test`]
 /// - `ZTHabitat::update` has no return value and every real sub-call it makes (`Ambients::play`,
-/// `reviseSpeciesList`, `recalculateCharacteristics`, `ZTViewingArea::updateAmbients`, `updatePortals`,
-/// `listen`) is itself either a real vanilla call-through or already covered by its own dedicated live
-/// test elsewhere in this file, so there's no independent "real" pole left to diff a return value
-/// against without double-driving those side effects. Calls the reimplementation with a small,
-/// realistic tick (`16` ms, one frame at 60Hz) on every real, non-tank habitat and only confirms the
-/// battery is still alive afterward - the `ambients_begin`/`_end` and `viewing_areas_begin`/`_end`
-/// vector walks are the two field offsets this test exists to exercise: a wrong offset there would
-/// either read garbage pointers (likely crashing `Ambients::play`/`updateAmbients`) or, if the
-/// begin/end pair happened to compare equal by coincidence, silently skip the walk entirely rather
-/// than prove anything - so this is a real crash-or-hang check, not a no-op. Skips tanks, matching the
-/// detour's own real invocation domain: `ZTTankExhibit` overrides this vtable slot at a separate
-/// address (see `ZTHabitat::update`'s own doc comment), so real vanilla never dispatches a tank's tick
-/// through the address this file detours.
+///   `reviseSpeciesList`, `recalculateCharacteristics`, `ZTViewingArea::updateAmbients`, `updatePortals`,
+///   `listen`) is itself either a real vanilla call-through or already covered by its own dedicated live
+///   test elsewhere in this file, so there's no independent "real" pole left to diff a return value
+///   against without double-driving those side effects. Calls the reimplementation with a small,
+///   realistic tick (`16` ms, one frame at 60Hz) on every real, non-tank habitat and only confirms the
+///   battery is still alive afterward - the `ambients_begin`/`_end` and `viewing_areas_begin`/`_end`
+///   vector walks are the two field offsets this test exists to exercise: a wrong offset there would
+///   either read garbage pointers (likely crashing `Ambients::play`/`updateAmbients`) or, if the
+///   begin/end pair happened to compare equal by coincidence, silently skip the walk entirely rather
+///   than prove anything - so this is a real crash-or-hang check, not a no-op. Skips tanks, matching the
+///   etour's own real invocation domain: `ZTTankExhibit` overrides this vtable slot at a separate
+///   address (see `ZTHabitat::update`'s own doc comment), so real vanilla never dispatches a tank's tick
+///   through the address this file detours.
 pub(crate) fn run_habitat_update_smoke_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTHABITAT_UPDATE_SMOKE_LIVE";
     let habitat_mgr = globals().zthabitatmgr();
@@ -2954,6 +2955,106 @@ pub(crate) fn run_habitat_get_near_clear_tile_live_test(failure_log: &mut Option
     }
 }
 
+/// Oracle minimum for [`run_habitat_get_nearest_clear_water_tile_live_test`]: the owned tiles
+/// passing both `.asm` filters in walk order (`tile+0x83 & 3 != 0` water-class,
+/// `tile+0x80 != 0xa`), minimized by squared Cartesian distance from `ref_tile` (`0x7fffffff` when
+/// either pointer is null). The first candidate is kept unconditionally and replacements need
+/// strictly smaller distance, so a null ref tile - every candidate at `0x7fffffff` - selects the
+/// first filter-passing tile in walk order. Seed-independent - the function draws nothing.
+fn nearest_clear_water_tile_oracle(tiles: &[u32], ref_tile: u32) -> u32 {
+    let mut best_tile = 0u32;
+    let mut best_dist = 0x7fff_ffffi32;
+    for &tile in tiles {
+        if get_from_memory::<u8>(tile + 0x83) & 3 == 0 || get_from_memory::<u8>(tile + 0x80) == 0xa {
+            continue;
+        }
+        let dist: i32 = if tile == 0 || ref_tile == 0 {
+            0x7fff_ffff
+        } else {
+            let dx: i32 = get_from_memory::<i32>(ref_tile + 0x34).wrapping_sub(get_from_memory::<i32>(tile + 0x34));
+            let dy: i32 = get_from_memory::<i32>(ref_tile + 0x38).wrapping_sub(get_from_memory::<i32>(tile + 0x38));
+            dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+        };
+        if best_tile == 0 || dist < best_dist {
+            best_tile = tile;
+            best_dist = dist;
+        }
+    }
+    best_tile
+}
+
+/// Per live habitat, checks one reimplementation call and one real vanilla call per reference tile
+/// against the fully independent [`nearest_clear_water_tile_oracle`] - deterministic on both sides
+/// (no RNG draw, no `characteristics_dirty` recalculate, so no seed juggling or settle draws).
+/// Two reference tiles per habitat: a real `BFTile*` (the first animal's own tile - the real
+/// caller `ZTGoalDrinkWater::decide` passes `BFEntity::getTile(entity)` - falling back to the
+/// habitat's first owned tile on animal-free habitats, since the distance math needs only a real
+/// tile, no unit) and null (the `.asm`'s `0x7fffffff` path - every candidate ties and the first
+/// filter-passing tile wins). Habitats with no water-class tiles exercise the null return on both
+/// sides (the plan's "dry land habitats return null without hanging"). Real vanilla's own call is
+/// asserted against the same oracle, so the oracle itself is validated against vanilla behavior,
+/// not just cross-agreement.
+pub(crate) fn run_habitat_get_nearest_clear_water_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NEAREST_CLEAR_WATER_TILE_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut water_hits = 0u32;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let animal_tile = (0..(end.wrapping_sub(begin)) / 4)
+            .map(|u| get_from_memory::<u32>(begin + u * 4))
+            .find(|&a| a != 0)
+            .map(|animal| (unsafe { BFENTITY_GET_TILE.original()(animal as *const u32) }) as u32)
+            .unwrap_or(0);
+        let real_ref_tile = if animal_tile != 0 {
+            animal_tile
+        } else {
+            tiles.iter().copied().find(|&tile| tile != 0).unwrap_or(0)
+        };
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for (case, ref_tile) in [("tile", real_ref_tile), ("null", 0u32)] {
+            let expected = nearest_clear_water_tile_oracle(&tiles, ref_tile);
+            if expected != 0 {
+                water_hits += 1;
+            }
+            let reimpl_ptr = habitat.get_nearest_clear_water_tile(ref_tile);
+            let real_ptr =
+                unsafe { zthabitat::GET_NEAREST_CLEAR_WATER_TILE.original()(ptr as *const u32, ref_tile as *const u32) } as u32;
+            if reimpl_ptr != expected {
+                failures.push(format!(
+                    "habitat {} ({:#010x}), ref={} ({:#010x}): reimpl got {:#010x}, expected {:#010x}",
+                    i, ptr, case, ref_tile, reimpl_ptr, expected
+                ));
+            }
+            if real_ptr != expected {
+                failures.push(format!(
+                    "habitat {} ({:#010x}), ref={} ({:#010x}): real got {:#010x}, expected {:#010x}",
+                    i, ptr, case, ref_tile, real_ptr, expected
+                ));
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, &format!("{} (non-null picks: {} habitat/tile draws)", test_name, water_hits));
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Shared driver for the two gate-pass resolver tests ([`run_habitat_get_gate_tile_pass_in_live_test`] /
 /// [`run_habitat_get_gate_tile_pass_out_live_test`]): per habitat with at least one real animal
 /// (`unit` = the habitat's own first animal, a real `ZTUnit`-derived entity - matching the functions'
@@ -3158,6 +3259,133 @@ pub(crate) fn run_habitat_add_baby_born_bonus_live_test(failure_log: &mut Option
             });
         }
     }
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// One snapshot→call→assert→restore pass of [`run_habitat_trigger_keeper_arrived_live_test`] for a
+/// single (side, habitat, `scheduled`) combination. Snapshots the habitat's `scheduled_service_counter`
+/// (`+0xf4`) and every animal's keeper-arrives flag byte (`+0x39c`) - plus the same pair for every
+/// amphibious neighbor on **both** `scheduled` values, so the recursion gate is asserted directly
+/// rather than only implicitly and the restore covers the function's full write set even if a future
+/// regression recursed when it should not - calls one side, asserts the decompile's contract over the
+/// pristine input, then restores every snapshot unconditionally so the next pass and the live game see
+/// exactly the state found. Expected values, straight from the `.asm`/`.c`: every entry the pass
+/// actually writes (the habitat itself always, a neighbor only under `scheduled`'s recursion) takes
+/// the contract - counter `(before.wrapping_sub(1)).max(0)`, exactly vanilla's `DEC`/`JNS`
+/// clamp-at-0 pair, and animal flag `1` when its own `canService` low byte passes else unchanged
+/// (`setKeeperArrives` *assigns* 1, it never ORs or clears) - while every non-involved entry must be
+/// unchanged. `canService` is a read-only predicate over animal/keeper fields nothing in the pass
+/// writes, so re-evaluating it per animal during the assert phase cannot perturb what the pass under
+/// test wrote.
+fn assert_trigger_keeper_arrived_pass(
+    failures: &mut Vec<String>,
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    keeper_ptr: u32,
+    scheduled: bool,
+    call: impl FnOnce(),
+) {
+    let mut involved_habitats: Vec<u32> = vec![habitat_ptr];
+    for node in walk_neighbor_tree(get_from_memory(habitat_ptr + 0x8)) {
+        involved_habitats.push(get_from_memory(node + 0x10));
+    }
+    let mut counter_snapshots: Vec<(u32, i32)> = Vec::new(); // (counter address, value before)
+    let mut flag_snapshots: Vec<(u32, u8, bool)> = Vec::new(); // (animal pointer, flag byte before, whether this pass writes it)
+    for (index, &habitat) in involved_habitats.iter().enumerate() {
+        let written = index == 0 || scheduled;
+        counter_snapshots.push((habitat + 0xf4, get_from_memory(habitat + 0xf4)));
+        for addr in (get_from_memory::<u32>(habitat + 0x6c)..get_from_memory::<u32>(habitat + 0x70)).step_by(4) {
+            let animal_ptr: u32 = get_from_memory(addr);
+            flag_snapshots.push((animal_ptr, get_from_memory(animal_ptr + 0x39c), written));
+        }
+    }
+
+    call();
+
+    for (index, &(addr, before)) in counter_snapshots.iter().enumerate() {
+        let expected = if index == 0 || scheduled {
+            (before.wrapping_sub(1)).max(0)
+        } else {
+            before
+        };
+        let actual: i32 = get_from_memory(addr);
+        if actual != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}) {}, scheduled={}: counter at {:#010x} is {}, expected {}",
+                habitat_index, habitat_ptr, side, scheduled, addr, actual, expected
+            ));
+        }
+    }
+    for &(animal_ptr, before, written) in &flag_snapshots {
+        let passes = low_byte_bool(unsafe { ZTANIMAL_CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) });
+        let expected = if written && passes { 1 } else { before };
+        let actual: u8 = get_from_memory(animal_ptr + 0x39c);
+        if actual != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}) {}, scheduled={}: animal {:#010x} keeper-arrives flag is {:#04x}, expected {:#04x} (canService={})",
+                habitat_index, habitat_ptr, side, scheduled, animal_ptr, actual, expected, passes
+            ));
+        }
+    }
+    for &(addr, before) in &counter_snapshots {
+        save_to_memory(addr, before);
+    }
+    for &(animal_ptr, before, _) in &flag_snapshots {
+        save_to_memory(animal_ptr + 0x39c, before);
+    }
+}
+
+/// `triggerKeeperArrived` mutates live habitat/animal state, so this verifies each side against the
+/// decompile's own contract over pristine input rather than cross-comparing after the fact (the same
+/// snapshot→call→assert→restore shape as [`run_habitat_add_baby_born_bonus_live_test`]). One live
+/// `ZTKeeper` is found in the real, loaded zoo's own `entity_array` (via [`RVA_KEEPER_TYPE_CHECK_ARG`],
+/// the same pattern as [`run_habitat_block_service_matches_real_live_test`]); real vanilla is called
+/// first, then the reimplementation, per habitat per `scheduled` value - both values, so the
+/// no-recursion path and the amphibious-neighbor recursion path are each exercised over every live
+/// habitat. Real vanilla's own neighbor recursion re-enters the Rust port under both sides (its
+/// self-call sits at the detoured address, same documented semantics as the Stage 2 counters), while
+/// `canService`/`setKeeperArrives`/`recalculateCharacteristics` are undetoured `.original()`
+/// call-throughs. Nothing the pass or the `characteristics_dirty` lazy recalculate writes feeds any
+/// snapshot (same reasoning as Stage 7's test), so no settle draw is needed within the synchronous,
+/// single-threaded pass.
+pub(crate) fn run_habitat_trigger_keeper_arrived_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE";
+
+    let keeper_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+    let Some(keeper_ptr) = keeper_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    };
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        for scheduled in [false, true] {
+            assert_trigger_keeper_arrived_pass(&mut failures, "real", i, ptr, keeper_ptr, scheduled, || unsafe {
+                zthabitat::TRIGGER_KEEPER_ARRIVED.original()(ptr as *const u32, keeper_ptr as *const u32, scheduled)
+            });
+            assert_trigger_keeper_arrived_pass(&mut failures, "reimpl", i, ptr, keeper_ptr, scheduled, || {
+                unsafe { mut_from_memory::<ZTHabitat>(ptr) }.trigger_keeper_arrived(keeper_ptr, scheduled)
+            });
+        }
+    }
+
     if failures.is_empty() {
         write_success_line(failure_log, test_name);
         false
@@ -4348,6 +4576,508 @@ pub(crate) fn run_habitat_get_food_to_leave_live_test(failure_log: &mut Option<s
     }
 }
 
+/// `getNumKeeperFoodTiles` reads the owned-tile list directly rather than any cached tally, so the driver
+/// sweeps categories the same exhaustive way as [`run_habitat_get_amount_keeper_food_live_test`] and adds
+/// an independently-built oracle: an in-test re-walk of each habitat's own tile list through the same
+/// gate/field the port documents. Also asserts non-vacuousness - on a foodless zoo a wrong gate or wrong
+/// field offset reads as 0 == 0 and passes silently, so the oracle must find at least one food tile
+/// somewhere in the zoo.
+pub(crate) fn run_habitat_get_num_keeper_food_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NUM_KEEPER_FOOD_TILES_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut tiles_walked = 0usize;
+    let mut food_tiles_found = 0usize;
+    let mut categories_seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+
+    // Phase 1: the oracle's own walk, one traversal per habitat - every gate-passing occupant's
+    // `entity_type+0x168` word is collected so the per-category counts below come out of a single list
+    // walk instead of one per swept category.
+    let mut per_habitat_food_types: Vec<(usize, u32, Vec<u32>)> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut food_types: Vec<u32> = Vec::new();
+        for node in walk_tile_list(*habitat.owned_tiles_ptr()) {
+            tiles_walked += 1;
+            let tile_ptr = get_from_memory::<u32>(node + 0x8);
+            let entity_ptr: u32 = get_from_memory(tile_ptr + 0x10);
+            if entity_ptr == 0 || !unsafe { entity_type_matches(entity_ptr, RVA_ZTFOOD_TYPE_CHECK_ARG) } {
+                continue;
+            }
+            let food_type: u32 = get_from_memory(get_from_memory::<u32>(entity_ptr + 0x128) + 0x168);
+            food_types.push(food_type);
+            categories_seen.insert(food_type);
+            food_tiles_found += 1;
+        }
+        per_habitat_food_types.push((i, ptr, food_types));
+    }
+
+    if per_habitat_food_types.is_empty() {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitats)", test_name));
+        return false;
+    }
+
+    // Sweep bound: the 16-entry category enum `getAmountKeeperFood`'s tally array indexes, a
+    // guaranteed-miss value, plus any out-of-range food-category word the oracle walk saw - so every
+    // gate-passing tile the zoo contains is guaranteed at least one matching swept category.
+    let mut categories: Vec<u32> = (0..16).collect();
+    categories.push(0xFFFF_FFFF);
+    for &value in &categories_seen {
+        if !(0..16).contains(&value) {
+            categories.push(value);
+        }
+    }
+
+    for (i, ptr, food_types) in &per_habitat_food_types {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(*ptr) };
+        for &category in &categories {
+            let oracle = food_types.iter().filter(|&&food_type| food_type == category).count() as i32;
+            let real = unsafe { zthabitat::GET_NUM_KEEPER_FOOD_TILES.original()(*ptr as *const u32, category) };
+            let port = habitat.get_num_keeper_food_tiles(category);
+            if real != oracle || port != oracle {
+                failures.push(format!(
+                    "habitat {} ({:#010x}), category={:#x}: oracle={}, real={}, port={}",
+                    i, ptr, category, oracle, real, port
+                ));
+            }
+        }
+    }
+
+    if food_tiles_found == 0 {
+        failures.push(format!(
+            "save contains no keeper food tiles - update the save (walked {} owned tiles across {} habitats, \
+             the oracle's ZTFood gate never passed; a wrong gate or field offset would read as 0 == 0 here)",
+            tiles_walked,
+            per_habitat_food_types.len()
+        ));
+    }
+
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} ({} habitats, {} owned tiles walked, {} food tiles found, distinct food categories on tiles: {:?})",
+                test_name,
+                per_habitat_food_types.len(),
+                tiles_walked,
+                food_tiles_found,
+                categories_seen
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Which of the three keeper-food targeting heuristics a [`run_habitat_keeper_food_pick_live_test`] run
+/// exercises - the `ZTGoalKeeperFood::decide` triplet, sharing one own-walk gate
+/// (non-null `ZTFood` occupant whose `entity_type+0x168` word equals `category`) and differing only in
+/// how the matching pool is picked (min `entity+0x154` amount / min squared distance to the reference
+/// tile / one-LCG-step uniform index) and in the world-global guard (absent only on Random).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum KeeperFoodPickKind {
+    Smallest,
+    Nearest,
+    Random,
+}
+
+impl KeeperFoodPickKind {
+    fn test_name(self) -> &'static str {
+        match self {
+            KeeperFoodPickKind::Smallest => "ZTHABITAT_GET_SMALLEST_KEEPER_FOOD_LIVE",
+            KeeperFoodPickKind::Nearest => "ZTHABITAT_GET_NEAREST_KEEPER_FOOD_LIVE",
+            KeeperFoodPickKind::Random => "ZTHABITAT_GET_RANDOM_KEEPER_FOOD_LIVE",
+        }
+    }
+
+    /// Real vanilla call-through (debug: the trampoline; release: the raw address, which re-enters
+    /// the port - same release semantics as [`BiomeTileKind::real`]). `generated.rs`'s `-> i32` return
+    /// is the pointer-as-integer wart (EAX carries the picked food entity or null) - cast back here.
+    fn real(self, habitat_ptr: u32, ref_tile: u32, category: u32, include_neighbors: bool) -> u32 {
+        let raw = match self {
+            KeeperFoodPickKind::Smallest => unsafe {
+                zthabitat::GET_SMALLEST_KEEPER_FOOD.original()(habitat_ptr as *const u32, ref_tile as *const u32, category, include_neighbors)
+            },
+            KeeperFoodPickKind::Nearest => unsafe {
+                zthabitat::GET_NEAREST_KEEPER_FOOD.original()(habitat_ptr as *const u32, ref_tile as *const u32, category, include_neighbors)
+            },
+            KeeperFoodPickKind::Random => unsafe {
+                zthabitat::GET_RANDOM_KEEPER_FOOD.original()(habitat_ptr as *const u32, ref_tile as *const u32, category, include_neighbors)
+            },
+        };
+        raw as u32
+    }
+
+    /// The port under test.
+    fn port(self, habitat: &ZTHabitat, ref_tile: u32, category: u32, include_neighbors: bool) -> u32 {
+        match self {
+            KeeperFoodPickKind::Smallest => habitat.get_smallest_keeper_food(ref_tile, category, include_neighbors),
+            KeeperFoodPickKind::Nearest => habitat.get_nearest_keeper_food(ref_tile, category, include_neighbors),
+            KeeperFoodPickKind::Random => habitat.get_random_keeper_food(ref_tile, category, include_neighbors),
+        }
+    }
+}
+
+/// `(entity, host_tile, food_category)` oracle walk entries, in owned-tile-list order - the ordered
+/// walk all three picks iterate, so first-wins tie behavior falls out of the Vec order.
+type KeeperFoodOracleList = Vec<(u32, u32, u32)>;
+
+/// The squared Cartesian distance between two raw tiles, `0x7fffffff` when either pointer is null -
+/// the exact math both [`KeeperFoodPickKind::Nearest`] comparisons use.
+fn keeper_food_tile_dist_squared(ref_tile: u32, tile: u32) -> i32 {
+    if ref_tile == 0 || tile == 0 {
+        return 0x7fff_ffff;
+    }
+    let dx: i32 = get_from_memory::<i32>(ref_tile + 0x34).wrapping_sub(get_from_memory::<i32>(tile + 0x34));
+    let dy: i32 = get_from_memory::<i32>(ref_tile + 0x38).wrapping_sub(get_from_memory::<i32>(tile + 0x38));
+    dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+}
+
+/// One list's oracle minimum for [`keeper_food_pick_oracle`]: `(entity, metric)` over `category`
+/// matches in walk order, strict `<` against the `0x7fffffff` sentinel (first-wins ties). Nearest
+/// measures from the reference tile to each candidate's host tile - the own/neighbor walks' own
+/// comparison; only the parent's re-distance of a neighbor *result* goes through
+/// `BFEntity::getTile` (see [`keeper_food_pick_oracle`]).
+fn keeper_food_oracle_list_min(kind: KeeperFoodPickKind, foods: &KeeperFoodOracleList, ref_tile: u32, category: u32) -> (u32, i32) {
+    let mut best = (0u32, 0x7fff_ffffi32);
+    for &(entity, tile, food_category) in foods {
+        if food_category != category {
+            continue;
+        }
+        let (candidate, metric) = match kind {
+            KeeperFoodPickKind::Smallest => (entity, get_from_memory::<i32>(entity + 0x154)),
+            KeeperFoodPickKind::Nearest => (entity, keeper_food_tile_dist_squared(ref_tile, tile)),
+            KeeperFoodPickKind::Random => unreachable!("Random has no list minimum"),
+        };
+        if metric < best.1 {
+            best = (candidate, metric);
+        }
+    }
+    best
+}
+
+/// The full oracle pick for the two deterministic kinds, mirroring the
+/// own-early-return / per-neighbor-internal-min-then-parent-compare recursion exactly: the own list
+/// is minimized first and returned immediately when non-empty; only an empty own pool consults the
+/// neighbors in tree order, each resolving its own internal minimum through the same minimizer, with
+/// the parent comparing the *returned candidate* against its running best (strict `<`) - re-distanced
+/// through real `BFEntity::getTile` for Nearest, mirroring real vanilla's own call.
+fn keeper_food_pick_oracle(
+    kind: KeeperFoodPickKind,
+    own_foods: &KeeperFoodOracleList,
+    neighbor_foods: &[KeeperFoodOracleList],
+    ref_tile: u32,
+    category: u32,
+    include_neighbors: bool,
+) -> u32 {
+    let (mut best_entity, mut best_metric) = keeper_food_oracle_list_min(kind, own_foods, ref_tile, category);
+    if best_entity != 0 || !include_neighbors {
+        return best_entity;
+    }
+    for neighbor in neighbor_foods {
+        let (candidate, candidate_metric) = keeper_food_oracle_list_min(kind, neighbor, ref_tile, category);
+        if candidate == 0 {
+            continue;
+        }
+        let metric = match kind {
+            KeeperFoodPickKind::Nearest => {
+                let candidate_tile = (unsafe { BFENTITY_GET_TILE.original()(candidate as *const u32) }) as u32;
+                keeper_food_tile_dist_squared(ref_tile, candidate_tile)
+            }
+            _ => candidate_metric,
+        };
+        if metric < best_metric {
+            best_metric = metric;
+            best_entity = candidate;
+        }
+    }
+    best_entity
+}
+
+/// Phase-1 oracle walk over one habitat's (or neighbor's) owned-tile list, collecting every
+/// gate-passing occupant as `(entity, host tile, entity_type+0x168 category)` in walk order.
+fn keeper_food_oracle_walk(
+    sentinel: u32,
+    foods: &mut KeeperFoodOracleList,
+    categories_seen: &mut std::collections::BTreeSet<u32>,
+    tiles_walked: &mut usize,
+    food_tiles_found: &mut usize,
+) {
+    for node in walk_tile_list(sentinel) {
+        *tiles_walked += 1;
+        let tile_ptr = get_from_memory::<u32>(node + 0x8);
+        let entity_ptr: u32 = get_from_memory(tile_ptr + 0x10);
+        if entity_ptr == 0 || !unsafe { entity_type_matches(entity_ptr, RVA_ZTFOOD_TYPE_CHECK_ARG) } {
+            continue;
+        }
+        let food_category: u32 = get_from_memory(get_from_memory::<u32>(entity_ptr + 0x128) + 0x168);
+        foods.push((entity_ptr, tile_ptr, food_category));
+        categories_seen.insert(food_category);
+        *food_tiles_found += 1;
+    }
+}
+
+/// Shared driver for the keeper-food targeting triplet: per live habitat, builds the oracle once
+/// (phase-1 walks over the habitat's own tiles plus each amphibious neighbor's, in
+/// [`walk_neighbor_tree`] order), then sweeps a real `BFTile*` reference tile (the first animal's own
+/// tile - the real caller `ZTGoalKeeperFood::decide` resolves its unit to a tile - falling back to the
+/// habitat's first owned tile) and null, every category in `0..16` plus the `0xffffffff` guaranteed
+/// miss plus every distinct category word the oracle observed, and both `include_neighbors` values.
+///
+/// Smallest/Nearest are fully deterministic three-way matches (oracle / real `.original()` / port).
+/// Random's oracle is the RNG state itself: each side's draw must return the
+/// `((lcg_next(seed) >> 0x10) & 0x7fff) % pool.len()`-th own-pool entity (via
+/// [`assert_lcg_tile_draw`]) or, when the own pool is empty, the first non-empty neighbor's own
+/// one-LCG-step pick with the seed advanced exactly once (a small custom branch -
+/// [`assert_lcg_tile_draw`]'s empty-list arm only covers the no-hit-at-all case) or 0 with the seed
+/// untouched. Everything is read-only apart from those exactly-asserted advances, so no
+/// snapshot/restore and no settle draws.
+///
+/// Non-vacuousness: the save must carry at least one keeper food tile zoo-wide (on a foodless zoo a
+/// wrong gate reads as 0 == 0 - [`run_habitat_get_num_keeper_food_tiles_live_test`]'s assert), and for
+/// Random at least one draw must come from a non-empty own pool (the pick path itself ran).
+fn run_habitat_keeper_food_pick_live_test(failure_log: &mut Option<std::fs::File>, kind: KeeperFoodPickKind) -> bool {
+    let test_name = kind.test_name();
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut failures: Vec<String> = Vec::new();
+    let mut fail_flag = false;
+    let mut tiles_walked = 0usize;
+    let mut food_tiles_found = 0usize;
+    let mut categories_seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut rows_checked = 0u32;
+    let mut own_pool_draws = 0u32;
+    let mut neighbor_resolved_rows = 0u32;
+    let mut habitats_checked = 0u32;
+
+    // Phase 1: oracle walks - per habitat, its own foods plus each amphibious neighbor's (walked
+    // directly through the neighbor's own owned-tile sentinel, not via the exhibit array), and the
+    // reference tile both sides are driven with.
+    let mut per_habitat: Vec<(usize, u32, KeeperFoodOracleList, Vec<KeeperFoodOracleList>, u32)> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        habitats_checked += 1;
+        let mut own_foods = KeeperFoodOracleList::new();
+        keeper_food_oracle_walk(*habitat.owned_tiles_ptr(), &mut own_foods, &mut categories_seen, &mut tiles_walked, &mut food_tiles_found);
+        let neighbor_foods: Vec<KeeperFoodOracleList> = walk_neighbor_tree(habitat.amphibious_neighbors_head)
+            .map(|node| {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                let mut foods = KeeperFoodOracleList::new();
+                keeper_food_oracle_walk(
+                    get_from_memory(neighbor_ptr + 0x40),
+                    &mut foods,
+                    &mut categories_seen,
+                    &mut tiles_walked,
+                    &mut food_tiles_found,
+                );
+                foods
+            })
+            .collect();
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let animal_tile = (0..(end.wrapping_sub(begin)) / 4)
+            .map(|u| get_from_memory::<u32>(begin + u * 4))
+            .find(|&a| a != 0)
+            .map(|animal| (unsafe { BFENTITY_GET_TILE.original()(animal as *const u32) }) as u32)
+            .unwrap_or(0);
+        let tiles: Vec<u32> = walk_tile_list(*habitat.owned_tiles_ptr()).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        let ref_tile = if animal_tile != 0 { animal_tile } else { tiles.iter().copied().find(|&tile| tile != 0).unwrap_or(0) };
+        per_habitat.push((i, ptr, own_foods, neighbor_foods, ref_tile));
+    }
+
+    if per_habitat.is_empty() {
+        write_success_line(failure_log, &format!("{} (skipped: no live habitats)", test_name));
+        return false;
+    }
+
+    // Sweep bound: the 16-entry category enum `getAmountKeeperFood`'s tally array indexes, a
+    // guaranteed-miss value, plus any out-of-range food-category word the oracle walk saw.
+    let mut categories: Vec<u32> = (0..16).collect();
+    categories.push(0xFFFF_FFFF);
+    for &value in &categories_seen {
+        if !(0..16).contains(&value) {
+            categories.push(value);
+        }
+    }
+
+    for (i, ptr, own_foods, neighbor_foods, ref_tile) in &per_habitat {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(*ptr) };
+        for (case, case_ref_tile) in [("tile", *ref_tile), ("null", 0u32)] {
+            for &category in &categories {
+                for include_neighbors in [false, true] {
+                    rows_checked += 1;
+                    let own_pool: Vec<u32> = own_foods.iter().filter(|&&(_, _, c)| c == category).map(|&(entity, _, _)| entity).collect();
+                    match kind {
+                        KeeperFoodPickKind::Random => {
+                            if !own_pool.is_empty() {
+                                own_pool_draws += 1;
+                            }
+                            for side in ["reimpl", "real"] {
+                                let seed_before: u32 = get_from_memory(rng_addr);
+                                let drawn = if side == "reimpl" {
+                                    kind.port(habitat, case_ref_tile, category, include_neighbors)
+                                } else {
+                                    kind.real(*ptr, case_ref_tile, category, include_neighbors)
+                                };
+                                let seed_after: u32 = get_from_memory(rng_addr);
+                                if !own_pool.is_empty() {
+                                    fail_flag |= assert_lcg_tile_draw(
+                                        failure_log,
+                                        test_name,
+                                        side,
+                                        *i,
+                                        *ptr,
+                                        &own_pool,
+                                        seed_before,
+                                        seed_after,
+                                        drawn,
+                                    );
+                                } else if include_neighbors {
+                                    // Expected: the first neighbor in tree order whose own pool is
+                                    // non-empty resolves the hit with its own one-LCG-step pick over
+                                    // `seed_before` (the parent advanced nothing); a pool-holding
+                                    // neighbor never returns null, so a non-zero expectation is exact.
+                                    // No such neighbor -> 0 with the seed untouched.
+                                    let expected_hit = neighbor_foods
+                                        .iter()
+                                        .find_map(|foods| {
+                                            let pool: Vec<u32> =
+                                                foods.iter().filter(|&&(_, _, c)| c == category).map(|&(entity, _, _)| entity).collect();
+                                            if pool.is_empty() {
+                                                None
+                                            } else {
+                                                let index = ((lcg_next(seed_before) >> 0x10) & 0x7fff) % pool.len() as u32;
+                                                Some(pool[index as usize])
+                                            }
+                                        })
+                                        .unwrap_or(0);
+                                    let expected_seed = if expected_hit != 0 { lcg_next(seed_before) } else { seed_before };
+                                    if drawn != expected_hit || seed_after != expected_seed {
+                                        failures.push(format!(
+                                            "habitat {} ({:#010x}), ref={} ({:#010x}), category={:#x}, {} draw: got {:#010x}, \
+                                             expected {:#010x} (first non-empty neighbor pick); rng {:#010x} -> {:#010x}, expected {:#010x}",
+                                            i, ptr, case, case_ref_tile, category, side, drawn, expected_hit, seed_before, seed_after, expected_seed
+                                        ));
+                                    }
+                                } else {
+                                    // Empty own pool, no subhabs -> 0 with the seed untouched (the
+                                    // helper's empty-list arm).
+                                    fail_flag |= assert_lcg_tile_draw(
+                                        failure_log,
+                                        test_name,
+                                        side,
+                                        *i,
+                                        *ptr,
+                                        &[],
+                                        seed_before,
+                                        seed_after,
+                                        drawn,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            let expected =
+                                keeper_food_pick_oracle(kind, own_foods, neighbor_foods, case_ref_tile, category, include_neighbors);
+                            if expected != 0 && own_pool.is_empty() {
+                                neighbor_resolved_rows += 1;
+                            }
+                            let port_pick = kind.port(habitat, case_ref_tile, category, include_neighbors);
+                            let real_pick = kind.real(*ptr, case_ref_tile, category, include_neighbors);
+                            if port_pick != expected {
+                                failures.push(format!(
+                                    "habitat {} ({:#010x}), ref={} ({:#010x}), category={:#x}, subhabs={}: port got {:#010x}, expected {:#010x}",
+                                    i, ptr, case, case_ref_tile, category, include_neighbors, port_pick, expected
+                                ));
+                            }
+                            if real_pick != expected {
+                                failures.push(format!(
+                                    "habitat {} ({:#010x}), ref={} ({:#010x}), category={:#x}, subhabs={}: real got {:#010x}, expected {:#010x}",
+                                    i, ptr, case, case_ref_tile, category, include_neighbors, real_pick, expected
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if food_tiles_found == 0 {
+        failures.push(format!(
+            "save contains no keeper food tiles - update the save (walked {} owned tiles across {} habitats, \
+             the oracle's ZTFood gate never passed; a wrong gate or field offset would read as 0 == 0 here)",
+            tiles_walked,
+            per_habitat.len()
+        ));
+    }
+    if kind == KeeperFoodPickKind::Random && own_pool_draws == 0 {
+        failures.push(
+            "non-vacuous-draw assert failed: no category/habitat row drew from a non-empty own pool - the pick path never ran on this save"
+                .to_string(),
+        );
+    }
+
+    if failures.is_empty() && !fail_flag {
+        let random_stats = if kind == KeeperFoodPickKind::Random {
+            format!("non-empty-own-pool draws: {}, ", own_pool_draws)
+        } else {
+            String::new()
+        };
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} ({} habitats, {} owned tiles walked (incl. neighbors), {} food tiles found, {} rows checked, \
+                 {}neighbor-resolved rows: {}, categories: {:?})",
+                test_name,
+                habitats_checked,
+                tiles_walked,
+                food_tiles_found,
+                rows_checked,
+                random_stats,
+                neighbor_resolved_rows,
+                categories_seen
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+pub(crate) fn run_habitat_get_smallest_keeper_food_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_keeper_food_pick_live_test(failure_log, KeeperFoodPickKind::Smallest)
+}
+
+pub(crate) fn run_habitat_get_nearest_keeper_food_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_keeper_food_pick_live_test(failure_log, KeeperFoodPickKind::Nearest)
+}
+
+pub(crate) fn run_habitat_get_random_keeper_food_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_keeper_food_pick_live_test(failure_log, KeeperFoodPickKind::Random)
+}
+
 /// Membership test over `hasBldg`'s own vector: `entity_ptr = 0` is exercised on every habitat (should
 /// never be a member), plus each habitat's own first real building-list entry when non-empty (should
 /// always be a member) - covers both the false and true paths without needing to construct anything.
@@ -4692,4 +5422,570 @@ pub(crate) fn run_update_gates_smoke_live_test(failure_log: &mut Option<std::fs:
     habitat_mgr.update_gates();
     write_success_line(failure_log, test_name);
     false
+}
+
+/// Which of the three biome-classification filters a [`run_habitat_add_biome_tiles_live_test`] run
+/// exercises - the `.asm`-confirmed per-tile predicates, shared verbatim by the port, the real
+/// vanilla call, and the oracle below.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BiomeTileKind {
+    Land,
+    Water,
+    Underwater,
+}
+
+const ALL_BIOME_KINDS: [BiomeTileKind; 3] = [BiomeTileKind::Land, BiomeTileKind::Water, BiomeTileKind::Underwater];
+
+impl BiomeTileKind {
+    fn test_name(self) -> &'static str {
+        match self {
+            BiomeTileKind::Land => "ZTHABITAT_ADD_LAND_TILES_LIVE",
+            BiomeTileKind::Water => "ZTHABITAT_ADD_WATER_TILES_LIVE",
+            BiomeTileKind::Underwater => "ZTHABITAT_ADD_UNDERWATER_TILES_LIVE",
+        }
+    }
+
+    /// The `.asm` predicate - the one instruction the three otherwise byte-for-byte identical
+    /// Windows bodies differ by.
+    fn qualifies(self, tile: u32) -> bool {
+        match self {
+            BiomeTileKind::Land => get_from_memory::<u8>(tile + 0x85) & 0x20 != 0,
+            BiomeTileKind::Water => get_from_memory::<u8>(tile + 0x83) & 3 != 0,
+            BiomeTileKind::Underwater => get_from_memory::<u8>(tile + 0x83) & 3 == 0 && get_from_memory::<u8>(tile + 0x85) & 0x20 == 0,
+        }
+    }
+
+    /// Real vanilla call-through (debug: the trampoline; release: the raw address, which re-enters
+    /// the port - same release semantics as [`vanilla_clear_tile_pool`]).
+    fn real(self, habitat_ptr: u32, out_vector: &mut [u32; 3]) {
+        let out = out_vector.as_mut_ptr() as *const i32;
+        match self {
+            BiomeTileKind::Land => unsafe { zthabitat::ADD_LAND_TILES.original()(habitat_ptr as *const u32, out) },
+            BiomeTileKind::Water => unsafe { zthabitat::ADD_WATER_TILES.original()(habitat_ptr as *const u32, out) },
+            BiomeTileKind::Underwater => unsafe { zthabitat::ADD_UNDERWATER_TILES.original()(habitat_ptr as *const u32, out) },
+        }
+    }
+
+    /// The port under test.
+    fn port(self, habitat: &ZTHabitat, out_vector_ptr: u32) {
+        match self {
+            BiomeTileKind::Land => habitat.add_land_tiles(out_vector_ptr),
+            BiomeTileKind::Water => habitat.add_water_tiles(out_vector_ptr),
+            BiomeTileKind::Underwater => habitat.add_underwater_tiles(out_vector_ptr),
+        }
+    }
+
+    /// Get-side (recursive-aggregator) test name - same filter identity, Stage 17's functions.
+    fn get_test_name(self) -> &'static str {
+        match self {
+            BiomeTileKind::Land => "ZTHABITAT_GET_LAND_TILES_LIVE",
+            BiomeTileKind::Water => "ZTHABITAT_GET_WATER_TILES_LIVE",
+            BiomeTileKind::Underwater => "ZTHABITAT_GET_UNDERWATER_TILES_LIVE",
+        }
+    }
+
+    /// Real vanilla get-side call-through (same routing notes as [`BiomeTileKind::real`]).
+    fn get_real(self, habitat_ptr: u32, out_vector: &mut [u32; 3]) {
+        let out = out_vector.as_mut_ptr() as *const i32;
+        match self {
+            BiomeTileKind::Land => unsafe { zthabitat::GET_LAND_TILES.original()(habitat_ptr as *const u32, out) },
+            BiomeTileKind::Water => unsafe { zthabitat::GET_WATER_TILES.original()(habitat_ptr as *const u32, out) },
+            BiomeTileKind::Underwater => unsafe { zthabitat::GET_UNDERWATER_TILES.original()(habitat_ptr as *const u32, out) },
+        }
+    }
+
+    /// The get-side port under test.
+    fn get_port(self, habitat: &ZTHabitat, out_vector_ptr: u32) {
+        match self {
+            BiomeTileKind::Land => habitat.get_land_tiles(out_vector_ptr),
+            BiomeTileKind::Water => habitat.get_water_tiles(out_vector_ptr),
+            BiomeTileKind::Underwater => habitat.get_underwater_tiles(out_vector_ptr),
+        }
+    }
+
+    /// Count-getter-side test name - same filter identity, the count-only wrappers.
+    fn num_test_name(self) -> &'static str {
+        match self {
+            BiomeTileKind::Land => "ZTHABITAT_GET_NUM_LAND_TILES_LIVE",
+            BiomeTileKind::Water => "ZTHABITAT_GET_NUM_WATER_TILES_LIVE",
+            BiomeTileKind::Underwater => "ZTHABITAT_GET_NUM_UNDERWATER_TILES_LIVE",
+        }
+    }
+
+    /// Real vanilla count-getter call-through (same routing notes as [`BiomeTileKind::real`]; the
+    /// per-entry `*const u32`/`*const c_void` parameter spread in `generated.rs` is matched
+    /// verbatim).
+    fn num_real(self, habitat_ptr: u32) -> i32 {
+        match self {
+            BiomeTileKind::Land => unsafe { zthabitat::GET_NUM_LAND_TILES.original()(habitat_ptr as *const u32) },
+            BiomeTileKind::Water => unsafe { zthabitat::GET_NUM_WATER_TILES.original()(habitat_ptr as *const std::ffi::c_void) },
+            BiomeTileKind::Underwater => unsafe { zthabitat::GET_NUM_UNDERWATER_TILES.original()(habitat_ptr as *const std::ffi::c_void) },
+        }
+    }
+
+    /// The count-getter port under test.
+    fn num_port(self, habitat: &ZTHabitat) -> i32 {
+        match self {
+            BiomeTileKind::Land => habitat.get_num_land_tiles(),
+            BiomeTileKind::Water => habitat.get_num_water_tiles(),
+            BiomeTileKind::Underwater => habitat.get_num_underwater_tiles(),
+        }
+    }
+
+    /// Random-getter-side test name - same filter identity, the random-draw wrappers.
+    fn random_test_name(self) -> &'static str {
+        match self {
+            BiomeTileKind::Land => "ZTHABITAT_GET_RANDOM_LAND_TILE_LIVE",
+            BiomeTileKind::Water => "ZTHABITAT_GET_RANDOM_WATER_TILE_LIVE",
+            BiomeTileKind::Underwater => "ZTHABITAT_GET_RANDOM_UNDERWATER_TILE_LIVE",
+        }
+    }
+
+    /// Real vanilla random-getter call-through (same routing notes as [`BiomeTileKind::real`]; the
+    /// per-entry `*const u32`/`*const c_void` parameter spread in `generated.rs` is matched verbatim,
+    /// and the `-> i32` return is the known pointer-as-integer wart - cast back to `u32` here).
+    fn random_real(self, habitat_ptr: u32) -> u32 {
+        match self {
+            BiomeTileKind::Land => (unsafe { zthabitat::GET_RANDOM_LAND_TILE.original()(habitat_ptr as *const u32) }) as u32,
+            BiomeTileKind::Water => (unsafe { zthabitat::GET_RANDOM_WATER_TILE.original()(habitat_ptr as *const std::ffi::c_void) }) as u32,
+            BiomeTileKind::Underwater => (unsafe { zthabitat::GET_RANDOM_UNDERWATER_TILE.original()(habitat_ptr as *const u32) }) as u32,
+        }
+    }
+
+    /// The random-getter port under test.
+    fn random_port(self, habitat: &ZTHabitat) -> u32 {
+        match self {
+            BiomeTileKind::Land => habitat.get_random_land_tile(),
+            BiomeTileKind::Water => habitat.get_random_water_tile(),
+            BiomeTileKind::Underwater => habitat.get_random_underwater_tile(),
+        }
+    }
+}
+
+/// Oracle for [`run_habitat_add_biome_tiles_live_test`]: `tiles` filtered by `kind`'s `.asm`
+/// predicate, in walk order, reading the two flag bytes directly off each tile - the same
+/// oracle-reads-real-flags shape as [`nearest_clear_water_tile_oracle`]. Seed-independent - none of
+/// the three functions draws.
+fn biome_tile_oracle(tiles: &[u32], kind: BiomeTileKind) -> Vec<u32> {
+    tiles.iter().copied().filter(|&tile| kind.qualifies(tile)).collect()
+}
+
+/// Extracts a real vanilla `std::vector<T*>` out-param's contents from a fresh zero-initialized
+/// 3-word scratch (`begin`/`end`/`cap_end`), freeing the buffer by capacity afterward - the same
+/// scratch management [`run_habitat_add_clear_tiles_matches_real_live_test`] uses
+/// ([`free_event_vector_buffer`], [`vector_push_pool_alloc4`]'s own teardown shape).
+fn extract_vector(fill: impl FnOnce(&mut [u32; 3])) -> Vec<u32> {
+    let mut scratch = [0u32; 3];
+    fill(&mut scratch);
+    let tiles: Vec<u32> = (scratch[0]..scratch[1]).step_by(4).map(get_from_memory::<u32>).collect();
+    free_event_vector_buffer(scratch[0], scratch[2].wrapping_sub(scratch[0]));
+    tiles
+}
+
+/// Shared driver for the three biome-tile-filter tests: per live habitat, snapshots the owned-tile
+/// list once (the same synchronous walk all three functions iterate on both sides), then checks one
+/// real vanilla call and one port call per `kind` element-for-element against the fully independent
+/// [`biome_tile_oracle`] - deterministic on both sides (no RNG draw, no `characteristics_dirty`
+/// recalculate). The other two kinds' real-vanilla lists are computed anyway and folded into the
+/// success line: the union of the three real lists must cover every owned tile by pointer identity
+/// (the tri-partite guarantee the decompiles actually support - the two bits are independent, so
+/// land/water overlap is possible in principle), and the count of tiles landing in 2+ lists is
+/// reported rather than asserted, since exclusivity is only empirical.
+fn run_habitat_add_biome_tiles_live_test(failure_log: &mut Option<std::fs::File>, kind: BiomeTileKind) -> bool {
+    let test_name = kind.test_name();
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut habitats_checked = 0u32;
+    let mut owned_total = 0u32;
+    let mut real_counts = [0u32; 3];
+    let mut overlap_tiles = 0u32;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        habitats_checked += 1;
+        owned_total += tiles.len() as u32;
+
+        let mut real_lists: [Vec<u32>; 3] = Default::default();
+        for (k, k_kind) in ALL_BIOME_KINDS.iter().enumerate() {
+            real_lists[k] = extract_vector(|scratch| k_kind.real(ptr, scratch));
+            real_counts[k] += real_lists[k].len() as u32;
+        }
+        let reimpl_tiles = extract_vector(|scratch| kind.port(unsafe { ref_from_memory::<ZTHabitat>(ptr) }, scratch.as_mut_ptr() as u32));
+
+        let expected = biome_tile_oracle(&tiles, kind);
+        let real_tiles = &real_lists[ALL_BIOME_KINDS.iter().position(|&k| k == kind).unwrap()];
+        if *real_tiles != expected {
+            failures.push(format!("habitat {} ({:#010x}): real ({:?}) != oracle ({:?})", i, ptr, real_tiles, expected));
+        }
+        if reimpl_tiles != expected {
+            failures.push(format!("habitat {} ({:#010x}): reimpl ({:?}) != oracle ({:?})", i, ptr, reimpl_tiles, expected));
+        }
+
+        for &tile in &tiles {
+            let lists_containing = real_lists.iter().filter(|list| list.contains(&tile)).count();
+            if lists_containing == 0 {
+                failures.push(format!("habitat {} ({:#010x}): owned tile {:#010x} in no biome list", i, ptr, tile));
+            }
+            if lists_containing >= 2 {
+                overlap_tiles += 1;
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, owned tiles: {}, land/water/underwater: {}/{}/{}, in >=2 lists: {})",
+                test_name, habitats_checked, owned_total, real_counts[0], real_counts[1], real_counts[2], overlap_tiles
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+pub(crate) fn run_habitat_add_land_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_add_biome_tiles_live_test(failure_log, BiomeTileKind::Land)
+}
+
+pub(crate) fn run_habitat_add_water_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_add_biome_tiles_live_test(failure_log, BiomeTileKind::Water)
+}
+
+pub(crate) fn run_habitat_add_underwater_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_add_biome_tiles_live_test(failure_log, BiomeTileKind::Underwater)
+}
+
+/// Shared driver for the three recursive biome-tile-aggregator tests (Stage 17's `get*Tiles`): per
+/// live habitat, builds the expected accumulation independently of both get-sides - real vanilla's
+/// own `add*Tiles` for `this` ([`BiomeTileKind::real`]), then the same call per amphibious neighbor
+/// in `walk_neighbor_tree` order with the payload read from node `+0x10`, the decompile's own
+/// aggregation shape - then checks one real vanilla call ([`BiomeTileKind::get_real`]) and one port
+/// call ([`BiomeTileKind::get_port`]) element-for-element against it. Deterministic on all sides
+/// (no RNG draw, no `characteristics_dirty` recalculate); the real vanilla getters' internal
+/// `add*Tiles` calls hit their now-detoured addresses, so they re-enter the Stage 16 ports under
+/// the battery - the same release-re-entry shape [`BiomeTileKind::real`] documents.
+///
+/// Ends with a non-vacuous-recursion assert: at least one habitat must carry a non-empty amphibious
+/// neighbor tree contributing at least one tile, else a walk-order or neighbor-payload bug would
+/// pass silently on a degenerate save - this needs the live save's genuine tank↔habitat amphibious
+/// connection (the same dependency the `ZTHABITATMGR_ENTITY_*_SMOKE_LIVE` tests stopped skipping
+/// for).
+fn run_habitat_get_biome_tiles_live_test(failure_log: &mut Option<std::fs::File>, kind: BiomeTileKind) -> bool {
+    let test_name = kind.get_test_name();
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut habitats_checked = 0u32;
+    let mut habitats_with_neighbors = 0u32;
+    let mut own_tiles_total = 0u32;
+    let mut neighbor_tiles_total = 0u32;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        habitats_checked += 1;
+
+        let own = extract_vector(|scratch| kind.real(ptr, scratch));
+        own_tiles_total += own.len() as u32;
+        let mut expected = own;
+        let neighbor_ptrs: Vec<u32> =
+            walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        for &neighbor in &neighbor_ptrs {
+            let part = extract_vector(|scratch| kind.real(neighbor, scratch));
+            neighbor_tiles_total += part.len() as u32;
+            expected.extend(part);
+        }
+        if !neighbor_ptrs.is_empty() {
+            habitats_with_neighbors += 1;
+        }
+
+        let real_out = extract_vector(|scratch| kind.get_real(ptr, scratch));
+        if real_out != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}, {} neighbors): real ({:?}) != expected ({:?})",
+                i,
+                ptr,
+                neighbor_ptrs.len(),
+                real_out,
+                expected
+            ));
+        }
+        let reimpl_out = extract_vector(|scratch| kind.get_port(habitat, scratch.as_mut_ptr() as u32));
+        if reimpl_out != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}, {} neighbors): reimpl ({:?}) != expected ({:?})",
+                i,
+                ptr,
+                neighbor_ptrs.len(),
+                reimpl_out,
+                expected
+            ));
+        }
+    }
+    if habitats_with_neighbors == 0 || neighbor_tiles_total == 0 {
+        failures.push(format!(
+            "non-vacuous-recursion assert failed: habitats with amphibious neighbors: {}, neighbor-contributed tiles: {} - the live save must contain a genuine amphibious connection for this test to exercise the recursion",
+            habitats_with_neighbors, neighbor_tiles_total
+        ));
+    }
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, with amphibious neighbors: {}, own tiles: {}, neighbor-contributed tiles: {})",
+                test_name, habitats_checked, habitats_with_neighbors, own_tiles_total, neighbor_tiles_total
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+pub(crate) fn run_habitat_get_land_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_biome_tiles_live_test(failure_log, BiomeTileKind::Land)
+}
+
+pub(crate) fn run_habitat_get_water_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_biome_tiles_live_test(failure_log, BiomeTileKind::Water)
+}
+
+pub(crate) fn run_habitat_get_underwater_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_biome_tiles_live_test(failure_log, BiomeTileKind::Underwater)
+}
+
+/// Shared driver for the three biome-tile count-getter tests (`getNum*Tiles`): per live habitat,
+/// builds the expected count independently of both count-sides - the same expected construction as
+/// [`run_habitat_get_biome_tiles_live_test`] (real vanilla's own `add*Tiles` via
+/// [`BiomeTileKind::real`] for `this`, then the same call per amphibious neighbor in
+/// `walk_neighbor_tree` order), with the expected count summed from the per-part element counts -
+/// then checks one real vanilla call ([`BiomeTileKind::num_real`]) and one port call
+/// ([`BiomeTileKind::num_port`]) against it. Deterministic on all sides (no RNG draw, no
+/// `characteristics_dirty` recalculate); the real vanilla count getters' internal `get*Tiles` calls
+/// hit their now-detoured addresses, so they re-enter the aggregator ports under the battery, whose
+/// own `add*Tiles` calls re-enter the filter ports - the same release-re-entry shape
+/// [`BiomeTileKind::real`] documents.
+///
+/// Ends with the same non-vacuous-recursion assert as the aggregator driver: at least one habitat
+/// must carry a non-empty amphibious neighbor tree contributing at least one tile, else a
+/// neighbor-walk bug would pass silently on a degenerate save.
+fn run_habitat_get_num_biome_tiles_live_test(failure_log: &mut Option<std::fs::File>, kind: BiomeTileKind) -> bool {
+    let test_name = kind.num_test_name();
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut habitats_checked = 0u32;
+    let mut habitats_with_neighbors = 0u32;
+    let mut own_tiles_total = 0u32;
+    let mut neighbor_tiles_total = 0u32;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        habitats_checked += 1;
+
+        let own = extract_vector(|scratch| kind.real(ptr, scratch));
+        own_tiles_total += own.len() as u32;
+        let mut expected = own.len() as i32;
+        let neighbor_ptrs: Vec<u32> =
+            walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        for &neighbor in &neighbor_ptrs {
+            let part = extract_vector(|scratch| kind.real(neighbor, scratch));
+            neighbor_tiles_total += part.len() as u32;
+            expected += part.len() as i32;
+        }
+        if !neighbor_ptrs.is_empty() {
+            habitats_with_neighbors += 1;
+        }
+
+        let real_count = kind.num_real(ptr);
+        if real_count != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}, {} neighbors): real count {} != expected {}",
+                i, ptr, neighbor_ptrs.len(), real_count, expected
+            ));
+        }
+        let reimpl_count = kind.num_port(habitat);
+        if reimpl_count != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}, {} neighbors): reimpl count {} != expected {}",
+                i, ptr, neighbor_ptrs.len(), reimpl_count, expected
+            ));
+        }
+    }
+    if habitats_with_neighbors == 0 || neighbor_tiles_total == 0 {
+        failures.push(format!(
+            "non-vacuous-recursion assert failed: habitats with amphibious neighbors: {}, neighbor-contributed tiles: {} - the live save must contain a genuine amphibious connection for this test to exercise the recursion",
+            habitats_with_neighbors, neighbor_tiles_total
+        ));
+    }
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, with amphibious neighbors: {}, own tiles: {}, neighbor-contributed tiles: {})",
+                test_name, habitats_checked, habitats_with_neighbors, own_tiles_total, neighbor_tiles_total
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+pub(crate) fn run_habitat_get_num_land_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_num_biome_tiles_live_test(failure_log, BiomeTileKind::Land)
+}
+
+pub(crate) fn run_habitat_get_num_water_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_num_biome_tiles_live_test(failure_log, BiomeTileKind::Water)
+}
+
+pub(crate) fn run_habitat_get_num_underwater_tiles_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_num_biome_tiles_live_test(failure_log, BiomeTileKind::Underwater)
+}
+
+/// Shared driver for the three biome-tile random-getter tests: per live habitat, builds the expected
+/// aggregate once - the real vanilla filter ([`BiomeTileKind::real`]) over `this` plus the same per
+/// amphibious neighbor in [`walk_neighbor_tree`] order, exactly what both real vanilla's `get*Tiles`
+/// callee and the port's `get_tiles_aggregating` produce - then snapshots the shared game RNG state
+/// and checks one reimpl draw and one real vanilla draw, each against [`assert_lcg_tile_draw`] over
+/// that same oracle list. Asserting real vanilla against the oracle validates the draw formula
+/// itself, not just cross-agreement. An empty pool expects a null return and an untouched seed (the
+/// `.asm`'s `JLE` gate sits before any RNG touch) and is exercised naturally per habitat - water on
+/// dry habitats, underwater on non-tanks. Deterministic apart from the one LCG advance: no
+/// `characteristics_dirty` recalculate anywhere in these bodies, so no settling draw is needed.
+///
+/// Non-vacuity (mirroring [`run_habitat_get_num_biome_tiles_live_test`]): the save must carry at
+/// least one habitat with a non-empty amphibious neighbor tree, and at least one non-empty aggregate
+/// for this kind - so the draw path itself actually ran on at least one habitat (save-dependent like
+/// the sibling tests).
+fn run_habitat_get_random_biome_tile_live_test(failure_log: &mut Option<std::fs::File>, kind: BiomeTileKind) -> bool {
+    let test_name = kind.random_test_name();
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut fail_flag = false;
+    let mut vacuity_failures: Vec<String> = Vec::new();
+    let mut habitats_checked = 0u32;
+    let mut habitats_with_neighbors = 0u32;
+    let mut non_empty_aggregates = 0u32;
+    let mut empty_pools = 0u32;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        habitats_checked += 1;
+
+        let mut expected = extract_vector(|scratch| kind.real(ptr, scratch));
+        let neighbor_ptrs: Vec<u32> =
+            walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        for &neighbor in &neighbor_ptrs {
+            expected.extend(extract_vector(|scratch| kind.real(neighbor, scratch)));
+        }
+        if !neighbor_ptrs.is_empty() {
+            habitats_with_neighbors += 1;
+        }
+        if expected.is_empty() {
+            empty_pools += 1;
+        } else {
+            non_empty_aggregates += 1;
+        }
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let reimpl_draw = kind.random_port(habitat);
+        fail_flag |= assert_lcg_tile_draw(
+            failure_log,
+            test_name,
+            "reimpl",
+            i,
+            ptr,
+            &expected,
+            seed_before,
+            get_from_memory(rng_addr),
+            reimpl_draw,
+        );
+
+        let seed_before: u32 = get_from_memory(rng_addr);
+        let real_draw = kind.random_real(ptr);
+        fail_flag |= assert_lcg_tile_draw(
+            failure_log,
+            test_name,
+            "real",
+            i,
+            ptr,
+            &expected,
+            seed_before,
+            get_from_memory(rng_addr),
+            real_draw,
+        );
+    }
+    if habitats_with_neighbors == 0 {
+        vacuity_failures.push(
+            "non-vacuous-recursion assert failed: no habitat has amphibious neighbors - the live save must contain a genuine amphibious connection for this test to exercise the neighbor walk".to_string(),
+        );
+    }
+    if non_empty_aggregates == 0 {
+        vacuity_failures.push(format!(
+            "non-vacuous-draw assert failed: every habitat's {:?} aggregate is empty - the draw path never ran on this save",
+            kind
+        ));
+    }
+    if fail_flag || !vacuity_failures.is_empty() {
+        for msg in &vacuity_failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, vacuity_failures.join("; ")).as_bytes());
+        }
+        true
+    } else {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, with amphibious neighbors: {}, non-empty aggregates: {}, empty pools: {})",
+                test_name, habitats_checked, habitats_with_neighbors, non_empty_aggregates, empty_pools
+            ),
+        );
+        false
+    }
+}
+
+pub(crate) fn run_habitat_get_random_land_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_random_biome_tile_live_test(failure_log, BiomeTileKind::Land)
+}
+
+pub(crate) fn run_habitat_get_random_water_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_random_biome_tile_live_test(failure_log, BiomeTileKind::Water)
+}
+
+pub(crate) fn run_habitat_get_random_underwater_tile_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    run_habitat_get_random_biome_tile_live_test(failure_log, BiomeTileKind::Underwater)
 }

@@ -53,11 +53,16 @@ pub mod hooks_zthabitatmgr {
         bfentity::VF_RETURN1_1 as IS_RIGHT_SALINITY,
         zthabitat::{
             GET_ATTRACTIVENESS, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, GET_GATE_TILE_PASS_IN, GET_GATE_TILE_PASS_OUT,
-            GET_NEAR_CLEAR_TILE, GET_NEAREST_CLEAR_TILE,
+            GET_NEAR_CLEAR_TILE, GET_NEAREST_CLEAR_TILE, GET_NEAREST_CLEAR_WATER_TILE,
             GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
             SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE, BLOCK_SERVICE,
             GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1,
             RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS,
+            ADD_LAND_TILES, ADD_WATER_TILES, ADD_UNDERWATER_TILES,
+            GET_LAND_TILES, GET_WATER_TILES, GET_UNDERWATER_TILES,
+            GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
+            GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
+            GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
@@ -304,6 +309,90 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_near_clear_tile(unit as u32, animal as u32) as i32
     }
 
+    /// `generated.rs`'s own entry is `thiscall` (`BFTile*` reference point - not a `ZTUnit*`, see
+    /// [`ZTHabitat::get_nearest_clear_water_tile`]'s own doc comment) returning the tile-as-int
+    /// (`0` when the guard fails or nothing qualifies).
+    #[detour(GET_NEAREST_CLEAR_WATER_TILE)]
+    unsafe extern "thiscall" fn get_nearest_clear_water_tile(this: *const u32, ref_tile: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_nearest_clear_water_tile(ref_tile as u32) as i32
+    }
+
+    /// The three biome-classification filters share one `thiscall` out-param shape and the same
+    /// `GET_SICKLY_ANIMALS`-style void signature - see [`ZTHabitat::add_land_tiles`]'s own doc comment
+    /// for the union-vs-exclusivity note.
+    #[detour(ADD_LAND_TILES)]
+    unsafe extern "thiscall" fn add_land_tiles(this: *const u32, out_vector: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_land_tiles(out_vector as u32)
+    }
+
+    #[detour(ADD_WATER_TILES)]
+    unsafe extern "thiscall" fn add_water_tiles(this: *const u32, out_vector: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_water_tiles(out_vector as u32)
+    }
+
+    #[detour(ADD_UNDERWATER_TILES)]
+    unsafe extern "thiscall" fn add_underwater_tiles(this: *const u32, out_vector: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_underwater_tiles(out_vector as u32)
+    }
+
+    /// The three recursive biome-tile aggregators share the add-filters' `thiscall` out-param shape -
+    /// see [`ZTHabitat::get_land_tiles`]'s own doc comment.
+    #[detour(GET_LAND_TILES)]
+    unsafe extern "thiscall" fn get_land_tiles(this: *const u32, out_vector: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_land_tiles(out_vector as u32)
+    }
+
+    #[detour(GET_WATER_TILES)]
+    unsafe extern "thiscall" fn get_water_tiles(this: *const u32, out_vector: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_water_tiles(out_vector as u32)
+    }
+
+    #[detour(GET_UNDERWATER_TILES)]
+    unsafe extern "thiscall" fn get_underwater_tiles(this: *const u32, out_vector: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_underwater_tiles(out_vector as u32)
+    }
+
+    /// The three biome-tile count getters share one `fastcall` shape (`ECX = this`, bare `RET`, no
+    /// stack args) and each is a thin scratch-vector wrapper over the matching aggregator above -
+    /// see [`ZTHabitat::get_num_land_tiles`]'s own doc comment. `generated.rs`'s u32-vs-c_void
+    /// `this` spread across the three entries is a regeneration wart; each detour matches its own
+    /// `FunctionDef`'s declared type verbatim (same precedent as `get_random_animal` above).
+    #[detour(GET_NUM_LAND_TILES)]
+    unsafe extern "fastcall" fn get_num_land_tiles(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_land_tiles()
+    }
+
+    #[detour(GET_NUM_WATER_TILES)]
+    unsafe extern "fastcall" fn get_num_water_tiles(this: *const std::ffi::c_void) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_water_tiles()
+    }
+
+    #[detour(GET_NUM_UNDERWATER_TILES)]
+    unsafe extern "fastcall" fn get_num_underwater_tiles(this: *const std::ffi::c_void) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_underwater_tiles()
+    }
+
+    /// The three biome-tile random getters share one `fastcall` shape (`ECX = this`, bare `RET`, no
+    /// stack args) and each is a thin scratch-vector + one-LCG-step wrapper over the matching
+    /// aggregator above - see [`ZTHabitat::get_random_tiles_aggregating`]. `generated.rs`'s `-> i32`
+    /// return is an ABI-identical wart (EAX carries a tile pointer or null), as is the u32-vs-c_void
+    /// `this` spread across the three entries; each detour matches its own `FunctionDef`'s declared
+    /// type verbatim and casts at the boundary (same precedent as `get_num_land_tiles` above).
+    #[detour(GET_RANDOM_LAND_TILE)]
+    unsafe extern "fastcall" fn get_random_land_tile(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_land_tile() as i32
+    }
+
+    #[detour(GET_RANDOM_WATER_TILE)]
+    unsafe extern "fastcall" fn get_random_water_tile(this: *const std::ffi::c_void) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_water_tile() as i32
+    }
+
+    #[detour(GET_RANDOM_UNDERWATER_TILE)]
+    unsafe extern "fastcall" fn get_random_underwater_tile(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_underwater_tile() as i32
+    }
+
     #[detour(GET_ANIMALS)]
     unsafe extern "thiscall" fn get_animals(this: *const u32) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_animals() as i32
@@ -317,6 +406,30 @@ pub mod hooks_zthabitatmgr {
     #[detour(GET_FOOD_TO_LEAVE)]
     unsafe extern "thiscall" fn get_food_to_leave(this: *const u32, category: u32, include_neighbors: bool) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_food_to_leave(category as i32, include_neighbors)
+    }
+
+    #[detour(GET_NUM_KEEPER_FOOD_TILES)]
+    unsafe extern "thiscall" fn get_num_keeper_food_tiles(this: *const u32, category: u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_keeper_food_tiles(category)
+    }
+
+    /// The keeper-food targeting triplet (`ZTGoalKeeperFood::decide`'s own three heuristics) - thin
+    /// pointer-casting wrappers over the ports, `generated.rs`'s `-> i32` return being the established
+    /// pointer-as-integer wart (EAX carries the picked food entity or null), same precedent as
+    /// [`get_random_land_tile`].
+    #[detour(GET_SMALLEST_KEEPER_FOOD)]
+    unsafe extern "thiscall" fn get_smallest_keeper_food(this: *const u32, tile: *const u32, category: u32, include_neighbors: bool) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_smallest_keeper_food(tile as u32, category, include_neighbors) as i32
+    }
+
+    #[detour(GET_NEAREST_KEEPER_FOOD)]
+    unsafe extern "thiscall" fn get_nearest_keeper_food(this: *const u32, tile: *const u32, category: u32, include_neighbors: bool) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_nearest_keeper_food(tile as u32, category, include_neighbors) as i32
+    }
+
+    #[detour(GET_RANDOM_KEEPER_FOOD)]
+    unsafe extern "thiscall" fn get_random_keeper_food(this: *const u32, tile: *const u32, category: u32, include_neighbors: bool) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_keeper_food(tile as u32, category, include_neighbors) as i32
     }
 
     #[detour(GET_NUM_KEEPERS)]
@@ -418,6 +531,11 @@ pub mod hooks_zthabitatmgr {
     #[detour(SET_TIME_LAST_SERVICED)]
     unsafe extern "thiscall" fn set_time_last_serviced(this: *const u32, time: u32, propagate: bool) {
         unsafe { mut_from_memory::<ZTHabitat>(this) }.set_time_last_serviced(time, propagate)
+    }
+
+    #[detour(TRIGGER_KEEPER_ARRIVED)]
+    unsafe extern "thiscall" fn trigger_keeper_arrived(this: *const u32, keeper: *const u32, scheduled: bool) {
+        unsafe { mut_from_memory::<ZTHabitat>(this) }.trigger_keeper_arrived(keeper as u32, scheduled)
     }
 
     /// Detoured (byte-for-byte reproducing real vanilla's own call graph adds no new risk over baseline),

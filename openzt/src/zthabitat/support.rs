@@ -4,7 +4,7 @@ use openzt_detour::{
         bfmap::WORLD_TO_VIRTUAL_0,
         bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
-        poolalloc::ALLOCATE as POOLALLOC_ALLOCATE,
+        poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
         zthabitat::GET_SPECIES_RATING,
     },
@@ -296,6 +296,13 @@ pub const RVA_TANK_WALL_TYPE_CHECK_ARG: u32 = 0x0023_8720;
 /// already document (`...0x638750, 0x638760, 0x638770...`, consistent spacing on both sides) - same
 /// caveat as those two. RVA = `0x00638760 - 0x400000`.
 pub const RVA_KEEPER_TYPE_CHECK_ARG: u32 = 0x0023_8760;
+
+/// `isCastClass`-style type-check argument for the `ZTFood` gate in `getNumKeeperFoodTiles`
+/// (`&DAT_006386c0` in the decompile; the macOS build names the same call site
+/// `BFEntityCastConst<ZTFood>` - attribution the sibling scenery/animal/guest/keeper tags lack). Sits in
+/// the same tag-table region as [`RVA_KEEPER_TYPE_CHECK_ARG`]
+/// (`0x00638660`/`0x00638670`/`0x006386c0`/`0x00638760`). RVA = `0x006386c0 - 0x400000`.
+pub const RVA_ZTFOOD_TYPE_CHECK_ARG: u32 = 0x0023_86c0;
 
 /// `DAT_00639148`'s RVA - a shared "gate placement/conversion in progress" flag, set to `1` for the
 /// duration of `ZTHabitatMgr::replaceGateWithFence`/`replaceFenceWithGate` and read as an early-return
@@ -787,6 +794,27 @@ pub fn free_event_vector_buffer(buf: u32, byte_capacity: u32) {
 /// operates on an arbitrary out-param address handed in by the caller (real vanilla's own stack-allocated
 /// local vector, in every known call site).
 pub fn vector_push_pool_alloc4(vector_ptr: u32, value: u32) {
+    vector_push_pool_alloc4_with_dealloc(vector_ptr, value, free_event_vector_buffer);
+}
+
+/// Variant used by the biome-tile-filter triplet (`ZTHabitat_addLandTiles.c`/`_addWaterTiles.c`/
+/// `_addUnderwaterTiles.c`, all byte-for-byte identical apart from the predicate): same growth shape as
+/// [`vector_push_pool_alloc4`], but the old buffer goes back through real vanilla
+/// `PoolAlloc::deallocate(buf, byte_capacity)` guarded on non-null (`.asm`-confirmed
+/// `TEST %EAX, %EAX`/`JZ` around the call, and `SAR 2`/`SHL 2` capacity math) - a different teardown
+/// from the manual freelist split [`free_event_vector_buffer`] reimplements, which those decompiles
+/// themselves don't use at this call site.
+pub fn vector_push_pool_alloc4_pool_dealloc(vector_ptr: u32, value: u32) {
+    vector_push_pool_alloc4_with_dealloc(vector_ptr, value, |buf, byte_capacity| {
+        if buf != 0 {
+            unsafe { POOLALLOC_DEALLOCATE.original()(buf as *const u32, byte_capacity) };
+        }
+    });
+}
+
+/// [`vector_push_pool_alloc4`]'s own body, parameterized over the old buffer's teardown - the two
+/// shapes above are the only variants this corpus's push-back sites use.
+fn vector_push_pool_alloc4_with_dealloc(vector_ptr: u32, value: u32, dealloc_old_buffer: fn(u32, u32)) {
     let begin = get_from_memory::<u32>(vector_ptr);
     let end = get_from_memory::<u32>(vector_ptr + 4);
     let cap_end = get_from_memory::<u32>(vector_ptr + 8);
@@ -805,7 +833,7 @@ pub fn vector_push_pool_alloc4(vector_ptr: u32, value: u32) {
         if new_buf != 0 {
             save_to_memory(new_buf + old_len * 4, value);
         }
-        free_event_vector_buffer(begin, cap_end - begin);
+        dealloc_old_buffer(begin, cap_end - begin);
 
         save_to_memory(vector_ptr, new_buf);
         save_to_memory(vector_ptr + 4, new_buf + (old_len + 1) * 4);
