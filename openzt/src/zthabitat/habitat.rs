@@ -3063,6 +3063,19 @@ impl ZTHabitat {
         self.vtable == Self::TANK_VTABLE_PTR
     }
 
+    /// Ports `ZTHabitat::isTank` (vtable `+0x20`, `ZTHabitat_isTank.c`) base default: constant
+    /// `false`. That slot's address (`0x004016d1`, `generated.rs`'s `standalone::VF_RETURN_FALSE`)
+    /// is a 2-instruction `XOR AL,AL; RET` stub roughly 150 vtable slots across the binary point at
+    /// (xref-confirmed; `BFEntity.md` alone already lists six), so any detour on it would run for
+    /// all of those classes' own boolean predicates too - like [`Self::is_right_salinity`]'s shared
+    /// base, this port never reads `self`, which keeps such a hook behavior-preserving.
+    /// `ZTTankExhibit`'s override (`0x00401302`, `standalone::VF_RETURN_TRUE_0`) is likewise a
+    /// constant stub and stays real vanilla; the battery's `ZTHABITAT_IS_TANK_LIVE` reaches it by
+    /// dispatch to confirm [`Self::is_tank`]'s vtable-identity pointer check agrees with it.
+    pub fn is_tank_base_default(&self) -> bool {
+        false
+    }
+
     pub fn is_show_tank(&self) -> bool {
         self.zt_show_info_ptr != 0
     }
@@ -3965,6 +3978,47 @@ impl fmt::Display for ZTHabitat {
         // writeln!(f, " unknown_ptr6: {:#x},", self.unknown_ptr6)?;
         // writeln!(f, " created_timestamp: {:#x},", self.created_timestamp)?;
         writeln!(f, "}}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::{self, offset_of};
+
+    use super::ZTHabitat;
+    use crate::zthabitat::tank_exhibit::ZTTankExhibit;
+
+    /// Host-safe fixture: `mem::zeroed()` is valid for every field of both structs (raw ints,
+    /// `f32`s, `FileTime`s, the 3-pointer `ZTBufferString`), and only `vtable` is ever written.
+    /// No test here calls through the fixture's vtable word as a function pointer - that would
+    /// dereference into unmapped memory.
+    fn fixture_habitat(vtable: u32) -> ZTHabitat {
+        let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
+        habitat.vtable = vtable;
+        habitat
+    }
+
+    /// `ZTHabitat_isTank.c`/`.asm` - the base virtual is a constant `false` regardless of `self`.
+    #[test]
+    fn base_default_is_constant_false() {
+        assert!(!fixture_habitat(0x00632100).is_tank_base_default());
+        assert!(!fixture_habitat(ZTHabitat::TANK_VTABLE_PTR).is_tank_base_default());
+    }
+
+    /// `is_tank()` reads the object's first word (the real vftptr slot - offset 0) and answers
+    /// `true` exactly for the `ZTTankExhibit` vtable (`0x006312bc`), `false` for the plain
+    /// `ZTHabitat` vtable (`0x00632100`, per `private/docs/vtables/ZTHabitat.md`).
+    #[test]
+    fn vtable_identity_check_distinguishes_tank_exhibit() {
+        assert_eq!(offset_of!(ZTHabitat, vtable), 0);
+        assert_eq!(offset_of!(ZTTankExhibit, habitat), 0);
+
+        assert!(!fixture_habitat(0x00632100).is_tank());
+        assert!(!fixture_habitat(0).is_tank());
+
+        let mut tank: ZTTankExhibit = unsafe { mem::zeroed() };
+        tank.habitat.vtable = ZTHabitat::TANK_VTABLE_PTR;
+        assert!(tank.is_tank());
     }
 }
 

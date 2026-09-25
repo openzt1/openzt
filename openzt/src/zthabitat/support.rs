@@ -903,6 +903,18 @@ pub unsafe fn call_vtable_slot_noargs(entity_ptr: u32, slot_offset: u32) {
     f(entity_ptr);
 }
 
+/// Same shape as [`call_vtable_slot_noargs`], but propagating the slot's `bool` result (read from
+/// `AL`, matching [`call_vtable_slot_with_ptr_ret_bool`]) - `ZTHabitat`'s own vtable `+0x20` `isTank`
+/// dispatch, used by the battery's `ZTHABITAT_IS_TANK_LIVE` (both of that slot's vtable poles - the
+/// plain-habitat base and `ZTTankExhibit`'s override - are 2-instruction constant-return stubs that
+/// never dereference `this`).
+pub unsafe fn call_vtable_slot_noargs_ret_bool(entity_ptr: u32, slot_offset: u32) -> bool {
+    let vtable = get_from_memory::<u32>(entity_ptr);
+    let target = get_from_memory::<u32>(vtable + slot_offset);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> bool>(target) };
+    f(entity_ptr)
+}
+
 /// Calls a 1-arg (`u8`) thiscall vtable slot - `ZTHabitat_setIsNotShowExhibit.c`'s sound teardown's final
 /// `(**vtable)(1)` scalar-deleting-destructor call (slot `+0x0`), the same idiom this vtable doc's own
 /// "+0x18 slot" correction documents for `ZTHabitat`'s own destructor.

@@ -22,8 +22,9 @@ use crate::ztmapview::BFTile;
 use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
 use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
 use crate::zthabitatmgr::{
-    animal_food_target, call_bfunit_tile_cost_vtable_slot, entity_name_bytes, free_event_vector_buffer, hooks_zthabitatmgr, walk_neighbor_tree,
-    walk_tile_list, ZTHabitat, ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG,
+    animal_food_target, call_bfunit_tile_cost_vtable_slot, call_vtable_slot_noargs_ret_bool, entity_name_bytes, free_event_vector_buffer,
+    hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat, ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
+    RVA_ZTFOOD_TYPE_CHECK_ARG,
 };
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -175,6 +176,64 @@ pub(crate) fn run_habitat_do_tank_check_live_test(failure_log: &mut Option<std::
         |ptr| unsafe { zthabitatmgr::DO_TANK_CHECK.original()(ptr as i32) },
         |habitat| habitat.do_tank_check(),
     )
+}
+
+/// `ZTHabitat::isTank` comparison: the real pole is the vtable `+0x20` slot dispatch itself (exactly
+/// what real vanilla's own `isTank` call sites execute - the `ZTTankExhibit` override's
+/// constant-`true` stub for tanks, the shared `VF_RETURN_FALSE` stub for everything else), compared
+/// against the vtable-identity pointer check [`ZTHabitat::is_tank`] over every real habitat.
+/// Read-only - both slot poles are 2-instruction constant-return stubs that never touch `this` or
+/// any game state. The base slot itself is deliberately not detoured (3-byte stub, no patch area -
+/// see `hooks_zthabitatmgr`'s own un-hooked `is_tank`).
+pub(crate) fn run_habitat_is_tank_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_IS_TANK_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut tanks = 0u32;
+    let mut non_tanks = 0u32;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let real = unsafe { call_vtable_slot_noargs_ret_bool(ptr, 0x20) };
+        if real {
+            tanks += 1;
+        } else {
+            non_tanks += 1;
+        }
+        let value = habitat.is_tank();
+        if value != real {
+            failures.push(format!(
+                "habitat {} ({:#010x}): real +0x20 slot dispatch = {}, is_tank() = {}",
+                i, ptr, real, value
+            ));
+        }
+    }
+    // Non-vacuity: the loaded zoo must contain at least one of each kind, or one pole of the
+    // virtual dispatch (and one arm of the pointer check) was never actually exercised.
+    if tanks == 0 {
+        failures.push("non-vacuous assert failed: no tank exhibits in the loaded zoo".to_string());
+    }
+    if non_tanks == 0 {
+        failures.push("non-vacuous assert failed: no non-tank habitats in the loaded zoo".to_string());
+    }
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!("{} (habitats: {}, tanks: {}, non-tanks: {})", test_name, tanks + non_tanks, tanks, non_tanks),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
 }
 
 /// Compares real `ZTHabitat::isRightSalinity`'s base-class default against the reimplemented constant

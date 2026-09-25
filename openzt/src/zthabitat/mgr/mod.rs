@@ -136,6 +136,26 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr as u32) }.do_tank_check()
     }
 
+    /// `ZTHabitat::isTank`'s base-slot port (`vtable +0x20` - see
+    /// [`ZTHabitat::is_tank_base_default`]), matching the real slot's own signature
+    /// (`generated.rs`'s `standalone::VF_RETURN_FALSE`, `thiscall fn(*const c_void) -> u8`) -
+    /// implemented but **deliberately left un-hooked**, same precedent as this module's own
+    /// `create_edge_pairs`, but for a harder reason than a suspected live bug: the address
+    /// *cannot* be detoured at all. The stub is 3 bytes (`XOR AL,AL; RET`), and retour's patcher
+    /// needs either 5 inline bytes or a 5-byte all-padding hot-patch area above the function -
+    /// both fail here (`0x004016d4..d5` are the first 2 bytes of the next function, whose 6 direct
+    /// callers would be corrupted by any inline patch; `0x004016cc..d1` are the live tail of the
+    /// previous one), so `GenericDetour::new` returns `NoPatchArea` and the detour macro's own
+    /// `LazyLock`-`.unwrap()` would panic the game inside `init_detours`. (`isRightSalinity`'s
+    /// shared base `VF_RETURN1_1` only hooks cleanly because it is exactly 5 bytes.) A `#[detour]`
+    /// on the shared stub would also fire for the ~150 other vtable slots pointing at it, so the
+    /// body must stay a `self`-blind constant regardless. Real `isTank` dispatch is covered by
+    /// the battery's `ZTHABITAT_IS_TANK_LIVE` instead.
+    #[allow(dead_code)]
+    unsafe extern "thiscall" fn is_tank(this: *const std::ffi::c_void) -> u8 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.is_tank_base_default() as u8
+    }
+
     #[detour(IS_SHOW_STOPPED)]
     unsafe extern "fastcall" fn is_show_stopped(this: *const u32) -> u32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.is_show_stopped() as u32

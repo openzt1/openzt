@@ -608,6 +608,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_needs_show_keeper_matches_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_IS_TANK_LIVE",
+                run: tests::zthabitatmgr::run_habitat_is_tank_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_REMOVE_VIEWING_AREAS_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_remove_viewing_areas_roundtrip_live_test,
             },
