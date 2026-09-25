@@ -236,6 +236,84 @@ pub(crate) fn run_habitat_is_tank_live_test(failure_log: &mut Option<std::fs::Fi
     }
 }
 
+/// Compares `hasPortalAnimal` (`ZTHabitat_hasPortalAnimal.c`/`.asm`) for every (habitat, target)
+/// pair over the live zoo's own habitats, plus a null target - exercising vanilla's own
+/// null-destination-tile == null-parameter arm and the full `all_animals` walk on both sides. Real
+/// vanilla's return is low-byte-only meaningful (`MOV AL,1`/`XOR AL,AL`, callers `TEST AL,AL`), so
+/// the real side is masked with `low_byte_bool`. The plan's "false on stationary exhibits"
+/// expectation is asserted directly: a habitat whose `all_animals` vector is empty must answer
+/// `false` for every non-null target on both sides.
+pub(crate) fn run_habitat_has_portal_animal_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_HAS_PORTAL_ANIMAL_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut stationary_habitats = 0u32;
+    let mut comparisons = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let stationary = habitat.all_animals_begin == habitat.all_animals_end;
+        for &target_ptr in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+            let real = low_byte_bool(unsafe {
+                zthabitat::HAS_PORTAL_ANIMAL.original()(habitat_ptr as *const u32, target_ptr as *const u32)
+            });
+            let reimpl = habitat.has_portal_animal(target_ptr);
+            comparisons += 1;
+            if real != reimpl {
+                failures.push(format!(
+                    "habitat {:#010x}, target {:#010x}: real={}, reimpl={}",
+                    habitat_ptr, target_ptr, real, reimpl
+                ));
+            }
+            if stationary && target_ptr != 0 && (real || reimpl) {
+                failures.push(format!(
+                    "stationary exhibit {:#010x} (no animals) answered true for target {:#010x}",
+                    habitat_ptr, target_ptr
+                ));
+            }
+        }
+        if stationary {
+            stationary_habitats += 1;
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, comparisons: {}, animal-free habitats: {})",
+                test_name,
+                habitat_ptrs.len(),
+                comparisons,
+                stationary_habitats
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Compares real `ZTHabitat::isRightSalinity`'s base-class default against the reimplemented constant
 /// `true`, over every non-tank habitat in the live, loaded zoo (`ZTTankExhibit`'s own override sits at a
 /// different address and is out of scope - see `zthabitatmgr.rs`'s own `is_right_salinity` doc comment).

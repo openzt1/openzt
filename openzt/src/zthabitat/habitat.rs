@@ -2013,6 +2013,56 @@ impl ZTHabitat {
         true
     }
 
+    /// Ports `ZTHabitat::hasPortalAnimal` (`ZTHabitat_hasPortalAnimal.c`/`.asm`, `generated.rs`'s
+    /// `HAS_PORTAL_ANIMAL` at `0x0059e9a3`): whether any direct-occupant animal is in a show-portal
+    /// transit state *and heading for* `target_habitat_ptr`. Reads the `all_animals` vector fields
+    /// directly (`all_animals_begin`/`all_animals_end`) - no `characteristics_dirty`
+    /// lazy-recalculate and no [`Self::get_all_animals`] sort, matching real vanilla's own straight
+    /// field reads (`MOV ESI,[EBX+0x6c]` / `MOV EAX,[EBX+0x70]`).
+    ///
+    /// Per animal, the current goal/action id at `animal+0x170` must be exactly `0x85` or `0x86` (a
+    /// full 32-bit compare in the `.asm`, not a byte test). The macOS decompile reaches the two
+    /// checks through named calls - `ZTAnimal::hasShowGoal` for this state check and
+    /// `ZTUnit::getTargetHabitat` for the target resolution - both inlined on Windows. The target
+    /// resolution reads the animal's destination tile pointer at `animal+0x234` and resolves the
+    /// habitat owning that tile: a null tile pointer yields candidate habitat `0`, otherwise the
+    /// tile's own grid coordinates (`BFTile` `pos` at `+0x34`/`+0x38`, the same fields every other
+    /// tile walker reads) index the habitat grid exactly as [`ZTHabitatMgr::get_habitat_ptr`] does
+    /// (`*(*(mgr+0x28 + x*0xc) + y*0x28)` at `.asm` level). One deviation: real vanilla derefs both
+    /// grid levels unconditionally (raw UB on an out-of-range coordinate - `cmp` against the target
+    /// is the very next instruction after the read), while [`ZTHabitatMgr::get_habitat_ptr`] is the
+    /// established bounds-checked grid read - identical for every in-range coordinate, the only
+    /// state a real animal's destination tile produces. The first animal whose resolved habitat
+    /// equals `target_habitat_ptr` wins; a null `target_habitat_ptr` therefore matches a portal
+    /// animal with no destination tile (vanilla's own `0 == 0` arm), reproduced faithfully.
+    ///
+    /// Real vanilla's return is a low-byte-only bool (`MOV AL,1` / `XOR AL,AL`; the C render's
+    /// `CONCAT31`/`& 0xffffff00` shapes pack garbage upper bytes around it) - the sole caller,
+    /// `ZTHabitat::updatePortals` (Win call sites `0x0059e9f9`/`0x0059ea09`; macOS
+    /// `ZTHabitat_updatePortals.c`), consumes it with `TEST AL,AL` while deciding which direction of
+    /// each show-portal pair to animate. The port returns a clean `bool`.
+    pub fn has_portal_animal(&self, target_habitat_ptr: u32) -> bool {
+        for animal_addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
+            let animal_ptr: u32 = get_from_memory(animal_addr);
+            let state: u32 = get_from_memory(animal_ptr + 0x170);
+            if state != 0x85 && state != 0x86 {
+                continue;
+            }
+            let target_tile_ptr: u32 = get_from_memory(animal_ptr + 0x234);
+            let resolved_habitat = if target_tile_ptr == 0 {
+                0
+            } else {
+                let x = get_from_memory::<i32>(target_tile_ptr + 0x34);
+                let y = get_from_memory::<i32>(target_tile_ptr + 0x38);
+                globals().zthabitatmgr().get_habitat_ptr(x, y)
+            };
+            if resolved_habitat == target_habitat_ptr {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Ports `ZTHabitat::getSmallestKeeperFood` (`ZTHabitat_getSmallestKeeperFood.c`/`.asm`,
     /// `generated.rs`'s `GET_SMALLEST_KEEPER_FOOD`): returns the food entity of keeper-food category
     /// `category` carrying the smallest `entity+0x154` quantity (macOS reads the equivalent through its
@@ -3986,6 +4036,7 @@ mod tests {
     use std::mem::{self, offset_of};
 
     use super::ZTHabitat;
+    use crate::util::save_to_memory;
     use crate::zthabitat::tank_exhibit::ZTTankExhibit;
 
     /// Host-safe fixture: `mem::zeroed()` is valid for every field of both structs (raw ints,
@@ -3996,6 +4047,85 @@ mod tests {
         let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
         habitat.vtable = vtable;
         habitat
+    }
+
+    /// Writes `state` into a leaked zeroed fake `ZTAnimal` block at the two offsets
+    /// [`ZTHabitat::has_portal_animal`] reads (`+0x170` goal/action id, `+0x234` destination tile
+    /// pointer) and returns the block's address. Leaked rather than stack-allocated so the raw
+    /// address stays valid for the port's volatile reads, same pattern as the
+    /// `reimplementation_tests` synthetic fixtures.
+    fn leak_fake_animal(state: u32, target_tile_ptr: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x238].into_boxed_slice());
+        let animal_ptr = block.as_ptr() as u32;
+        save_to_memory(animal_ptr + 0x170, state);
+        save_to_memory(animal_ptr + 0x234, target_tile_ptr);
+        animal_ptr
+    }
+
+    /// A zeroed [`ZTHabitat`] whose `all_animals` vector spans `animals` (leaked so the raw
+    /// begin/end pointers stay valid).
+    fn fixture_habitat_with_animals(animals: &[u32]) -> ZTHabitat {
+        let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
+        let block: &'static mut [u32] = Box::leak(animals.to_vec().into_boxed_slice());
+        habitat.all_animals_begin = block.as_ptr() as u32;
+        habitat.all_animals_end = block.as_ptr() as u32 + block.len() as u32 * 4;
+        habitat
+    }
+
+    /// `hasPortalAnimal`'s `.asm` empty-vector early-out (`CMP ESI, EAX` → `XOR AL,AL`): no
+    /// animals means `false` regardless of the requested target, null or not.
+    #[test]
+    fn empty_animals_vector_returns_false() {
+        let habitat = fixture_habitat_with_animals(&[]);
+        assert!(!habitat.has_portal_animal(0x0063_2100));
+        assert!(!habitat.has_portal_animal(0));
+    }
+
+    /// Animals whose `+0x170` goal/action id is neither `0x85` nor `0x86` are skipped without
+    /// touching their destination tile (full 32-bit compares in the `.asm`, so neighboring ids
+    /// like `0x84`/`0x87` don't match either, and neither does `0x185`'s shared low byte).
+    #[test]
+    fn non_portal_animal_states_are_skipped() {
+        for state in [0u32, 0x84, 0x87, 0x185] {
+            let habitat = fixture_habitat_with_animals(&[leak_fake_animal(state, 0)]);
+            assert!(!habitat.has_portal_animal(0), "state {state:#x} matched");
+        }
+    }
+
+    /// A portal-state animal (`0x85`/`0x86`) with a null destination tile resolves to candidate
+    /// habitat `0` - which matches only a null `target_habitat_ptr` (vanilla's own `0 == 0` arm,
+    /// `.asm` `XOR EAX,EAX; JMP` to the compare) and loses against any non-null one. The null-tile
+    /// arm never reaches the habitat grid, keeping these fixtures host-safe.
+    #[test]
+    fn portal_animal_null_tile_resolution() {
+        for state in [0x85u32, 0x86] {
+            let habitat = fixture_habitat_with_animals(&[leak_fake_animal(state, 0)]);
+            assert!(habitat.has_portal_animal(0), "state {state:#x} should match a null target");
+            assert!(!habitat.has_portal_animal(0x0059_e9a3), "state {state:#x} should not match a non-null target");
+        }
+    }
+
+    /// The loop continues past non-portal animals and stops at the first match, so a portal
+    /// animal in any position decides the answer.
+    #[test]
+    fn portal_animal_is_found_in_any_loop_position() {
+        let habitat = fixture_habitat_with_animals(&[
+            leak_fake_animal(0x84, 0),
+            leak_fake_animal(0x86, 0),
+        ]);
+        assert!(habitat.has_portal_animal(0));
+
+        let habitat = fixture_habitat_with_animals(&[
+            leak_fake_animal(0x86, 0),
+            leak_fake_animal(0x85, 0),
+        ]);
+        assert!(habitat.has_portal_animal(0));
+
+        let habitat = fixture_habitat_with_animals(&[
+            leak_fake_animal(0x85, 0),
+            leak_fake_animal(0x86, 0),
+        ]);
+        assert!(!habitat.has_portal_animal(0x0059_e9a3));
     }
 
     /// `ZTHabitat_isTank.c`/`.asm` - the base virtual is a constant `false` regardless of `self`.

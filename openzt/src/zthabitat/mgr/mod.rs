@@ -63,7 +63,7 @@ pub mod hooks_zthabitatmgr {
             GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
-            GET_NEAREST_DIRT_PILE, NEEDS_SHOW_KEEPER,
+            GET_NEAREST_DIRT_PILE, HAS_PORTAL_ANIMAL, NEEDS_SHOW_KEEPER,
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
@@ -557,6 +557,15 @@ pub mod hooks_zthabitatmgr {
     #[detour(REMOVE_FOOD_TARGET_FOR_ALL)]
     unsafe extern "thiscall" fn remove_food_target_for_all(this: *const u32, food_entity: *const u32) -> u32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_food_target_for_all(food_entity as u32) as u32
+    }
+
+    /// `generated.rs`'s own `-> u32` return is real vanilla's undefined-upper-bytes bool render
+    /// (`MOV AL,1` / `XOR AL,AL`; the C packs garbage into the upper 3 bytes) - real callers
+    /// `TEST AL,AL` only, so the detour widens the port's clean bool to match the declared
+    /// signature (see [`ZTHabitat::has_portal_animal`]'s own doc comment).
+    #[detour(HAS_PORTAL_ANIMAL)]
+    unsafe extern "thiscall" fn has_portal_animal(this: *const u32, target_habitat: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.has_portal_animal(target_habitat as u32) as u32
     }
 
     #[detour(ZTHABITAT_SET_DIRTY_CHARACTERISTICS)]
