@@ -620,6 +620,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_get_tiles_copy_matches_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_IS_SHOW_NEIGHBOR_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_is_show_neighbor_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_REMOVE_VIEWING_AREAS_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_remove_viewing_areas_roundtrip_live_test,
             },

@@ -63,7 +63,7 @@ pub mod hooks_zthabitatmgr {
             GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
-            GET_NEAREST_DIRT_PILE, HAS_PORTAL_ANIMAL, NEEDS_SHOW_KEEPER,
+            GET_NEAREST_DIRT_PILE, HAS_PORTAL_ANIMAL, IS_SHOW_NEIGHBOR, NEEDS_SHOW_KEEPER,
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
@@ -564,6 +564,14 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.has_portal_animal(target_habitat as u32)
     }
 
+    /// The real return is a low-byte-only bool (`is_show_neighbor`'s own doc comment); the `as u32`
+    /// widen hands vanilla callers a clean 0/1 in the shape today's `generated.rs` entry (`-> u32`)
+    /// declares, and drops once regeneration flips the entry to `-> bool`.
+    #[detour(IS_SHOW_NEIGHBOR)]
+    unsafe extern "thiscall" fn is_show_neighbor(this: *const u32, neighbor: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.is_show_neighbor(neighbor as u32) as u32
+    }
+
     /// Ports `ZTHabitat::getTilesCopy` - the out-param is a real `list<uint>` that `0x004f3a31`'s own
     /// body default-constructs; `RET 0x4` returns it, so the detour returns the pointer vanilla's
     /// callers read.
@@ -577,6 +585,14 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_tiles_copy_real(this: *const u32, out_list: *const i32) -> *const i32 {
         unsafe { GET_TILES_COPY_DETOUR.call(this, out_list) }
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test, same as
+    /// [`get_tiles_copy_real`] - the unmasked `u32` is intentional; the caller masks with
+    /// [`low_byte_bool`](crate::util::low_byte_bool).
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn is_show_neighbor_real(this: *const u32, neighbor: *const u32) -> u32 {
+        unsafe { IS_SHOW_NEIGHBOR_DETOUR.call(this, neighbor) }
     }
 
     #[detour(ZTHABITAT_SET_DIRTY_CHARACTERISTICS)]

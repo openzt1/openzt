@@ -448,6 +448,95 @@ pub(crate) fn run_habitat_get_tiles_copy_matches_real_live_test(failure_log: &mu
     }
 }
 
+/// Compares `isShowNeighbor` (`ZTHabitat_isShowNeighbor.c`/`.asm`) for every (habitat, target) pair
+/// over the live zoo's own habitats, plus a null target, cross-checking both sides against an
+/// independent membership oracle - a [`walk_neighbor_tree`] linear scan of the same
+/// `show_neighbors_head` tree the port binary-searches (each node's `+0x10` payload, the same read
+/// `hilite_show_neighbors`' own walk performs), so a descent bug cannot agree with itself.
+/// The real vanilla return carries garbage upper bytes, so it is masked with [`low_byte_bool`]
+/// before comparing. Coverage counters (habitats, comparisons, non-empty show-neighbor trees, true
+/// hits) are logged so a save with no show tanks is visibly comparison-only rather than silently
+/// green - the populated-tree paths are then carried by habitat.rs's own host unit tests.
+pub(crate) fn run_habitat_is_show_neighbor_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_IS_SHOW_NEIGHBOR_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut populated_trees = 0u32;
+    let mut true_hits = 0u32;
+    let mut comparisons = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let tree_members: Vec<u32> = walk_neighbor_tree(*habitat.show_neighbors_head())
+            .map(|node| get_from_memory::<u32>(node + 0x10))
+            .collect();
+        if !tree_members.is_empty() {
+            populated_trees += 1;
+        }
+        for &target_ptr in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+            let real = low_byte_bool(hooks_zthabitatmgr::is_show_neighbor_real(
+                habitat_ptr as *const u32,
+                target_ptr as *const u32,
+            ));
+            let reimpl = habitat.is_show_neighbor(target_ptr);
+            let oracle = tree_members.contains(&target_ptr);
+            comparisons += 1;
+            if real != reimpl {
+                failures.push(format!(
+                    "habitat {:#010x}, target {:#010x}: real={}, reimpl={}",
+                    habitat_ptr, target_ptr, real, reimpl
+                ));
+            }
+            if oracle != real {
+                failures.push(format!(
+                    "habitat {:#010x}, target {:#010x}: real={} != tree-walk oracle {}",
+                    habitat_ptr, target_ptr, real, oracle
+                ));
+            }
+            if real {
+                true_hits += 1;
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, comparisons: {}, non-empty show-neighbor trees: {}, true hits: {})",
+                test_name,
+                habitat_ptrs.len(),
+                comparisons,
+                populated_trees,
+                true_hits
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Compares real `ZTHabitat::isRightSalinity`'s base-class default against the reimplemented constant
 /// `true`, over every non-tank habitat in the live, loaded zoo (`ZTTankExhibit`'s own override sits at a
 /// different address and is out of scope - see `zthabitatmgr.rs`'s own `is_right_salinity` doc comment).

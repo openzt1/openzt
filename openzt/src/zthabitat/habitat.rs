@@ -3304,6 +3304,49 @@ impl ZTHabitat {
         out_list_ptr
     }
 
+    /// Ports `ZTHabitat::isShowNeighbor` (`ZTHabitat_isShowNeighbor.c`/`.asm`, `generated.rs`'s
+    /// `IS_SHOW_NEIGHBOR` at `0x005a3585`): whether `neighbor_ptr` is a member of this habitat's
+    /// show-neighbor set - a pure, read-only probe of the `std::set<ZTHabitat*>`
+    /// (`less<ZTHabitat*>`) rooted at [`Self::show_neighbors_head`], answered when a show goal
+    /// completes to decide whether the habitat being arrived at / left is show-linked.
+    ///
+    /// Real vanilla is the MSVC `_Tree::find` shape: a lower_bound descent from the head's
+    /// `_Parent` (`+0x4`, the root) - descending `_Right` (`+0xc`) while `node->_Value` (`+0x10`)
+    /// is unsigned-less than the key, else recording the node and descending `_Left` (`+0x8`) -
+    /// then confirming the surviving candidate with `candidate != head && candidate->_Value <=
+    /// key`. The loop guard is a plain null check, so an empty set (null root) exits immediately
+    /// with the candidate still the head and the answer `false`; the `&&` short-circuit likewise
+    /// keeps the head's own `+0x10` slot (never meaningful) unread. Node layout is the same one
+    /// [`walk_neighbor_tree`] documents, and the tree itself stays un-ported - this only ever
+    /// reads a shape real vanilla's own `addShowNeighbor`/`clearShowNeighbors` produced. The C
+    /// decompiles mislabel `show_neighbors_head` (`this+0x14`) `zoo_entrance_y` - an OOAnalyzer
+    /// type-propagation artifact, not a real field read. The macOS counterpart
+    /// (`ZTHabitat_isShowNeighbor.c`) reaches the same answer through named
+    /// `std::tree<ZTHabitat*>::find` on `this+0x14`, returning a branchless `found != end()`.
+    ///
+    /// Real vanilla's return is a low-byte-only bool (the C renders' `CONCAT31`/`& 0xffffff00`
+    /// shapes pack garbage upper bytes around one real byte) - both callers,
+    /// `ZTGoalGoToShow::complete` (Win call site `0x005a3897`) and
+    /// `ZTGoalReturnFromShow::complete` (Win call site `0x005a375c`), consume it low byte only.
+    /// The return is retyped to `bool` in the live Ghidra project, so the next `generated.rs`
+    /// regeneration carries `-> bool` and [`crate::zthabitatmgr::hooks_zthabitatmgr`]'s temporary
+    /// `as u32` detour widen drops with it (the same mechanical step `HAS_PORTAL_ANIMAL` already
+    /// went through). The port returns a clean `bool`.
+    pub fn is_show_neighbor(&self, neighbor_ptr: u32) -> bool {
+        let head = self.show_neighbors_head;
+        let mut candidate = head;
+        let mut node: u32 = get_from_memory(head + 0x4); // head->_Parent = root
+        while node != 0 {
+            if get_from_memory::<u32>(node + 0x10) < neighbor_ptr {
+                node = get_from_memory(node + 0xc); // _Right
+            } else {
+                candidate = node;
+                node = get_from_memory(node + 0x8); // _Left
+            }
+        }
+        candidate != head && get_from_memory::<u32>(candidate + 0x10) <= neighbor_ptr
+    }
+
     /// Ports `ZTHabitat::resetUnitAI` (vtable slot, `ZTHabitat_resetUnitAI.c`/`.asm`): for every owned
     /// tile, walks that tile's own occupant list (`BFTile::unit_list_ptr`, `+0x0` - the exact same
     /// [`TileListNode`] shape/pool as `owned_tiles_ptr`, one level more nested, confirmed directly
@@ -4106,6 +4149,31 @@ mod tests {
         habitat
     }
 
+    /// Leaks a zeroed 20-byte MSVC `_Tree_node`-shaped block and writes `parent`/`left`/`right`/
+    /// `value` into the `+0x4`/`+0x8`/`+0xc`/`+0x10` slots [`walk_neighbor_tree`] and
+    /// [`ZTHabitat::is_show_neighbor`] both read, returning the block's address. Leaked rather
+    /// than stack-allocated so the raw addresses stay valid for the port's volatile reads, same
+    /// pattern as [`fixture_habitat_with_animals`].
+    fn leak_tree_node(parent: u32, left: u32, right: u32, value: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x14].into_boxed_slice());
+        let node_ptr = block.as_ptr() as u32;
+        save_to_memory(node_ptr + 0x4, parent);
+        save_to_memory(node_ptr + 0x8, left);
+        save_to_memory(node_ptr + 0xc, right);
+        save_to_memory(node_ptr + 0x10, value);
+        node_ptr
+    }
+
+    /// A zeroed [`ZTHabitat`] whose `show_neighbors_head` points at a leaked head node whose
+    /// `_Parent` (`+0x4`, the root slot) holds `root`. Every show-tree test must set a real head -
+    /// a null `show_neighbors_head` would make the port read address `0x4` in the host process
+    /// (real vanilla cannot reach that either; its own set constructor always builds the head).
+    fn fixture_habitat_with_show_tree(root: u32) -> ZTHabitat {
+        let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
+        habitat.show_neighbors_head = leak_tree_node(root, 0, 0, 0);
+        habitat
+    }
+
     /// `hasPortalAnimal`'s `.asm` empty-vector early-out (`CMP ESI, EAX` → `XOR AL,AL`): no
     /// animals means `false` regardless of the requested target, null or not.
     #[test]
@@ -4160,6 +4228,61 @@ mod tests {
             leak_fake_animal(0x86, 0),
         ]);
         assert!(!habitat.has_portal_animal(0x0059_e9a3));
+    }
+
+    /// `isShowNeighbor`'s `.asm` null-root guard (`MOV EAX,[ECX+0x4]` + `TEST EAX,EAX` into the
+    /// loop tail): an empty set leaves the candidate at the head, so the tail's `candidate != head`
+    /// arm fails and the answer is `false` for every key, null or not.
+    #[test]
+    fn empty_show_tree_returns_false() {
+        let habitat = fixture_habitat_with_show_tree(0);
+        assert!(!habitat.is_show_neighbor(0x0063_2100));
+        assert!(!habitat.is_show_neighbor(0));
+    }
+
+    /// One-node set: an exact hit satisfies both tail arms; a key below the value passes the
+    /// descent but fails the `candidate->_Value <= key` confirmation (the `.asm`'s JC-to-tail
+    /// path); a key above the value descends right to null, so the candidate never leaves the head.
+    #[test]
+    fn show_neighbor_hit_and_miss_single_node() {
+        let habitat = fixture_habitat_with_show_tree(leak_tree_node(0, 0, 0, 0x2000));
+        assert!(habitat.is_show_neighbor(0x2000));
+        assert!(!habitat.is_show_neighbor(0x1000));
+        assert!(!habitat.is_show_neighbor(0x3000));
+    }
+
+    /// Three-node BST: hits resolve from either subtree and the root; a key falling between two
+    /// nodes survives the descent but fails the confirmation compare; a key beyond the maximum
+    /// descends right to null and leaves the candidate at the head.
+    #[test]
+    fn show_neighbor_multi_node_descent() {
+        let left = leak_tree_node(0, 0, 0, 0x1000);
+        let right = leak_tree_node(0, 0, 0, 0x3000);
+        let root = leak_tree_node(0, left, right, 0x2000);
+        save_to_memory(left + 0x4, root);
+        save_to_memory(right + 0x4, root);
+        let habitat = fixture_habitat_with_show_tree(root);
+
+        assert!(habitat.is_show_neighbor(0x1000));
+        assert!(habitat.is_show_neighbor(0x2000));
+        assert!(habitat.is_show_neighbor(0x3000));
+        assert!(!habitat.is_show_neighbor(0x2500));
+        assert!(!habitat.is_show_neighbor(0x4000));
+    }
+
+    /// `less<ZTHabitat*>` is a plain unsigned compare, so a null key can only match a null value -
+    /// a tree of real (non-null) pointers answers `false` for it: lower_bound(0) lands on the
+    /// leftmost node and its value `<= 0` confirmation fails.
+    #[test]
+    fn null_target_never_matches_non_null_tree() {
+        let left = leak_tree_node(0, 0, 0, 0x10_00);
+        let right = leak_tree_node(0, 0, 0, 0x30_00);
+        let root = leak_tree_node(0, left, right, 0x20_00);
+        save_to_memory(left + 0x4, root);
+        save_to_memory(right + 0x4, root);
+        let habitat = fixture_habitat_with_show_tree(root);
+
+        assert!(!habitat.is_show_neighbor(0));
     }
 
     /// `ZTHabitat_isTank.c`/`.asm` - the base virtual is a constant `false` regardless of `self`.
