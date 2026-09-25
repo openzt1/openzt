@@ -8,7 +8,7 @@ use openzt_detour::generated::{
         },
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
-        ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY, SET_KEEPER_ARRIVES},
+        ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING},
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             GET_EVENTS, GET_SIZE, NEEDS_SERVICE,
@@ -149,6 +149,28 @@ fn keeper_food_category_matches(tile_ptr: u32, category: u32) -> bool {
     entity_ptr != 0
         && unsafe { entity_type_matches(entity_ptr, RVA_ZTFOOD_TYPE_CHECK_ARG) }
         && get_from_memory::<u32>(get_from_memory::<u32>(entity_ptr + 0x128) + 0x168) == category
+}
+
+/// The animal's currently-targeted `ZTFood` entity, or `0` if it has none - the chain real vanilla's
+/// `ZTAnimal::getFood` walks, fully inlined at every Windows call site (confirmed no standalone
+/// `generated.rs` entry exists for it, and no Windows decompile file - only
+/// `private/resources/macos-decompiles/ZTAnimal_getFood.c`). `animal_ptr + 0x38c` is the animal's
+/// current eat-action context pointer (corroborated independently by `ZTAnimal_fReduceFood.c`'s
+/// identical `this->_pad_0x2bc + 0xd0` read, `0x2bc + 0xd0 == 0x38c`); `+0x10` within it is the
+/// candidate food entity, gated by the same [`entity_type_matches`]/[`RVA_ZTFOOD_TYPE_CHECK_ARG`]
+/// `ZTFood` type-check [`keeper_food_category_matches`] already uses for the identical `&DAT_006386c0`
+/// constant.
+pub(crate) fn animal_food_target(animal_ptr: u32) -> u32 {
+    let action_ctx: u32 = get_from_memory(animal_ptr + 0x38c);
+    if action_ctx == 0 {
+        return 0;
+    }
+    let candidate: u32 = get_from_memory(action_ctx + 0x10);
+    if candidate != 0 && unsafe { entity_type_matches(candidate, RVA_ZTFOOD_TYPE_CHECK_ARG) } {
+        candidate
+    } else {
+        0
+    }
 }
 
 /// The squared straight-line distance [`Self::get_nearest_keeper_food`]'s two comparisons use: plain
@@ -1945,6 +1967,52 @@ impl ZTHabitat {
         count
     }
 
+    /// Ports `ZTHabitat::removeFoodTarget` (`ZTHabitat_removeFoodTarget.c`/`.asm`, `generated.rs`'s
+    /// `REMOVE_FOOD_TARGET` at `0x0059aa67`) - a free function despite the `ZTHabitat::` namespace: `this`
+    /// is never read (the `.asm`'s own `RET 0x4`, one stack arg, no `ECX` use), the same unused-`this`
+    /// shape as [`Self::get_adjacent_clear_tile`]. Clears `animal_ptr`'s current food target
+    /// ([`animal_food_target`]) if it has one, delegating the mutation itself to real vanilla
+    /// `ZTAnimal::setFood(animal, null)`/`ZTAnimal::stopEating(animal, false)` (`SET_FOOD`/`STOP_EATING`,
+    /// both un-detoured - `ZTAnimal` itself isn't ported) via the call-the-port convention. A null
+    /// `animal_ptr` is a legal real-vanilla no-op (its own leading guard). Real vanilla always returns
+    /// `true`.
+    pub fn remove_food_target(animal_ptr: u32) -> bool {
+        if animal_ptr != 0 && animal_food_target(animal_ptr) != 0 {
+            unsafe {
+                SET_FOOD.original()(animal_ptr as *const u32, std::ptr::null());
+                STOP_EATING.original()(animal_ptr as *const u32, 0);
+            }
+        }
+        true
+    }
+
+    /// Ports `ZTHabitat::removeFoodTargetForAll` (`ZTHabitat_removeFoodTargetForAll.c`/`.asm`,
+    /// `generated.rs`'s `REMOVE_FOOD_TARGET_FOR_ALL` at `0x0059a9d9`) - calls [`Self::remove_food_target`]
+    /// on every animal in the habitat ([`Self::get_all_animals`]`(false)`) whose current food target
+    /// ([`animal_food_target`]) is `food_entity_ptr`, then tears the entity down through its own vtable:
+    /// `setVisible(false)` (slot `+0xcc`, [`call_vtable_slot_with_u8`]) then `setIsRemoved(true, false)`
+    /// (slot `+0xa8`, [`call_vtable_slot_with_u8_u8`]) - both confirmed real `BFEntity` base slots. Real
+    /// vanilla dereferences `food_entity_ptr`'s vtable unconditionally with no null guard for this final
+    /// step (a real crash in vanilla on a null entity) - guarded here instead, the same "dead in practice"
+    /// deviation this file already applies elsewhere (e.g. [`Self::get_outermost_tank`]'s own doc comment).
+    /// Real vanilla ANDs each `removeFoodTarget` call's own low byte into a running result, but every path
+    /// through [`Self::remove_food_target`] returns `true`, so the accumulated result is always `true` -
+    /// reproduced here as a plain `true` return.
+    pub fn remove_food_target_for_all(&self, food_entity_ptr: u32) -> bool {
+        for animal_ptr in self.get_all_animals(false) {
+            if animal_food_target(animal_ptr) == food_entity_ptr {
+                Self::remove_food_target(animal_ptr);
+            }
+        }
+        if food_entity_ptr != 0 {
+            unsafe {
+                call_vtable_slot_with_u8(food_entity_ptr, 0xcc, 0);
+                call_vtable_slot_with_u8_u8(food_entity_ptr, 0xa8, 1, 0);
+            }
+        }
+        true
+    }
+
     /// Ports `ZTHabitat::getSmallestKeeperFood` (`ZTHabitat_getSmallestKeeperFood.c`/`.asm`,
     /// `generated.rs`'s `GET_SMALLEST_KEEPER_FOOD`): returns the food entity of keeper-food category
     /// `category` carrying the smallest `entity+0x154` quantity (macOS reads the equivalent through its
@@ -2372,9 +2440,11 @@ impl ZTHabitat {
     /// pass, kept as a raw vtable dispatch); its own tile doesn't have the unconfirmed `+0x85 & 4` flag set
     /// (same check [`Self::get_num_sickly_animals`] uses); [`Self::keeper_assigned_to_animal`]; and real
     /// vanilla `ZTAnimal::canService(animal, keeper_ptr)` (masked via [`low_byte_bool`]). When
-    /// `check_can_see` is set, additionally requires a real, un-ported `ZTAIMgr` vtable `+0x1c`-style
-    /// visibility check (`virt_meth_0x601e1c_28` in the decompile - called through raw, not independently
-    /// identified) to pass. Distance is squared Euclidean over each candidate's own tile `x`/`y` (`+0x34`/`+0x38`,
+    /// `check_can_see` is set, additionally requires the shared `GLOBAL_ZTAIMgr` vtable `+0x1c`
+    /// visibility/path-reachability dispatch ([`call_vtable_slot_ptr_ptr_ptr_u32_ret_bool`], `this=ai_mgr`,
+    /// `keeper_tile_ptr`, `animal_tile_ptr`, `keeper_ptr`, `0` - a 4-stack-arg thiscall, confirmed via a
+    /// manual `.asm` trace and identical to the call [`Self::get_nearest_dirt_pile`] makes to the same
+    /// slot) to pass. Distance is squared Euclidean over each candidate's own tile `x`/`y` (`+0x34`/`+0x38`,
     /// [`crate::ztmapview::BFTile::pos`]) against `keeper_ptr`'s own tile.
     ///
     /// Frees the scratch vector's buffer via [`vector_push_pool_alloc4`]'s own counterpart,
@@ -2417,7 +2487,9 @@ impl ZTHabitat {
             if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
                 continue;
             }
-            if check_can_see && !unsafe { call_entity_vtable_noargs(ai_mgr, 0x1c) } {
+            if check_can_see
+                && !unsafe { call_vtable_slot_ptr_ptr_ptr_u32_ret_bool(ai_mgr, 0x1c, keeper_tile_ptr, animal_tile_ptr, keeper_ptr, 0) }
+            {
                 continue;
             }
             let dx: i32 = get_from_memory::<i32>(keeper_tile_ptr + 0x34) - get_from_memory::<i32>(animal_tile_ptr + 0x34);
@@ -2431,6 +2503,107 @@ impl ZTHabitat {
 
         free_event_vector_buffer(scratch_vector[0], scratch_vector[2] - scratch_vector[0]);
         best_animal
+    }
+
+    /// Ports `ZTHabitat::getNearestDirtPile` (`ZTHabitat_getNearestDirtPile.c`/`.asm`, `generated.rs`'s
+    /// `GET_NEAREST_DIRT_PILE`): returns `0` if `keeper_ptr` (real vanilla's own `param_1`, actually a
+    /// `ZTStaff*`) is null, if `GLOBAL_ZTAIMgr` is null, or if `keeper_ptr`'s own tile can't be resolved.
+    /// Real vanilla's own separate `GLOBAL_ZTWorldMgr == 0xfffffff8` sentinel check is not reproduced as
+    /// its own branch here, same established simplification as [`Self::get_nearest_sick_animal`]'s own
+    /// doc comment explains - [`BFENTITY_GET_TILE`]'s real body already returns null in that exact state.
+    ///
+    /// Otherwise walks every owned tile ([`walk_tile_list`] over [`Self::owned_tiles_ptr`]), reads each
+    /// tile's occupant entity (raw `tile+0x10` - the `.asm`'s own odd "push `0x20,0x20,0`; `SAR 0x5` per
+    /// axis" grid-index sequence constant-folds to this flat read, the same compiler artifact already
+    /// documented for [`Self::get_num_keeper_food_tiles`]), and scans for the closest occupant for which
+    /// all of the following hold: the tile is **not** present in [`Self::keeper_has_invalid_tile`]'s
+    /// per-keeper exclusion list; `keeper_ptr`'s own vtable `+0x324` slot
+    /// ([`call_vtable_slot_with_ptr_ret_bool`], `this=keeper_ptr`, the candidate entity) returns true -
+    /// the real per-keeper entity-target filter (the master plan's own gloss claiming this is an
+    /// `RVA_SCENERY_TYPE_CHECK_ARG`/`entity_type_matches` call does not hold up against the real
+    /// decompile/disassembly - no such call appears anywhere in this function on either platform); the
+    /// tile does not have the same unconfirmed `+0x85 & 4` flag [`Self::get_num_sickly_animals`] uses; and,
+    /// when `check_can_see` is set, the shared `GLOBAL_ZTAIMgr` vtable `+0x1c` visibility/path-reachability
+    /// dispatch ([`call_vtable_slot_ptr_ptr_ptr_u32_ret_bool`], identical shape and slot to
+    /// [`Self::get_nearest_sick_animal`]'s own call) passes. Distance is squared Euclidean via
+    /// [`keeper_food_distance_squared`] between `keeper_ptr`'s own tile and each candidate's tile, ties
+    /// going to the first in walk order (strict `<`).
+    ///
+    /// Naming correction: the master plan's signature gloss `getNearestDirtPile(ZTStaff* keeper, bool
+    /// subhabs)` is wrong for the second parameter - tracing the disassembly shows this bool gates only
+    /// the `GLOBAL_ZTAIMgr` visibility check above; there is no habitat-neighbor recursion anywhere in this
+    /// function (unlike [`Self::get_nearest_sick_animal`]/the keeper-food triplet). The real parameter
+    /// plays the exact same role as `get_nearest_sick_animal`'s own `check_can_see` parameter - named
+    /// accordingly here, not `subhabs`.
+    ///
+    /// Real vanilla also builds a permanently-empty local scratch `std::vector`-shaped object at function
+    /// entry and conditionally tears it down via a `PoolAlloc`-bucket deallocate at the very end - nothing
+    /// in the function body ever writes to it, so the teardown's guard (`pointer != 0`) is always false at
+    /// runtime. Dead weight with zero observable effect; no Rust equivalent is needed for it.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_nearest_dirt_pile(&self, keeper_ptr: u32, check_can_see: bool) -> u32 {
+        if keeper_ptr == 0 || globals().ztaimgr_ptr() as u32 == 0 {
+            return 0;
+        }
+        let keeper_tile_ptr = unsafe { BFENTITY_GET_TILE.original()(keeper_ptr as *const u32) } as u32;
+        if keeper_tile_ptr == 0 {
+            return 0;
+        }
+
+        let mut best_entity = 0u32;
+        let mut best_dist = i32::MAX;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+            let entity_ptr: u32 = get_from_memory(tile_ptr + 0x10);
+            if entity_ptr == 0 {
+                continue;
+            }
+            if Self::keeper_has_invalid_tile(keeper_ptr, tile_ptr) {
+                continue;
+            }
+            if !unsafe { call_vtable_slot_with_ptr_ret_bool(keeper_ptr, 0x324, entity_ptr) } {
+                continue;
+            }
+            if get_from_memory::<u8>(tile_ptr + 0x85) & 4 != 0 {
+                continue;
+            }
+            if check_can_see {
+                let ai_mgr = globals().ztaimgr_ptr() as u32;
+                let visible = unsafe {
+                    call_vtable_slot_ptr_ptr_ptr_u32_ret_bool(ai_mgr, 0x1c, keeper_tile_ptr, tile_ptr, keeper_ptr, 0)
+                };
+                if !visible {
+                    continue;
+                }
+            }
+            let dist = keeper_food_distance_squared(keeper_tile_ptr, tile_ptr);
+            if best_entity == 0 || dist < best_dist {
+                best_entity = entity_ptr;
+                best_dist = dist;
+            }
+        }
+        best_entity
+    }
+
+    /// Ports `ZTHabitat::needsShowKeeper` (Win `0x0041680c`, `generated.rs`'s `NEEDS_SHOW_KEEPER`; macOS
+    /// `ZTHabitat_needsShowKeeper.c`). `false` if `keeper_ptr` is null. Otherwise looks up the keeper's own
+    /// catalog/type ID via its `BFEntityType`'s (`keeper_ptr + 0x128`) vtable `+0x20` slot
+    /// ([`call_entity_vtable_u32_noargs`] - the same "isUserTypeID" slot [`Self::block_service`] already
+    /// calls on a keeper's entity type) - real vanilla makes this call unconditionally whenever
+    /// `keeper_ptr` is non-null, before checking `zt_show_info_ptr`, so this preserves that order. `false`
+    /// again with no attached `ZTShowInfo`; otherwise delegates to the already-ported
+    /// `ztshowinfo::needs_keeper`.
+    pub fn needs_show_keeper(&self, keeper_ptr: u32) -> bool {
+        if keeper_ptr == 0 {
+            return false;
+        }
+        let entity_type_ptr: u32 = get_from_memory(keeper_ptr + 0x128);
+        let keeper_type_id = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) };
+        if self.zt_show_info_ptr == 0 {
+            return false;
+        }
+        ztshowinfo::needs_keeper(self.zt_show_info_ptr, keeper_type_id)
     }
 
     /// Ports `ZTHabitat::getViewingAreasWithGuests` (`ZTHabitat_getViewingAreasWithGuests.c`,
@@ -2675,6 +2848,17 @@ impl ZTHabitat {
         let begin: u32 = get_from_memory(keeper_ptr + 0x270);
         let end: u32 = get_from_memory(keeper_ptr + 0x274);
         (begin..end).step_by(4).any(|addr| get_from_memory::<u32>(addr) == animal_id)
+    }
+
+    /// Checks whether `tile_ptr` is present in `keeper_ptr`'s own `std::vector<BFTile*>` exclusion list at
+    /// `keeper_ptr+0x27c`(begin)/`+0x280`(end) - same linear-scan-for-membership idiom as
+    /// [`Self::keeper_assigned_to_animal`], just over tile pointers. Confirmed via
+    /// `ZTHabitat_getNearestDirtPile.asm`'s own inlined scan (real vanilla's "not found" polarity -
+    /// presence in the list marks the tile as excluded).
+    pub(crate) fn keeper_has_invalid_tile(keeper_ptr: u32, tile_ptr: u32) -> bool {
+        let begin: u32 = get_from_memory(keeper_ptr + 0x27c);
+        let end: u32 = get_from_memory(keeper_ptr + 0x280);
+        (begin..end).step_by(4).any(|addr| get_from_memory::<u32>(addr) == tile_ptr)
     }
 
     /// Ports `ZTHabitat::blockService` (`ZTHabitat_blockService.c`/`.asm`) - decides whether `keeper_ptr`

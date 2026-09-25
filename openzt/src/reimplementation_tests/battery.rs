@@ -334,6 +334,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_remove_species_smoke_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_REMOVE_FOOD_TARGET_SMOKE_LIVE",
+                run: tests::zthabitatmgr::run_habitat_remove_food_target_smoke_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_ACCEPT_DONATION_SMOKE_LIVE",
                 run: tests::zthabitatmgr::run_habitat_accept_donation_smoke_live_test,
             },
@@ -594,6 +598,14 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_GET_NEAREST_SICK_ANIMAL_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_nearest_sick_animal_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NEAREST_DIRT_PILE_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_nearest_dirt_pile_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_NEEDS_SHOW_KEEPER_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_needs_show_keeper_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_REMOVE_VIEWING_AREAS_ROUNDTRIP_LIVE",

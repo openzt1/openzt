@@ -63,6 +63,7 @@ pub mod hooks_zthabitatmgr {
             GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
+            GET_NEAREST_DIRT_PILE, NEEDS_SHOW_KEEPER,
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
@@ -482,6 +483,16 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_nearest_sick_animal(keeper as u32, check_can_see != 0) as *const i32
     }
 
+    #[detour(GET_NEAREST_DIRT_PILE)]
+    unsafe extern "thiscall" fn get_nearest_dirt_pile(this: *const u32, keeper: *const u32, check_can_see: bool) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_nearest_dirt_pile(keeper as u32, check_can_see) as i32
+    }
+
+    #[detour(NEEDS_SHOW_KEEPER)]
+    unsafe extern "thiscall" fn needs_show_keeper(this: *const u32, keeper: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.needs_show_keeper(keeper as u32) as u32
+    }
+
     #[detour(GET_VIEWING_AREAS_WITH_GUESTS)]
     unsafe extern "thiscall" fn get_viewing_areas_with_guests(this: *const u32, out_vector: *const i32) {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_viewing_areas_with_guests(out_vector as u32)
@@ -516,6 +527,16 @@ pub mod hooks_zthabitatmgr {
     #[detour(REMOVE_SPECIES)]
     unsafe extern "thiscall" fn remove_species(this: *const u32, species_key: i32) {
         unsafe { mut_from_memory::<ZTHabitat>(this) }.remove_species(species_key as u32)
+    }
+
+    #[detour(REMOVE_FOOD_TARGET)]
+    unsafe extern "stdcall" fn remove_food_target(animal: *const std::ffi::c_void) -> u32 {
+        ZTHabitat::remove_food_target(animal as u32) as u32
+    }
+
+    #[detour(REMOVE_FOOD_TARGET_FOR_ALL)]
+    unsafe extern "thiscall" fn remove_food_target_for_all(this: *const u32, food_entity: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_food_target_for_all(food_entity as u32) as u32
     }
 
     #[detour(ZTHABITAT_SET_DIRTY_CHARACTERISTICS)]

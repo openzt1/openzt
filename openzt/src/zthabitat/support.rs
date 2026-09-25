@@ -913,6 +913,17 @@ pub unsafe fn call_vtable_slot_with_u8(entity_ptr: u32, slot_offset: u32, arg: u
     f(entity_ptr, arg);
 }
 
+/// Same shape as [`call_vtable_slot_with_u8`], for a 2-arg (`u8`, `u8`) thiscall vtable slot -
+/// `ZTHabitat_removeFoodTargetForAll.c`/`.asm`'s own `BFEntity::setIsRemoved(bool, bool)` teardown call
+/// (slot `+0xa8`, confirmed real `BFEntity` base slot - index 42 in `private/docs/vtables/BFEntity.md`/
+/// `ZTScenery.md`).
+pub unsafe fn call_vtable_slot_with_u8_u8(entity_ptr: u32, slot_offset: u32, arg1: u8, arg2: u8) {
+    let vtable = get_from_memory::<u32>(entity_ptr);
+    let target = get_from_memory::<u32>(vtable + slot_offset);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u8, u8)>(target) };
+    f(entity_ptr, arg1, arg2);
+}
+
 /// Calls a 1-arg (raw pointer) thiscall vtable slot - `ZTHabitat_moveGateTo_0.asm`'s own `+0x1c` gate/
 /// fence `setName` dispatch (`PUSH <name-buffer-ptr>; CALL [vtable+0x1c]`), confirmed at the `.asm` level
 /// since the C decompile's own struct-offset math for this call is garbled (see
@@ -923,6 +934,31 @@ pub unsafe fn call_vtable_slot_with_ptr(entity_ptr: u32, slot_offset: u32, arg: 
     let target = get_from_memory::<u32>(vtable + slot_offset);
     let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32)>(target) };
     f(entity_ptr, arg);
+}
+
+/// Same shape as [`call_vtable_slot_with_ptr`], but for a slot returning a bool result -
+/// `ZTHabitat_getNearestDirtPile.asm`'s own `keeper_ptr` vtable `+0x324` dispatch (`this=keeper_ptr`, one
+/// pointer stack arg = the candidate entity) - an unidentified per-keeper entity-target filter.
+pub unsafe fn call_vtable_slot_with_ptr_ret_bool(entity_ptr: u32, slot_offset: u32, arg: u32) -> bool {
+    let vtable = get_from_memory::<u32>(entity_ptr);
+    let target = get_from_memory::<u32>(vtable + slot_offset);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(target) };
+    f(entity_ptr, arg)
+}
+
+/// Calls a 4-arg (3 pointers + `u32`) thiscall vtable slot returning bool - the shared `GLOBAL_ZTAIMgr`
+/// vtable `+0x1c` visibility/path-reachability dispatch both `ZTHabitat::getNearestDirtPile` and
+/// `ZTHabitat::getNearestSickAnimal` call when their own `check_can_see` parameter is set (`this=ai_mgr`,
+/// `from_tile`, `to_tile`, `unit_ptr`, `0` - confirmed identical stack shape at both real call sites via a
+/// manual `.asm` trace). Resembles `generated.rs`'s `bfaimgr::CHECK_PATH` in its first three stack args but
+/// is not confirmed to be the same function - that entry's own signature carries one fewer stack arg than
+/// real vanilla pushes here, so this stays a raw, unidentified dispatch rather than a call to
+/// `CHECK_PATH`.
+pub unsafe fn call_vtable_slot_ptr_ptr_ptr_u32_ret_bool(this_ptr: u32, slot_offset: u32, arg1: u32, arg2: u32, arg3: u32, arg4: u32) -> bool {
+    let vtable = get_from_memory::<u32>(this_ptr);
+    let target = get_from_memory::<u32>(vtable + slot_offset);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32, u32, u32) -> bool>(target) };
+    f(this_ptr, arg1, arg2, arg3, arg4)
 }
 
 /// Same shape as [`call_vtable_slot_with_ptr`], for a single-byte-argument slot that returns a `u32`
