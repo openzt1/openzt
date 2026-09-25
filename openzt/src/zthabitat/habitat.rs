@@ -6,6 +6,7 @@ use openzt_detour::generated::{
         bftile::{
             IS_IN_ZOO as BFTILE_IS_IN_ZOO, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         },
+        msvc_std_listuint::INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
         ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING},
@@ -3268,6 +3269,39 @@ impl ZTHabitat {
 
         save_to_memory(sentinel, sentinel);
         save_to_memory(sentinel + 4, sentinel);
+    }
+
+    /// Ports `ZTHabitat::getTilesCopy` (`ZTHabitat_getTilesCopy.c`/`.asm`, `generated.rs`'s
+    /// `GET_TILES_COPY`): default-constructs a fresh empty `list<uint>` into the caller's out-param -
+    /// vanilla's own inline sequence `*out = 0; PoolAlloc::allocate(0xc); self-ref next/prev;
+    /// *out = sentinel` (the same bucket-1 node pool [`TileListNode`] documents) - then one real
+    /// vanilla `msvc_std::list<uint>::insert_range` of `[owned_tiles begin, end)` into it. The
+    /// out-param is a `list`, not the master plan's glossed `vector` (both the Windows and macOS
+    /// decompiles agree). Every node the copy contains is vanilla-allocated; this frees nothing - the
+    /// caller (`ZTViewingArea::createOA`, the only call site) destroys the copy through vanilla's own
+    /// list erase, so the cross-allocator rule holds trivially.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`].
+    pub fn get_tiles_copy(&self, out_list_ptr: u32) -> u32 {
+        save_to_memory::<u32>(out_list_ptr, 0);
+        let sentinel = unsafe { POOLALLOC_ALLOCATE.original()(0xc) } as u32;
+        save_to_memory(sentinel, sentinel);
+        save_to_memory(sentinel + 4, sentinel);
+        save_to_memory(out_list_ptr, sentinel);
+
+        let src_sentinel = self.owned_tiles_ptr;
+        let src_head: u32 = get_from_memory(src_sentinel);
+        let where_node: u32 = get_from_memory(out_list_ptr); // out begin() == the fresh sentinel
+        unsafe {
+            MSVC_LIST_UINT_INSERT_RANGE.original()(
+                out_list_ptr as *const std::ffi::c_void,
+                where_node as *const i32,
+                src_head as *const i32,
+                src_sentinel as *const i32,
+            );
+        }
+        out_list_ptr
     }
 
     /// Ports `ZTHabitat::resetUnitAI` (vtable slot, `ZTHabitat_resetUnitAI.c`/`.asm`): for every owned

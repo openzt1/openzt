@@ -59,7 +59,7 @@ pub mod hooks_zthabitatmgr {
             GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1,
             RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS,
             ADD_LAND_TILES, ADD_WATER_TILES, ADD_UNDERWATER_TILES,
-            GET_LAND_TILES, GET_WATER_TILES, GET_UNDERWATER_TILES,
+            GET_LAND_TILES, GET_WATER_TILES, GET_UNDERWATER_TILES, GET_TILES_COPY,
             GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
@@ -559,13 +559,24 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_food_target_for_all(food_entity as u32) as u32
     }
 
-    /// `generated.rs`'s own `-> u32` return is real vanilla's undefined-upper-bytes bool render
-    /// (`MOV AL,1` / `XOR AL,AL`; the C packs garbage into the upper 3 bytes) - real callers
-    /// `TEST AL,AL` only, so the detour widens the port's clean bool to match the declared
-    /// signature (see [`ZTHabitat::has_portal_animal`]'s own doc comment).
     #[detour(HAS_PORTAL_ANIMAL)]
-    unsafe extern "thiscall" fn has_portal_animal(this: *const u32, target_habitat: *const u32) -> u32 {
-        unsafe { ref_from_memory::<ZTHabitat>(this) }.has_portal_animal(target_habitat as u32) as u32
+    unsafe extern "thiscall" fn has_portal_animal(this: *const u32, target_habitat: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.has_portal_animal(target_habitat as u32)
+    }
+
+    /// Ports `ZTHabitat::getTilesCopy` - the out-param is a real `list<uint>` that `0x004f3a31`'s own
+    /// body default-constructs; `RET 0x4` returns it, so the detour returns the pointer vanilla's
+    /// callers read.
+    #[detour(GET_TILES_COPY)]
+    unsafe extern "thiscall" fn get_tiles_copy(this: *const u32, out_list: *const i32) -> *const i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_tiles_copy(out_list as u32) as *const i32
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see `ztawardmgr`'s
+    /// `call_real` doc comments for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_tiles_copy_real(this: *const u32, out_list: *const i32) -> *const i32 {
+        unsafe { GET_TILES_COPY_DETOUR.call(this, out_list) }
     }
 
     #[detour(ZTHABITAT_SET_DIRTY_CHARACTERISTICS)]

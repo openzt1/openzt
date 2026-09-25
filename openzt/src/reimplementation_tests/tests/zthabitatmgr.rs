@@ -23,8 +23,8 @@ use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
 use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
 use crate::zthabitatmgr::{
     animal_food_target, call_bfunit_tile_cost_vtable_slot, call_vtable_slot_noargs_ret_bool, entity_name_bytes, free_event_vector_buffer,
-    hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, ZTHabitat, ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
-    RVA_ZTFOOD_TYPE_CHECK_ARG,
+    hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
+    RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
 };
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -238,11 +238,9 @@ pub(crate) fn run_habitat_is_tank_live_test(failure_log: &mut Option<std::fs::Fi
 
 /// Compares `hasPortalAnimal` (`ZTHabitat_hasPortalAnimal.c`/`.asm`) for every (habitat, target)
 /// pair over the live zoo's own habitats, plus a null target - exercising vanilla's own
-/// null-destination-tile == null-parameter arm and the full `all_animals` walk on both sides. Real
-/// vanilla's return is low-byte-only meaningful (`MOV AL,1`/`XOR AL,AL`, callers `TEST AL,AL`), so
-/// the real side is masked with `low_byte_bool`. The plan's "false on stationary exhibits"
-/// expectation is asserted directly: a habitat whose `all_animals` vector is empty must answer
-/// `false` for every non-null target on both sides.
+/// null-destination-tile == null-parameter arm and the full `all_animals` walk on both sides. The
+/// plan's "false on stationary exhibits" expectation is asserted directly: a habitat whose
+/// `all_animals` vector is empty must answer `false` for every non-null target on both sides.
 pub(crate) fn run_habitat_has_portal_animal_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTHABITAT_HAS_PORTAL_ANIMAL_MATCHES_REAL_LIVE";
     let habitat_mgr = globals().zthabitatmgr();
@@ -269,9 +267,7 @@ pub(crate) fn run_habitat_has_portal_animal_matches_real_live_test(failure_log: 
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
         let stationary = habitat.all_animals_begin == habitat.all_animals_end;
         for &target_ptr in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
-            let real = low_byte_bool(unsafe {
-                zthabitat::HAS_PORTAL_ANIMAL.original()(habitat_ptr as *const u32, target_ptr as *const u32)
-            });
+            let real = unsafe { zthabitat::HAS_PORTAL_ANIMAL.original()(habitat_ptr as *const u32, target_ptr as *const u32) };
             let reimpl = habitat.has_portal_animal(target_ptr);
             comparisons += 1;
             if real != reimpl {
@@ -302,6 +298,144 @@ pub(crate) fn run_habitat_has_portal_animal_matches_real_live_test(failure_log: 
                 stationary_habitats
             ),
         );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Frees a `getTilesCopy`-produced list's own nodes back to the shared bucket-1 freelist
+/// ([`TILE_LIST_NODE_FREELIST_HEAD_RVA`]) - every node in it, sentinel included, was allocated by real
+/// vanilla's own `PoolAlloc::allocate`, so pushing it back is exactly what vanilla's own free path does
+/// (no cross-allocator hazard, unlike a `Box`-walking cleanup). Mirrors
+/// [`run_habitat_remove_habitat_tiles_live_test`]'s own teardown loop.
+fn free_tile_list_copy(sentinel: u32) {
+    let freelist_head_addr = get_module_base("zoo.exe") as u32 + TILE_LIST_NODE_FREELIST_HEAD_RVA;
+    for node in walk_tile_list(sentinel) {
+        let old_head: u32 = get_from_memory(freelist_head_addr);
+        save_to_memory(node, old_head);
+        save_to_memory(freelist_head_addr, node);
+    }
+    let old_head: u32 = get_from_memory(freelist_head_addr);
+    save_to_memory(sentinel, old_head);
+    save_to_memory(freelist_head_addr, sentinel);
+}
+
+/// Compares `getTilesCopy` (`ZTHabitat_getTilesCopy.c`/`.asm`) against the reimplementation over every
+/// live habitat's own owned-tile list: real vanilla's copy first, then the reimplementation's, each into
+/// its own out-param slot, verifying both return the pointer passed in (RVO return), both copies walk to
+/// the exact same payload sequence as a snapshot of the source list taken before either call, and the
+/// source list itself is untouched afterward (catches a `where`/`first` argument swap splicing the
+/// source's own nodes into the copy instead of inserting a copy of them). Every node either copy produces
+/// is freed back to the shared freelist ([`free_tile_list_copy`]) - never through `Box`.
+pub(crate) fn run_habitat_get_tiles_copy_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_TILES_COPY_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut total_tiles = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let source_payloads: Vec<u32> = walk_tile_list(*habitat.owned_tiles_ptr())
+            .map(|node| get_from_memory::<TileListNode>(node).payload)
+            .collect();
+        total_tiles += source_payloads.len() as u32;
+
+        let mut real_out: u32 = 0;
+        let real_out_addr = &mut real_out as *mut u32 as u32;
+        let real_ret = hooks_zthabitatmgr::get_tiles_copy_real(habitat_ptr as *const u32, real_out_addr as *const i32) as u32;
+
+        let mut reimpl_out: u32 = 0;
+        let reimpl_out_addr = &mut reimpl_out as *mut u32 as u32;
+        let reimpl_ret = habitat.get_tiles_copy(reimpl_out_addr);
+
+        if real_ret != real_out_addr {
+            failures.push(format!("habitat {:#010x}: real getTilesCopy returned {:#010x}, expected out-param address {:#010x}", habitat_ptr, real_ret, real_out_addr));
+        }
+        if reimpl_ret != reimpl_out_addr {
+            failures.push(format!("habitat {:#010x}: reimpl get_tiles_copy returned {:#010x}, expected out-param address {:#010x}", habitat_ptr, reimpl_ret, reimpl_out_addr));
+        }
+
+        let real_sentinel = real_out;
+        let reimpl_sentinel = reimpl_out;
+        if real_sentinel == 0 {
+            failures.push(format!("habitat {:#010x}: real getTilesCopy produced a null sentinel", habitat_ptr));
+        }
+        if reimpl_sentinel == 0 {
+            failures.push(format!("habitat {:#010x}: reimpl get_tiles_copy produced a null sentinel", habitat_ptr));
+        }
+
+        if real_sentinel != 0 && reimpl_sentinel != 0 {
+            let real_payloads: Vec<u32> = walk_tile_list(real_sentinel).map(|node| get_from_memory::<TileListNode>(node).payload).collect();
+            let reimpl_payloads: Vec<u32> = walk_tile_list(reimpl_sentinel).map(|node| get_from_memory::<TileListNode>(node).payload).collect();
+
+            if real_payloads != source_payloads {
+                failures.push(format!(
+                    "habitat {:#010x}: real copy payloads {:?} != source snapshot {:?}",
+                    habitat_ptr, real_payloads, source_payloads
+                ));
+            }
+            if reimpl_payloads != source_payloads {
+                failures.push(format!(
+                    "habitat {:#010x}: reimpl copy payloads {:?} != source snapshot {:?}",
+                    habitat_ptr, reimpl_payloads, source_payloads
+                ));
+            }
+
+            free_tile_list_copy(real_sentinel);
+            free_tile_list_copy(reimpl_sentinel);
+        } else {
+            if real_sentinel != 0 {
+                free_tile_list_copy(real_sentinel);
+            }
+            if reimpl_sentinel != 0 {
+                free_tile_list_copy(reimpl_sentinel);
+            }
+        }
+
+        let source_after: Vec<u32> = walk_tile_list(*habitat.owned_tiles_ptr())
+            .map(|node| get_from_memory::<TileListNode>(node).payload)
+            .collect();
+        if source_after != source_payloads {
+            failures.push(format!(
+                "habitat {:#010x}: source list changed by getTilesCopy - before {:?}, after {:?}",
+                habitat_ptr, source_payloads, source_after
+            ));
+        }
+    }
+
+    if total_tiles == 0 {
+        let msg = "no owned tiles found across any live habitat - insert_range's non-empty arm never ran".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, &format!("{} (habitats: {}, total tiles: {})", test_name, habitat_ptrs.len(), total_tiles));
         false
     } else {
         for msg in &failures {

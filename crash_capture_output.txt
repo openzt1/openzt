@@ -51,10 +51,10 @@ ModLoad: 73480000 7348b000   C:\WINDOWS\SysWOW64\netutils.dll
 ModLoad: 766a0000 766c5000   C:\WINDOWS\SysWOW64\IMM32.DLL
 ModLoad: 76240000 762aa000   C:\WINDOWS\SysWOW64\WS2_32.dll
 ModLoad: 776d0000 77789000   C:\WINDOWS\SysWOW64\comdlg32.dll
-ModLoad: 60000000 60058000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\ijl15.dll
 ModLoad: 71030000 710c1000   C:\WINDOWS\WinSxS\x86_microsoft.windows.common-controls_6595b64144ccf1df_5.82.26100.8521_none_cf9e08b68ea73d80\COMCTL32.dll
-(a2d8.9bbc): Break instruction exception - code 80000003 (first chance)
-eax=00000000 ebx=00000000 ecx=14dd0000 edx=00000000 esi=008862f0 edi=00202000
+ModLoad: 60000000 60058000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\ijl15.dll
+(62fc.7878): Break instruction exception - code 80000003 (first chance)
+eax=00000000 ebx=00000000 ecx=94730000 edx=00000000 esi=00875e80 edi=0037d000
 eip=77ca8b88 esp=001afa54 ebp=001afa80 iopl=0         nv up ei pl zr na pe nc
 cs=0023  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
 ntdll!LdrpDoDebuggerBreak+0x2b:
@@ -62,131 +62,131 @@ ntdll!LdrpDoDebuggerBreak+0x2b:
 0:000> cdb: Reading initial command 'g;kv;r;q'
 ModLoad: 76000000 76117000   C:\WINDOWS\SysWOW64\msctf.dll
 ModLoad: 10000000 10013000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res200.dll
-ModLoad: 00c60000 00c73000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res100.dll
-ModLoad: 00c60000 00c73000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res100.dll
-ModLoad: 00c80000 00ca0000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res0.dll
-ModLoad: 00c80000 00ca0000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res0.dll
-ModLoad: 70890000 70fad000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res-openzttest.dll
+ModLoad: 00b20000 00b33000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res100.dll
+ModLoad: 00b20000 00b33000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res100.dll
+ModLoad: 00d60000 00d80000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res0.dll
+ModLoad: 00d60000 00d80000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res0.dll
+ModLoad: 70880000 70fa1000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res-openzttest.dll
 ModLoad: 77350000 773ca000   C:\WINDOWS\SysWOW64\bcryptprimitives.dll
 ModLoad: 75630000 7564d000   C:\WINDOWS\SysWOW64\VCRUNTIME140.dll
 ModLoad: 73d40000 73d4a000   C:\WINDOWS\SysWOW64\CRYPTBASE.DLL
-ModLoad: 02790000 027a3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\langRSNwildwings.dll
-ModLoad: 02790000 027a3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\langRSNwildwings.dll
-ModLoad: 027b0000 027c5000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang999-override.dll
-ModLoad: 027b0000 027c5000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang999-override.dll
-ModLoad: 02f20000 02f59000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang300.dll
-ModLoad: 02f20000 02f59000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang300.dll
-ModLoad: 0a290000 0a87f000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang200.dll
-ModLoad: 0a290000 0a87f000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang200.dll
-ModLoad: 06080000 06229000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang100.dll
-ModLoad: 06080000 06229000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang100.dll
-ModLoad: 027d0000 027e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang021.dll
-ModLoad: 027d0000 027e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang021.dll
-ModLoad: 02d10000 02d23000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang020.dll
-ModLoad: 02d10000 02d23000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang020.dll
-ModLoad: 02d40000 02d54000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang019.dll
-ModLoad: 02d40000 02d54000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang019.dll
-ModLoad: 046c0000 046d4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang018.dll
-ModLoad: 046c0000 046d4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang018.dll
-ModLoad: 04870000 04884000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang017.dll
-ModLoad: 04870000 04884000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang017.dll
-ModLoad: 04890000 048a4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang016.dll
-ModLoad: 04890000 048a4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang016.dll
-ModLoad: 048b0000 048c3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang015.dll
-ModLoad: 048b0000 048c3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang015.dll
-ModLoad: 048d0000 048e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang013.dll
-ModLoad: 048d0000 048e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang013.dll
-ModLoad: 04e40000 04e54000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang012.dll
-ModLoad: 04e40000 04e54000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang012.dll
-ModLoad: 04e60000 04e74000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang010.dll
-ModLoad: 04e60000 04e74000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang010.dll
-ModLoad: 04e80000 04e93000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang009.dll
-ModLoad: 04e80000 04e93000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang009.dll
-ModLoad: 04eb0000 04ec4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang008.dll
-ModLoad: 04eb0000 04ec4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang008.dll
-ModLoad: 04ed0000 04ee4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang007.dll
-ModLoad: 04ed0000 04ee4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang007.dll
-ModLoad: 05000000 05013000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang002.dll
-ModLoad: 05000000 05013000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang002.dll
-ModLoad: 05020000 05033000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang001.dll
-ModLoad: 05020000 05033000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang001.dll
-ModLoad: 0ba40000 0bc2e000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang0.dll
-ModLoad: 0ba40000 0bc2e000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang0.dll
-ModLoad: 70790000 7087c000   C:\WINDOWS\SysWOW64\DDRAW.DLL
-ModLoad: 70670000 70677000   C:\WINDOWS\SysWOW64\DCIMAN32.dll
-ModLoad: 70680000 70788000   C:\WINDOWS\SysWOW64\dxgi.dll
-ModLoad: 70610000 70665000   C:\WINDOWS\SysWOW64\powrprof.dll
-ModLoad: 705d0000 70607000   C:\WINDOWS\SysWOW64\dxcore.dll
-ModLoad: 705b0000 705bf000   C:\WINDOWS\SysWOW64\UMPDC.dll
-ModLoad: 70510000 705ac000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvldumd.dll
+ModLoad: 025d0000 025e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\langRSNwildwings.dll
+ModLoad: 025d0000 025e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\langRSNwildwings.dll
+ModLoad: 025f0000 02605000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang999-override.dll
+ModLoad: 025f0000 02605000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang999-override.dll
+ModLoad: 02fd0000 03009000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang300.dll
+ModLoad: 02fd0000 03009000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang300.dll
+ModLoad: 0a260000 0a84f000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang200.dll
+ModLoad: 0a260000 0a84f000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang200.dll
+ModLoad: 06030000 061d9000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang100.dll
+ModLoad: 06030000 061d9000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang100.dll
+ModLoad: 026d0000 026e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang021.dll
+ModLoad: 026d0000 026e3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang021.dll
+ModLoad: 02da0000 02db3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang020.dll
+ModLoad: 02da0000 02db3000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang020.dll
+ModLoad: 044f0000 04504000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang019.dll
+ModLoad: 044f0000 04504000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang019.dll
+ModLoad: 04530000 04544000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang018.dll
+ModLoad: 04530000 04544000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang018.dll
+ModLoad: 04550000 04564000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang017.dll
+ModLoad: 04550000 04564000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang017.dll
+ModLoad: 04730000 04744000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang016.dll
+ModLoad: 04730000 04744000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang016.dll
+ModLoad: 04750000 04763000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang015.dll
+ModLoad: 04750000 04763000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang015.dll
+ModLoad: 04ef0000 04f03000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang013.dll
+ModLoad: 04ef0000 04f03000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang013.dll
+ModLoad: 04f10000 04f24000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang012.dll
+ModLoad: 04f10000 04f24000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang012.dll
+ModLoad: 04f50000 04f64000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang010.dll
+ModLoad: 04f50000 04f64000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang010.dll
+ModLoad: 04f70000 04f83000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang009.dll
+ModLoad: 04f70000 04f83000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang009.dll
+ModLoad: 04f90000 04fa4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang008.dll
+ModLoad: 04f90000 04fa4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang008.dll
+ModLoad: 04fc0000 04fd4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang007.dll
+ModLoad: 04fc0000 04fd4000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang007.dll
+ModLoad: 04ff0000 05003000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang002.dll
+ModLoad: 04ff0000 05003000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang002.dll
+ModLoad: 05010000 05023000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang001.dll
+ModLoad: 05010000 05023000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang001.dll
+ModLoad: 0be00000 0bfee000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang0.dll
+ModLoad: 0be00000 0bfee000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\lang0.dll
+ModLoad: 70780000 7086c000   C:\WINDOWS\SysWOW64\DDRAW.DLL
+ModLoad: 70770000 70777000   C:\WINDOWS\SysWOW64\DCIMAN32.dll
+ModLoad: 70660000 70768000   C:\WINDOWS\SysWOW64\dxgi.dll
+ModLoad: 70620000 70657000   C:\WINDOWS\SysWOW64\dxcore.dll
+ModLoad: 705c0000 70615000   C:\WINDOWS\SysWOW64\powrprof.dll
+ModLoad: 705a0000 705af000   C:\WINDOWS\SysWOW64\UMPDC.dll
+ModLoad: 70500000 7059c000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvldumd.dll
 ModLoad: 73460000 7346e000   C:\WINDOWS\SysWOW64\msasn1.dll
-ModLoad: 704e0000 7050b000   C:\WINDOWS\SysWOW64\cryptnet.dll
+ModLoad: 704d0000 704fb000   C:\WINDOWS\SysWOW64\cryptnet.dll
 ModLoad: 77a00000 77b0e000   C:\WINDOWS\SysWOW64\CRYPT32.dll
-ModLoad: 70470000 704cc000   C:\WINDOWS\SysWOW64\wldp.dll
-ModLoad: 70340000 7046b000   C:\WINDOWS\SysWOW64\drvstore.dll
-ModLoad: 70310000 70335000   C:\WINDOWS\SysWOW64\devobj.dll
+ModLoad: 70460000 704bc000   C:\WINDOWS\SysWOW64\wldp.dll
+ModLoad: 70330000 7045b000   C:\WINDOWS\SysWOW64\drvstore.dll
+ModLoad: 70300000 70325000   C:\WINDOWS\SysWOW64\devobj.dll
 ModLoad: 757b0000 75817000   C:\WINDOWS\SysWOW64\wintrust.dll
 ModLoad: 76220000 7623b000   C:\WINDOWS\SysWOW64\imagehlp.dll
 ModLoad: 73d90000 73da4000   C:\WINDOWS\SysWOW64\CRYPTSP.dll
 ModLoad: 73d50000 73d82000   C:\WINDOWS\SysWOW64\rsaenh.dll
 ModLoad: 747a0000 747bc000   C:\WINDOWS\SysWOW64\bcrypt.dll
-ModLoad: 6c470000 70303000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvgpucomp32.dll
-ModLoad: 6c380000 6c46d000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\NvMemMapStorage.dll
-ModLoad: 68700000 6c376000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvd3dum.dll
-ModLoad: 685e0000 686f6000   C:\WINDOWS\SysWOW64\nvspcap.dll
+ModLoad: 6c460000 702f3000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvgpucomp32.dll
+ModLoad: 6c370000 6c45d000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\NvMemMapStorage.dll
+ModLoad: 686f0000 6c366000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvd3dum.dll
+ModLoad: 685d0000 686e6000   C:\WINDOWS\SysWOW64\nvspcap.dll
 ModLoad: 73e00000 73e1e000   C:\WINDOWS\SysWOW64\profapi.dll
-ModLoad: 685b0000 685cf000   C:\WINDOWS\SysWOW64\gpapi.dll
-ModLoad: 68470000 685b0000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvppe.dll
-ModLoad: 68440000 68467000   C:\WINDOWS\SysWOW64\DINPUT.DLL
-ModLoad: 682c0000 68432000   C:\WINDOWS\SysWOW64\inputhost.dll
+ModLoad: 685a0000 685bf000   C:\WINDOWS\SysWOW64\gpapi.dll
+ModLoad: 68460000 685a0000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvppe.dll
+ModLoad: 68430000 68457000   C:\WINDOWS\SysWOW64\DINPUT.DLL
+ModLoad: 682b0000 68422000   C:\WINDOWS\SysWOW64\inputhost.dll
 ModLoad: 727f0000 728d0000   C:\WINDOWS\SysWOW64\CoreMessaging.dll
 ModLoad: 73db0000 73dc5000   C:\WINDOWS\SysWOW64\kernel.appcore.dll
 ModLoad: 77020000 770a6000   C:\WINDOWS\SysWOW64\clbcatq.dll
-ModLoad: 70580000 705a9000   C:\WINDOWS\SysWOW64\dmusic.dll
-ModLoad: 70550000 70575000   C:\WINDOWS\SysWOW64\winmmbase.dll
-ModLoad: 70540000 70547000   C:\WINDOWS\SysWOW64\ksuser.dll
-ModLoad: 70290000 70306000   C:\WINDOWS\SysWOW64\DSOUND.dll
-ModLoad: 701e0000 7027f000   C:\WINDOWS\SysWOW64\ResampleDmo.DLL
-ModLoad: 70530000 70539000   C:\WINDOWS\SysWOW64\msdmo.dll
-ModLoad: 70140000 701dc000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvldumd.dll
-ModLoad: 6c2a0000 70133000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvgpucomp32.dll
-ModLoad: 6c1b0000 6c29d000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\NvMemMapStorage.dll
-ModLoad: 64640000 682b6000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvd3dum.dll
-ModLoad: 70120000 701db000   C:\WINDOWS\SysWOW64\D3D8.DLL
-ModLoad: 70520000 70527000   C:\WINDOWS\SysWOW64\d3d8thk.dll
-ModLoad: 70510000 70517000   C:\WINDOWS\SysWOW64\dpnhpast.dll
-ModLoad: 05970000 05982000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\EBUEula.dll
-ModLoad: 05970000 05982000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\EBUEula.dll
-ModLoad: 70880000 70886000   C:\WINDOWS\SysWOW64\RICHED32.DLL
-ModLoad: 707f0000 70874000   C:\WINDOWS\SysWOW64\RICHED20.dll
-ModLoad: 707d0000 707e7000   C:\WINDOWS\SysWOW64\USP10.dll
-ModLoad: 70790000 707bc000   C:\WINDOWS\SysWOW64\msls31.dll
-ModLoad: 05970000 05982000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp1.dll
-ModLoad: 05970000 05982000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp1.dll
-ModLoad: 05970000 05982000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp2.dll
-ModLoad: 05970000 05982000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp2.dll
+ModLoad: 70570000 70599000   C:\WINDOWS\SysWOW64\dmusic.dll
+ModLoad: 70540000 70565000   C:\WINDOWS\SysWOW64\winmmbase.dll
+ModLoad: 70530000 70537000   C:\WINDOWS\SysWOW64\ksuser.dll
+ModLoad: 70280000 702f6000   C:\WINDOWS\SysWOW64\DSOUND.dll
+ModLoad: 701d0000 7026f000   C:\WINDOWS\SysWOW64\ResampleDmo.DLL
+ModLoad: 70520000 70529000   C:\WINDOWS\SysWOW64\msdmo.dll
+ModLoad: 70130000 701cc000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvldumd.dll
+ModLoad: 6c290000 70123000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvgpucomp32.dll
+ModLoad: 6c1a0000 6c28d000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\NvMemMapStorage.dll
+ModLoad: 64630000 682a6000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvd3dum.dll
+ModLoad: 70110000 701cb000   C:\WINDOWS\SysWOW64\D3D8.DLL
+ModLoad: 70510000 70517000   C:\WINDOWS\SysWOW64\d3d8thk.dll
+ModLoad: 70500000 70507000   C:\WINDOWS\SysWOW64\dpnhpast.dll
+ModLoad: 05b80000 05b92000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\EBUEula.dll
+ModLoad: 05b80000 05b92000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\EBUEula.dll
+ModLoad: 70870000 70876000   C:\WINDOWS\SysWOW64\RICHED32.DLL
+ModLoad: 707e0000 70864000   C:\WINDOWS\SysWOW64\RICHED20.dll
+ModLoad: 707c0000 707d7000   C:\WINDOWS\SysWOW64\USP10.dll
+ModLoad: 70780000 707ac000   C:\WINDOWS\SysWOW64\msls31.dll
+ModLoad: 05b80000 05b92000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp1.dll
+ModLoad: 05b80000 05b92000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp1.dll
+ModLoad: 05b80000 05b92000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp2.dll
+ModLoad: 05b80000 05b92000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Eulaxp2.dll
 ModLoad: 728e0000 729df000   C:\WINDOWS\SysWOW64\textinputframework.dll
 ModLoad: 72550000 727e3000   C:\WINDOWS\SysWOW64\CoreUIComponents.dll
 ModLoad: 72450000 72549000   C:\WINDOWS\SysWOW64\wintypes.dll
-ModLoad: 05970000 0597c000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\ImeUiRes.dll
-ModLoad: 05970000 0597c000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\ImeUiRes.dll
-ModLoad: 70690000 7077c000   C:\WINDOWS\SysWOW64\ddraw.dll
-ModLoad: 70680000 70687000   C:\WINDOWS\SysWOW64\DCIMAN32.dll
-ModLoad: 700d0000 701d8000   C:\WINDOWS\SysWOW64\dxgi.dll
-ModLoad: 70030000 700cc000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvldumd.dll
-ModLoad: 6c190000 70023000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvgpucomp32.dll
-ModLoad: 6c0a0000 6c18d000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\NvMemMapStorage.dll
-ModLoad: 64640000 682b6000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvd3dum.dll
-ModLoad: 6c010000 6c097000   C:\WINDOWS\SysWOW64\MMDevApi.dll
-ModLoad: 6bfb0000 6bfff000   C:\WINDOWS\SysWOW64\winsta.dll
-ModLoad: 6bf50000 6bf9d000   C:\WINDOWS\SysWOW64\rdpendp.dll
+ModLoad: 059e0000 059ec000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\ImeUiRes.dll
+ModLoad: 059e0000 059ec000   C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\ImeUiRes.dll
+ModLoad: 70680000 7076c000   C:\WINDOWS\SysWOW64\ddraw.dll
+ModLoad: 70670000 70677000   C:\WINDOWS\SysWOW64\DCIMAN32.dll
+ModLoad: 700c0000 701c8000   C:\WINDOWS\SysWOW64\dxgi.dll
+ModLoad: 70020000 700bc000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvldumd.dll
+ModLoad: 6c180000 70013000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvgpucomp32.dll
+ModLoad: 6c090000 6c17d000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\NvMemMapStorage.dll
+ModLoad: 64630000 682a6000   C:\WINDOWS\System32\DriverStore\FileRepository\nv_dispig.inf_amd64_f4c7a2fd13e0f763\nvd3dum.dll
+ModLoad: 6c000000 6c087000   C:\WINDOWS\SysWOW64\MMDevApi.dll
+ModLoad: 6bfa0000 6bfef000   C:\WINDOWS\SysWOW64\winsta.dll
+ModLoad: 6bf40000 6bf8d000   C:\WINDOWS\SysWOW64\rdpendp.dll
 ModLoad: 73cc0000 73ce1000   C:\WINDOWS\SysWOW64\WTSAPI32.dll
-ModLoad: 6be80000 6bf49000   C:\WINDOWS\SysWOW64\PROPSYS.dll
-ModLoad: 6bd00000 6be71000   C:\WINDOWS\SysWOW64\AUDIOSES.DLL
-ModLoad: 6bce0000 6bcf0000   C:\WINDOWS\SysWOW64\resourcepolicyclient.dll
-ModLoad: 6bbc0000 6bcd1000   C:\Windows\SysWOW64\Windows.UI.dll
-ModLoad: 70670000 70679000   C:\WINDOWS\SysWOW64\avrt.dll
-ModLoad: 6bb50000 6bbb7000   C:\WINDOWS\SysWOW64\D3DIM700.DLL
+ModLoad: 6be70000 6bf39000   C:\WINDOWS\SysWOW64\PROPSYS.dll
+ModLoad: 6bcf0000 6be61000   C:\WINDOWS\SysWOW64\AUDIOSES.DLL
+ModLoad: 6bcd0000 6bce0000   C:\WINDOWS\SysWOW64\resourcepolicyclient.dll
+ModLoad: 6bbb0000 6bcc1000   C:\Windows\SysWOW64\Windows.UI.dll
+ModLoad: 70660000 70669000   C:\WINDOWS\SysWOW64\avrt.dll
+ModLoad: 6bb40000 6bba7000   C:\WINDOWS\SysWOW64\D3DIM700.DLL
 ModLoad: 72360000 7244b000   C:\WINDOWS\SysWOW64\TextShaping.dll
 NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\Visualizers\atlmfc.natvis'
 NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\Visualizers\ObjectiveC.natvis'
