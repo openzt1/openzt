@@ -562,6 +562,13 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_POPULATION_METRICS_MULTI_REIMPL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_population_metrics_multi_reimpl_live_test,
             },
+            // Multi-reimplementation integration stage 33 (zthabitat-additional-functions-plan.md):
+            // terrain-passability / clear-tile navigation cross-getter contracts over the live zoo.
+            // Read-only: scratch vectors are freed, seeds restored where cross-agreement is asserted.
+            RegisteredTest {
+                name: "ZTHABITAT_TERRAIN_PASSABILITY_MULTI_REIMPL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_terrain_passability_multi_reimpl_live_test,
+            },
             RegisteredTest {
                 name: "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE",
                 run: tests::zthabitatmgr::run_habitat_trigger_keeper_arrived_live_test,

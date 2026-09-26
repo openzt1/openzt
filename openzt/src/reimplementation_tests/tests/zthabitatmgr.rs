@@ -4238,6 +4238,410 @@ pub(crate) fn run_habitat_population_metrics_multi_reimpl_live_test(failure_log:
     }
 }
 
+/// Rebuilds `getAdjacentClearTile`'s expected candidate set for one base tile - the decompile's own
+/// dx-outer/dy-inner 8-neighborhood scan: bounds against the live map, owner equality with the base
+/// tile's own owner ([`ZTHabitatMgr::get_habitat_ptr`], the same raw "0 == 0 ownerless tiles match"
+/// comparison both sides perform), and the real vtable `+0x164` path-cost dispatch
+/// ([`call_bfunit_tile_cost_vtable_slot`]) by exact equality against the shared [`MAX_PATH_COST_RVA`]
+/// sentinel. Extracted for [`run_habitat_terrain_passability_multi_reimpl_live_test`]; the
+/// per-function tests keep their own inline copies of the same scan.
+fn adjacent_clear_candidates(habitat_mgr: &ZTHabitatMgr, world: &crate::ztworldmgr::ZTWorldMgr, unit: u32, base_tile: u32, max_cost: i32) -> Vec<u32> {
+    let base_x: i32 = get_from_memory(base_tile + 0x34);
+    let base_y: i32 = get_from_memory(base_tile + 0x38);
+    let base_habitat = habitat_mgr.get_habitat_ptr(base_x, base_y);
+    let mut candidates: Vec<u32> = Vec::new();
+    for dx in -1i32..=1 {
+        for dy in -1i32..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let cand_x = base_x + dx;
+            let cand_y = base_y + dy;
+            if cand_x < 0 || cand_y < 0 || cand_x as u32 >= world.map_x_size || cand_y as u32 >= world.map_y_size {
+                continue;
+            }
+            if habitat_mgr.get_habitat_ptr(cand_x, cand_y) != base_habitat {
+                continue;
+            }
+            let candidate_tile_ptr = world.get_tile_ptr(cand_x as u32, cand_y as u32);
+            let cost = unsafe { call_bfunit_tile_cost_vtable_slot(unit, candidate_tile_ptr) };
+            if cost == max_cost {
+                continue;
+            }
+            candidates.push(candidate_tile_ptr);
+        }
+    }
+    candidates
+}
+
+/// Multi-reimplementation integration test (stage 33 of
+/// `openzt/plans/zthabitat-additional-functions-plan.md`): drives the terrain-passability /
+/// clear-tile navigation reimplementations together over the live zoo's own habitats, asserting
+/// cross-getter contracts per side rather than re-asserting the per-draw LCG slot fidelity each
+/// per-function live test already pins (stage 11's "may only need the remaining cross-function
+/// assertions" scoping). Real vanilla is called before the reimplementation everywhere except the
+/// seed-juggled legs, which must restore the shared seed between the sides so both draw the same
+/// internal animal slot (the established `characteristics_dirty` ordering still holds: one
+/// unasserted real `getRandomAnimal` settles any pending recalculate per habitat first). Per
+/// habitat, over its own owned-tile list:
+///
+/// 1. Clear-tile pool: the null-animal `(false, false)` `addClearTiles` pool agrees
+///    element-for-element between the sides, and every pooled tile is an owned tile. In release,
+///    `ADD_CLEAR_TILES.original()` re-enters the port, so this leg is port-vs-port there - the
+///    real-vs-reimpl diff is `ZTHABITAT_ADD_CLEAR_TILES_MATCHES_REAL_LIVE`'s coverage, same note as
+///    [`vanilla_clear_tile_pool`]'s own doc.
+/// 2. Random-clear-tile membership: 100 `getRandomClearTile` overload-0 draws per side, in the real
+///    callers' own `(false, false)` shape, must each be null (the internally drawn animal's cost
+///    gate can legitimately empty the pool) or a member of that null-animal pool - the animal gate
+///    only removes tiles. Membership-level only: the exact two-step LCG composition is
+///    `ZTHABITAT_GET_RANDOM_CLEAR_TILE_DEFAULT_LIVE`'s coverage.
+/// 3. Adjacency: for every distinct drawn tile, both sides' `getAdjacentClearTile` returns the base
+///    tile itself when the rebuilt 8-neighborhood candidate set ([`adjacent_clear_candidates`]) is
+///    empty (the RNG-free pass-through), else a member of it. The spec's "within 1 tile Manhattan
+///    distance" is wrong - the decompile scans the 8-neighborhood, so diagonal picks are Manhattan
+///    2; the faithful contract is Chebyshev-1 candidacy, which the candidate rebuild encodes.
+/// 4. Nearest/near: `getNearestClearTile` is asserted exactly - seed-controlled prediction of the
+///    internal `getRandomAnimal` slot against the [`nearest_clear_tile_oracle`] (the mathematically
+///    nearest tile matching all passability constraints; the oracle is the per-function test's own,
+///    reused, not re-derived). `getNearClearTile` asserts membership in the seed-independent
+///    [`near_clear_tile_candidates`] set per side, and restored-seed cross-agreement of (tile,
+///    seed) when the set is empty (the fallback chain `getNearestClearTile` ->
+///    `getRandomClearTile(false, false)` is deterministic given the seed; its absolute correctness
+///    is the per-function tests'). The spec's "getNearClearTile selects the mathematically nearest
+///    tile" is wrong - stage 14 established it as a random pick among `dist^2 < 10` candidates with
+///    a fallback chain, not a nearest search. The near leg is skipped zoo-wide (not a failure) when
+///    the zoo has no keeper - the only caller shape the `ZTStaff`-only reserved-tile vector read is
+///    safe for.
+/// 5. Raycast within the exhibit: per direction (0-7 plus the `-1`/`0xffffffff` sentinel),
+///    `getRandomTileInDirection` returns a direction-candidate tile or - through vanilla's own
+///    `getRandomTile` fallback - still an owned tile; `getRandomClearTileAhead` obeys the same
+///    contract over its ahead-of-heading candidate set. The spec's "strictly within the exhibit
+///    perimeter" is read as owned-tile membership: both functions' candidate sets and their shared
+///    fallback draw exclusively from the owned-tile list.
+///
+/// Everything is read-only or exactly restored (scratch vectors freed via
+/// [`free_event_vector_buffer`], seeds restored where cross-agreement is asserted; advancing the
+/// shared game RNG is what every live test already does). Non-vacuousness: the save must own at
+/// least one tile across all habitats, or every invariant above holds vacuously.
+pub(crate) fn run_habitat_terrain_passability_multi_reimpl_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_TERRAIN_PASSABILITY_MULTI_REIMPL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let world = globals().ztworldmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    // Leg 4's near half resolves its keeper zoo-wide once (real caller shape `ZTGoalPutFood::decide`):
+    // no keeper (or a tile-less one) skips that leg, not a failure; a malformed `ZTStaff`-only
+    // reserved-tile vector fails loudly rather than letting the reserved-tile scan (both sides') walk
+    // unbounded memory.
+    let mut near_skip_note = String::new();
+    let keeper = world
+        .entity_array()
+        .find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) })
+        .map(|unit| {
+            let unit_tile = (unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) }) as u32;
+            (unit, unit_tile)
+        });
+    let keeper = match keeper {
+        None => {
+            near_skip_note = "near leg skipped: no live ZTKeeper found".to_string();
+            None
+        }
+        Some((_, 0)) => {
+            near_skip_note = "near leg skipped: live ZTKeeper has no tile".to_string();
+            None
+        }
+        Some((unit, unit_tile)) => {
+            let reserved_begin: u32 = get_from_memory(unit + 0x27c);
+            let reserved_end: u32 = get_from_memory(unit + 0x280);
+            let reserved_len = reserved_end.wrapping_sub(reserved_begin);
+            if reserved_end < reserved_begin || !reserved_len.is_multiple_of(4) || reserved_len > 0x10000 {
+                let msg = format!("keeper {:#010x} reserved-tile vector malformed: {:#010x}..{:#010x}", unit, reserved_begin, reserved_end);
+                error!("{}: {}", test_name, msg);
+                if let Some(log_file) = failure_log {
+                    let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+                }
+                return true;
+            }
+            Some((unit, unit_tile))
+        }
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut total_owned_tiles = 0usize;
+    let mut clear_pools = 0usize;
+    let mut random_draws = 0usize;
+    let mut random_non_null = 0usize;
+    let mut adjacency_checks = 0usize;
+    let mut adjacency_skipped = 0usize;
+    let mut nearest_checks = 0usize;
+    let mut nearest_skipped = 0usize;
+    let mut near_checks = 0usize;
+    let mut near_fallback_agreements = 0usize;
+    let mut near_skipped = 0usize;
+    let mut raycast_draws = 0usize;
+
+    for (i, &ptr) in habitat_ptrs.iter().enumerate() {
+        // Settle: one unasserted real draw triggers any pending lazy recalculate and leaves
+        // `all_animals` exactly as every snapshot below sees it.
+        unsafe { zthabitat::GET_RANDOM_ANIMAL.original()(ptr as *const std::ffi::c_void) };
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let tiles: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        total_owned_tiles += tiles.len();
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let count = (end.wrapping_sub(begin)) / 4;
+        let animals: Vec<u32> = (0..count).map(|u| get_from_memory::<u32>(begin + u * 4)).filter(|&a| a != 0).collect();
+        let unit_and_tile = animals.first().copied().and_then(|unit| {
+            let unit_tile = (unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) }) as u32;
+            (unit_tile != 0).then_some((unit, unit_tile))
+        });
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let from_tile = tiles.first().copied().unwrap_or(0);
+        let gate_tile_ptr = habitat.get_gate_tile_in().map(|tile| world.get_ptr_from_bftile(&tile)).unwrap_or(0);
+
+        // Leg 1 - clear-tile pool: both sides, element-for-element, owned-tile membership.
+        let real_pool = vanilla_clear_tile_pool(ptr, &[], 0, false, false);
+        let mut reimpl_scratch = [0u32; 3];
+        habitat.add_clear_tiles(reimpl_scratch.as_mut_ptr() as u32, 0, false);
+        let reimpl_pool: Vec<u32> = (reimpl_scratch[0]..reimpl_scratch[1]).step_by(4).map(get_from_memory::<u32>).collect();
+        free_event_vector_buffer(reimpl_scratch[0], reimpl_scratch[2].wrapping_sub(reimpl_scratch[0]));
+        clear_pools += 2;
+        if real_pool != reimpl_pool {
+            failures.push(format!(
+                "habitat {} ({:#010x}): clear-tile pools disagree - real ({:?}) vs reimpl ({:?})",
+                i, ptr, real_pool, reimpl_pool
+            ));
+        }
+        for (side, pool) in [("real", &real_pool), ("reimpl", &reimpl_pool)] {
+            for &tile in pool {
+                if !tiles.contains(&tile) {
+                    failures.push(format!("habitat {} ({:#010x}) {}: clear pool tile {:#010x} is not an owned tile", i, ptr, side, tile));
+                }
+            }
+        }
+
+        // Leg 2 - random-clear-tile membership, 100 draws per side.
+        let mut drawn_tiles: Vec<u32> = Vec::new();
+        for _ in 0..100 {
+            for (side, drawn) in [
+                ("real", (unsafe { zthabitat::GET_RANDOM_CLEAR_TILE_0.original()(ptr as *const u32, false, false) }) as u32),
+                ("reimpl", habitat.get_random_clear_tile_default(false, false)),
+            ] {
+                random_draws += 1;
+                if drawn == 0 {
+                    continue;
+                }
+                random_non_null += 1;
+                if !drawn_tiles.contains(&drawn) {
+                    drawn_tiles.push(drawn);
+                }
+                let pool = if side == "real" { &real_pool } else { &reimpl_pool };
+                if !pool.contains(&drawn) {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}) {}: getRandomClearTile drew {:#010x} outside the null-animal clear pool of {} tiles",
+                        i, ptr, side, drawn, pool.len()
+                    ));
+                }
+            }
+        }
+
+        // Leg 3 - adjacency of the drawn tiles.
+        if let Some((unit, _)) = unit_and_tile {
+            for &base in &drawn_tiles {
+                let candidates = adjacent_clear_candidates(habitat_mgr, world, unit, base, max_cost);
+                for (side, returned) in [
+                    ("real", (unsafe { zthabitat::GET_ADJACENT_CLEAR_TILE.original()(unit as *const u32, base as *const u32) }) as u32),
+                    ("reimpl", ZTHabitat::get_adjacent_clear_tile(unit, base)),
+                ] {
+                    adjacency_checks += 1;
+                    let ok = if candidates.is_empty() { returned == base } else { candidates.contains(&returned) };
+                    if !ok {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: getAdjacentClearTile at base {:#010x} returned {:#010x}, expected {} (of {} candidates)",
+                            i,
+                            ptr,
+                            side,
+                            base,
+                            returned,
+                            if candidates.is_empty() { "the base tile back".to_string() } else { "a candidate".to_string() },
+                            candidates.len()
+                        ));
+                    }
+                }
+            }
+        } else {
+            adjacency_skipped += 1;
+        }
+
+        // Leg 4a - nearest, exact against the shared oracle; the shared seed is restored between the
+        // sides so both draw the same internal animal slot.
+        if let Some((unit, unit_tile)) = unit_and_tile {
+            let seed_at_predict: u32 = get_from_memory(rng_addr);
+            let expected_rng = lcg_next(seed_at_predict);
+            let random_animal = if count == 0 {
+                0
+            } else {
+                let index = ((expected_rng >> 0x10) & 0x7fff) % count;
+                get_from_memory::<u32>(begin + index * 4)
+            };
+            let expected_tile = nearest_clear_tile_oracle(&tiles, unit, unit_tile, random_animal, max_cost);
+            let real_ptr = (unsafe { zthabitat::GET_NEAREST_CLEAR_TILE.original()(ptr as *const u32, unit as *const u32) }) as u32;
+            save_to_memory(rng_addr, seed_at_predict);
+            let reimpl_ptr = habitat.get_nearest_clear_tile(unit);
+            nearest_checks += 2;
+            for (side, returned) in [("real", real_ptr), ("reimpl", reimpl_ptr)] {
+                if returned != expected_tile {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}) {}: getNearestClearTile returned {:#010x}, oracle expected {:#010x} (predicted animal {:#010x} of {} slots)",
+                        i, ptr, side, returned, expected_tile, random_animal, count
+                    ));
+                }
+            }
+        } else {
+            nearest_skipped += 1;
+        }
+
+        // Leg 4b - near: membership when the candidate set is non-empty, restored-seed cross-agreement
+        // of (tile, seed) through the fallback chain when it is empty.
+        if let Some((keeper, keeper_tile)) = keeper {
+            for animal in std::iter::once(0u32).chain(animals.first().copied()) {
+                let candidates = near_clear_tile_candidates(&tiles, keeper, keeper_tile, animal, gate_tile_ptr, max_cost);
+                let seed_before: u32 = get_from_memory(rng_addr);
+                let real_ptr =
+                    (unsafe { zthabitat::GET_NEAR_CLEAR_TILE.original()(ptr as *const u32, keeper as *const u32, animal as *const u32) }) as u32;
+                let real_seed: u32 = get_from_memory(rng_addr);
+                save_to_memory(rng_addr, seed_before);
+                let reimpl_ptr = habitat.get_near_clear_tile(keeper, animal);
+                let reimpl_seed: u32 = get_from_memory(rng_addr);
+                near_checks += 2;
+                if !candidates.is_empty() {
+                    for (side, drawn) in [("real", real_ptr), ("reimpl", reimpl_ptr)] {
+                        if !candidates.contains(&drawn) {
+                            failures.push(format!(
+                                "habitat {} ({:#010x}) {}: getNearClearTile(animal={:#010x}) returned {:#010x}, outside the {}-candidate near set",
+                                i, ptr, side, animal, drawn, candidates.len()
+                            ));
+                        }
+                    }
+                } else if reimpl_ptr == real_ptr && reimpl_seed == real_seed {
+                    near_fallback_agreements += 1;
+                } else {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), animal={:#010x}: empty fallback disagreement - reimpl ({:#010x}, rng {:#010x}) vs real ({:#010x}, rng {:#010x})",
+                        i, ptr, animal, reimpl_ptr, reimpl_seed, real_ptr, real_seed
+                    ));
+                }
+            }
+        } else {
+            near_skipped += 1;
+        }
+
+        // Leg 5 - raycast within the exhibit (skipped for tile-less habitats).
+        if !tiles.is_empty() {
+            for direction in [0u32, 1, 2, 3, 4, 5, 6, 7, 0xffff_ffff] {
+                let candidates = directional_tile_candidates(&tiles, from_tile, direction as i32);
+                for (side, returned) in [
+                    ("real", (unsafe { zthabitat::GET_RANDOM_TILE_IN_DIRECTION.original()(ptr as *const u32, from_tile as *const u32, direction) }) as u32),
+                    ("reimpl", habitat.get_random_tile_in_direction(from_tile, direction)),
+                ] {
+                    raycast_draws += 1;
+                    let ok = if candidates.is_empty() { tiles.contains(&returned) } else { candidates.contains(&returned) };
+                    if !ok {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: getRandomTileInDirection(dir {:#x}) returned {:#010x}, expected {}",
+                            i,
+                            ptr,
+                            side,
+                            direction,
+                            returned,
+                            if candidates.is_empty() { "an owned tile (empty-set getRandomTile fallback)".to_string() } else { "a direction candidate".to_string() }
+                        ));
+                    }
+                }
+            }
+            if let Some((unit, unit_tile)) = unit_and_tile {
+                let rotation: u32 = get_from_memory(unit + 0x12c);
+                let heading = if rotation == 0xffff_ffff { rotation } else { rotation.wrapping_sub(4) & 7 };
+                let candidates: Vec<u32> = tiles
+                    .iter()
+                    .copied()
+                    .filter(|&tile| {
+                        let cost = unsafe { call_bfunit_tile_cost_vtable_slot(unit, tile) };
+                        if cost >= max_cost {
+                            return false;
+                        }
+                        let dir = unsafe { BFMAP_GET_DIRECTION_0.original()(unit_tile as i32, tile as i32) };
+                        !is_close_direction(heading as i32, dir)
+                    })
+                    .collect();
+                for (side, returned) in [
+                    ("real", (unsafe { zthabitat::GET_RANDOM_CLEAR_TILE_AHEAD.original()(ptr as *const u32, unit as *const u32) }) as u32),
+                    ("reimpl", habitat.get_random_clear_tile_ahead(unit)),
+                ] {
+                    raycast_draws += 1;
+                    let ok = if candidates.is_empty() { tiles.contains(&returned) } else { candidates.contains(&returned) };
+                    if !ok {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: getRandomClearTileAhead returned {:#010x}, expected {}",
+                            i,
+                            ptr,
+                            side,
+                            returned,
+                            if candidates.is_empty() { "an owned tile (empty-set getRandomTile fallback)".to_string() } else { "an ahead candidate".to_string() }
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if total_owned_tiles == 0 {
+        let msg = "all invariants were vacuous: no owned tiles across any live habitat".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    if failures.is_empty() {
+        let mut summary = format!(
+            "{} (habitats: {}, owned tiles: {}, clear pools: {}, random draws: {} (non-null {}), adjacency checks: {} (skipped: {}), nearest checks: {} (skipped: {}), near checks: {} (fallback agreements: {}, skipped: {}), raycast draws: {}",
+            test_name, habitat_ptrs.len(), total_owned_tiles, clear_pools, random_draws, random_non_null, adjacency_checks, adjacency_skipped, nearest_checks, nearest_skipped, near_checks, near_fallback_agreements, near_skipped, raycast_draws
+        );
+        if !near_skip_note.is_empty() {
+            summary.push_str(&format!(", {near_skip_note}"));
+        }
+        summary.push(')');
+        write_success_line(failure_log, &summary);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// One snapshot→call→assert→restore pass of [`run_habitat_trigger_keeper_arrived_live_test`] for a
 /// single (side, habitat, `scheduled`) combination. Snapshots the habitat's `scheduled_service_counter`
 /// (`+0xf4`) and every animal's keeper-arrives flag byte (`+0x39c`) - plus the same pair for every
