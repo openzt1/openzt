@@ -578,6 +578,14 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_GATE_PASS_TRAVERSAL_MULTI_REIMPL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_gate_pass_traversal_multi_reimpl_live_test,
             },
+            // Multi-reimplementation integration stage 35 (zthabitat-additional-functions-plan.md):
+            // multi-layer biome aggregation & subhabitat inheritance cross-getter contracts over the
+            // live zoo. Read-only: scratch vectors are freed; the random-draw leg advances the
+            // shared game RNG (no restore needed - no cross-draw seed agreement is asserted).
+            RegisteredTest {
+                name: "ZTHABITAT_BIOME_AGGREGATION_MULTI_REIMPL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_biome_aggregation_multi_reimpl_live_test,
+            },
             RegisteredTest {
                 name: "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE",
                 run: tests::zthabitatmgr::run_habitat_trigger_keeper_arrived_live_test,

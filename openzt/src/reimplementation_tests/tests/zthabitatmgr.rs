@@ -4996,6 +4996,296 @@ pub(crate) fn run_habitat_gate_pass_traversal_multi_reimpl_live_test(failure_log
     }
 }
 
+/// Stage 35 of the zthabitat-additional-functions plan (multi-reimplementation integration test):
+/// cross-validates the three biome layers' four function families against each other over the live
+/// zoo. Test-only - no production code, no new detours. All twelve biome functions are detoured, so
+/// in release every `.original()` pole re-enters the ports and the real-vs-reimpl equality legs are
+/// port-vs-port there - the genuine real-vs-reimpl diffs stay with the Stage 16-19 per-function
+/// tests (same documented shape as [`BiomeTileKind::real`]'s own doc). No leg needs a
+/// `characteristics_dirty` settling draw - none of the twelve bodies recalculates. Per habitat over
+/// `exhibit_array`:
+///
+/// 1. Subhabitat inheritance (leg 1): for each of the three kinds, both sides' `get*Tiles` must
+///    equal, in order, the habitat's own real `add*Tiles` plus each amphibious neighbor's own real
+///    `add*Tiles` in [`walk_neighbor_tree`] order - one flat level of fan-in, the decompiled
+///    aggregation shape ([`ZTHabitat::get_tiles_aggregating`]).
+/// 2. num/len cross-getter contract (legs 2-4): real `getNum*Tiles` == the real `get*Tiles` list
+///    length, port `get_num_*` == the port `get_*_tiles` list length, and real num == port num.
+/// 3. Random membership sweep (leg 5): 50 draws per kind per side; a non-empty aggregate must yield
+///    a member of that side's own aggregate, an empty pool must yield null with the shared RNG seed
+///    untouched (the `.asm`'s `JLE` gate precedes any RNG touch). Membership level only - the exact
+///    `(seed >> 0x10 & 0x7fff) % count` slot contract stays with the Stage 19 tests - and the
+///    draws advance the shared game RNG unrestored (nothing downstream asserts a seed value).
+/// 4. Partition identity + strict sum (leg 6): on every habitat and both sides,
+///    `land + water + underwater == universe + |land ∩ water|` - the identity the decompiles
+///    actually guarantee (the filters are independent bits, so underwater is the complement of
+///    land-union-water and land/water overlap is legal) - then the spec's strict
+///    `getNumLandTiles + getNumWaterTiles == universe` only for a qualifying "standard non-tank
+///    exhibit" (no amphibious neighbors, not a tank, empty underwater aggregate, zero land/water
+///    overlap). A non-qualifying habitat is counted per first-failing gate (neighbors / tank /
+///    underwater / overlap) in the success line, never a failure, and zero standard exhibits on a
+///    save is a documented skip note rather than a failure - the identity assert carries the leg
+///    everywhere.
+///
+/// The aggregated tile universe is each habitat's own owned tiles plus every neighbor's own owned
+/// tiles (deduped by pointer containment; habitats never share tiles - the dedup is defensive).
+/// Everything is read-only except the shared game RNG the sweep advances; scratch vectors are freed
+/// via [`free_event_vector_buffer`]. Non-vacuousness: the save must contain at least one genuine
+/// amphibious connection contributing at least one tile, and at least one non-empty aggregate per
+/// kind, else every invariant above holds vacuously.
+pub(crate) fn run_habitat_biome_aggregation_multi_reimpl_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_BIOME_AGGREGATION_MULTI_REIMPL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut habitats_with_neighbors = 0usize;
+    let mut neighbor_tiles_total = 0usize;
+    let mut num_len_checks = 0usize;
+    let mut num_cross_checks = 0usize;
+    let mut random_draws = 0usize;
+    let mut random_non_null = 0usize;
+    let mut empty_pool_draws = 0usize;
+    let mut identity_checks = 0usize;
+    let mut strict_sum_checks = 0usize;
+    let mut standard_exhibits = 0usize;
+    let mut excluded_neighbors = 0usize;
+    let mut excluded_tanks = 0usize;
+    let mut excluded_underwater = 0usize;
+    let mut excluded_overlap = 0usize;
+    let mut kind_non_empty = [0usize; 3];
+
+    for (i, &ptr) in habitat_ptrs.iter().enumerate() {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let neighbor_ptrs: Vec<u32> =
+            walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        if !neighbor_ptrs.is_empty() {
+            habitats_with_neighbors += 1;
+        }
+
+        // The aggregated tile universe: this habitat's own owned tiles plus every neighbor's own
+        // owned tiles (deduped by pointer containment; habitats never share tiles - the dedup is
+        // defensive).
+        let sentinel: u32 = get_from_memory(ptr + 0x40);
+        let mut universe: Vec<u32> = walk_tile_list(sentinel).map(|node| get_from_memory::<u32>(node + 0x8)).collect();
+        for &neighbor in &neighbor_ptrs {
+            let neighbor_sentinel: u32 = get_from_memory(neighbor + 0x40);
+            let neighbor_tiles: Vec<u32> = walk_tile_list(neighbor_sentinel)
+                .map(|node| get_from_memory::<u32>(node + 0x8))
+                .filter(|tile| !universe.contains(tile))
+                .collect();
+            universe.extend(neighbor_tiles);
+        }
+
+        // Expected aggregation per kind (Stage 17's assembly shape): the habitat's own real
+        // add*Tiles, then each neighbor's own real add*Tiles in walk order - one flat level of
+        // fan-in, exactly what real vanilla's get*Tiles and the port's get_tiles_aggregating both
+        // produce.
+        let mut expected: [Vec<u32>; 3] = Default::default();
+        for (k, &kind) in ALL_BIOME_KINDS.iter().enumerate() {
+            expected[k] = extract_vector(|scratch| kind.real(ptr, scratch));
+            for &neighbor in &neighbor_ptrs {
+                let part = extract_vector(|scratch| kind.real(neighbor, scratch));
+                neighbor_tiles_total += part.len();
+                expected[k].extend(part);
+            }
+            if !expected[k].is_empty() {
+                kind_non_empty[k] += 1;
+            }
+        }
+
+        let mut real_lists: [Vec<u32>; 3] = Default::default();
+        let mut port_lists: [Vec<u32>; 3] = Default::default();
+        let mut real_nums = [0i32; 3];
+        let mut port_nums = [0i32; 3];
+        for (k, &kind) in ALL_BIOME_KINDS.iter().enumerate() {
+            real_lists[k] = extract_vector(|scratch| kind.get_real(ptr, scratch));
+            port_lists[k] = extract_vector(|scratch| kind.get_port(habitat, scratch.as_mut_ptr() as u32));
+
+            // Leg 1 - subhabitat inheritance, element-for-element (ordered equality pins the walk
+            // order; strictly stronger than the spec's containment wording).
+            for (side, list) in [("real", &real_lists[k]), ("port", &port_lists[k])] {
+                if list != &expected[k] {
+                    let first_diff = list.iter().zip(expected[k].iter()).position(|(a, b)| a != b).unwrap_or(list.len().min(expected[k].len()));
+                    failures.push(format!(
+                        "habitat {} ({:#010x}) {}: {:?} get*Tiles disagrees with the own-add + per-neighbor-add aggregation - {} tiles vs expected {}, first difference at index {}",
+                        i, ptr, side, kind, list.len(), expected[k].len(), first_diff
+                    ));
+                }
+            }
+
+            // Legs 2-4 - num/len cross-getter contract.
+            real_nums[k] = kind.num_real(ptr);
+            port_nums[k] = kind.num_port(habitat);
+            num_len_checks += 2;
+            if real_nums[k] != real_lists[k].len() as i32 {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {:?}: real getNum*Tiles {} != real get*Tiles len {}",
+                    i, ptr, kind, real_nums[k], real_lists[k].len()
+                ));
+            }
+            if port_nums[k] != port_lists[k].len() as i32 {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {:?}: port get_num_* {} != port get_*_tiles len {}",
+                    i, ptr, kind, port_nums[k], port_lists[k].len()
+                ));
+            }
+            num_cross_checks += 1;
+            if real_nums[k] != port_nums[k] {
+                failures.push(format!("habitat {} ({:#010x}) {:?}: real num {} != port num {}", i, ptr, kind, real_nums[k], port_nums[k]));
+            }
+
+            // Leg 5 - random membership sweep (50 draws per side). The seed is read immediately
+            // before each draw; only the empty-pool arm asserts seed-untouched. Draws advance the
+            // shared game RNG and are not restored.
+            for _ in 0..50 {
+                for side in ["real", "port"] {
+                    let seed_before: u32 = get_from_memory(rng_addr);
+                    let (drawn, pool) = if side == "real" {
+                        (kind.random_real(ptr), &real_lists[k])
+                    } else {
+                        (kind.random_port(habitat), &port_lists[k])
+                    };
+                    random_draws += 1;
+                    if pool.is_empty() {
+                        empty_pool_draws += 1;
+                        if drawn != 0 {
+                            failures.push(format!(
+                                "habitat {} ({:#010x}) {} {:?}: draw {:#010x} from an empty aggregate, expected null",
+                                i, ptr, side, kind, drawn
+                            ));
+                        }
+                        let seed_after: u32 = get_from_memory(rng_addr);
+                        if seed_after != seed_before {
+                            failures.push(format!(
+                                "habitat {} ({:#010x}) {} {:?}: empty-pool draw moved the shared RNG seed ({:#010x} -> {:#010x}), expected it untouched",
+                                i, ptr, side, kind, seed_before, seed_after
+                            ));
+                        }
+                    } else if drawn != 0 && pool.contains(&drawn) {
+                        random_non_null += 1;
+                    } else {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {} {:?}: draw {:#010x} outside the aggregated biome vector ({} tiles){}",
+                            i,
+                            ptr,
+                            side,
+                            kind,
+                            drawn,
+                            pool.len(),
+                            if drawn == 0 { " (null draw from a non-empty pool)" } else { "" }
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Leg 6 - the decompile-guaranteed partition identity (underwater is the complement of
+        // land-union-water by predicate construction, so the only double-counted tiles are
+        // land+water), then the spec's strict sum restricted to qualifying standard exhibits.
+        let overlap = real_lists[0].iter().filter(|tile| real_lists[1].contains(tile)).count();
+        for (side, lists) in [("real", &real_lists), ("port", &port_lists)] {
+            identity_checks += 1;
+            let sum = lists[0].len() + lists[1].len() + lists[2].len();
+            let identity_total = universe.len() + overlap;
+            if sum != identity_total {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {}: land {} + water {} + underwater {} = {}, expected universe {} + land/water overlap {} = {}",
+                    i, ptr, side, lists[0].len(), lists[1].len(), lists[2].len(), sum, universe.len(), overlap, identity_total
+                ));
+            }
+        }
+        if neighbor_ptrs.is_empty() && !habitat.is_tank() && real_lists[2].is_empty() && overlap == 0 {
+            standard_exhibits += 1;
+            strict_sum_checks += 2;
+            let expected_total = universe.len() as i32;
+            if real_nums[0] + real_nums[1] != expected_total {
+                failures.push(format!(
+                    "habitat {} ({:#010x}): standard exhibit strict sum - real getNumLandTiles {} + getNumWaterTiles {} != universe {}",
+                    i, ptr, real_nums[0], real_nums[1], expected_total
+                ));
+            }
+            if port_nums[0] + port_nums[1] != expected_total {
+                failures.push(format!(
+                    "habitat {} ({:#010x}): standard exhibit strict sum - port get_num_land_tiles {} + get_num_water_tiles {} != universe {}",
+                    i, ptr, port_nums[0], port_nums[1], expected_total
+                ));
+            }
+        } else if !neighbor_ptrs.is_empty() {
+            excluded_neighbors += 1;
+        } else if habitat.is_tank() {
+            excluded_tanks += 1;
+        } else if !real_lists[2].is_empty() {
+            excluded_underwater += 1;
+        } else {
+            excluded_overlap += 1;
+        }
+    }
+
+    if habitats_with_neighbors == 0 || neighbor_tiles_total == 0 {
+        failures.push(format!(
+            "non-vacuous-recursion assert failed: habitats with amphibious neighbors: {}, neighbor-contributed tiles: {} - the live save must contain a genuine amphibious connection for this test to exercise the aggregation",
+            habitats_with_neighbors, neighbor_tiles_total
+        ));
+    }
+    for (k, &kind) in ALL_BIOME_KINDS.iter().enumerate() {
+        if kind_non_empty[k] == 0 {
+            failures.push(format!(
+                "non-vacuous-draw assert failed: every habitat's {:?} aggregate is empty - the get/count/draw paths never ran on a non-empty pool on this save",
+                kind
+            ));
+        }
+    }
+
+    if failures.is_empty() {
+        let summary = format!(
+            "{} (habitats: {}, with amphibious neighbors: {}, neighbor-contributed tiles: {}, num/len checks: {}, cross num checks: {}, random draws: {} (non-null {}, empty-pool {}), identity checks: {}, strict-sum checks: {} (standard exhibits: {}, exclusions: neighbors {} / tanks {} / underwater {} / overlap {}){}",
+            test_name,
+            habitat_ptrs.len(),
+            habitats_with_neighbors,
+            neighbor_tiles_total,
+            num_len_checks,
+            num_cross_checks,
+            random_draws,
+            random_non_null,
+            empty_pool_draws,
+            identity_checks,
+            strict_sum_checks,
+            standard_exhibits,
+            excluded_neighbors,
+            excluded_tanks,
+            excluded_underwater,
+            excluded_overlap,
+            if standard_exhibits == 0 { ", strict-sum leg skipped: no standard non-tank exhibits on this save" } else { "" }
+        );
+        write_success_line(failure_log, &summary);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// One snapshot→call→assert→restore pass of [`run_habitat_trigger_keeper_arrived_live_test`] for a
 /// single (side, habitat, `scheduled`) combination. Snapshots the habitat's `scheduled_service_counter`
 /// (`+0xf4`) and every animal's keeper-arrives flag byte (`+0x39c`) - plus the same pair for every
