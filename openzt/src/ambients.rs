@@ -652,7 +652,7 @@ mod ambients_detours {
         unsafe { ref_from_memory::<AmbientsGroup>(this) }.play(delta, position);
     }
 
-    /// Live-test access to the real vanilla bodies and to the detours' installation state - same
+    /// Live-test access to the real vanilla bodies - same
     /// per-profile rationale as `ztsoundscape.rs`'s own `soundscape_detours::test_real` (`.original()`
     /// on a hooked address is a raw cast in release, so it would re-enter these detours instead of
     /// reaching vanilla; `*_DETOUR.call` stays correct in every profile). Lives inside the detour
@@ -686,18 +686,6 @@ mod ambients_detours {
         pub(crate) fn ambientsgroup_play(this: *const u32, delta: i32, position: *const i32) {
             unsafe { super::AMBIENTSGROUP_PLAY_DETOUR.call(this, delta, position) }
         }
-
-        /// `(name, is_enabled)` per detour - a battery `AMBIENTS_DETOURS_ENABLED`-style test asserts all
-        /// five to catch a silently-failed `init_detours()` (error logged, game continues on vanilla).
-        pub(crate) fn status() -> [(&'static str, bool); 5] {
-            [
-                ("AMBIENTS_CONSTRUCTOR", super::AMBIENTS_CONSTRUCTOR_DETOUR.is_enabled()),
-                ("AMBIENTS_PLAY", super::AMBIENTS_PLAY_DETOUR.is_enabled()),
-                ("AMBIENTS_DESTRUCTOR", super::AMBIENTS_DESTRUCTOR_DETOUR.is_enabled()),
-                ("AMBIENTSGROUP_CONSTRUCTOR", super::AMBIENTSGROUP_CONSTRUCTOR_DETOUR.is_enabled()),
-                ("AMBIENTSGROUP_PLAY", super::AMBIENTSGROUP_PLAY_DETOUR.is_enabled()),
-            ]
-        }
     }
 }
 
@@ -716,9 +704,9 @@ pub(crate) mod live_support {
 
     use super::*;
 
-    /// `(name, is_enabled)` per detour - see `ambients_detours::test_real::status`.
-    pub(crate) fn detour_status() -> [(&'static str, bool); 5] {
-        ambients_detours::test_real::status()
+    /// `(name, is_enabled)` per detour - see `ambients_detours::status`.
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
+        ambients_detours::status()
     }
 
     /// Allocates a fresh, uninitialized `0x18`-byte block via the real vanilla allocator - mirrors

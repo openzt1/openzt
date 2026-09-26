@@ -73,6 +73,28 @@ pub fn detour_mod(_attr: TokenStream, input: TokenStream) -> TokenStream {
             };
 
             items.push(init_fn);
+
+            let status_entries: Vec<proc_macro2::TokenStream> = detour_infos
+                .iter()
+                .map(|info| {
+                    let detour_name = &info.detour_name;
+                    let detour_static_name = Ident::new(&format!("{}_DETOUR", detour_name), detour_name.span());
+                    quote! { (::std::stringify!(#detour_name), #detour_static_name.is_enabled()) }
+                })
+                .collect();
+
+            let status_fn: syn::Item = parse_quote! {
+                /// `(name, is_enabled)` per detour, in declaration order - lets the live battery's
+                /// `*_DETOURS_ENABLED` wiring checks catch a silently-failed `init_detours()` without any
+                /// hand-maintained list to keep in sync.
+                #[cfg(feature = "reimplementation-tests")]
+                #[allow(dead_code)]
+                pub fn status() -> ::std::vec::Vec<(&'static str, bool)> {
+                    ::std::vec![#(#status_entries),*]
+                }
+            };
+
+            items.push(status_fn);
         }
     }
 

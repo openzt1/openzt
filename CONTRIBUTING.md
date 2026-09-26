@@ -351,6 +351,11 @@ See [CLAUDE.md](CLAUDE.md) for detailed integration test documentation.
 ./openzt.bat docs
 ```
 
+`./openzt.bat check`/`build`/`run`/`crash-capture`/`debug-play` also run a detour-reentry audit
+(`openzt/scripts/check-detour-reentry.sh`) automatically - it fails the build if any `FunctionDef` is both
+`#[detour(NAME)]`'d and called via `NAME.original()` in the same file, which silently re-enters that detour
+instead of reaching real vanilla in release builds. No separate command to run.
+
 ### Git Workflow
 
 1. Create a feature branch

@@ -23,7 +23,7 @@ use std::{ffi::c_void, fmt, fmt::Display};
 use openzt_detour::generated::{
     bfterrainimage,
     bfuimgr::{HIDE_BUSY_CURSOR, SHOW_BUSY_CURSOR},
-    ztadvterrainmgr::{LOAD_TEXTURES_0, SETUP_RENDER, SET_AUX_IMAGE, SET_GROUND_IMAGE, SET_IMAGE, START, START2D, START_D3D, UPDATE},
+    ztadvterrainmgr::{LOAD_TEXTURES, SETUP_RENDER, SET_AUX_IMAGE, SET_GROUND_IMAGE, SET_IMAGE, START, START2D, START_D3D, UPDATE},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::{error, info};
@@ -179,16 +179,16 @@ impl ZTAdvTerrainMgr_raw {
         self.set_state(2);
         let this = self.base_addr() as *const u32;
         unsafe {
-            if START2D.original()(this) == 0 {
+            if !START2D.original()(this) {
                 return false;
             }
-            if START_D3D.original()(this) == 0 {
+            if !START_D3D.original()(this) {
                 return false;
             }
-            if LOAD_TEXTURES_0.original()(this) == 0 {
+            if !LOAD_TEXTURES.original()(this) {
                 return false;
             }
-            SETUP_RENDER.original()(this) != 0
+            SETUP_RENDER.original()(this)
         }
     }
 

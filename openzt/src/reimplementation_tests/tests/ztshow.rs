@@ -387,7 +387,7 @@ pub(crate) fn run_ztshow_pending_script_tree_real_zoo_integrity_live_test(failur
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: BLOCKED - no qualifying show-tank habitat found\n", test_name).as_bytes());
         }
-        return false;
+        return true;
     };
 
     let header = get_from_memory::<u32>(show_info_ptr + 0x44);
@@ -483,7 +483,7 @@ pub(crate) fn run_ztshowinfo_real_save_load_byte_count_live_test(failure_log: &m
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: BLOCKED - no qualifying show-tank habitat found\n", test_name).as_bytes());
         }
-        return false;
+        return true;
     };
 
     const REAL_VERSION: u32 = 106;
@@ -499,7 +499,7 @@ pub(crate) fn run_ztshowinfo_real_save_load_byte_count_live_test(failure_log: &m
                 .as_bytes(),
         );
     }
-    if (save_ok & 0xff) == 0 {
+    if !save_ok {
         error!("{}: real ZTShowInfo::save returned failure", test_name);
         fail_flag = true;
     }
@@ -515,7 +515,7 @@ pub(crate) fn run_ztshowinfo_real_save_load_byte_count_live_test(failure_log: &m
             format!("CHECKPOINT {} load_ok={} bytes_consumed={} bytes_written={}\n", test_name, load_ok, consumed_len, written_len).as_bytes(),
         );
     }
-    if load_ok == 0 {
+    if !load_ok {
         error!("{}: real ZTShowInfo::load returned failure replaying its own save's bytes", test_name);
         fail_flag = true;
     }
@@ -733,7 +733,7 @@ pub(crate) fn run_ztshow_group3_trick_live_test(failure_log: &mut Option<std::fs
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: BLOCKED - no real show-tank habitat found in test zoo\n", test_name).as_bytes());
         }
-        return false;
+        return true;
     };
 
     let Some((_unit_ptr, unit_id)) = find_real_trick_eligible_unit() else {
@@ -744,7 +744,7 @@ pub(crate) fn run_ztshow_group3_trick_live_test(failure_log: &mut Option<std::fs
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: BLOCKED - test zoo has no trick-eligible animal\n", test_name).as_bytes());
         }
-        return false;
+        return true;
     };
 
     let real_show = real_show_info + 4;

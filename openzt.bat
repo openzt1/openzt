@@ -21,6 +21,7 @@ IF "%~1"=="clippy" GOTO clippy
 IF "%~1"=="test" GOTO test
 IF "%~1"=="integration-tests" GOTO integration_tests
 IF "%~1"=="crash-capture" GOTO crash_capture
+IF "%~1"=="debug-play" GOTO debug_play
 IF "%~1"=="update" GOTO update
 IF "%~1"=="tree" GOTO tree
 
@@ -100,6 +101,9 @@ REM Build Function
 REM ============================================================
 
 :build
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
 REM Set manifest path and DLL name
 IF DEFINED TEST_FLAG (
     SET MANIFEST_PATH=openzt-test-dll/Cargo.toml
@@ -166,6 +170,32 @@ IF "%ERRORLEVEL%"=="0" (
     exit /b 1
 )
 exit /b 0
+
+REM ============================================================
+REM Detour-Reentry Audit
+REM ============================================================
+REM Fails if any FunctionDef name is both #[detour(NAME)]'d and called via NAME.original() in the same
+REM file - .original() on a hooked address silently re-enters that detour in release builds (see
+REM openzt/scripts/check-detour-reentry.sh's own header comment for the full history/reasoning).
+
+:audit_detour_reentry
+REM Prefer Git for Windows' own bash.exe by well-known install path rather than trusting `where bash` -
+REM on a machine with WSL installed, `where bash` can resolve to C:\Windows\System32\bash.exe (the WSL
+REM launcher) instead, which doesn't understand a raw Windows path with backslashes and fails with
+REM "No such file or directory" on the script path itself.
+SET GIT_BASH=
+IF EXIST "%ProgramFiles%\Git\bin\bash.exe" SET GIT_BASH=%ProgramFiles%\Git\bin\bash.exe
+IF NOT DEFINED GIT_BASH IF EXIST "%ProgramFiles(x86)%\Git\bin\bash.exe" SET GIT_BASH=%ProgramFiles(x86)%\Git\bin\bash.exe
+IF NOT DEFINED GIT_BASH (
+    where bash >nul 2>nul
+    IF !errorlevel! NEQ 0 (
+        echo Warning: bash not found - skipping detour-reentry audit ^(install Git for Windows or add its bin\ to PATH^)
+        exit /b 0
+    )
+    SET GIT_BASH=bash
+)
+"!GIT_BASH!" "%~dp0openzt\scripts\check-detour-reentry.sh"
+exit /b !errorlevel!
 
 REM ============================================================
 REM Copy and Run Function
@@ -269,6 +299,9 @@ SHIFT
 GOTO crash_capture_args_loop
 
 :run_crash_capture
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
 echo Building openzttest.dll (release) for crash capture...
 cargo build --manifest-path openzt-test-dll/Cargo.toml --lib --target=i686-pc-windows-msvc --release
 
@@ -321,6 +354,115 @@ echo Done. Full output written to !CRASH_LOG!
 echo Tail:
 echo ------------------------------------------------------------
 powershell -Command "Get-Content -Path '!CRASH_LOG!' -Tail 20"
+echo ------------------------------------------------------------
+
+GOTO :EOF
+
+REM ============================================================
+REM Debug Play Function
+REM ============================================================
+REM Builds the REAL (non-test) openzt.dll, launches Zoo Tycoon under cdb with proper .pdb
+REM symbols loaded, then lets it run interactively (the game window is fully playable - cdb just
+REM watches silently) until either the process exits normally or an unhandled exception occurs,
+REM at which point a real, symbolized stack trace and register dump is written to the log and cdb
+REM quits. Use this instead of `crash-capture` for a bug that needs manual play to reproduce
+REM (crash-capture's own game runs under the test DLL, which auto-runs the reimplementation-tests
+REM battery and exits immediately - it never reaches an interactive, playable state at all).
+REM See CLAUDE.md's "Getting real symbols from a live crash" section for why the symbol path and
+REM module-name handling below are necessary, and for the gotchas around private/inlined functions
+REM not always resolving to their real name.
+
+:debug_play
+SHIFT
+SET CRASH_LOG=debug_play_output.txt
+SET RELEASE_FLAG=
+
+:debug_play_args_loop
+IF "%~1"=="" GOTO run_debug_play
+IF "%~1"=="--out" GOTO debug_play_out_flag
+IF "%~1"=="--release" (
+    SET RELEASE_FLAG=1
+    SHIFT
+    GOTO debug_play_args_loop
+)
+echo Error: Unknown flag "%~1" for debug-play
+exit /b 1
+
+:debug_play_out_flag
+SHIFT
+SET CRASH_LOG=%~1
+SHIFT
+GOTO debug_play_args_loop
+
+:run_debug_play
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
+SET BUILD_TYPE=debug
+SET BUILD_FLAGS=
+IF DEFINED RELEASE_FLAG (
+    SET BUILD_TYPE=release
+    SET BUILD_FLAGS=--release
+)
+
+echo Building openzt.dll (!BUILD_TYPE!) for debug-play...
+cargo build --manifest-path openzt-dll/Cargo.toml --lib --target=i686-pc-windows-msvc !BUILD_FLAGS! --features "command-console"
+
+IF !errorlevel! NEQ 0 (
+    echo.
+    echo Build failed
+    exit /b !errorlevel!
+)
+
+SET SOURCE_DLL=target\i686-pc-windows-msvc\!BUILD_TYPE!\openzt.dll
+IF NOT EXIST "!SOURCE_DLL!" (
+    echo Error: Built DLL not found at !SOURCE_DLL!
+    exit /b 1
+)
+
+CALL :check_zoo_running
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
+echo.
+echo Cleaning up old DLLs...
+del "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res-openzt.dll" 2>nul
+del "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res-openztrpc.dll" 2>nul
+del "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res-openzttest.dll" 2>nul
+
+echo Copying openzt.dll to Zoo Tycoon directory...
+copy "!SOURCE_DLL!" "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\res-openzt.dll"
+
+IF !errorlevel! NEQ 0 (
+    echo.
+    echo Copy failed
+    exit /b !errorlevel!
+)
+
+SET CDB_EXE=
+IF EXIST "C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe" SET CDB_EXE=C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\cdb.exe
+IF NOT DEFINED CDB_EXE IF EXIST "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe" SET CDB_EXE=C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe
+IF NOT DEFINED CDB_EXE (
+    echo Error: cdb.exe not found under "C:\Program Files (x86)\Windows Kits\10\Debuggers".
+    echo Install the "Debugging Tools for Windows" component of the Windows SDK.
+    exit /b 1
+)
+
+REM `res-openzt`'s own PDB sits next to the DLL in this same target directory - added ahead of
+REM `srv*` so cdb finds our own symbols first, falling back to Microsoft's symbol server for
+REM everything else (ntdll, kernel32, ...).
+SET SYM_PATH=srv*;%CD%\target\i686-pc-windows-msvc\!BUILD_TYPE!
+
+echo.
+echo Launching Zoo Tycoon under cdb - the window is fully playable, cdb watches silently.
+echo Reproduce the bug now; a crash will symbolize automatically and quit cdb.
+echo Output: !CRASH_LOG!
+"!CDB_EXE!" -G -y "!SYM_PATH!" -c "sxe ld:res-openzt;g;.reload /f res-openzt.dll;g;kv;r;q" "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\zoo.exe" > "!CRASH_LOG!" 2>&1
+
+echo.
+echo Done. Full output written to !CRASH_LOG!
+echo Tail:
+echo ------------------------------------------------------------
+powershell -Command "Get-Content -Path '!CRASH_LOG!' -Tail 25"
 echo ------------------------------------------------------------
 
 GOTO :EOF
@@ -393,6 +535,9 @@ SHIFT
 GOTO check_args_loop
 
 :run_check
+CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+
 echo Running cargo check on !CHECK_MANIFEST!...
 cargo check --manifest-path !CHECK_MANIFEST! --target i686-pc-windows-msvc !CHECK_ARGS!
 
@@ -539,6 +684,7 @@ echo   clippy             Run cargo clippy on openzt crate (pass --test to check
 echo   test               Run cargo test on openzt crate
 echo   integration-tests  Run integration tests (builds release, launches game, displays results)
 echo   crash-capture      Build test DLL, launch game under cdb non-interactively, dump crash info (--out ^<file^>)
+echo   debug-play         Build real DLL, launch game under cdb WITH symbols, play manually, auto-dump on crash (--release, --out ^<file^>)
 echo   update             Run cargo update on the workspace (forwards extra args, e.g. -p ^<pkg^>)
 echo   tree               Run cargo tree on the workspace (forwards extra args, e.g. -i ^<pkg^>)
 echo   docs               Generate and open documentation
@@ -566,6 +712,8 @@ echo   openzt.bat test -- --nocapture        Run cargo test, forwarding extra ar
 echo   openzt.bat integration-tests         Run integration tests (builds release, displays results)
 echo   openzt.bat crash-capture             Build test DLL, run under cdb, dump crash info
 echo   openzt.bat crash-capture --out x.txt Same, writing output to a custom file
+echo   openzt.bat debug-play                Build debug DLL, play interactively under cdb, symbolized crash dump
+echo   openzt.bat debug-play --release       Same, release build
 echo   openzt.bat docs                      Generate and open docs
 echo   openzt.bat console                   Open interactive Lua console
 echo   openzt.bat console --oneshot "help()"          Run single Lua command and exit
