@@ -597,6 +597,15 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_KEEPER_MAINTENANCE_FLOW_MULTI_REIMPL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_keeper_maintenance_flow_multi_reimpl_live_test,
             },
+            // Multi-reimplementation integration stage 37 (zthabitat-additional-functions-plan.md):
+            // multi-exhibit topology, shows, portals & manager census across the Stage 26-31 ports
+            // over the live zoo. Census/show-topology legs are read-only; leg 3 mutates one live
+            // animal's +0x170/+0x234 and restores both (restoration proven by baseline-row
+            // equality), running last.
+            RegisteredTest {
+                name: "ZTHABITATMGR_TOPOLOGY_SHOW_CENSUS_MULTI_REIMPL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_topology_show_census_multi_reimpl_live_test,
+            },
             RegisteredTest {
                 name: "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE",
                 run: tests::zthabitatmgr::run_habitat_trigger_keeper_arrived_live_test,

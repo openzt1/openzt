@@ -5955,6 +5955,405 @@ fn assert_trigger_keeper_arrived_pass(
     }
 }
 
+/// Multi-reimplementation integration test (stage 37 of
+/// `openzt/plans/zthabitat-additional-functions-plan.md`, the plan's last): drives the Stage 26-31
+/// reimplementations together over the live zoo's own habitats - global exhibit census, show
+/// topology, portal transit - so a disagreement between two reimplementations of one side surfaces
+/// as a failed cross-getter invariant rather than only a real-vs-reimpl diff. Real vanilla is called
+/// before the reimplementation everywhere; legs run in order, the mutating leg last (Stage 36
+/// convention):
+///
+/// 1. Global exhibit census (read-only): every `exhibit_array` habitat is classified as a show tank
+///    three independent ways that must all agree - the raw-field oracle (vtable ==
+///    [`ZTHabitat::TANK_VTABLE_PTR`] && the `+0x4` show-info dword nonzero, exactly
+///    `ZTHABITATMGR_GET_NUM_NON_SHOW_NON_WORLD_HABITATS_LIVE`'s independent oracle, so a
+///    vtable-identity bug cannot agree with itself), the port's [`ZTHabitat::is_tank`] &&
+///    [`ZTHabitat::is_show_tank`], and real vanilla's own `isTank` vtable `+0x20` dispatch (the
+///    un-hooked constant stubs [`ZTHABITAT_IS_TANK_LIVE`] dispatches) && the same raw `+0x4` read.
+///    The census identity is then pinned: `getNumNonShowNonWorldHabitats` release-safe real pole ==
+///    port == the oracle's non-show count, and non-show + show tanks == scanned ==
+///    `exhibit_array().len()`.
+/// 2. Show topology (read-only): for every ordered (habitat, target) pair plus a null target,
+///    `isShowNeighbor` (release-safe real pole vs port) must equal the independent
+///    [`walk_neighbor_tree`] membership oracle over the same `show_neighbors_head` tree the port
+///    binary-searches - which pins literal truth for every oracle-member pair and literal falsity
+///    for every non-member on both sides at once. No symmetry assertion between (a, b) and (b, a) -
+///    the decompiles do not promise it; direction is covered by the oracle.
+/// 3. Portal transit (synthetic, mutating-with-restore): the first zoo-wide animal found over the
+///    raw `+0x6c..+0x70` vectors in `exhibit_array` order (never `get_all_animals`, which sorts in
+///    place) is transitioned into each accepted portal state (`0x85`, `0x86`) with its destination
+///    tile (`+0x234`) pointed at one of the target exhibit's own owned tiles. The target is the live
+///    show tank from leg 1, and the tile is obtained through `getTilesCopy` itself - release-safe
+///    real pole vs port vs a pre-call snapshot of the source list (both copies reproducing the
+///    snapshot exactly pins them to each other too), so the Stage 28 port is exercised where the leg
+///    genuinely needs it. An assumption check first resolves the chosen tile independently through
+///    the habitat grid (`+0x34`/`+0x38` coordinates -> [`ZTHabitatMgr::get_habitat_ptr`]) so a wrong
+///    tile cannot silently break the leg. Per state, `hasPortalAnimal` must answer literally true
+///    for (source, target) on both sides, stay real == port across the full (habitat, target + null)
+///    matrix, and stay literally false on every unrelated row ((source, u) with u != target and
+///    (u, target) with u != source) that was already all-false at baseline. Both mutated fields are
+///    snapshotted up front and restored after each state pass; after the final restore the source
+///    row is re-run and must equal its recorded baseline row - restoration proven, not assumed. The
+///    pass is synchronous single-threaded on the game thread (no tick can interleave), the same
+///    reasoning as [`assert_baby_born_bonus_pass`]'s live mutation.
+///
+/// Spec deviations (all pre-declared): (a) "Transition an animal into portal state" is
+/// synthetic-with-restore - real portal transit needs the un-ported goal/portal machinery and
+/// interactive play to reach (same reasoning as Stage 36's deviation (d)), so exactly the two fields
+/// the port's documented read path consumes (`animal+0x170` state, `animal+0x234` destination tile)
+/// are written directly and every other byte of the animal is left alone. (b) "true between linked
+/// tanks" is asserted as show-neighbor-set membership for every ordered pair, target-class-agnostic
+/// (the live mutual pair need not be tank x tank). (c) The required list's `addToBuildingList`/
+/// `additionalScenerySuitabilityChange` (Stage 30) appear in none of the spec's three assertions;
+/// their real-vs-port fidelity stays with their own
+/// `ZTHABITAT_ADD_TO_BUILDING_LIST_MATCHES_REAL_LIVE`/
+/// `ZTHABITAT_ADDITIONAL_SCENERY_SUITABILITY_CHANGE_MATCHES_REAL_LIVE` tests - duplicating those
+/// fresh-map/fresh-buffer fixture shapes here would add vanilla-heap teardown risk for zero new
+/// invariants. `getTilesCopy` is folded in where the portal leg genuinely needs it (the destination
+/// tile), `isTank` as leg 1's classification. (d) `HAS_PORTAL_ANIMAL` is detoured, so in release its
+/// `.original()` pole re-enters the port (the established Stage 36 deviation-(f) note) and the
+/// portal leg's agreement is port-vs-port there; the census/show-neighbor/tiles-copy legs use the
+/// release-safe `_real` accessors and the `isTank` slot is un-hooked, so those stay real-vs-port in
+/// both profiles. A save with no show tank at all logs an explicit summary note and falls back to
+/// the first other habitat as the portal target rather than failing (the spec's "linked show tank"
+/// wording degrades to "a different exhibit"); a save with no non-show habitat, no animal zoo-wide,
+/// or a target exhibit with no owned tiles fails loudly instead - each would leave a whole assertion
+/// class unexercised.
+pub(crate) fn run_habitat_topology_show_census_multi_reimpl_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_TOPOLOGY_SHOW_CENSUS_MULTI_REIMPL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+
+    // Leg 1 (spec 1) - global exhibit census, read-only: three independent show-tank
+    // classifications must agree per habitat, then the census identity across the manager getter,
+    // its release-safe real pole, and the raw-field oracle.
+    let mut show_tanks = 0usize;
+    let mut non_show = 0usize;
+    let mut first_show_tank = 0u32;
+    for (i, &ptr) in habitat_ptrs.iter().enumerate() {
+        let raw_is_show_tank = get_from_memory::<u32>(ptr) == ZTHabitat::TANK_VTABLE_PTR && get_from_memory::<u32>(ptr + 4) != 0;
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let port_is_show_tank = habitat.is_tank() && habitat.is_show_tank();
+        let real_is_show_tank = unsafe { call_vtable_slot_noargs_ret_bool(ptr, 0x20) } && get_from_memory::<u32>(ptr + 4) != 0;
+        if raw_is_show_tank {
+            show_tanks += 1;
+            if first_show_tank == 0 {
+                first_show_tank = ptr;
+            }
+        } else {
+            non_show += 1;
+        }
+        if port_is_show_tank != raw_is_show_tank || real_is_show_tank != raw_is_show_tank {
+            failures.push(format!(
+                "leg 1: habitat {} ({:#010x}) show-tank classification disagreement - raw-field oracle {}, port is_tank/is_show_tank {}, real +0x20 dispatch {}",
+                i, ptr, raw_is_show_tank, port_is_show_tank, real_is_show_tank
+            ));
+        }
+    }
+    let real_non_show = hooks_zthabitatmgr::get_num_non_show_non_world_habitats_real(mgr_ptr);
+    let port_non_show = habitat_mgr.get_num_non_show_non_world_habitats();
+    if real_non_show != port_non_show {
+        failures.push(format!("leg 1: real getNumNonShowNonWorldHabitats {real_non_show} != port {port_non_show}"));
+    }
+    if port_non_show as usize != non_show {
+        failures.push(format!(
+            "leg 1: port get_num_non_show_non_world_habitats {port_non_show} != raw-field oracle non-show count {non_show}"
+        ));
+    }
+    if non_show + show_tanks != habitat_ptrs.len() || habitat_ptrs.len() != habitat_mgr.exhibit_array().len() {
+        failures.push(format!(
+            "leg 1: census identity broken: non-show {non_show} + show tanks {show_tanks} != scanned {} (exhibit_array len {})",
+            habitat_ptrs.len(),
+            habitat_mgr.exhibit_array().len()
+        ));
+    }
+    if non_show == 0 {
+        failures.push("non-vacuous assert failed: no non-show habitats in the loaded zoo".to_string());
+    }
+    let mut leg3_note = String::new();
+    if show_tanks == 0 {
+        leg3_note = "; no live show tank found - leg 3's portal target falls back to the first other habitat".to_string();
+    }
+
+    // Leg 2 (spec 2) - show topology, read-only: real == port == tree-walk membership oracle for
+    // every ordered pair plus a null target (the oracle read is the same one
+    // ZTHABITAT_IS_SHOW_NEIGHBOR_MATCHES_REAL_LIVE uses, so a descent bug cannot agree with itself).
+    let mut show_neighbor_comparisons = 0usize;
+    let mut populated_trees = 0usize;
+    let mut true_hits = 0usize;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let tree_members: Vec<u32> = walk_neighbor_tree(*habitat.show_neighbors_head())
+            .map(|node| get_from_memory::<u32>(node + 0x10))
+            .collect();
+        if !tree_members.is_empty() {
+            populated_trees += 1;
+        }
+        for &target_ptr in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+            let oracle = tree_members.contains(&target_ptr);
+            let real = hooks_zthabitatmgr::is_show_neighbor_real(habitat_ptr as *const u32, target_ptr as *const u32);
+            let port = habitat.is_show_neighbor(target_ptr);
+            show_neighbor_comparisons += 1;
+            if real != oracle || port != oracle {
+                failures.push(format!(
+                    "leg 2: habitat {habitat_ptr:#010x}, target {target_ptr:#010x}: show-neighbor membership disagreement - oracle {oracle}, real {real}, port {port}"
+                ));
+            }
+            if oracle {
+                true_hits += 1;
+            }
+        }
+    }
+
+    // Leg 3 (spec 3) - portal transit, synthetic and mutating-with-restore, last. Source = first
+    // habitat whose raw all_animals vector yields a non-null animal; the raw field reads keep the
+    // vector exactly as both poles' own walks see it (get_all_animals would sort it in place).
+    let mut source_ptr = 0u32;
+    let mut animal_ptr = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let begin: u32 = get_from_memory(habitat_ptr + 0x6c);
+        let end: u32 = get_from_memory(habitat_ptr + 0x70);
+        if let Some(found) = (0..(end.wrapping_sub(begin)) / 4).map(|u| get_from_memory::<u32>(begin + u * 4)).find(|&a| a != 0) {
+            source_ptr = habitat_ptr;
+            animal_ptr = found;
+            break;
+        }
+    }
+    let mut portal_states_exercised = 0usize;
+    let mut portal_literal_trues = 0usize;
+    let mut portal_literal_falses = 0usize;
+    let mut baseline_comparisons = 0usize;
+    let mut baseline_trues = 0usize;
+    if animal_ptr == 0 {
+        failures.push("leg 3: no live animal found in any habitat - nothing to transition into portal state".to_string());
+    } else {
+        // Baseline matrix, read-only: real == port for every (habitat, target + null) row, recorded
+        // so the literal-false requirements apply only where the row was already all-false and the
+        // post-restore proof has its reference.
+        let mut baseline: std::collections::HashMap<(u32, u32), (bool, bool)> = std::collections::HashMap::new();
+        for &habitat_ptr in &habitat_ptrs {
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+            for &target_ptr in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+                let real = unsafe { zthabitat::HAS_PORTAL_ANIMAL.original()(habitat_ptr as *const u32, target_ptr as *const u32) };
+                let port = habitat.has_portal_animal(target_ptr);
+                baseline_comparisons += 1;
+                if real {
+                    baseline_trues += 1;
+                }
+                if real != port {
+                    failures.push(format!(
+                        "leg 3 baseline: habitat {habitat_ptr:#010x}, target {target_ptr:#010x}: real {real} != port {port}"
+                    ));
+                }
+                baseline.insert((habitat_ptr, target_ptr), (real, port));
+            }
+        }
+
+        // Portal target: the live show tank from leg 1, else the first other habitat with an
+        // explicit summary note. If the target == the source (the animal lives in the show tank)
+        // the structure is unchanged - "unrelated" simply means targets != target.
+        let mut target_ptr = first_show_tank;
+        if target_ptr == 0 {
+            target_ptr = habitat_ptrs.iter().copied().find(|&ptr| ptr != source_ptr).unwrap_or(0);
+        }
+        if target_ptr == 0 {
+            failures.push("leg 3: no portal target available (single-habitat zoo)".to_string());
+        } else {
+            // Destination tile through the Stage 28 port: snapshot the target's source list first,
+            // then both sides' getTilesCopy into their own out-slots must reproduce it exactly; the
+            // port copy's first payload is the tile the synthetic transit aims at. Every copy node
+            // is vanilla-allocated - freed back through free_tile_list_copy, never Box.
+            let target_habitat = unsafe { ref_from_memory::<ZTHabitat>(target_ptr) };
+            let source_payloads: Vec<u32> = walk_tile_list(*target_habitat.owned_tiles_ptr())
+                .map(|node| get_from_memory::<TileListNode>(node).payload)
+                .collect();
+            let mut dest_tile = 0u32;
+            if source_payloads.is_empty() {
+                failures.push(format!(
+                    "leg 3: portal target {target_ptr:#010x} has no owned tiles - no destination tile to aim the synthetic transit at"
+                ));
+            } else {
+                let mut real_out: u32 = 0;
+                let real_out_addr = &mut real_out as *mut u32 as u32;
+                let real_ret = hooks_zthabitatmgr::get_tiles_copy_real(target_ptr as *const u32, real_out_addr as *const i32) as u32;
+                let mut port_out: u32 = 0;
+                let port_out_addr = &mut port_out as *mut u32 as u32;
+                let port_ret = target_habitat.get_tiles_copy(port_out_addr);
+                if real_ret != real_out_addr {
+                    failures.push(format!("leg 3: real getTilesCopy returned {real_ret:#010x}, expected out-param address {real_out_addr:#010x}"));
+                }
+                if port_ret != port_out_addr {
+                    failures.push(format!("leg 3: port get_tiles_copy returned {port_ret:#010x}, expected out-param address {port_out_addr:#010x}"));
+                }
+                let real_payloads: Option<Vec<u32>> = if real_out != 0 {
+                    Some(walk_tile_list(real_out).map(|node| get_from_memory::<TileListNode>(node).payload).collect())
+                } else {
+                    None
+                };
+                let port_payloads: Option<Vec<u32>> = if port_out != 0 {
+                    Some(walk_tile_list(port_out).map(|node| get_from_memory::<TileListNode>(node).payload).collect())
+                } else {
+                    None
+                };
+                if real_out == 0 {
+                    failures.push(format!("leg 3: real getTilesCopy produced a null sentinel for target {target_ptr:#010x}"));
+                }
+                if port_out == 0 {
+                    failures.push(format!("leg 3: port get_tiles_copy produced a null sentinel for target {target_ptr:#010x}"));
+                }
+                if let (Some(real_payloads), Some(port_payloads)) = (&real_payloads, &port_payloads) {
+                    if real_payloads != &source_payloads {
+                        failures.push(format!("leg 3: real copy payloads {real_payloads:?} != source snapshot {source_payloads:?}"));
+                    }
+                    if port_payloads != &source_payloads {
+                        failures.push(format!("leg 3: port copy payloads {port_payloads:?} != source snapshot {source_payloads:?}"));
+                    }
+                    dest_tile = port_payloads[0];
+                }
+                if real_out != 0 {
+                    free_tile_list_copy(real_out);
+                }
+                if port_out != 0 {
+                    free_tile_list_copy(port_out);
+                }
+
+                // Assumption check: resolve the destination tile independently through the habitat
+                // grid so a wrong tile cannot silently break the leg's assertions.
+                let resolved = if dest_tile != 0 {
+                    let dest_x: i32 = get_from_memory(dest_tile + 0x34);
+                    let dest_y: i32 = get_from_memory(dest_tile + 0x38);
+                    habitat_mgr.get_habitat_ptr(dest_x, dest_y)
+                } else {
+                    0
+                };
+                if resolved != target_ptr {
+                    failures.push(format!(
+                        "leg 3: destination tile {dest_tile:#010x} resolves to habitat {resolved:#010x}, expected the portal target {target_ptr:#010x}"
+                    ));
+                    dest_tile = 0;
+                }
+            }
+
+            if dest_tile != 0 {
+                let state_before: u32 = get_from_memory(animal_ptr + 0x170);
+                let tile_before: u32 = get_from_memory(animal_ptr + 0x234);
+                for &state in &[0x85u32, 0x86] {
+                    save_to_memory(animal_ptr + 0x170, state);
+                    save_to_memory(animal_ptr + 0x234, dest_tile);
+                    portal_states_exercised += 1;
+
+                    // (source, target) must be literally true on both sides.
+                    let source_habitat = unsafe { ref_from_memory::<ZTHabitat>(source_ptr) };
+                    let real_hit = unsafe { zthabitat::HAS_PORTAL_ANIMAL.original()(source_ptr as *const u32, target_ptr as *const u32) };
+                    let port_hit = source_habitat.has_portal_animal(target_ptr);
+                    if !real_hit || !port_hit {
+                        failures.push(format!(
+                            "leg 3: state {state:#x}: hasPortalAnimal({source_ptr:#010x}, {target_ptr:#010x}) must be literally true with the synthetic transit in place - real {real_hit}, port {port_hit}"
+                        ));
+                    } else {
+                        portal_literal_trues += 1;
+                    }
+
+                    // Full matrix real == port, plus literal falsity on every unrelated row that
+                    // was already all-false at baseline (equality-only elsewhere).
+                    for &matrix_self in &habitat_ptrs {
+                        let habitat = unsafe { ref_from_memory::<ZTHabitat>(matrix_self) };
+                        for &matrix_target in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+                            let real = unsafe { zthabitat::HAS_PORTAL_ANIMAL.original()(matrix_self as *const u32, matrix_target as *const u32) };
+                            let port = habitat.has_portal_animal(matrix_target);
+                            if real != port {
+                                failures.push(format!(
+                                    "leg 3: state {state:#x}: habitat {matrix_self:#010x}, target {matrix_target:#010x}: real {real} != port {port}"
+                                ));
+                            }
+                            let unrelated = (matrix_self == source_ptr && matrix_target != target_ptr)
+                                || (matrix_self != source_ptr && matrix_target == target_ptr);
+                            if unrelated && matches!(baseline.get(&(matrix_self, matrix_target)), Some((false, false))) {
+                                if real || port {
+                                    failures.push(format!(
+                                        "leg 3: state {state:#x}: unrelated row ({matrix_self:#010x}, {matrix_target:#010x}) must be literally false - real {real}, port {port}"
+                                    ));
+                                } else {
+                                    portal_literal_falses += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    save_to_memory(animal_ptr + 0x170, state_before);
+                    save_to_memory(animal_ptr + 0x234, tile_before);
+                }
+
+                // Restoration proof: the source row must read exactly its recorded baseline again.
+                let source_habitat = unsafe { ref_from_memory::<ZTHabitat>(source_ptr) };
+                for &matrix_target in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+                    let real = unsafe { zthabitat::HAS_PORTAL_ANIMAL.original()(source_ptr as *const u32, matrix_target as *const u32) };
+                    let port = source_habitat.has_portal_animal(matrix_target);
+                    let Some(&(baseline_real, baseline_port)) = baseline.get(&(source_ptr, matrix_target)) else {
+                        failures.push(format!("leg 3: baseline missing the ({source_ptr:#010x}, {matrix_target:#010x}) row"));
+                        continue;
+                    };
+                    if real != baseline_real || port != baseline_port {
+                        failures.push(format!(
+                            "leg 3: source row not restored after the final restore - ({source_ptr:#010x}, {matrix_target:#010x}): real {real} (baseline {baseline_real}), port {port} (baseline {baseline_port})"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, show tanks: {}, non-show: {}, show-neighbor comparisons: {} (non-empty trees: {}, true hits: {}), \
+                 baseline comparisons: {} (trues: {}), portal states exercised: {}, literal-true outcomes: {}, \
+                 literal-false outcomes: {}{})",
+                test_name,
+                habitat_ptrs.len(),
+                show_tanks,
+                non_show,
+                show_neighbor_comparisons,
+                populated_trees,
+                true_hits,
+                baseline_comparisons,
+                baseline_trues,
+                portal_states_exercised,
+                portal_literal_trues,
+                portal_literal_falses,
+                leg3_note
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// `triggerKeeperArrived` mutates live habitat/animal state, so this verifies each side against the
 /// decompile's own contract over pristine input rather than cross-comparing after the fact (the same
 /// snapshot→call→assert→restore shape as [`run_habitat_add_baby_born_bonus_live_test`]). One live
