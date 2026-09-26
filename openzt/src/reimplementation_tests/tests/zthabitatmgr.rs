@@ -19,9 +19,11 @@ use crate::globals::{get_module_base, globals};
 use crate::reimplementation_tests::harness::write_success_line;
 use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory};
+use crate::zthabitat::support::{call_vtable_slot_ptr_ptr_ptr_u32_ret_bool, call_vtable_slot_with_ptr_ret_bool};
 use crate::ztmapview::BFTile;
 use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
-use crate::ztshow::{call_entity_vtable_noargs, RVA_ANIMAL_TYPE_CHECK};
+use crate::ztshow::{call_entity_vtable_noargs, call_entity_vtable_u32_noargs, RVA_ANIMAL_TYPE_CHECK};
+use crate::ztshowinfo::needs_keeper;
 use crate::zthabitatmgr::{
     animal_food_target, call_bfunit_tile_cost_vtable_slot, call_vtable_slot_noargs_ret_bool, entity_name_bytes, free_event_vector_buffer,
     hooks_zthabitatmgr, map_int_habitatsuitability_find_or_insert, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr,
@@ -5284,6 +5286,599 @@ pub(crate) fn run_habitat_biome_aggregation_multi_reimpl_live_test(failure_log: 
         }
         true
     }
+}
+
+/// Stage 36 of the zthabitat-additional-functions plan (multi-reimplementation integration test):
+/// drives the keeper-service / food-management / dirt-maintenance reimplementations (Stages 20-25)
+/// together over the live zoo. Test-only - no production code, no new detours. Every involved
+/// function is detoured, so in release each `.original()` pole re-enters the ports and the
+/// real-vs-port agreement legs are port-vs-port there - the decompile-derived oracle legs carry both
+/// profiles (same documented shape as the Stage 32-35 integration tests).
+///
+/// One shared phase-1 oracle walk per habitat (own owned tiles only) collects each habitat's
+/// [`KeeperFoodOracleList`] plus the zoo-wide food-tile/category tallies, and the keeper is resolved
+/// once from the live world entity array (legs 1/4 and leg 5's decomposition arm need one; they are
+/// skipped with explicit summary notes, not failures, when the save has none). Legs, in run order:
+///
+/// 1. (spec 2) nearest-vs-smallest over each habitat's own food piles, own-exhibit scope
+///    (`include_neighbors = false`; the subhab recursion is Stage 22's turf), per zoo-wide-seen
+///    keeper-food category - so a habitat lacking a category forms an empty own pool and exercises
+///    the null arms, while the full 0..16 sweep stays with the per-function tests. Real and port
+///    picks must equal [`keeper_food_oracle_list_min`]'s argmin for both kinds; whenever the own
+///    pool is non-empty, the smallest pick's `entity+0x154` amount must not exceed the nearest
+///    pick's and the nearest pick's distance must not exceed the smallest pick's (the spec's literal
+///    point, asserted over both sides' picks); pools of >= 2 count as multi-pile rows. The
+///    [`KeeperFoodPickKind::Random`] triplet member draws 10 picks per side: a non-empty own pool
+///    must yield a member of that pool (membership level per the Stage 11 note), an empty own pool
+///    must yield null with the shared RNG seed untouched. Draws advance the shared game RNG
+///    unrestored; exact per-draw slot fidelity stays with the Stage 22 tests.
+/// 2. (spec 4) the dirt-pile locator against an oracle-min walk through the port's own documented
+///    gate chain (see [`keeper_dirt_pile_oracle_min`]), per habitat per `check_can_see`. "Place a
+///    dirt entity" is not fabricatable from the battery (entity creation is un-ported; the real gate
+///    is the keeper's own live vtable `+0x324` dispatch, not a static type check), so the faithful
+///    contract is the oracle-min equality - expected `0 == 0 == 0` on a save without dirt piles,
+///    asserted and counted, never skipped - upgrading automatically on saves that contain dirt
+///    piles. Real vanilla makes the same `+0x324` dispatches internally inside its own `.original()`
+///    call; the oracle's own dispatch count is the non-vacuousness witness that the filter walk
+///    genuinely ran.
+/// 3. (spec 5) `needsShowKeeper` decomposition. The null-keeper arm runs without a live keeper (both
+///    sides' own null early-out); per habitat with the live keeper, the oracle is the port's own
+///    documented decomposition reproduced read-only - show info attached and
+///    `ztshowinfo::needs_keeper(show_info, keeper_type_id)` passing, with `keeper_type_id` the
+///    keeper's entity-type vtable `+0x20` call real vanilla makes unconditionally before the
+///    show-info check - and real (low-byte masked) == port == oracle. "Show tanks with pending
+///    performances return true" cannot be forced at battery time: habitats with no attached show
+///    info must yield false on both sides (>= 1 required), true results are counted but not
+///    required, and the true branch upgrades automatically on saves with a keeperless scheduled
+///    show.
+/// 4. (spec 1) keeper arrival alert state via [`assert_keeper_arrival_flagged_set_pass`], per
+///    habitat per `scheduled` per pole (real first, then port): snapshot, call, counter +
+///    flagged-set contract, restore - with the returned flagged sets additionally required to agree
+///    between the poles, a direct real-vs-port set-granularity comparison the Stage 20 byte-level
+///    test implies but never asserts.
+/// 5. (spec 3, last - destructive-with-restore and therefore port-only, no way to run both poles
+///    against one starting state, the Stage 23 smoke precedent)
+///    [`ZTHabitat::remove_food_target_for_all`] over the phase-1 walks' first own food entity: the
+///    zoo-wide targeting scan partitions every habitat's animals into targeting-F (this habitat:
+///    must read target 0 after; other habitats: must be untouched - the function only walks its own
+///    habitat's animals, so cross-habitat non-interference is a genuine integration check) and
+///    others (all unchanged). F's teardown flag bytes (`+0x104`/`+0x105`/`+0x107`, what the real
+///    `BFEntity::setVisible`/`setIsRemoved` base bodies write) are snapshot and restored, never
+///    asserted - the vtable slots could resolve to an override writing more. Expected vacuous on a
+///    save with no mid-eat animal - a skip note, not a failure (same shape as the Stage 35
+///    strict-sum skip); upgrades automatically on saves with a targeting animal.
+///
+/// Non-vacuousness (fail loudly): at least one live habitat; at least one keeper food tile zoo-wide
+/// (on a foodless zoo a wrong gate reads as 0 == 0); at least one leg-2 row with a non-empty own
+/// pool; with a live keeper, at least one leg-4 oracle `+0x324` dispatch and at least one habitat
+/// without an attached show info.
+pub(crate) fn run_habitat_keeper_maintenance_flow_multi_reimpl_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_KEEPER_MAINTENANCE_FLOW_MULTI_REIMPL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let keeper_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+
+    // Shared phase-1 oracle walk: one pass over each habitat's own owned tiles, plus the reference
+    // tile both pick kinds are driven with (the first animal's own tile, else the habitat's first
+    // owned tile - the keeper-food pick tests' pattern).
+    let mut tiles_walked = 0usize;
+    let mut food_tiles_found = 0usize;
+    let mut categories_seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut per_habitat: Vec<(usize, u32, KeeperFoodOracleList, u32)> = Vec::new();
+    for (i, &ptr) in habitat_ptrs.iter().enumerate() {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut own_foods = KeeperFoodOracleList::new();
+        keeper_food_oracle_walk(*habitat.owned_tiles_ptr(), &mut own_foods, &mut categories_seen, &mut tiles_walked, &mut food_tiles_found);
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let animal_tile = (0..(end.wrapping_sub(begin)) / 4)
+            .map(|u| get_from_memory::<u32>(begin + u * 4))
+            .find(|&a| a != 0)
+            .map(|animal| (unsafe { BFENTITY_GET_TILE.original()(animal as *const u32) }) as u32)
+            .unwrap_or(0);
+        let ref_tile = if animal_tile != 0 {
+            animal_tile
+        } else {
+            walk_tile_list(*habitat.owned_tiles_ptr())
+                .map(|node| get_from_memory::<u32>(node + 0x8))
+                .find(|&tile| tile != 0)
+                .unwrap_or(0)
+        };
+        per_habitat.push((i, ptr, own_foods, ref_tile));
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+
+    // Leg 2 (spec 2) - nearest vs smallest over each habitat's own food piles.
+    let mut nearest_smallest_rows = 0usize;
+    let mut multi_pile_rows = 0usize;
+    let mut nonempty_pool_rows = 0usize;
+    let mut random_draws = 0usize;
+    let mut random_pool_draws = 0usize;
+    let mut random_empty_pool_draws = 0usize;
+    let categories: Vec<u32> = categories_seen.iter().copied().collect();
+    for (i, ptr, own_foods, ref_tile) in &per_habitat {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(*ptr) };
+        for &category in &categories {
+            let own_pool: Vec<u32> = own_foods.iter().filter(|&&(_, _, c)| c == category).map(|&(entity, _, _)| entity).collect();
+            nearest_smallest_rows += 1;
+            if !own_pool.is_empty() {
+                nonempty_pool_rows += 1;
+            }
+            if own_pool.len() >= 2 {
+                multi_pile_rows += 1;
+            }
+            let (oracle_smallest, _) = keeper_food_oracle_list_min(KeeperFoodPickKind::Smallest, own_foods, *ref_tile, category);
+            let (oracle_nearest, _) = keeper_food_oracle_list_min(KeeperFoodPickKind::Nearest, own_foods, *ref_tile, category);
+            let real_smallest =
+                (unsafe { zthabitat::GET_SMALLEST_KEEPER_FOOD.original()(*ptr as *const u32, *ref_tile as *const u32, category, false) }) as u32;
+            let real_nearest =
+                (unsafe { zthabitat::GET_NEAREST_KEEPER_FOOD.original()(*ptr as *const u32, *ref_tile as *const u32, category, false) }) as u32;
+            let port_smallest = habitat.get_smallest_keeper_food(*ref_tile, category, false);
+            let port_nearest = habitat.get_nearest_keeper_food(*ref_tile, category, false);
+            for (side, smallest, nearest) in [("real", real_smallest, real_nearest), ("port", port_smallest, port_nearest)] {
+                if smallest != oracle_smallest {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}) {}: getSmallestKeeperFood(category {category:#x}, subhabs=false) got {smallest:#010x}, expected oracle argmin {oracle_smallest:#010x}",
+                        i, ptr, side
+                    ));
+                }
+                if nearest != oracle_nearest {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}) {}: getNearestKeeperFood(category {category:#x}, subhabs=false) got {nearest:#010x}, expected oracle argmin {oracle_nearest:#010x}",
+                        i, ptr, side
+                    ));
+                }
+            }
+            if !own_pool.is_empty() {
+                // Cross-getter contract (the spec's literal point): smallest minimizes the remaining
+                // food units, nearest the geometric distance, so neither pick can lose to the other
+                // on its own metric - asserted over both sides' picks.
+                for (side, smallest, nearest) in [("real", real_smallest, real_nearest), ("port", port_smallest, port_nearest)] {
+                    if smallest == 0 || nearest == 0 {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: null pick from a non-empty own pool (smallest {smallest:#010x}, nearest {nearest:#010x})",
+                            i, ptr, side
+                        ));
+                        continue;
+                    }
+                    let smallest_amount: i32 = get_from_memory(smallest + 0x154);
+                    let nearest_amount: i32 = get_from_memory(nearest + 0x154);
+                    if smallest_amount > nearest_amount {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: smallest pick {smallest:#010x} (amount {smallest_amount}) holds more food than the nearest pick {nearest:#010x} (amount {nearest_amount})",
+                            i, ptr, side
+                        ));
+                    }
+                    let smallest_dist =
+                        keeper_food_tile_dist_squared(*ref_tile, (unsafe { BFENTITY_GET_TILE.original()(smallest as *const u32) }) as u32);
+                    let nearest_dist =
+                        keeper_food_tile_dist_squared(*ref_tile, (unsafe { BFENTITY_GET_TILE.original()(nearest as *const u32) }) as u32);
+                    if nearest_dist > smallest_dist {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: nearest pick {nearest:#010x} (dist {nearest_dist}) is farther than the smallest pick {smallest:#010x} (dist {smallest_dist})",
+                            i, ptr, side
+                        ));
+                    }
+                }
+            }
+
+            // Stage 22's third function, membership level - 10 draws per side, both pool arms.
+            for side in ["real", "port"] {
+                for _ in 0..10 {
+                    random_draws += 1;
+                    let seed_before: u32 = get_from_memory(rng_addr);
+                    let drawn = if side == "real" {
+                        (unsafe { zthabitat::GET_RANDOM_KEEPER_FOOD.original()(*ptr as *const u32, *ref_tile as *const u32, category, false) }) as u32
+                    } else {
+                        habitat.get_random_keeper_food(*ref_tile, category, false)
+                    };
+                    if own_pool.is_empty() {
+                        random_empty_pool_draws += 1;
+                        let seed_after: u32 = get_from_memory(rng_addr);
+                        if drawn != 0 || seed_after != seed_before {
+                            failures.push(format!(
+                                "habitat {} ({:#010x}) {}: empty own pool drew {drawn:#010x} with rng {seed_before:#010x} -> {seed_after:#010x}, expected null and an untouched seed",
+                                i, ptr, side
+                            ));
+                        }
+                    } else {
+                        random_pool_draws += 1;
+                        if !own_pool.contains(&drawn) {
+                            failures.push(format!(
+                                "habitat {} ({:#010x}) {}: draw {drawn:#010x} outside the own pool ({} piles)",
+                                i, ptr, side,
+                                own_pool.len()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Leg 4 (spec 4) - the dirt-pile locator vs the oracle-min walk.
+    let mut dirt_rows = 0usize;
+    let mut dirt_filter_dispatches = 0usize;
+    let mut dirt_null_gate_rows = 0usize;
+    if let Some(keeper) = keeper_ptr {
+        let ai_mgr = globals().ztaimgr_ptr() as u32;
+        let keeper_tile = (unsafe { BFENTITY_GET_TILE.original()(keeper as *const u32) }) as u32;
+        for (i, ptr, _, _) in &per_habitat {
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(*ptr) };
+            for check_can_see in [false, true] {
+                dirt_rows += 1;
+                let real = (unsafe { zthabitat::GET_NEAREST_DIRT_PILE.original()(*ptr as *const u32, keeper as *const u32, check_can_see) }) as u32;
+                let port = habitat.get_nearest_dirt_pile(keeper, check_can_see);
+                let oracle = if ai_mgr == 0 || keeper_tile == 0 {
+                    // Both sides' own null early-outs (the port's documented guard chain head).
+                    dirt_null_gate_rows += 1;
+                    0
+                } else {
+                    keeper_dirt_pile_oracle_min(*ptr, keeper, keeper_tile, ai_mgr, check_can_see, &mut dirt_filter_dispatches)
+                };
+                if real != oracle {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), check_can_see={check_can_see}: real getNearestDirtPile {real:#010x} != oracle {oracle:#010x}",
+                        i, ptr
+                    ));
+                }
+                if port != oracle {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), check_can_see={check_can_see}: port get_nearest_dirt_pile {port:#010x} != oracle {oracle:#010x}",
+                        i, ptr
+                    ));
+                }
+            }
+        }
+    }
+
+    // Leg 5 (spec 5) - needsShowKeeper decomposition + directional claims.
+    let mut needs_show_rows = 0usize;
+    let mut no_show_info_habitats = 0usize;
+    let mut needs_show_true_results = 0usize;
+    for (i, ptr, _, _) in &per_habitat {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(*ptr) };
+        let real = low_byte_bool(unsafe { zthabitat::NEEDS_SHOW_KEEPER.original()(*ptr as *const u32, std::ptr::null()) });
+        let port = habitat.needs_show_keeper(0);
+        needs_show_rows += 1;
+        if real || port {
+            failures.push(format!(
+                "habitat {} ({:#010x}): needsShowKeeper(null keeper) must be false on both sides - real {real}, port {port}",
+                i, ptr
+            ));
+        }
+    }
+    if let Some(keeper) = keeper_ptr {
+        let keeper_type_id = unsafe { call_entity_vtable_u32_noargs(get_from_memory::<u32>(keeper + 0x128), 0x20) };
+        for (i, ptr, _, _) in &per_habitat {
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(*ptr) };
+            let show_info = habitat.zt_show_info_ptr;
+            let expected = show_info != 0 && needs_keeper(show_info, keeper_type_id);
+            let real = low_byte_bool(unsafe { zthabitat::NEEDS_SHOW_KEEPER.original()(*ptr as *const u32, keeper as *const u32) });
+            let port = habitat.needs_show_keeper(keeper);
+            needs_show_rows += 1;
+            if real != port || port != expected {
+                failures.push(format!(
+                    "habitat {} ({:#010x}): needsShowKeeper disagreement - real {real}, port {port}, oracle {expected} (show_info {show_info:#010x}, keeper_type_id {keeper_type_id:#x})",
+                    i, ptr
+                ));
+            }
+            if expected {
+                needs_show_true_results += 1;
+            }
+            if show_info == 0 {
+                no_show_info_habitats += 1;
+            }
+        }
+    }
+
+    // Leg 1 (spec 1) - keeper arrival alert state, per habitat per scheduled per pole (real first,
+    // then port, each pass restoring its snapshots), with the two poles' flagged sets required to
+    // agree.
+    let mut arrival_passes = 0usize;
+    if let Some(keeper) = keeper_ptr {
+        for (i, &ptr) in habitat_ptrs.iter().enumerate() {
+            for scheduled in [false, true] {
+                let real_set = assert_keeper_arrival_flagged_set_pass(&mut failures, "real", i, ptr, keeper, scheduled, || unsafe {
+                    zthabitat::TRIGGER_KEEPER_ARRIVED.original()(ptr as *const u32, keeper as *const u32, scheduled)
+                });
+                let port_set = assert_keeper_arrival_flagged_set_pass(&mut failures, "port", i, ptr, keeper, scheduled, || {
+                    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.trigger_keeper_arrived(keeper, scheduled)
+                });
+                arrival_passes += 1;
+                if real_set != port_set {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}), scheduled={scheduled}: real and port flagged sets disagree - real {real_set:?} vs port {port_set:?}",
+                        i, ptr
+                    ));
+                }
+            }
+        }
+    }
+
+    // Leg 3 (spec 3), last - destructive-with-restore, port-only. See the doc comment for the
+    // leg's contract; F's teardown flags are restore-only, never asserted.
+    let mut leg3_note = String::new();
+    let food_target =
+        per_habitat.iter().find_map(|(_, ptr, own_foods, _)| own_foods.first().map(|&(entity, _, _)| (*ptr, entity)));
+    if let Some((food_habitat_ptr, food_entity)) = food_target {
+        let mut targeting_here: Vec<u32> = Vec::new();
+        let mut targeting_elsewhere: Vec<u32> = Vec::new();
+        let mut others: Vec<(u32, u32)> = Vec::new();
+        for &habitat_ptr in &habitat_ptrs {
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+            for animal_ptr in habitat.get_all_animals(false) {
+                let target = animal_food_target(animal_ptr);
+                if target == food_entity {
+                    if habitat_ptr == food_habitat_ptr {
+                        targeting_here.push(animal_ptr);
+                    } else {
+                        targeting_elsewhere.push(animal_ptr);
+                    }
+                } else {
+                    others.push((animal_ptr, target));
+                }
+            }
+        }
+        let leg3_targeting_animals = targeting_here.len() + targeting_elsewhere.len();
+        let teardown_before: [u8; 3] = [
+            get_from_memory(food_entity + 0x104),
+            get_from_memory(food_entity + 0x105),
+            get_from_memory(food_entity + 0x107),
+        ];
+        let removed = unsafe { mut_from_memory::<ZTHabitat>(food_habitat_ptr) }.remove_food_target_for_all(food_entity);
+        if !removed {
+            failures.push(format!("leg 3: remove_food_target_for_all({food_entity:#010x}) returned false, expected true"));
+        }
+        for &animal_ptr in &targeting_here {
+            let target = animal_food_target(animal_ptr);
+            if target != 0 {
+                failures.push(format!(
+                    "leg 3: animal {animal_ptr:#010x} in the food's own habitat still targets {target:#010x} after remove_food_target_for_all({food_entity:#010x})"
+                ));
+            }
+        }
+        for &animal_ptr in &targeting_elsewhere {
+            let target = animal_food_target(animal_ptr);
+            if target != food_entity {
+                failures.push(format!(
+                    "leg 3: cross-habitat animal {animal_ptr:#010x} target changed to {target:#010x} - remove_food_target_for_all must not touch other habitats' animals"
+                ));
+            }
+        }
+        for &(animal_ptr, before) in &others {
+            let target = animal_food_target(animal_ptr);
+            if target != before {
+                failures.push(format!("leg 3: uninvolved animal {animal_ptr:#010x} target changed from {before:#010x} to {target:#010x}"));
+            }
+        }
+        for (offset, before) in [(0x104u32, teardown_before[0]), (0x105, teardown_before[1]), (0x107, teardown_before[2])] {
+            save_to_memory(food_entity + offset, before);
+        }
+        if leg3_targeting_animals == 0 {
+            leg3_note = "; leg 3 vacuous on this save: no live animal with an active food target (the matched-animal branch has no save coverage - \
+                         the Stage 23 smoke test skipped for the same reason; upgrades automatically on a save with a mid-eat animal)"
+                .to_string();
+        }
+    } else {
+        leg3_note = "; leg 3 skipped: no owned keeper-food entity found".to_string();
+    }
+
+    // Non-vacuousness guards (fail loudly, Stage 32/35 precedent).
+    if food_tiles_found == 0 {
+        failures.push(format!(
+            "save contains no keeper food tiles - update the save (walked {} owned tiles across {} habitats; \
+             a wrong gate or field offset would read as 0 == 0 here)",
+            tiles_walked,
+            per_habitat.len()
+        ));
+    }
+    if nonempty_pool_rows == 0 {
+        failures.push(format!(
+            "non-vacuous assert failed: every leg-2 (habitat, category) row has an empty own pool across {} food tiles, categories {:?}",
+            food_tiles_found, categories_seen
+        ));
+    }
+    if let Some(keeper) = keeper_ptr {
+        if dirt_filter_dispatches == 0 {
+            failures.push(format!(
+                "non-vacuous assert failed: the leg-4 oracle never dispatched the keeper vtable +0x324 filter across {} rows \
+                 (keeper {keeper:#010x}) - the filter walk did not genuinely run",
+                dirt_rows
+            ));
+        }
+        if no_show_info_habitats == 0 {
+            failures.push(format!(
+                "non-vacuous assert failed: no habitat without an attached show info - the leg-5 false arm never ran against the live keeper {keeper:#010x}"
+            ));
+        }
+    }
+
+    if failures.is_empty() {
+        let keeper_desc = if keeper_ptr.is_some() { "found" } else { "none (legs 1/4 skipped, leg 5 null-keeper arm only)" };
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, keeper: {}, owned tiles walked: {}, food tiles: {}, categories: {:?}, \
+                 nearest/smallest rows: {} (multi-pile: {}), random draws: {} (non-empty-pool {}, empty-pool {}), \
+                 dirt rows: {} (filter dispatches: {}, null-gate rows: {}), needs-show rows: {} (no-show-info habitats: {}, true results: {}), \
+                 arrival passes: {}{}",
+                test_name,
+                habitat_ptrs.len(),
+                keeper_desc,
+                tiles_walked,
+                food_tiles_found,
+                categories_seen,
+                nearest_smallest_rows,
+                multi_pile_rows,
+                random_draws,
+                random_pool_draws,
+                random_empty_pool_draws,
+                dirt_rows,
+                dirt_filter_dispatches,
+                dirt_null_gate_rows,
+                needs_show_rows,
+                no_show_info_habitats,
+                needs_show_true_results,
+                arrival_passes,
+                leg3_note
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Leg 4's oracle-min walk for [`run_habitat_keeper_maintenance_flow_multi_reimpl_live_test`]:
+/// replicates [`ZTHabitat::get_nearest_dirt_pile`]'s own documented gate chain, in order, over the
+/// habitat's owned tiles - occupant non-null -> not in [`ZTHabitat::keeper_has_invalid_tile`]'s
+/// exclusion list -> the keeper vtable `+0x324` entity-target filter (every dispatch counted - the
+/// leg's non-vacuousness witness) -> the `tile+0x85 & 4` flag clear -> the `check_can_see` AI-mgr
+/// vtable `+0x1c` dispatch - tracking the best candidate by [`keeper_food_tile_dist_squared`] with
+/// the port's own `best_entity == 0 || dist < best_dist` shape. All dispatches are the read-only
+/// predicates real vanilla's own `.original()` call makes internally on the same data.
+fn keeper_dirt_pile_oracle_min(
+    habitat_ptr: u32,
+    keeper_ptr: u32,
+    keeper_tile: u32,
+    ai_mgr_ptr: u32,
+    check_can_see: bool,
+    filter_dispatches: &mut usize,
+) -> u32 {
+    let mut best_entity = 0u32;
+    let mut best_dist = i32::MAX;
+    for node in walk_tile_list(get_from_memory(habitat_ptr + 0x40)) {
+        let tile_ptr = get_from_memory::<u32>(node + 0x8);
+        let entity_ptr: u32 = get_from_memory(tile_ptr + 0x10);
+        if entity_ptr == 0 || ZTHabitat::keeper_has_invalid_tile(keeper_ptr, tile_ptr) {
+            continue;
+        }
+        *filter_dispatches += 1;
+        if !unsafe { call_vtable_slot_with_ptr_ret_bool(keeper_ptr, 0x324, entity_ptr) } {
+            continue;
+        }
+        if get_from_memory::<u8>(tile_ptr + 0x85) & 4 != 0 {
+            continue;
+        }
+        if check_can_see && !unsafe { call_vtable_slot_ptr_ptr_ptr_u32_ret_bool(ai_mgr_ptr, 0x1c, keeper_tile, tile_ptr, keeper_ptr, 0) } {
+            continue;
+        }
+        let dist = keeper_food_tile_dist_squared(keeper_tile, tile_ptr);
+        if best_entity == 0 || dist < best_dist {
+            best_entity = entity_ptr;
+            best_dist = dist;
+        }
+    }
+    best_entity
+}
+
+/// One snapshot→call→assert→restore pass of Stage 36's leg-1 keeper-arrival flow for a single
+/// (side, habitat, `scheduled`) combination, returning the flagged animal set it produced.
+/// [`assert_trigger_keeper_arrived_pass`]'s snapshot discipline - each involved habitat (the habitat
+/// itself plus every amphibious neighbor in [`walk_neighbor_tree`] order) has its
+/// `scheduled_service_counter` (`+0xf4`) snapshotted, and every animal's keeper-arrives flag byte
+/// (`+0x39c`) over each involved habitat's `+0x6c..+0x70` vector, no null-animal skip (faithful to
+/// vanilla's loop) - but the alert state is asserted at *set* granularity rather than per-animal
+/// byte (that contract stays with the Stage 20 test): the set of animals reading flag 1 post-call
+/// must equal `{animals whose byte was already 1} ∪ {written animals whose own `canService` low
+/// byte passes}`. `canService` is read-only, so assert-phase re-evaluation cannot perturb what the
+/// pass wrote. Every snapshot is restored unconditionally (also on the failure path) so the other
+/// pole and the live game see exactly the state found.
+fn assert_keeper_arrival_flagged_set_pass(
+    failures: &mut Vec<String>,
+    side: &str,
+    habitat_index: usize,
+    habitat_ptr: u32,
+    keeper_ptr: u32,
+    scheduled: bool,
+    call: impl FnOnce(),
+) -> Vec<u32> {
+    let mut involved_habitats: Vec<u32> = vec![habitat_ptr];
+    for node in walk_neighbor_tree(get_from_memory(habitat_ptr + 0x8)) {
+        involved_habitats.push(get_from_memory(node + 0x10));
+    }
+    let mut counter_snapshots: Vec<(u32, i32)> = Vec::new(); // (counter address, value before)
+    let mut flag_snapshots: Vec<(u32, u8, bool)> = Vec::new(); // (animal pointer, flag byte before, whether this pass writes it)
+    for (index, &habitat) in involved_habitats.iter().enumerate() {
+        let written = index == 0 || scheduled;
+        counter_snapshots.push((habitat + 0xf4, get_from_memory(habitat + 0xf4)));
+        for addr in (get_from_memory::<u32>(habitat + 0x6c)..get_from_memory::<u32>(habitat + 0x70)).step_by(4) {
+            let animal_ptr: u32 = get_from_memory(addr);
+            flag_snapshots.push((animal_ptr, get_from_memory(animal_ptr + 0x39c), written));
+        }
+    }
+
+    call();
+
+    for (index, &(addr, before)) in counter_snapshots.iter().enumerate() {
+        let expected = if index == 0 || scheduled {
+            (before.wrapping_sub(1)).max(0)
+        } else {
+            before
+        };
+        let actual: i32 = get_from_memory(addr);
+        if actual != expected {
+            failures.push(format!(
+                "habitat {} ({:#010x}) {}, scheduled={}: counter at {:#010x} is {actual}, expected {expected}",
+                habitat_index, habitat_ptr, side, scheduled, addr
+            ));
+        }
+    }
+    let mut flagged_set: Vec<u32> = Vec::new();
+    let mut expected_set: Vec<u32> = Vec::new();
+    for &(animal_ptr, before, written) in &flag_snapshots {
+        if get_from_memory::<u8>(animal_ptr + 0x39c) == 1 && !flagged_set.contains(&animal_ptr) {
+            flagged_set.push(animal_ptr);
+        }
+        if before == 1 && !expected_set.contains(&animal_ptr) {
+            expected_set.push(animal_ptr);
+        }
+        if written
+            && !expected_set.contains(&animal_ptr)
+            && low_byte_bool(unsafe { ZTANIMAL_CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) })
+        {
+            expected_set.push(animal_ptr);
+        }
+    }
+    flagged_set.sort_unstable();
+    expected_set.sort_unstable();
+    if flagged_set != expected_set {
+        failures.push(format!(
+            "habitat {} ({:#010x}) {}, scheduled={}: flagged set {flagged_set:?} != expected set {expected_set:?}",
+            habitat_index, habitat_ptr, side, scheduled
+        ));
+    }
+    for &(addr, before) in &counter_snapshots {
+        save_to_memory(addr, before);
+    }
+    for &(animal_ptr, before, _) in &flag_snapshots {
+        save_to_memory(animal_ptr + 0x39c, before);
+    }
+    flagged_set
 }
 
 /// One snapshot→call→assert→restore pass of [`run_habitat_trigger_keeper_arrived_live_test`] for a

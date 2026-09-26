@@ -586,6 +586,17 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_BIOME_AGGREGATION_MULTI_REIMPL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_biome_aggregation_multi_reimpl_live_test,
             },
+            // Multi-reimplementation integration stage 36 (zthabitat-additional-functions-plan.md):
+            // keeper service, food management & dirt maintenance across the Stage 20-25 ports over
+            // the live zoo. Legs 1/4 and leg 5's decomposition arm need a live ZTKeeper (skipped
+            // with explicit summary notes when the save has none); leg 1 snapshot/restores habitat
+            // counters + animal alert flags; leg 3 is destructive-with-restore (the food entity's
+            // teardown flag bytes) and runs last; the random-membership draws advance the shared
+            // game RNG unrestored.
+            RegisteredTest {
+                name: "ZTHABITAT_KEEPER_MAINTENANCE_FLOW_MULTI_REIMPL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_keeper_maintenance_flow_multi_reimpl_live_test,
+            },
             RegisteredTest {
                 name: "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE",
                 run: tests::zthabitatmgr::run_habitat_trigger_keeper_arrived_live_test,
