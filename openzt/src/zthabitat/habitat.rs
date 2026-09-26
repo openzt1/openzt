@@ -2,6 +2,7 @@ use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour::generated::{
         ambients::PLAY as AMBIENTS_PLAY,
         bfaimgr::CHECK_PATH as BFAIMGR_CHECK_PATH,
+        bfcategory::GET_VALUE as BFCATEGORY_GET_VALUE,
         bfentity::GET_TILE as BFENTITY_GET_TILE,bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION},
         bftile::{
             IS_IN_ZOO as BFTILE_IS_IN_ZOO, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
@@ -82,7 +83,7 @@ pub struct ZTHabitat {
     pub all_animals_begin: u32,      // 0x06c // Begin pointer of the real vanilla std::vector<ZTAnimal*> ZTHabitat::getAllAnimals exposes (`&this->field_0x6c`, `.asm`-confirmed `LEA EAX,[ESI+0x6c]`) - unlike species_list_begin/end this vector is never recalculated here, only optionally sorted in place by Self::get_all_animals.
     pub all_animals_end: u32,        // 0x070
     pub all_animals_cap_end: u32,    // 0x074 // The animals vector's own capacity end - never observed written by any function ported so far (`get_all_animals`'s own sort never grows it), carried here for completeness alongside the vector's other two fields.
-    pub building_list_begin: u32,    // 0x078 // Begin pointer of a real vanilla std::vector<BFEntity*> - `ZTHabitat::hasBldg` (`Self::has_bldg`) is this vector's only reader ported so far; its writer, `ZTHabitat::addToBuildingList`, is still un-ported (mac-only, no Windows decompile as of this pass - see `zthabitatmgr-implementation-plan.md`'s "Guest/animal-experience queries" bulk).
+    pub building_list_begin: u32,    // 0x078 // Begin pointer of a real vanilla std::vector<BFEntity*> - `ZTHabitat::hasBldg` (`Self::has_bldg`) reads it; `ZTHabitat::addToBuildingList` (`Self::add_to_building_list`) writes it, appending onto another habitat's own list of this field's namesake.
     pub building_list_end: u32,      // 0x07c
     pub building_list_cap_end: u32,  // 0x080 // The building-list vector's own capacity end - never written by any function ported so far.
     pub characteristics_timer: u32,  // 0x084 // Elapsed-time accumulator update() advances every tick; past 6999 sets characteristics_dirty and rerolls to a random 0..200 value via the shared game RNG.
@@ -2689,6 +2690,104 @@ impl ZTHabitat {
         (self.building_list_begin..self.building_list_end).step_by(4).any(|addr| get_from_memory::<u32>(addr) == entity_ptr)
     }
 
+    /// Ports `ZTHabitat::addToBuildingList` (`ZTHabitat_addToBuildingList.c`/`.asm`, `generated.rs`'s
+    /// `ADD_TO_BUILDING_LIST`): [`Self::has_bldg`]'s own writer. Walks every owned tile's four
+    /// direct-entity slots (`tile+0x4..+0x10` - see [`Self::add_clear_tiles`]'s own doc comment for this
+    /// shape, confirmed `.asm`-side here too: a 2x2 nested loop over the same four dwords), and for each
+    /// non-null occupant passing the `ZTBuilding` type-cast gate ([`entity_type_matches`],
+    /// [`RVA_BUILDING_TYPE_CHECK_ARG`]) whose own type has either its `+0x23e` flag byte set or its
+    /// `+0x170` dword positive, appends it onto `other_ptr`'s own building list (`other_ptr+0x78`/`+0x7c`,
+    /// the same [`Self::has_bldg`]-style dedup scan, just parameterized over `other_ptr` instead of
+    /// `self`; [`vector_push_pool_alloc4`] push onto `out_vector_ptr`) unless already present. Called once
+    /// per amphibious neighbor from the still-unported `ZTHabitat::recalculateCharacteristics`
+    /// (`neighbor.addToBuildingList(&target.building_list_begin, target)` - `self` here is the *neighbor*
+    /// being merged from, not the merge target `other_ptr`).
+    pub fn add_to_building_list(&self, out_vector_ptr: u32, other_ptr: u32) {
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + 0x8);
+            for slot in (0x4u32..=0x10).step_by(4) {
+                let entity_ptr: u32 = get_from_memory(tile + slot);
+                if entity_ptr == 0 || !unsafe { entity_type_matches(entity_ptr, RVA_BUILDING_TYPE_CHECK_ARG) } {
+                    continue;
+                }
+                let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
+                let flag: u8 = get_from_memory(entity_type_ptr + 0x23e);
+                let count: i32 = get_from_memory(entity_type_ptr + 0x170);
+                if flag == 0 && count <= 0 {
+                    continue;
+                }
+                let already_present = (get_from_memory::<u32>(other_ptr + 0x78)..get_from_memory::<u32>(other_ptr + 0x7c))
+                    .step_by(4)
+                    .any(|addr| get_from_memory::<u32>(addr) == entity_ptr);
+                if !already_present {
+                    vector_push_pool_alloc4(out_vector_ptr, entity_ptr);
+                }
+            }
+        }
+    }
+
+    /// Ports `ZTHabitat::additionalScenerySuitabilityChange`
+    /// (`ZTHabitat_additionalScenerySuitabilityChange.c`/`.asm`, `generated.rs`'s
+    /// `ADDITIONAL_SCENERY_SUITABILITY_CHANGE`): for every species type in the caller-built
+    /// `species_vector_ptr` vector passing its own vtable `+0xcc` gate ([`call_entity_vtable_noargs`],
+    /// dispatched directly on the species type object - not through a `+0x128` indirection, unlike every
+    /// occupant-entity gate elsewhere in this file), finds or inserts
+    /// ([`map_int_habitatsuitability_find_or_insert`]) that species's own suitability record (keyed on
+    /// `species_type+0x1ec`) in the tree at `map_ptr`, then walks every owned tile's four direct-entity
+    /// slots (`tile+0x4..+0x10`, same shape as [`Self::add_to_building_list`]). For each non-null occupant
+    /// passing the `ZTSceneryType` cast gate ([`entity_type_matches`], [`RVA_SCENERY_TYPE_CHECK_ARG`]):
+    /// accumulates `BFCategory::getValue(category, type+0x10c) + BFCategory::getValue(category,
+    /// vtable-slot-0x20(type))`, scaled `*100` then divided by the *occupant entity's own* `+0x150` dword
+    /// (not the type's - confirmed directly against the `.c`'s own `iVar1`/`piVar7` variable split, easy
+    /// to misread since both are "the entity" in prose) with plain truncating integer division exactly as
+    /// real vanilla's own per-item arithmetic does (only cast to `f32` once, after the whole owned-tile
+    /// walk completes), into a running total; ORs the type's own `+0x12a` flag into a per-tile flag
+    /// (bumping the record's `matching_item_count` once per matching occupant whose own `+0x12b` byte is
+    /// set), and bumps the record's `tiles_with_match_count` once per tile where that OR'd flag ended up
+    /// set. Finally adds the accumulated running total onto the record's own `category_score_sum`.
+    pub fn additional_scenery_suitability_change(&self, species_vector_ptr: u32, map_ptr: u32) {
+        let begin: u32 = get_from_memory(species_vector_ptr);
+        let end: u32 = get_from_memory(species_vector_ptr + 4);
+        for addr in (begin..end).step_by(4) {
+            let species_type_ptr: u32 = get_from_memory(addr);
+            if !unsafe { call_entity_vtable_noargs(species_type_ptr, 0xcc) } {
+                continue;
+            }
+            let key: i32 = get_from_memory(species_type_ptr + 0x1ec);
+            let category_ptr = species_type_ptr + 0x2cc;
+            let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, key);
+
+            let mut running_score: i32 = 0;
+            for node in walk_tile_list(self.owned_tiles_ptr) {
+                let tile: u32 = get_from_memory(node + 0x8);
+                let mut tile_flag = false;
+                for slot in (0x4u32..=0x10).step_by(4) {
+                    let entity_ptr: u32 = get_from_memory(tile + slot);
+                    if entity_ptr == 0 || !unsafe { entity_type_matches(entity_ptr, RVA_SCENERY_TYPE_CHECK_ARG) } {
+                        continue;
+                    }
+                    let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
+                    let arg1: i32 = get_from_memory(entity_type_ptr + 0x10c);
+                    let arg2 = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) } as i32;
+                    let val1 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg1) };
+                    let val2 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg2) };
+                    let divisor: i32 = get_from_memory(entity_ptr + 0x150);
+                    running_score += (val1 + val2) * 100 / divisor;
+
+                    if get_from_memory::<u8>(entity_type_ptr + 0x12b) != 0 {
+                        save_to_memory::<i32>(record_ptr + 0x1c, get_from_memory::<i32>(record_ptr + 0x1c) + 1);
+                    }
+                    tile_flag |= get_from_memory::<u8>(entity_type_ptr + 0x12a) != 0;
+                }
+                if tile_flag {
+                    save_to_memory::<i32>(record_ptr + 0x14, get_from_memory::<i32>(record_ptr + 0x14) + 1);
+                }
+            }
+            let current_score: f32 = get_from_memory(record_ptr + 0x10);
+            save_to_memory::<f32>(record_ptr + 0x10, running_score as f32 + current_score);
+        }
+    }
+
     /// Ports `ZTHabitat::removeViewingAreas` (`ZTHabitat_removeViewingAreas.c`, `generated.rs`'s
     /// `REMOVE_VIEWING_AREAS`): a no-op if `unknown_flag_0x2c` is set (the same guard
     /// `recalculateCharacteristics`'s own early-return uses). Otherwise destroys and frees every entry in
@@ -4306,6 +4405,38 @@ mod tests {
         let mut tank: ZTTankExhibit = unsafe { mem::zeroed() };
         tank.habitat.vtable = ZTHabitat::TANK_VTABLE_PTR;
         assert!(tank.is_tank());
+    }
+
+    /// A zeroed [`ZTHabitat`] whose `building_list_begin`/`_end` span `entries` (leaked so the raw
+    /// begin/end pointers stay valid) - the exact vector shape [`ZTHabitat::has_bldg`] reads and
+    /// [`ZTHabitat::add_to_building_list`]'s own dedup scan reproduces (parameterized over an
+    /// arbitrary `other_ptr+0x78`/`+0x7c` pair instead of `self`'s own fields).
+    fn fixture_habitat_with_building_list(entries: &[u32]) -> ZTHabitat {
+        let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
+        let block: &'static mut [u32] = Box::leak(entries.to_vec().into_boxed_slice());
+        habitat.building_list_begin = block.as_ptr() as u32;
+        habitat.building_list_end = block.as_ptr() as u32 + block.len() as u32 * 4;
+        habitat
+    }
+
+    /// `ZTHabitat_hasBldg.c`'s own membership scan - also the exact logic
+    /// [`ZTHabitat::add_to_building_list`]'s dedup check reuses (parameterized over `other_ptr`
+    /// instead of `self`), so this doubles as coverage for that shared shape.
+    #[test]
+    fn has_bldg_finds_present_entry_and_rejects_absent_one() {
+        let habitat = fixture_habitat_with_building_list(&[0x1000, 0x2000, 0x3000]);
+        assert!(habitat.has_bldg(0x2000));
+        assert!(!habitat.has_bldg(0x4000));
+    }
+
+    /// An empty building list (`begin == end`) never matches anything, including a null probe -
+    /// the same empty-vector early-out `add_clear_tiles`'s own `empty_animals_vector_returns_false`
+    /// documents for a sibling vector shape.
+    #[test]
+    fn has_bldg_empty_list_never_matches() {
+        let habitat = fixture_habitat_with_building_list(&[]);
+        assert!(!habitat.has_bldg(0x1000));
+        assert!(!habitat.has_bldg(0));
     }
 }
 

@@ -64,6 +64,7 @@ pub mod hooks_zthabitatmgr {
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
             GET_NEAREST_DIRT_PILE, HAS_PORTAL_ANIMAL, IS_SHOW_NEIGHBOR, NEEDS_SHOW_KEEPER,
+            ADD_TO_BUILDING_LIST, ADDITIONAL_SCENERY_SUITABILITY_CHANGE,
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
@@ -564,12 +565,9 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.has_portal_animal(target_habitat as u32)
     }
 
-    /// The real return is a low-byte-only bool (`is_show_neighbor`'s own doc comment); the `as u32`
-    /// widen hands vanilla callers a clean 0/1 in the shape today's `generated.rs` entry (`-> u32`)
-    /// declares, and drops once regeneration flips the entry to `-> bool`.
     #[detour(IS_SHOW_NEIGHBOR)]
-    unsafe extern "thiscall" fn is_show_neighbor(this: *const u32, neighbor: *const u32) -> u32 {
-        unsafe { ref_from_memory::<ZTHabitat>(this) }.is_show_neighbor(neighbor as u32) as u32
+    unsafe extern "thiscall" fn is_show_neighbor(this: *const u32, neighbor: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.is_show_neighbor(neighbor as u32)
     }
 
     /// Ports `ZTHabitat::getTilesCopy` - the out-param is a real `list<uint>` that `0x004f3a31`'s own
@@ -588,11 +586,34 @@ pub mod hooks_zthabitatmgr {
     }
 
     /// Release-safe path back to real vanilla for the live comparison test, same as
-    /// [`get_tiles_copy_real`] - the unmasked `u32` is intentional; the caller masks with
-    /// [`low_byte_bool`](crate::util::low_byte_bool).
+    /// [`get_tiles_copy_real`].
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn is_show_neighbor_real(this: *const u32, neighbor: *const u32) -> u32 {
+    pub(crate) fn is_show_neighbor_real(this: *const u32, neighbor: *const u32) -> bool {
         unsafe { IS_SHOW_NEIGHBOR_DETOUR.call(this, neighbor) }
+    }
+
+    #[detour(ADD_TO_BUILDING_LIST)]
+    unsafe extern "thiscall" fn add_to_building_list(this: *const u32, out_vector_ptr: *const i32, other_ptr: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_to_building_list(out_vector_ptr as u32, other_ptr as u32)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see `get_tiles_copy_real`'s
+    /// own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn add_to_building_list_real(this: *const u32, out_vector_ptr: *const i32, other_ptr: *const u32) {
+        unsafe { ADD_TO_BUILDING_LIST_DETOUR.call(this, out_vector_ptr, other_ptr) }
+    }
+
+    #[detour(ADDITIONAL_SCENERY_SUITABILITY_CHANGE)]
+    unsafe extern "thiscall" fn additional_scenery_suitability_change(this: *const u32, species_vector_ptr: *const i32, map_ptr: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.additional_scenery_suitability_change(species_vector_ptr as u32, map_ptr as u32)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see `get_tiles_copy_real`'s
+    /// own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn additional_scenery_suitability_change_real(this: *const u32, species_vector_ptr: *const i32, map_ptr: *const i32) {
+        unsafe { ADDITIONAL_SCENERY_SUITABILITY_CHANGE_DETOUR.call(this, species_vector_ptr, map_ptr) }
     }
 
     #[detour(ZTHABITAT_SET_DIRTY_CHARACTERISTICS)]

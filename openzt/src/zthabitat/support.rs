@@ -4,6 +4,7 @@ use openzt_detour::{
         bfmap::WORLD_TO_VIRTUAL_0,
         bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
+        msvc_std_mapint_habitatsuitability::OPERATOR_INDEX as MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_INDEX,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
         zthabitat::GET_SPECIES_RATING,
@@ -296,6 +297,47 @@ pub const RVA_TANK_WALL_TYPE_CHECK_ARG: u32 = 0x0023_8720;
 /// already document (`...0x638750, 0x638760, 0x638770...`, consistent spacing on both sides) - same
 /// caveat as those two. RVA = `0x00638760 - 0x400000`.
 pub const RVA_KEEPER_TYPE_CHECK_ARG: u32 = 0x0023_8760;
+
+/// `isCastClass` type-tag constant for `ZTBuilding` (`&CAST_ZTBuilding`, `0x00638680`) - confirmed
+/// directly via `ZTHabitat_addToBuildingList.asm`'s own `PUSH CAST_ZTBuilding; CALL [vtable+0x1c]`
+/// dispatch on an owned tile's occupant entity type ([`entity_type_matches`]'s exact shape). Sits between
+/// [`crate::ztmegatilemgr::RVA_SCENERY_TYPE_CHECK_ARG`] (`0x638670`) and [`RVA_STAFF_TYPE_CHECK_ARG`]
+/// (`0x638710`) in the same `0x10`-spaced isCastClass tag table those two document. RVA =
+/// `0x00638680 - 0x400000`.
+pub const RVA_BUILDING_TYPE_CHECK_ARG: u32 = 0x0023_8680;
+
+/// A `ZTHabitatSuitabilityRecord` (the real vanilla `msvc_std::map<int, ZTHabitatSuitabilityRecord>`'s
+/// per-key payload) is `0x70` bytes, confirmed via `msvc_std_mapint_habitatsuitability::TREE`'s own node
+/// allocation (`operator_new(0x84)`, tree node header `0x14` bytes, `0x84 - 0x14 = 0x70`). Field offsets
+/// are read directly off `ZTHabitatSuitabilityRecord_ZTHabitatSuitabilityRecord.asm`'s own zero-init write
+/// sequence - one dword/byte-run write per instruction, in the exact address order written (`0x0, 0x4,
+/// 0x8, 0xc, 0x38, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x3c, 0x40, 0x44, 0x48,
+/// 0x4c, 0x50, 0x54`, then a 22-byte flag pack at `0x58..0x6e`) - **not** assumed from the `.c`
+/// decompile's field-declaration order, which does not track true layout for a couple of these fields
+/// (its own `unk_0x28`/`unk_0x2c`/`unk_0x3c`/`unk_0x40`/`unk_0x44` names do match their real offsets,
+/// confirming this address-order reading is correct, but its `sum_category_tally` name is attached to the
+/// field really at `0x38`, not `0x10`).
+/// [`crate::zthabitat::habitat::ZTHabitat::additional_scenery_suitability_change`] only touches
+/// `+0x10` (running `f32` suitability score accumulator), `+0x14` (`i32` count of owned tiles with at
+/// least one matching, flagged scenery occupant) and `+0x1c` (`i32` count of matching scenery occupants
+/// whose own `+0x12b` flag byte is set) - read/written directly as raw offsets off
+/// [`map_int_habitatsuitability_find_or_insert`]'s returned record address, no dedicated struct needed.
+///
+/// Finds (or default-inserts) the record for `key` in the real vanilla
+/// `msvc_std::map<int, ZTHabitatSuitabilityRecord>` at `map_ptr`, returning the record's own address
+/// (`node+0x14`). Delegates the whole find-or-insert to real vanilla's own
+/// `msvc_std_mapint_habitatsuitability::OPERATOR_INDEX` (`map::operator[]`) rather than hand-rolling the
+/// manual lower-bound-walk-then-`INSERT_WRAPPER`-on-miss dance `ZTHabitat_additionalScenerySuitabilityChange.c`'s
+/// own body performs inline: a hand-rolled version of that dance crashed inside vanilla's own generic
+/// tree-insert helper (`FUN_00403103`, confirmed live via `crash-capture` - `cmp byte ptr [edx],0` on a
+/// null `edx`) on its very first real insert, despite the argument mapping matching the decompile
+/// byte-for-byte; `OPERATOR_INDEX` performs the identical `insert_wrapper(this, &out, 0, &{key,record})`
+/// sequence internally (confirmed via its own decompile) but is real vanilla's own single entry point for
+/// it, used throughout the game for countless other `map<K,V>::operator[]` call sites, so it carries far
+/// more real-world exercise than any hand assembly of the same steps.
+pub fn map_int_habitatsuitability_find_or_insert(map_ptr: u32, key: i32) -> u32 {
+    (unsafe { MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_INDEX.original()(map_ptr as *const i32, &key as *const i32) }) as u32
+}
 
 /// `isCastClass`-style type-check argument for the `ZTFood` gate in `getNumKeeperFoodTiles`
 /// (`&DAT_006386c0` in the decompile; the macOS build names the same call site
@@ -1057,4 +1099,3 @@ pub unsafe fn call_save_vtable_slot(entity_ptr: u32, file: *const i8) -> bool {
     let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, *const i8) -> u8>(target) };
     f(entity_ptr, file) != 0
 }
-

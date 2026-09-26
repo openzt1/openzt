@@ -6,6 +6,7 @@ use openzt_detour::generated::{
     bfentity,
     bfentity::GET_TILE as BFENTITY_GET_TILE,
     bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE},
+    msvc_std_mapint_habitatsuitability::{TREE as MSVC_MAP_INT_HABITATSUITABILITY_TREE, TREE_DTOR as MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR},
     standalone::OPERATOR_NEW,
     ztanimal::CAN_SERVICE as ZTANIMAL_CAN_SERVICE,
     zthabitat, zthabitatmgr, ztviewingarea,
@@ -20,11 +21,11 @@ use crate::reimplementation_tests::io_redirect;
 use crate::util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory};
 use crate::ztmapview::BFTile;
 use crate::ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG};
-use crate::ztshow::RVA_ANIMAL_TYPE_CHECK;
+use crate::ztshow::{call_entity_vtable_noargs, RVA_ANIMAL_TYPE_CHECK};
 use crate::zthabitatmgr::{
     animal_food_target, call_bfunit_tile_cost_vtable_slot, call_vtable_slot_noargs_ret_bool, entity_name_bytes, free_event_vector_buffer,
-    hooks_zthabitatmgr, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr, MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG,
-    RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
+    hooks_zthabitatmgr, map_int_habitatsuitability_find_or_insert, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr,
+    MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
 };
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -489,10 +490,7 @@ pub(crate) fn run_habitat_is_show_neighbor_matches_real_live_test(failure_log: &
             populated_trees += 1;
         }
         for &target_ptr in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
-            let real = low_byte_bool(hooks_zthabitatmgr::is_show_neighbor_real(
-                habitat_ptr as *const u32,
-                target_ptr as *const u32,
-            ));
+            let real = hooks_zthabitatmgr::is_show_neighbor_real(habitat_ptr as *const u32, target_ptr as *const u32);
             let reimpl = habitat.is_show_neighbor(target_ptr);
             let oracle = tree_members.contains(&target_ptr);
             comparisons += 1;
@@ -525,6 +523,206 @@ pub(crate) fn run_habitat_is_show_neighbor_matches_real_live_test(failure_log: &
                 true_hits
             ),
         );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Compares `addToBuildingList` (`ZTHabitat_addToBuildingList.c`/`.asm`) against the reimplementation
+/// over every live habitat's own owned-tile list: each side merges the *same* real habitat's occupants
+/// into its own fresh, empty "other" building-list buffer (`other_ptr = out_vector_ptr - 0x78`, so the
+/// dedup scan and the push both land in the same freshly zeroed 3-word vector - `self` itself is never
+/// mutated by this function, so both sides can safely read the one live habitat), then the two resulting
+/// lists are compared for exact order/contents equality. Growth buffers are freed back through
+/// [`free_event_vector_buffer`] - the same allocator [`crate::zthabitatmgr::vector_push_pool_alloc4`]
+/// itself uses, so this is real-vanilla-allocator-safe even when a push actually grows the buffer.
+pub(crate) fn run_habitat_add_to_building_list_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ADD_TO_BUILDING_LIST_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut compared_habitats = 0u32;
+    let mut total_pushed = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        if walk_tile_list(*habitat.owned_tiles_ptr()).count() == 0 {
+            continue;
+        }
+        compared_habitats += 1;
+
+        let mut real_other_buf: [u32; 3] = [0, 0, 0];
+        let mut reimpl_other_buf: [u32; 3] = [0, 0, 0];
+        let real_out_vector_ptr = real_other_buf.as_mut_ptr() as u32;
+        let reimpl_out_vector_ptr = reimpl_other_buf.as_mut_ptr() as u32;
+        let real_other_ptr = real_out_vector_ptr - 0x78;
+        let reimpl_other_ptr = reimpl_out_vector_ptr - 0x78;
+
+        hooks_zthabitatmgr::add_to_building_list_real(habitat_ptr as *const u32, real_out_vector_ptr as *const i32, real_other_ptr as *const u32);
+        habitat.add_to_building_list(reimpl_out_vector_ptr, reimpl_other_ptr);
+
+        let real_entries: Vec<u32> = (real_other_buf[0]..real_other_buf[1]).step_by(4).map(get_from_memory::<u32>).collect();
+        let reimpl_entries: Vec<u32> = (reimpl_other_buf[0]..reimpl_other_buf[1]).step_by(4).map(get_from_memory::<u32>).collect();
+        total_pushed += real_entries.len() as u32;
+
+        if real_entries != reimpl_entries {
+            failures.push(format!("habitat {:#010x}: real building list {:?} != reimpl {:?}", habitat_ptr, real_entries, reimpl_entries));
+        }
+
+        free_event_vector_buffer(real_other_buf[0], real_other_buf[2] - real_other_buf[0]);
+        free_event_vector_buffer(reimpl_other_buf[0], reimpl_other_buf[2] - reimpl_other_buf[0]);
+    }
+
+    if compared_habitats == 0 {
+        let msg = "no live habitat had any owned tiles".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, &format!("{} (habitats: {}, buildings pushed: {})", test_name, compared_habitats, total_pushed));
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Compares `additionalScenerySuitabilityChange` (`ZTHabitat_additionalScenerySuitabilityChange.c`/`.asm`)
+/// against the reimplementation over every live habitat's own owned-tile list and species list: each side
+/// populates its own fresh, empty real-vanilla `msvc_std::map<int, ZTHabitatSuitabilityRecord>`
+/// ([`MSVC_MAP_INT_HABITATSUITABILITY_TREE`], real vanilla's own `operator_new`-backed head node - torn
+/// down afterward through [`MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR`], never `Box`, so there is no
+/// cross-allocator hazard even though every node either side inserts is real vanilla heap memory), then
+/// every species passing the reimplementation's own `+0xcc` gate is looked up
+/// ([`map_int_habitatsuitability_find_or_insert`] - a pure lookup here, since the key must already exist
+/// on both sides) and its record's `occurrence_count`/`category_score_sum`/`tiles_with_match_count`/
+/// `matching_item_count` fields diffed byte-for-byte.
+pub(crate) fn run_habitat_additional_scenery_suitability_change_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ADDITIONAL_SCENERY_SUITABILITY_CHANGE_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut compared_habitats = 0u32;
+    let mut compared_species = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let species: Vec<u32> = habitat.species_list().collect();
+        if species.is_empty() {
+            continue;
+        }
+
+        let species_vector = [*habitat.species_list_begin(), *habitat.species_list_end()];
+        let species_vector_ptr = species_vector.as_ptr() as u32;
+
+        let comparator_byte: i32 = 0;
+        let allocator_byte: i8 = 0;
+        let mut real_map: [u32; 2] = [0, 0];
+        let mut reimpl_map: [u32; 2] = [0, 0];
+        unsafe {
+            MSVC_MAP_INT_HABITATSUITABILITY_TREE.original()(real_map.as_mut_ptr() as *const i32, &comparator_byte as *const i32, &allocator_byte as *const i8);
+            MSVC_MAP_INT_HABITATSUITABILITY_TREE.original()(
+                reimpl_map.as_mut_ptr() as *const i32,
+                &comparator_byte as *const i32,
+                &allocator_byte as *const i8,
+            );
+        }
+        let real_map_ptr = real_map.as_ptr() as u32;
+        let reimpl_map_ptr = reimpl_map.as_ptr() as u32;
+
+        hooks_zthabitatmgr::additional_scenery_suitability_change_real(
+            habitat_ptr as *const u32,
+            species_vector_ptr as *const i32,
+            real_map_ptr as *const i32,
+        );
+        habitat.additional_scenery_suitability_change(species_vector_ptr, reimpl_map_ptr);
+
+        let mut any_species_compared = false;
+        for &species_ptr in &species {
+            if !unsafe { call_entity_vtable_noargs(species_ptr, 0xcc) } {
+                continue;
+            }
+            any_species_compared = true;
+            compared_species += 1;
+            let key: i32 = get_from_memory(species_ptr + 0x1ec);
+            let real_record = map_int_habitatsuitability_find_or_insert(real_map_ptr, key);
+            let reimpl_record = map_int_habitatsuitability_find_or_insert(reimpl_map_ptr, key);
+            for &field_offset in &[0x0u32, 0x10, 0x14, 0x1c] {
+                let real_val: u32 = get_from_memory(real_record + field_offset);
+                let reimpl_val: u32 = get_from_memory(reimpl_record + field_offset);
+                if real_val != reimpl_val {
+                    failures.push(format!(
+                        "habitat {:#010x}, species {:#010x}, key {}, field +{:#x}: real={:#010x}, reimpl={:#010x}",
+                        habitat_ptr, species_ptr, key, field_offset, real_val, reimpl_val
+                    ));
+                }
+            }
+        }
+        if any_species_compared {
+            compared_habitats += 1;
+        }
+
+        unsafe {
+            MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR.original()(real_map.as_mut_ptr() as *const i32);
+            MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR.original()(reimpl_map.as_mut_ptr() as *const i32);
+        }
+    }
+
+    if compared_species == 0 {
+        let msg = "no species passed the +0xcc gate across any live habitat".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, &format!("{} (habitats: {}, species compared: {})", test_name, compared_habitats, compared_species));
         false
     } else {
         for msg in &failures {

@@ -3938,7 +3938,7 @@ pub mod zthabitat {
     pub const GET_SHOW_PORTAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> i32> = FunctionDef{address: 0x0059e0a9, function_type: PhantomData};
     pub const HAS_PORTAL_ANIMAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x0059e9a3, function_type: PhantomData};
     pub const IS_SHOW_STOPPED: FunctionDef<unsafe extern "fastcall" fn(*const u32) -> u32> = FunctionDef{address: 0x0059f988, function_type: PhantomData};
-    pub const IS_SHOW_NEIGHBOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x005a3585, function_type: PhantomData};
+    pub const IS_SHOW_NEIGHBOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x005a3585, function_type: PhantomData};
     pub const PLAY_SHOW_START_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005a3d80, function_type: PhantomData};
     pub const REMOVE_SHOW_PORTAL: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x005aa4d9, function_type: PhantomData};
     pub const REMOVE_SHOW_NEIGHBOR: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x005aa75e, function_type: PhantomData};
@@ -5889,7 +5889,7 @@ pub mod msvc_std_mapint_habitatsuitability {
 
     pub const TREE_DTOR: FunctionDef<unsafe extern "thiscall" fn(*const i32)> = FunctionDef{address: 0x0044616d, function_type: PhantomData};
     pub const OPERATOR_ASSIGN: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i32) -> *const u32> = FunctionDef{address: 0x00446370, function_type: PhantomData};
-    pub const TREE: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const u8) -> *const u32> = FunctionDef{address: 0x004466d9, function_type: PhantomData};
+    pub const TREE: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i32, *const i8) -> *const u32> = FunctionDef{address: 0x004466d9, function_type: PhantomData};
     pub const INSERT: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i8, *const i8, *const i32)> = FunctionDef{address: 0x004469e5, function_type: PhantomData};
     pub const INSERT_WRAPPER: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const u32, *const i8, *const i32)> = FunctionDef{address: 0x00446ab3, function_type: PhantomData};
     pub const OPERATOR_INDEX: FunctionDef<unsafe extern "thiscall" fn(*const i32, *const i32) -> i32> = FunctionDef{address: 0x004470e7, function_type: PhantomData};
