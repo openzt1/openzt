@@ -555,6 +555,13 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_ADD_BABY_BORN_BONUS_LIVE",
                 run: tests::zthabitatmgr::run_habitat_add_baby_born_bonus_live_test,
             },
+            // Multi-reimplementation integration stage 32 (zthabitat-additional-functions-plan.md):
+            // population/demographics invariants across the population getters over the live zoo. The
+            // test mutates only `animal+0x2ac` and restores it, so ordering is otherwise free.
+            RegisteredTest {
+                name: "ZTHABITAT_POPULATION_METRICS_MULTI_REIMPL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_population_metrics_multi_reimpl_live_test,
+            },
             RegisteredTest {
                 name: "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE",
                 run: tests::zthabitatmgr::run_habitat_trigger_keeper_arrived_live_test,

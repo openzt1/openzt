@@ -3896,6 +3896,348 @@ pub(crate) fn run_habitat_add_baby_born_bonus_live_test(failure_log: &mut Option
     }
 }
 
+/// Multi-reimplementation integration test (stage 32 of
+/// `openzt/plans/zthabitat-additional-functions-plan.md`): drives the population/demographics
+/// reimplementations together over the live zoo's own habitats, so a disagreement between two getters
+/// of one side surfaces as a failed cross-getter invariant rather than only a real-vs-reimpl diff.
+/// Real vanilla is called before the reimplementation everywhere (the established
+/// `characteristics_dirty` ordering). Per habitat, over its own direct occupants:
+///
+/// 1. Adult partition: `getNumAdultAnimals(false)` equals the sum of per-species
+///    `getNumAdultAnimals(species, false)` over the habitat's own distinct species ids plus one
+///    guaranteed-absent probe (`i32::MAX`), per side, and both totals agree. The
+///    `include_neighbors = true` arm is deliberately not partitioned - the neighbor closure's species
+///    are not enumerable from this habitat's own occupants, so the sum invariant does not hold there;
+///    with-neighbors real-vs-reimpl equality is already pinned by
+///    `ZTHABITAT_GET_NUM_ADULT_ANIMALS_WITH_NEIGHBORS_LIVE`.
+/// 2. Species membership: `getSpeciesAnimals(species)`'s out-param length equals the count of that
+///    species within `getAllAnimals`, per species per side.
+/// 3. Gender partition: for each species, `getAdultGenderSpeciesAnimals("Female")` +
+///    `getAdultGenderSpeciesAnimals("Male")` lengths equal that species' adult count from assertion 1,
+///    per side. The spec's `"m"`/`"f"` request strings are not usable here - the filter compares the
+///    requested string against each animal's own gender text (`"Female"`/`"Male"`), so `"m"`/`"f"`
+///    match nothing and the invariant would be vacuously 0 + 0 == 0 for every species; an assumption
+///    check first asserts every adult's own gender text actually corresponds to its
+///    `entity_type+0xa4` tag (`'f'` ↔ "Female", `'m'` ↔ "Male") so a tag/text drift fails loudly
+///    instead of silently breaking the partition.
+/// 4. Bounded counters: `getNumAngryAnimals(false)` and `getNumSickAnimals(false)` never exceed the
+///    habitat's direct-occupant count, per side (the `true` arm legitimately exceeds one habitat's own
+///    count by summing neighbors, so it is not bounded this way).
+/// 5. Baby-bonus/average consistency: `getAvgAnimalHappiness` equals the recomputed population mean
+///    (`sum(animal+0x2a8) / num_animals`, plain truncating division - the census
+///    `ZTHabitat_recalculateCharacteristics.c` sums each animal's `happiness` field into per-species
+///    suitability records and divides the total by `num_animals`; 0 when `num_animals` is 0) on both
+///    sides, then every `ZTAnimalType` present anywhere in the zoo is swept through
+///    [`assert_baby_born_bonus_pass`] on both sides (the habitat × type cross-product re-exercises the
+///    empty-scratch path for species absent from this habitat), and the average is re-read and must
+///    still equal the same oracle. The spec's "getAvgAnimalHappiness shifts consistently with the
+///    population average" cannot mean a shift inside a synchronous pass: `addBabyBornBonus` writes the
+///    pending accumulator `animal+0x2ac`, which `ZTAnimal::updateStatusVariables` drains into the
+///    happiness value at `+0x2a8` one tick later, while `getAvgAnimalHappiness` returns the cached
+///    census average of `animal+0x2a8` - so the faithful equivalent is that the average stays equal to
+///    the recomputed population mean across both sides' bonus sweeps, with the exact-increment
+///    contract itself carried by [`assert_baby_born_bonus_pass`].
+///
+/// Also asserts `num_animals` against the `getAllAnimals` enumeration every invariant above is built
+/// on. Everything is read-only or exactly restored ([`assert_baby_born_bonus_pass`] snapshots and
+/// restores every `+0x2ac` accumulator), so no game state survives the test. Non-vacuousness: the
+/// save must contain at least one animal zoo-wide, or every invariant above holds vacuously.
+pub(crate) fn run_habitat_population_metrics_multi_reimpl_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_POPULATION_METRICS_MULTI_REIMPL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+    let mut failures: Vec<String> = Vec::new();
+
+    // Union of the zoo's real `ZTAnimalType` pointers, in habitat order (same shape as
+    // [`run_habitat_add_baby_born_bonus_live_test`]).
+    let mut type_ptrs: Vec<u32> = Vec::new();
+    for &ptr in &habitat_ptrs {
+        for animal_ptr in unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_all_animals(false) {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            if !type_ptrs.contains(&animal_type_ptr) {
+                type_ptrs.push(animal_type_ptr);
+            }
+        }
+    }
+
+    let mut total_animals = 0usize;
+    let mut species_queries = 0usize;
+    let mut adult_gender_queries = 0usize;
+    let mut bonus_passes = 0usize;
+
+    for (i, &ptr) in habitat_ptrs.iter().enumerate() {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let animal_ptrs: Vec<u32> = habitat.get_all_animals(false).collect();
+        total_animals += animal_ptrs.len();
+        let num_animals = habitat.num_animals;
+        if num_animals != animal_ptrs.len() as i32 {
+            failures.push(format!(
+                "habitat {} ({:#010x}): num_animals {} != getAllAnimals length {}",
+                i,
+                ptr,
+                num_animals,
+                animal_ptrs.len()
+            ));
+        }
+
+        let mut species_of: Vec<i32> = Vec::new();
+        let mut species_ids: Vec<i32> = Vec::new();
+        for &animal_ptr in &animal_ptrs {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let species_id: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+            species_of.push(species_id);
+            if !species_ids.contains(&species_id) {
+                species_ids.push(species_id);
+            }
+        }
+        species_ids.push(i32::MAX);
+
+        // Assertion 1 - adult partition (false arm only, see the doc comment).
+        let adult_real = unsafe { zthabitat::GET_NUM_ADULT_ANIMALS_0.original()(ptr as *const u32, false) };
+        let adult_reimpl = habitat.get_num_adult_animals(false);
+        let mut adult_sum_real = 0i32;
+        let mut adult_sum_reimpl = 0i32;
+        let mut per_species_adults: Vec<(i32, i32, i32)> = Vec::new();
+        for &species_id in &species_ids {
+            let real = unsafe { zthabitat::GET_NUM_ADULT_ANIMALS_1.original()(ptr as *const u32, species_id, false) };
+            let reimpl = habitat.get_num_adult_animals_by_species(species_id, false);
+            adult_sum_real += real;
+            adult_sum_reimpl += reimpl;
+            per_species_adults.push((species_id, real, reimpl));
+        }
+        if adult_sum_real != adult_real {
+            failures.push(format!(
+                "habitat {} ({:#010x}) real: sum of per-species adult counts {} != getNumAdultAnimals(false) {}",
+                i, ptr, adult_sum_real, adult_real
+            ));
+        }
+        if adult_sum_reimpl != adult_reimpl {
+            failures.push(format!(
+                "habitat {} ({:#010x}) reimpl: sum of per-species adult counts {} != get_num_adult_animals(false) {}",
+                i, ptr, adult_sum_reimpl, adult_reimpl
+            ));
+        }
+        if adult_real != adult_reimpl {
+            failures.push(format!(
+                "habitat {} ({:#010x}): real getNumAdultAnimals(false) {}, reimpl {}",
+                i, ptr, adult_real, adult_reimpl
+            ));
+        }
+
+        // Assertion 2 - species membership lengths.
+        for &species_id in &species_ids {
+            let expected_len = species_of.iter().filter(|&&s| s == species_id).count() as i32;
+
+            let mut real_vector = [0u32; 3];
+            unsafe { zthabitat::GET_SPECIES_ANIMALS.original()(ptr as *const u32, species_id, real_vector.as_mut_ptr() as *const i32) };
+            let real_len = ((real_vector[1] - real_vector[0]) >> 2) as i32;
+            free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+            let mut reimpl_vector = [0u32; 3];
+            habitat.get_species_animals(species_id, reimpl_vector.as_mut_ptr() as u32);
+            let reimpl_len = ((reimpl_vector[1] - reimpl_vector[0]) >> 2) as i32;
+            free_event_vector_buffer(reimpl_vector[0], reimpl_vector[2] - reimpl_vector[0]);
+
+            species_queries += 2;
+            if real_len != expected_len {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) real: getSpeciesAnimals({}) length {} != getAllAnimals count {}",
+                    i, ptr, species_id, real_len, expected_len
+                ));
+            }
+            if reimpl_len != expected_len {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) reimpl: get_species_animals({}) length {} != get_all_animals count {}",
+                    i, ptr, species_id, reimpl_len, expected_len
+                ));
+            }
+        }
+
+        // Assertion 3, assumption leg: an adult's own gender text must correspond to its type's
+        // gender tag, or the partition below could only agree with a broken premise.
+        for &animal_ptr in &animal_ptrs {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let gender_tag: u8 = get_from_memory(get_from_memory::<u32>(animal_type_ptr + 0xa4));
+            if gender_tag == b'm' || gender_tag == b'f' {
+                let text_start: u32 = get_from_memory(animal_ptr + 0x26c);
+                let text_end: u32 = get_from_memory(animal_ptr + 0x270);
+                let own_text: Vec<u8> = (text_start..text_end).map(get_from_memory::<u8>).collect();
+                let expected_text: &[u8] = if gender_tag == b'f' { b"Female" } else { b"Male" };
+                if own_text != expected_text {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}): animal {:#010x} adult gender tag {} carries gender text {:?}, expected {:?} - the gender partition invariant cannot hold",
+                        i,
+                        ptr,
+                        animal_ptr,
+                        gender_tag as char,
+                        String::from_utf8_lossy(&own_text),
+                        String::from_utf8_lossy(expected_text)
+                    ));
+                }
+            }
+        }
+
+        // Assertion 3, partition leg: "Female" + "Male" lengths account for every adult of the
+        // species, per side.
+        for &(species_id, adult_real, adult_reimpl) in &per_species_adults {
+            let mut gender_lens = [(0i32, 0i32); 2];
+            for (slot, gender_text) in [&b"Female"[..], &b"Male"[..]].into_iter().enumerate() {
+                let mut gender_buf = gender_text.to_vec();
+                gender_buf.push(0);
+                let gender_start = gender_buf.as_ptr() as u32;
+                let gender_header: [u32; 3] = [
+                    gender_start,
+                    gender_start + gender_text.len() as u32,
+                    gender_start + gender_text.len() as u32 + 1,
+                ];
+
+                let mut real_vector = [0u32; 3];
+                unsafe {
+                    zthabitat::GET_ADULT_GENDER_SPECIES_ANIMALS.original()(
+                        ptr as *const u32,
+                        gender_header.as_ptr() as *const i8,
+                        species_id,
+                        real_vector.as_mut_ptr() as *const i32,
+                    )
+                };
+                let real_len = ((real_vector[1] - real_vector[0]) >> 2) as i32;
+                free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+                let mut reimpl_vector = [0u32; 3];
+                habitat.get_adult_gender_species_animals(gender_header.as_ptr() as u32, species_id, reimpl_vector.as_mut_ptr() as u32);
+                let reimpl_len = ((reimpl_vector[1] - reimpl_vector[0]) >> 2) as i32;
+                free_event_vector_buffer(reimpl_vector[0], reimpl_vector[2] - reimpl_vector[0]);
+
+                gender_lens[slot] = (real_len, reimpl_len);
+                adult_gender_queries += 2;
+            }
+            let (female_real, female_reimpl) = gender_lens[0];
+            let (male_real, male_reimpl) = gender_lens[1];
+            if female_real + male_real != adult_real {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) real: getAdultGenderSpeciesAnimals({}, \"Female\") {} + (\"Male\") {} != adult count {}",
+                    i, ptr, species_id, female_real, male_real, adult_real
+                ));
+            }
+            if female_reimpl + male_reimpl != adult_reimpl {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) reimpl: get_adult_gender_species_animals({}, \"Female\") {} + (\"Male\") {} != adult count {}",
+                    i, ptr, species_id, female_reimpl, male_reimpl, adult_reimpl
+                ));
+            }
+        }
+
+        // Assertion 4 - the cached angry/sick tallies are per-habitat counts, so neither may exceed
+        // the direct-occupant population they are tallied from.
+        let bound = animal_ptrs.len() as i32;
+        for (side, angry, sick) in [
+            (
+                "real",
+                unsafe { zthabitat::GET_NUM_ANGRY_ANIMALS.original()(ptr as *const u32, false) },
+                unsafe { zthabitat::GET_NUM_SICK_ANIMALS.original()(ptr as *const u32, false) },
+            ),
+            ("reimpl", habitat.get_num_angry_animals(false), habitat.get_num_sick_animals(false)),
+        ] {
+            if angry > bound {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {}: getNumAngryAnimals(false) {} exceeds the direct-occupant count {}",
+                    i, ptr, side, angry, bound
+                ));
+            }
+            if sick > bound {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {}: getNumSickAnimals(false) {} exceeds the direct-occupant count {}",
+                    i, ptr, side, sick, bound
+                ));
+            }
+        }
+
+        // Assertion 5 - average consistency plus the bonus sweep. The census average's own formula
+        // (sum of `animal+0x18` over `num_animals`, 0 when empty) is the oracle both sides must match
+        // before and after the sweep; nothing the sweep writes feeds it (see the doc comment).
+        let oracle = if num_animals == 0 {
+            0
+        } else {
+            animal_ptrs.iter().map(|&a| get_from_memory::<i32>(a + 0x2a8)).fold(0i32, |acc, v| acc.wrapping_add(v)) / num_animals
+        };
+        for (side, avg) in [
+            ("real", unsafe { zthabitat::GET_AVG_ANIMAL_HAPPINESS.original()(ptr as *const u32) }),
+            ("reimpl", habitat.get_avg_animal_happiness()),
+        ] {
+            if avg != oracle {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {}: getAvgAnimalHappiness {} != recomputed population mean {}",
+                    i, ptr, side, avg, oracle
+                ));
+            }
+        }
+
+        for &type_ptr in &type_ptrs {
+            bonus_passes += 2;
+            assert_baby_born_bonus_pass(&mut failures, "real", i, ptr, &animal_ptrs, type_ptr, || unsafe {
+                zthabitat::ADD_BABY_BORN_BONUS.original()(ptr as *const u32, type_ptr as *const u32)
+            });
+            assert_baby_born_bonus_pass(&mut failures, "reimpl", i, ptr, &animal_ptrs, type_ptr, || {
+                unsafe { ref_from_memory::<ZTHabitat>(ptr) }.add_baby_born_bonus(type_ptr)
+            });
+        }
+
+        for (side, avg) in [
+            ("real", unsafe { zthabitat::GET_AVG_ANIMAL_HAPPINESS.original()(ptr as *const u32) }),
+            ("reimpl", habitat.get_avg_animal_happiness()),
+        ] {
+            if avg != oracle {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {}: getAvgAnimalHappiness {} after the bonus sweep, expected the same recomputed population mean {}",
+                    i, ptr, side, avg, oracle
+                ));
+            }
+        }
+    }
+
+    if total_animals == 0 {
+        let msg = "all invariants were vacuous: no animals found across any live habitat".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, animals: {}, species queries: {}, adult-gender queries: {}, bonus passes: {})",
+                test_name, habitat_ptrs.len(), total_animals, species_queries, adult_gender_queries, bonus_passes
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// One snapshot→call→assert→restore pass of [`run_habitat_trigger_keeper_arrived_live_test`] for a
 /// single (side, habitat, `scheduled`) combination. Snapshots the habitat's `scheduled_service_counter`
 /// (`+0xf4`) and every animal's keeper-arrives flag byte (`+0x39c`) - plus the same pair for every
