@@ -4642,6 +4642,360 @@ pub(crate) fn run_habitat_terrain_passability_multi_reimpl_live_test(failure_log
     }
 }
 
+/// Multi-reimplementation integration test (stage 34 of
+/// `openzt/plans/zthabitat-additional-functions-plan.md`): drives the gate-navigation
+/// reimplementations together over the live zoo's own habitats, asserting cross-getter contracts
+/// per side rather than re-asserting the per-draw LCG slot fidelity the per-function live tests
+/// already pin (the same scoping [`run_habitat_terrain_passability_multi_reimpl_live_test`] used).
+/// Real vanilla is called before the reimplementation throughout; every address involved
+/// (`getGateTileIn`/`getGateTileOut`/both gate-pass resolvers/`getHabitat`/`leadsTo`) is detoured,
+/// so in release `.original()` re-enters the ports and those legs are port-vs-port there - the
+/// real-vs-reimpl diffs stay with `ZTHABITAT_GET_GATE_TILE_OUT_LIVE`,
+/// `ZTHABITAT_GET_GATE_TILE_PASS_IN/OUT_LIVE` and `ZTHABITATMGR_LEADS_TO_LIVE`. Gate-in has no
+/// dedicated comparison test anywhere, so leg 1 gives it its first live real-vs-reimpl coverage
+/// (debug). Per habitat, over `exhibit_array`:
+///
+/// 1. Gate resolution: real `getGateTileIn`/`getGateTileOut` agree with the ports
+///    `get_gate_tile_in()`/`get_gate_tile_out()` mapped through `get_ptr_from_bftile` (0 for
+///    `None`).
+/// 2. Interior/exterior ownership: when a gate tile resolves, the gate-in tile is owned by this
+///    habitat and the gate-out tile is not ([`ZTHabitatMgr::get_habitat_ptr`]). The spec's "sits
+///    inside the exhibit interior"/"sits on the exterior public path" have no path-surface notion
+///    in the real functions - the faithful contract is tile ownership plus the same-owner
+///    candidacy rule leg 3 rebuilds.
+/// 3. Pass resolvers (needs a unit - the habitat's own first live animal, the per-function tests'
+///    driver convention; animal-free habitats are skipped, not failures): with the
+///    8-neighborhood candidate set rebuilt once from the port gate tile
+///    ([`adjacent_clear_candidates`]; leg 1 pins real==port gate tiles, so one rebuild serves both
+///    sides), a gate-less habitat must return null with the shared RNG seed untouched, and a
+///    gate-having habitat must return a non-null member of the candidate set, or the gate tile
+///    itself when that set is empty. Also asserts the pass-out result's own chain link: same owner
+///    as its gate-out base tile (the same-owner candidacy rule the rebuild encodes).
+/// 4. Interior/exterior of the pass results: the pass-in result is owned by this habitat, the
+///    pass-out result is not (follows from legs 2+3, asserted explicitly).
+/// 5. Gate-out chain continuity vs `leadsTo`: per non-world habitat, the gate-out walk chain is
+///    derived independently - exactly as the `leadsTo` decompile walks it: reset the shared
+///    scratch markers, mark `a`, then repeatedly step gate-out -> `getHabitatPtr(tile pos)`,
+///    stopping at a null tile, an already-visited habitat, or a "world" habitat
+///    (`unknown_flag_0x2c`), pushing each new step. The chain is derived twice (real
+///    `GET_GATE_TILE_OUT` + `GET_HABITAT` poles; port getters) and the two must agree
+///    element-for-element; then every `b` over `exhibit_array` plus null must satisfy
+///    `leadsTo(a, b) == (b != 0 && world_flag(b) == 0 && chain.contains(&b))` on both sides. The
+///    spec's "pathfinding continuity from getGateTilePassOut to the zoo entrance via leadsTo" is
+///    wrong on two counts: `leadsTo` takes two habitat pointers, not tiles, and has no
+///    zoo-entrance involvement whatsoever (the entrance tile is `ZTHabitatMgr`'s own global,
+///    covered by `ZTHABITATMGR_GET_ZOO_ENTRANCE_TILE_LIVE`); the faithful contract is the chain
+///    containment check here.
+///
+/// Spec deviations, restated: the spec's blanket "both return non-null tiles" (assertion 3) only
+/// holds for habitats that resolve a gate pair - a gate-less habitat's null gate tile passes
+/// through `getAdjacentClearTile`'s own null guard as null, by design; "interior"/"exterior
+/// public path" (assertions 4/5) are read as tile ownership plus same-owner candidacy, not path
+/// surfaces; assertion 6's zoo-entrance continuity does not exist in the real function.
+///
+/// Everything is read-only except the shared `tank_walk_visited_marker` scratch flag (each real
+/// and port `leadsTo` call and each derivation resets it itself) and the shared game RNG the pass
+/// draws advance exactly as every live test already does. Non-vacuousness: the save must resolve
+/// at least one gate pair and contain at least one non-world habitat, or every invariant above
+/// holds vacuously.
+pub(crate) fn run_habitat_gate_pass_traversal_multi_reimpl_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GATE_PASS_TRAVERSAL_MULTI_REIMPL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let world = globals().ztworldmgr();
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut gate_habitats = 0usize;
+    let mut gateless_habitats = 0usize;
+    let mut pass_checks = 0usize;
+    let mut pass_skipped = 0usize;
+    let mut base_back_picks = 0usize;
+    let mut membership_picks = 0usize;
+    let mut continuity_pairs = 0usize;
+    let mut non_empty_chains = 0usize;
+
+    let tile_owner = |tile_ptr: u32| -> u32 {
+        let x: i32 = get_from_memory(tile_ptr + 0x34);
+        let y: i32 = get_from_memory(tile_ptr + 0x38);
+        habitat_mgr.get_habitat_ptr(x, y)
+    };
+    let world_flag = |habitat_ptr: u32| -> bool { unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.unknown_flag_0x2c != 0 };
+
+    for (i, &ptr) in habitat_ptrs.iter().enumerate() {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+
+        // Leg 1 - gate resolution agreement (gate-in's first live real-vs-reimpl coverage).
+        let real_in = (unsafe { zthabitat::GET_GATE_TILE_IN.original()(ptr as *const u32) }) as u32;
+        let real_out = (unsafe { zthabitat::GET_GATE_TILE_OUT.original()(ptr as *const u32) }) as u32;
+        let port_in = habitat.get_gate_tile_in().map(|tile| world.get_ptr_from_bftile(&tile)).unwrap_or(0);
+        let port_out = habitat.get_gate_tile_out().map(|tile| world.get_ptr_from_bftile(&tile)).unwrap_or(0);
+        if real_in != port_in {
+            failures.push(format!("habitat {} ({:#010x}): getGateTileIn real {:#010x} != port {:#010x}", i, ptr, real_in, port_in));
+        }
+        if real_out != port_out {
+            failures.push(format!("habitat {} ({:#010x}): getGateTileOut real {:#010x} != port {:#010x}", i, ptr, real_out, port_out));
+        }
+
+        // Leg 2 - interior/exterior ownership of the resolved pair.
+        if port_in == 0 {
+            gateless_habitats += 1;
+        } else {
+            gate_habitats += 1;
+            let owner = tile_owner(port_in);
+            if owner != ptr {
+                failures.push(format!(
+                    "habitat {} ({:#010x}): gate-in tile {:#010x} is owned by {:#010x}, expected this habitat (the interior/exterior ownership invariant)",
+                    i, ptr, port_in, owner
+                ));
+            }
+        }
+        if port_out != 0 {
+            let owner = tile_owner(port_out);
+            if owner == ptr {
+                failures.push(format!(
+                    "habitat {} ({:#010x}): gate-out tile {:#010x} is owned by this habitat, expected an exterior tile",
+                    i, ptr, port_out
+                ));
+            }
+        }
+
+        // Legs 3+4 - pass resolvers (membership-level) and the pass results' own interior/exterior
+        // ownership.
+        let begin: u32 = get_from_memory(ptr + 0x6c);
+        let end: u32 = get_from_memory(ptr + 0x70);
+        let Some(unit) = (0..(end.wrapping_sub(begin)) / 4).map(|u| get_from_memory::<u32>(begin + u * 4)).find(|&a| a != 0) else {
+            pass_skipped += 1;
+            continue;
+        };
+        for direction in [0usize, 1] {
+            let (direction, gate_ptr) = if direction == 0 { ("in", port_in) } else { ("out", port_out) };
+            let seed_before: u32 = get_from_memory(rng_addr);
+            let (real_pass, port_pass) = if direction == "in" {
+                (
+                    (unsafe { zthabitat::GET_GATE_TILE_PASS_IN.original()(ptr as *const u32, unit as *const u32) }) as u32,
+                    habitat.get_gate_tile_pass_in(unit),
+                )
+            } else {
+                (
+                    (unsafe { zthabitat::GET_GATE_TILE_PASS_OUT.original()(ptr as *const u32, unit as *const u32) }) as u32,
+                    habitat.get_gate_tile_pass_out(unit),
+                )
+            };
+            let candidates = if gate_ptr == 0 { Vec::new() } else { adjacent_clear_candidates(habitat_mgr, world, unit, gate_ptr, max_cost) };
+            for (side, returned) in [("real", real_pass), ("port", port_pass)] {
+                pass_checks += 1;
+                if gate_ptr == 0 {
+                    // Null-gate pass-through: the null gate tile rides through
+                    // `getAdjacentClearTile`'s own null guard - null return, seed untouched.
+                    if returned != 0 {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: gate-less {} pass returned {:#010x}, expected null",
+                            i, ptr, side, direction, returned
+                        ));
+                    }
+                    let seed_after: u32 = get_from_memory(rng_addr);
+                    if seed_after != seed_before {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: gate-less {} pass moved the shared RNG seed ({:#010x} -> {:#010x}), expected it untouched",
+                            i, ptr, side, direction, seed_before, seed_after
+                        ));
+                    }
+                    continue;
+                }
+                if candidates.is_empty() {
+                    if returned == gate_ptr {
+                        base_back_picks += 1;
+                    } else {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: {} pass returned {:#010x}, expected the gate tile itself back ({:#010x}; empty candidate set)",
+                            i, ptr, side, direction, returned, gate_ptr
+                        ));
+                    }
+                } else if candidates.contains(&returned) {
+                    membership_picks += 1;
+                } else {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}) {}: {} pass returned {:#010x}, outside the {}-candidate set",
+                        i, ptr, side, direction, returned, candidates.len()
+                    ));
+                }
+                // The pass result's own interior/exterior ownership, guarded on the non-null check
+                // leg 3 already asserts (a null result failed above; nothing to look up).
+                if returned != 0 {
+                    let owner = tile_owner(returned);
+                    let expected_owned = direction == "in";
+                    if (owner == ptr) != expected_owned {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: {} pass result {:#010x} is owned by {:#010x}, expected {}",
+                            i,
+                            ptr,
+                            side,
+                            direction,
+                            returned,
+                            owner,
+                            if expected_owned { "this habitat (the interior side)" } else { "a different owner (the exterior side)" }
+                        ));
+                    }
+                }
+            }
+            // The pass-out result's own chain link: same owner as its gate-out base tile.
+            if direction == "out" && gate_ptr != 0 {
+                let gate_owner = tile_owner(gate_ptr);
+                for (side, returned) in [("real", real_pass), ("port", port_pass)] {
+                    if returned == 0 {
+                        continue;
+                    }
+                    let owner = tile_owner(returned);
+                    if owner != gate_owner {
+                        failures.push(format!(
+                            "habitat {} ({:#010x}) {}: pass-out result {:#010x} is owned by {:#010x}, but its gate-out base tile {:#010x} is owned by {:#010x}",
+                            i, ptr, side, returned, owner, gate_ptr, gate_owner
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Leg 5 - gate-out chain continuity vs leadsTo, derived independently per non-world habitat.
+    // Each derivation resets the shared scratch markers and mirrors the `leadsTo` decompile's own
+    // walk (visited bookkeeping included); the real-pole derivation and the port derivation must
+    // agree, and both `leadsTo` sides must equal the chain-containment expectation for every `b`.
+    let derive_chain = |use_real: bool, a: u32| -> Vec<u32> {
+        habitat_mgr.clear_tank_walk_markers();
+        unsafe { mut_from_memory::<ZTHabitat>(a) }.tank_walk_visited_marker = 1;
+        let mut chain: Vec<u32> = Vec::new();
+        let mut current = a;
+        loop {
+            let gate = if use_real {
+                (unsafe { zthabitat::GET_GATE_TILE_OUT.original()(current as *const u32) }) as u32
+            } else {
+                unsafe { ref_from_memory::<ZTHabitat>(current) }
+                    .get_gate_tile_out()
+                    .map(|tile| world.get_ptr_from_bftile(&tile))
+                    .unwrap_or(0)
+            };
+            if gate == 0 {
+                break;
+            }
+            let x: i32 = get_from_memory(gate + 0x34);
+            let y: i32 = get_from_memory(gate + 0x38);
+            let next = if use_real {
+                unsafe { zthabitatmgr::GET_HABITAT.original()(mgr_ptr, x, y) }
+            } else {
+                habitat_mgr.get_habitat_ptr(x, y)
+            };
+            if next == 0 {
+                break;
+            }
+            if unsafe { ref_from_memory::<ZTHabitat>(next) }.tank_walk_visited_marker != 0 {
+                break;
+            }
+            unsafe { mut_from_memory::<ZTHabitat>(next) }.tank_walk_visited_marker = 1;
+            if world_flag(next) {
+                break;
+            }
+            chain.push(next);
+            current = next;
+        }
+        chain
+    };
+    let non_world_habitats = habitat_ptrs.iter().copied().filter(|ptr| !world_flag(*ptr)).count();
+    for (i, &a) in habitat_ptrs.iter().enumerate() {
+        if world_flag(a) {
+            continue;
+        }
+        let real_chain = derive_chain(true, a);
+        let port_chain = derive_chain(false, a);
+        if real_chain != port_chain {
+            failures.push(format!(
+                "habitat {} ({:#010x}): gate-out walk chain disagrees - real {:?} vs port {:?}",
+                i, a, real_chain, port_chain
+            ));
+        }
+        if !port_chain.is_empty() {
+            non_empty_chains += 1;
+        }
+        for b in habitat_ptrs.iter().copied().chain(std::iter::once(0)) {
+            let expected = b != 0 && !world_flag(b) && port_chain.contains(&b);
+            continuity_pairs += 1;
+            let real_value = low_byte_bool(unsafe { zthabitatmgr::LEADS_TO.original()(mgr_ptr, a as *const u32, b as *const u32) });
+            if real_value != expected {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) -> {:#010x}: leadsTo real {} != expected {} (chain {:?})",
+                    i, a, b, real_value, expected, port_chain
+                ));
+            }
+            let port_value = habitat_mgr.leads_to(a, b);
+            if port_value != expected {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) -> {:#010x}: leads_to port {} != expected {} (chain {:?})",
+                    i, a, b, port_value, expected, port_chain
+                ));
+            }
+        }
+    }
+
+    if gate_habitats == 0 || non_world_habitats == 0 {
+        let msg = format!(
+            "all invariants were vacuous: gate habitats {}, non-world habitats {} (of {} live habitats)",
+            gate_habitats,
+            non_world_habitats,
+            habitat_ptrs.len()
+        );
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, gate habitats: {}, gateless habitats: {}, pass checks: {} (skipped: {}), base-back picks: {}, membership picks: {}, continuity pairs: {} (non-empty chains: {}))",
+                test_name,
+                habitat_ptrs.len(),
+                gate_habitats,
+                gateless_habitats,
+                pass_checks,
+                pass_skipped,
+                base_back_picks,
+                membership_picks,
+                continuity_pairs,
+                non_empty_chains
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// One snapshot→call→assert→restore pass of [`run_habitat_trigger_keeper_arrived_live_test`] for a
 /// single (side, habitat, `scheduled`) combination. Snapshots the habitat's `scheduled_service_counter`
 /// (`+0xf4`) and every animal's keeper-arrives flag byte (`+0x39c`) - plus the same pair for every

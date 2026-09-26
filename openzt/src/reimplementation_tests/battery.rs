@@ -569,6 +569,15 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_TERRAIN_PASSABILITY_MULTI_REIMPL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_terrain_passability_multi_reimpl_live_test,
             },
+            // Multi-reimplementation integration stage 34 (zthabitat-additional-functions-plan.md):
+            // gate in/out navigation & connectivity contracts (gate resolution, gate-pass
+            // membership, gate-out chain continuity vs leadsTo) over the live zoo. Read-only:
+            // pass draws advance the shared game RNG, the chain derivations touch only the shared
+            // scratch marker each leadsTo call resets itself.
+            RegisteredTest {
+                name: "ZTHABITAT_GATE_PASS_TRAVERSAL_MULTI_REIMPL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_gate_pass_traversal_multi_reimpl_live_test,
+            },
             RegisteredTest {
                 name: "ZTHABITAT_TRIGGER_KEEPER_ARRIVED_LIVE",
                 run: tests::zthabitatmgr::run_habitat_trigger_keeper_arrived_live_test,
