@@ -245,6 +245,30 @@ impl ZTHabitatMgr {
         self.distinct_species_catalog_ids(0x1ec) as i32
     }
 
+    /// Ports `ZTHabitatMgr::getNumNonShowNonWorldHabitats` (Win `0x0052ffbc`, macOS
+    /// `ZTHabitatMgr_getNumNonShowNonWorldHabitats.c`): counts every `exhibit_array` entry that is not a
+    /// show tank. The show-tank test is `ZTHabitat::isShowTank`, which Windows inlines at the loop site as
+    /// `isTank()` (real vtable `+0x20` dispatch) && `zt_show_info_ptr != 0` - reproduced here with
+    /// [`ZTHabitat::is_tank`] (vtable-identity check, dispatch-equivalent since both real `isTank`
+    /// implementations are constant stubs - see that method's doc) && [`ZTHabitat::is_show_tank`], the
+    /// same combined idiom `block_service` and the live tests already use.
+    ///
+    /// Every `exhibit_array` entry is by definition a non-world habitat (the "world" habitat is stashed in
+    /// `pending_habitat_ptr` and never appended - see that field's doc), hence the name. No null-slot
+    /// guard, matching real vanilla's own unconditional slot deref. Sole vanilla caller:
+    /// `updateZooStatusInfo` (call site `0x0053017d`), formatting the count into zoo-status UI element
+    /// `0x1015`; full-width `i32` return confirmed against the `.asm` (`EBX` counter -> `EAX`, plain `RET`).
+    pub fn get_num_non_show_non_world_habitats(&self) -> i32 {
+        let mut count = 0i32;
+        for i in 0..self.exhibit_array.len() {
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(self.exhibit_array.get_ptr(i)) };
+            if !(habitat.is_tank() && habitat.is_show_tank()) {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Ports `ZTHabitatMgr::enterNewMonth` (`ZTHabitatMgr_enterNewMonth.c`): for every `exhibit_array`
     /// entry, and finally for [`Self::pending_habitat_ptr`] itself (real vanilla reads it unconditionally,
     /// no null check - see that field's own doc comment for why this is confidently the always-present
@@ -3903,5 +3927,64 @@ impl fmt::Display for ZTHabitatMgr {
         )?;
         writeln!(f, "  popularity_scale_factor: {},", self.popularity_scale_factor)?;
         write!(f, "}}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem;
+
+    use super::{save_to_memory, ZTArray, ZTHabitat, ZTHabitatMgr};
+
+    /// Host-safe fixture: `mem::zeroed()` is valid for every field of `ZTHabitatMgr` (raw `u32`s, an
+    /// `f32`, the 3-pointer `ZTArray`, `PhantomData`), and only `exhibit_array` is ever repointed.
+    /// Leaked rather than stack-allocated so the raw addresses stay valid for the port's volatile
+    /// reads, same pattern as habitat.rs's own fixtures.
+    fn fixture_mgr(habitats: &[(u32, u32)]) -> &'static mut ZTHabitatMgr {
+        let mgr: &'static mut ZTHabitatMgr = Box::leak(Box::new(unsafe { mem::zeroed() }));
+        let slots: &'static mut [u32] = Box::leak(
+            habitats
+                .iter()
+                .map(|(vtable, show_info)| leak_fake_habitat(*vtable, *show_info))
+                .collect::<Vec<u32>>()
+                .into_boxed_slice(),
+        );
+        let start = slots.as_ptr() as u32;
+        let end = start + slots.len() as u32 * 4;
+        mgr.exhibit_array = ZTArray::from_raw_parts(start, end, end);
+        mgr
+    }
+
+    /// Writes `vtable`/`zt_show_info_ptr` into a leaked zeroed fake `ZTHabitat` block (exactly the
+    /// struct's own `0x178` bytes) and returns the block's address.
+    fn leak_fake_habitat(vtable: u32, show_info: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x178].into_boxed_slice());
+        let habitat_ptr = block.as_ptr() as u32;
+        save_to_memory(habitat_ptr, vtable);
+        save_to_memory(habitat_ptr + 4, show_info);
+        habitat_ptr
+    }
+
+    #[test]
+    fn empty_exhibit_array_counts_zero() {
+        assert_eq!(fixture_mgr(&[]).get_num_non_show_non_world_habitats(), 0);
+    }
+
+    #[test]
+    fn counts_everything_except_show_tanks() {
+        let (tank_vtable, land_vtable) = (ZTHabitat::TANK_VTABLE_PTR, ZTHabitat::TANK_VTABLE_PTR + 0x100);
+        let mgr = fixture_mgr(&[
+            (land_vtable, 0),       // plain land habitat
+            (land_vtable, 0x1000),  // `!isTank` arm - a nonzero show-info alone is not a show tank
+            (tank_vtable, 0x1000),  // show tank
+            (tank_vtable, 0),       // tank with no show info
+        ]);
+        assert_eq!(mgr.get_num_non_show_non_world_habitats(), 3);
+    }
+
+    #[test]
+    fn all_show_tanks_count_zero() {
+        let mgr = fixture_mgr(&[(ZTHabitat::TANK_VTABLE_PTR, 0x1000); 3]);
+        assert_eq!(mgr.get_num_non_show_non_world_habitats(), 0);
     }
 }

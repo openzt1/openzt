@@ -1498,6 +1498,71 @@ pub(crate) fn run_zthabitatmgr_get_num_families_species_live_test(failure_log: &
     }
 }
 
+/// Compares real `ZTHabitatMgr::getNumNonShowNonWorldHabitats` against the reimplemented
+/// `get_num_non_show_non_world_habitats`, over the live, loaded zoo's own manager singleton. The
+/// independent oracle reads raw fields only (vtable == [`ZTHabitat::TANK_VTABLE_PTR`] && the `+0x4`
+/// show-info dword nonzero), standing in for the `isTank() && zt_show_info_ptr != 0` test real vanilla
+/// inlines at the loop site - so a vtable-identity (`is_tank`) bug cannot agree with itself. Also pins
+/// the census identity every `exhibit_array` scan satisfies: non-show count + show tanks == scanned ==
+/// `exhibit_array().len()` (the core assertion the Stage 37 global exhibit census builds on).
+pub(crate) fn run_zthabitatmgr_get_num_non_show_non_world_habitats_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_GET_NUM_NON_SHOW_NON_WORLD_HABITATS_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let mgr = globals().zthabitatmgr();
+
+    let exhibit_len = mgr.exhibit_array().len();
+    if exhibit_len == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no habitats loaded)", test_name));
+        return false;
+    }
+
+    let real = hooks_zthabitatmgr::get_num_non_show_non_world_habitats_real(mgr_ptr);
+    let reimpl = mgr.get_num_non_show_non_world_habitats();
+
+    let mut oracle = 0i32;
+    let mut show_tanks = 0i32;
+    for i in 0..exhibit_len {
+        let habitat_ptr = mgr.exhibit_array().get_ptr(i);
+        let is_show_tank =
+            get_from_memory::<u32>(habitat_ptr) == ZTHabitat::TANK_VTABLE_PTR && get_from_memory::<u32>(habitat_ptr + 4) != 0;
+        if is_show_tank {
+            show_tanks += 1;
+        } else {
+            oracle += 1;
+        }
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    if real != reimpl {
+        failures.push(format!("real={}, reimpl={}", real, reimpl));
+    }
+    if oracle != reimpl {
+        failures.push(format!("reimpl={}, raw-field oracle={}", reimpl, oracle));
+    }
+    if oracle + show_tanks != exhibit_len as i32 {
+        failures.push(format!(
+            "census identity broken: non-show {} + show tanks {} != scanned {}",
+            oracle, show_tanks, exhibit_len
+        ));
+    }
+
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!("{} (habitats scanned: {}, show tanks: {}, non-show count: {})", test_name, exhibit_len, show_tanks, oracle),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Round-trips `ZTHabitat::highlight`/`unhighlight` on exactly **one** real habitat (the first with a
 /// non-empty owned-tile list): captures every owned tile's `+0x83`/`+0x85` byte first, calls
 /// `highlight(true)` and confirms bit `0x80` is now set at `+0x83` on every one, then calls `unhighlight`

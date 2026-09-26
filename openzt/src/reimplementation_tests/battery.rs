@@ -241,6 +241,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_zthabitatmgr_get_num_families_species_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITATMGR_GET_NUM_NON_SHOW_NON_WORLD_HABITATS_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_num_non_show_non_world_habitats_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_HIGHLIGHT_UNHIGHLIGHT_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_highlight_unhighlight_roundtrip_live_test,
             },

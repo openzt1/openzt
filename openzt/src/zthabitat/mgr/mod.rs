@@ -70,7 +70,8 @@ pub mod hooks_zthabitatmgr {
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
         },
         zthabitatmgr::{
-            DO_TANK_CHECK, ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES, HABITAT_TILE_CHANGED,
+            DO_TANK_CHECK, ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES,
+            GET_NUM_NON_SHOW_NON_WORLD_HABITATS, HABITAT_TILE_CHANGED,
             HIGHLIGHT_HABITAT, REPLACE_FENCE_WITH_GATE, REPLACE_GATE, REPLACE_GATE_WITH_FENCE, SCENERY_ENTITY_CHANGE, TERRAIN_TILE_CHANGED,
             UNHIGHLIGHT_HABITAT, PATH_PLACED as ZTHABITATMGR_PATH_PLACED, PATH_REMOVED as ZTHABITATMGR_PATH_REMOVED, CHECK_ENTER_HABITAT,
             GET_OUTERMOST_TANK, GET_NEEDY_NESTED_TANK, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
@@ -690,6 +691,18 @@ pub mod hooks_zthabitatmgr {
     #[detour(GET_NUM_SPECIES)]
     unsafe extern "fastcall" fn get_num_species(this: *const u32) -> i32 {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_num_species()
+    }
+
+    #[detour(GET_NUM_NON_SHOW_NON_WORLD_HABITATS)]
+    unsafe extern "thiscall" fn get_num_non_show_non_world_habitats(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_num_non_show_non_world_habitats()
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_num_non_show_non_world_habitats_real(this: *const u32) -> i32 {
+        unsafe { GET_NUM_NON_SHOW_NON_WORLD_HABITATS_DETOUR.call(this) }
     }
 
     /// Real vanilla is a free `stdcall` helper taking a `ZTHabitat*` directly, not a `ZTHabitatMgr`
