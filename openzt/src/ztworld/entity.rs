@@ -132,6 +132,8 @@ pub struct BFEntity { // Full size is 0x154 bytes
     stop_at_end: u8,           // 0x146
     padding_3: [u8; 0x9],      // ----- padding: 10 bytes
     map_footprint: i32,        // 0x150
+    #[getset(skip)]
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(mem::size_of::<BFEntity>() == 0x154);

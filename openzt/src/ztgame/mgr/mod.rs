@@ -16,7 +16,7 @@ use windows::Win32::Foundation::FILETIME;
 use crate::{
     lua_fn,
     systemtime::{filetime_to_ticks, ticks_to_filetime},
-    util::{mut_from_memory, ref_from_memory},
+    util::ref_from_memory,
 };
 
 /// Registers the Lua commands and installs this module's detours (see the module doc comment's
@@ -83,7 +83,7 @@ mod gamemgr_lifecycle_detours {
 
     #[detour(SET_NEW_GAME_DEFAULTS)]
     unsafe extern "thiscall" fn set_new_game_defaults(this: *const u32, config: *const u32, is_new_game: bool) {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.set_new_game_defaults(config, is_new_game);
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.set_new_game_defaults(config, is_new_game);
     }
 
     #[detour(SAVE)]
@@ -93,7 +93,7 @@ mod gamemgr_lifecycle_detours {
 
     #[detour(LOAD)]
     unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> bool {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.load(file, version)
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.load(file, version)
     }
 
     #[detour(UPDATE)]
@@ -103,7 +103,7 @@ mod gamemgr_lifecycle_detours {
 
     #[detour(UPDATE_SIM)]
     unsafe extern "thiscall" fn update_sim(this: *const u32, delta: u32) {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.update_sim(delta);
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.update_sim(delta);
     }
 
     /// `START`/`STOP`'s real `generated.rs` entries are `extern "fastcall" fn(i32)` (OOAnalyzer's
@@ -112,12 +112,12 @@ mod gamemgr_lifecycle_detours {
     /// `ztshow.rs::CALCULATE_PERCENT_ADJUSTMENT` precedent for a fastcall single-param detour.
     #[detour(START)]
     unsafe extern "fastcall" fn start(this: i32) {
-        unsafe { mut_from_memory::<ZTGameMgr>(this as *const u32) }.start();
+        unsafe { ref_from_memory::<ZTGameMgr>(this as *const u32) }.start();
     }
 
     #[detour(STOP)]
     unsafe extern "fastcall" fn stop(this: i32) {
-        unsafe { mut_from_memory::<ZTGameMgr>(this as *const u32) }.stop();
+        unsafe { ref_from_memory::<ZTGameMgr>(this as *const u32) }.stop();
     }
 }
 
@@ -129,7 +129,7 @@ mod gamemgr_finance_detours {
 
     #[detour(ADD_CASH)]
     unsafe extern "thiscall" fn add_cash(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.add_cash(amount);
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.add_cash(amount);
     }
 
     /// The real signature carries a trailing `bool` (`ZTGameMgr::subtractCash(float, bool)`, per the
@@ -137,7 +137,7 @@ mod gamemgr_finance_detours {
     /// the detour's stack accounting matches the real function's.
     #[detour(SUBTRACT_CASH)]
     unsafe extern "thiscall" fn subtract_cash(this: *const u32, amount: f32, _unused: bool) {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.subtract_cash(amount);
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.subtract_cash(amount);
     }
 
     #[detour(GET_DATE)]
@@ -188,7 +188,7 @@ mod gamemgr_finance_detours {
 
     #[detour(OVERRIDE_NEW_GAME_DEFAULTS)]
     unsafe extern "thiscall" fn override_new_game_defaults(this: *const u32, config: *const u32) {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.override_new_game_defaults(config);
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.override_new_game_defaults(config);
     }
 }
 
@@ -223,13 +223,13 @@ mod gamemgr_allocator_detours {
 
     #[detour(DESTRUCTOR_0)]
     unsafe extern "thiscall" fn destructor_0(this: *const u32) -> *const u32 {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.destruct();
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.destruct();
         this
     }
 
     #[detour(DESTRUCTOR_1)]
     unsafe extern "thiscall" fn destructor_1(this: *const u32, delete_flag: u8) -> *const u32 {
-        unsafe { mut_from_memory::<ZTGameMgr>(this) }.destruct();
+        unsafe { ref_from_memory::<ZTGameMgr>(this) }.destruct();
         if delete_flag != 0 {
             drop(unsafe { Box::from_raw(this as *mut ZTGameMgr) });
         }

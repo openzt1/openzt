@@ -227,7 +227,7 @@ impl BFTile {
 pub mod zoo_ztmapview {
     use tracing::error;
 
-    use crate::util::{get_from_memory, ref_from_memory, save_to_memory};
+    use crate::util::{get_from_memory, save_to_memory};
     use crate::ztmapview::{BFTile, ZTMapView};
     use crate::ztworldmgr::IVec3;
     use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
@@ -246,12 +246,12 @@ pub mod zoo_ztmapview {
 
         // let entity = get_from_memory(temp_entity);
 
-        let bf_tile = unsafe { ref_from_memory::<BFTile>(tile) };
+        let bf_tile = get_from_memory::<BFTile>(tile);
 
         // let zt_map_view = get_from_memory::<ZTMapView>(_this);
 
         let zt_result = if response_ptr.is_null() { 0 } else { get_from_memory::<u32>(response_ptr) };
-        match ZTMapView::check_tank_placement(temp_entity_ptr, bf_tile) {
+        match ZTMapView::check_tank_placement(temp_entity_ptr, &bf_tile) {
             Err(reimplemented_result) => {
                 if zt_result != reimplemented_result.clone() as u32 {
                     error!("ZTMapView::checkTankPlacement mismatch between reimplementation and game result! Reimplementation: {:?}, Game: {:#x}", reimplemented_result, zt_result);
@@ -280,7 +280,7 @@ pub mod zoo_ztmapview {
     // 0040f24d int __thiscall OOAnalyzer::BFTile::getLocalElevation(BFTile *this,BFPos *param_1)
     #[detour(GET_LOCAL_ELEVATION)]
     unsafe extern "thiscall" fn get_local_elevation(_this: *const u32, pos: *const u32) -> i32 {
-        let tile = unsafe { ref_from_memory::<BFTile>(_this) };
+        let tile = get_from_memory::<BFTile>(_this);
         let pos_vec = get_from_memory::<IVec3>(pos);
         tile.get_local_elevation(pos_vec)
     }

@@ -16,6 +16,7 @@ pub struct ZTThoughtMgr {
     pub _pad: [u8; 3],      // ----- padding: 3 bytes
     pub sentinel_ptr: u32,  // 0x8 - pointer to the list's sentinel node (not embedded inline)
     pub max_thoughts: u32,  // 0xc - default 1000, the cap `addThought` trims the list to
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(mem::size_of::<ZTThoughtMgr>() == 0x10);

@@ -45,6 +45,7 @@ pub struct ZTShowMgr {
     pub tag_byte: u8,
     _pad_0x31: [u8; 3],
     pub show_script_mgr: ZTShowScriptMgrSlot,
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<ZTShowMgr>() == 0x44);

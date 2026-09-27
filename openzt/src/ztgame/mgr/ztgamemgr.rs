@@ -66,7 +66,7 @@
 //! `menuMusicAttenToScrollbarVal`/`scrollbarValToMenuMusicAtten` (macOS-only, no Windows address)
 //! also remain out of scope - see `menu_music_max_attenuation` in the struct below.
 
-use std::ffi::c_void;
+use std::{ffi::c_void, mem::offset_of};
 
 use openzt_detour::generated::{
     bfscenariomgr::{GET_CROWD_AMBIENTS_NAME, GET_CROWD_CONFIG_NAME, GET_WORLD_AMBIENTS_NAME, GET_WORLD_CONFIG_NAME},
@@ -89,6 +89,7 @@ use crate::{
     command_console::CommandError,
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory},
+    write_live,
     ztgame::menu_music_handler::MenuMusicHandler,
     ztsoundscape::ZTSoundscape,
     zoostatus::{self, ZooStatus},
@@ -181,6 +182,7 @@ pub struct ZTGameMgr {
     /// value's source is now known.
     menu_music_max_attenuation: i32, // 0x11A8
     pad11: [u8; 0x11b0 - 0x11AC], // 0x11AC - trailing unaccounted space
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<ZTGameMgr>() == 0x11b0);
@@ -236,21 +238,27 @@ impl ZTGameMgr {
         self.cash
     }
 
+    /// Raw address of one of `self`'s own fields at `offset` (use `offset_of!`), for a vanilla call
+    /// that wants a pointer to write through rather than a value ([`DEALLOCATE`]'s `hooked()` load path).
+    fn field_addr(&self, offset: usize) -> u32 {
+        self as *const Self as u32 + offset as u32
+    }
+
     /// Exposed for the live `reimplementation_tests` comparison harness, to pin the real, live
     /// `ZTGameMgr` singleton's budget to a known value around a `ZTResearchBranch::update` comparison
     /// call - see `ztresearch::reimplementation_tests` support for why this writes the real singleton
     /// rather than a synthetic instance.
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn set_cash(&mut self, value: f32) {
-        self.cash = value;
+    pub(crate) fn set_cash(&self, value: f32) {
+        write_live!(self, cash, value);
     }
 
     /// Test-only accessors for the `ZTGAMEMGR_SAVE_LOAD` live test, letting it seed/read the
     /// three fields `save`/`load` actually touch (`cash`/`date`/`elapsed_sim_ticks`) without exposing
     /// the private `Systemtime` type outside this module.
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn set_elapsed_sim_ticks(&mut self, value: u32) {
-        self.elapsed_sim_ticks = value;
+    pub(crate) fn set_elapsed_sim_ticks(&self, value: u32) {
+        write_live!(self, elapsed_sim_ticks, value);
     }
 
     #[cfg(feature = "reimplementation-tests")]
@@ -259,8 +267,8 @@ impl ZTGameMgr {
     }
 
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn set_date_bytes(&mut self, bytes: [u8; 0x10]) {
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), &mut self.date as *mut Systemtime as *mut u8, 0x10) };
+    pub(crate) fn set_date_bytes(&self, bytes: [u8; 0x10]) {
+        write_live!(self, date, bytes);
     }
 
     #[cfg(feature = "reimplementation-tests")]
@@ -278,15 +286,15 @@ impl ZTGameMgr {
     /// has a trailing, unread `bool` parameter (`ZTGameMgr::subtractCash(float,
     /// bool)`, per the `.asm`'s `RET 8`) - not part of this method's own logic, so not part of this
     /// method's own signature either; the detour wrapper below supplies/discards it.
-    pub fn subtract_cash(&mut self, amount: f32) {
-        self.cash -= amount;
+    pub fn subtract_cash(&self, amount: f32) {
+        write_live!(self, cash, self.cash - amount);
         unsafe { ZTUI_MAIN_SET_MONEY_TEXT.original()() };
     }
 
     /// Ports `ZTGameMgr::addCash` (`ZTGameMgr_addCash.c`): adds `amount` to the budget,
     /// then refreshes the on-screen money display (`ZTUI::main::setMoneyText`).
-    pub fn add_cash(&mut self, amount: f32) {
-        self.cash += amount;
+    pub fn add_cash(&self, amount: f32) {
+        write_live!(self, cash, self.cash + amount);
         unsafe { ZTUI_MAIN_SET_MONEY_TEXT.original()() };
     }
 
@@ -392,16 +400,16 @@ impl ZTGameMgr {
     /// `this` itself - no further calls, no other side effects. Used by
     /// `ztresearch::ZTResearchBranch::update`'s native reimplementation, called before `subtract_cash`
     /// to match vanilla's own call order.
-    pub fn spend_research(&mut self, amount: f32) {
-        let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
+    pub fn spend_research(&self, amount: f32) {
+        let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
         unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_research(amount)
     }
 
     /// Calls the reimplemented `ZooStatus::spendMarketing` on the same embedded `ZooStatus` sub-object as
     /// `spend_research`. Used by `ztmarketing::ZTMarketing::update`, called before `subtract_cash` to
     /// match vanilla's own call order.
-    pub fn spend_marketing(&mut self, amount: f32) {
-        let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
+    pub fn spend_marketing(&self, amount: f32) {
+        let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
         unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_marketing(amount)
     }
 
@@ -424,13 +432,13 @@ impl ZTGameMgr {
     ///    `.asm`
     /// 5. `ZooStatus::ratingChecks(&self.zoo_status)` (reimplemented, embedded sub-object)
     /// 6. `elapsed_sim_ticks = 0`
-    pub fn set_new_game_defaults(&mut self, config: *const u32, is_new_game: bool) {
-        self.cash = 0.0;
+    pub fn set_new_game_defaults(&self, config: *const u32, is_new_game: bool) {
+        write_live!(self, cash, 0.0f32);
 
-        let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
+        let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
         unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.init(config as *const c_void);
 
-        self.date = Systemtime {
+        write_live!(self, date, Systemtime {
             w_year: 0x7d1,
             w_month: 1,
             w_day_of_week: 1,
@@ -439,7 +447,7 @@ impl ZTGameMgr {
             w_minute: 0,
             w_second: 0,
             w_milliseconds: 0,
-        };
+        });
 
         if is_new_game {
             unsafe { BFAIMGR_LOAD_DATA.original()(globals().ztaimgr_ptr(), false) };
@@ -447,7 +455,7 @@ impl ZTGameMgr {
 
         unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.rating_checks();
 
-        self.elapsed_sim_ticks = 0;
+        write_live!(self, elapsed_sim_ticks, 0u32);
     }
 
     /// Ports `ZTGameMgr::overrideNewGameDefaults` (`ZTGameMgr_overrideNewGameDefaults.c`/`.asm`), a
@@ -455,8 +463,8 @@ impl ZTGameMgr {
     /// One-line call-through to the
     /// reimplemented `ZooStatus::override` on the embedded sub-object at `self+0x10`, exactly
     /// the same shape as [`Self::spend_research`]/[`Self::spend_marketing`].
-    pub fn override_new_game_defaults(&mut self, config: *const u32) {
-        let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
+    pub fn override_new_game_defaults(&self, config: *const u32) {
+        let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
         unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.override_config(config as *const c_void)
     }
 
@@ -504,20 +512,20 @@ impl ZTGameMgr {
     ///
     /// `BFGameMgr::load`'s own inlined base body (`BFGameMgr_load.c`) only reads `elapsed_sim_ticks` when
     /// `version > 0x48`; older saves leave it zeroed instead.
-    pub fn load(&mut self, file: *const u32, version: u32) -> bool {
+    pub fn load(&self, file: *const u32, version: u32) -> bool {
         let mut marker: u32 = 0;
         let marker_ok = unsafe { DEALLOCATE.hooked()(&mut marker as *mut u32 as *const u32, 4, 1, file as *const u8) } == 1;
         if !marker_ok {
             return false;
         }
 
-        let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
+        let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
         let zoostatus_result = unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.load(file, version);
         if !low_byte_bool(zoostatus_result) {
             return false;
         }
 
-        let date_ok = unsafe { DEALLOCATE.hooked()(&mut self.date as *mut Systemtime as *const u32, 0x10, 1, file as *const u8) } == 1;
+        let date_ok = unsafe { DEALLOCATE.hooked()(self.field_addr(offset_of!(Self, date)) as *const u32, 0x10, 1, file as *const u8) } == 1;
         let mut cash: f32 = 0.0;
         let cash_ok = unsafe { DEALLOCATE.hooked()(&mut cash as *mut f32 as *const u32, 4, 1, file as *const u8) } == 1;
 
@@ -525,13 +533,13 @@ impl ZTGameMgr {
             return false;
         }
 
-        self.cash = cash;
+        write_live!(self, cash, cash);
 
         // BFGameMgr::load inlined: only reads elapsed_sim_ticks for saves newer than version 0x48.
         if version > 0x48 {
-            unsafe { DEALLOCATE.hooked()(&mut self.elapsed_sim_ticks as *mut u32 as *const u32, 4, 1, file as *const u8) == 1 }
+            unsafe { DEALLOCATE.hooked()(self.field_addr(offset_of!(Self, elapsed_sim_ticks)) as *const u32, 4, 1, file as *const u8) == 1 }
         } else {
-            self.elapsed_sim_ticks = 0;
+            write_live!(self, elapsed_sim_ticks, 0u32);
             true
         }
     }
@@ -573,15 +581,15 @@ impl ZTGameMgr {
     ///    `FileTimeToSystemTime` failure aborts the rest of the method, also matching), then sets
     ///    `day_changed_flag` if the round-trip changed `date.w_month` (see that field's own doc comment -
     ///    **not** `w_day_of_week`).
-    pub fn update_sim(&mut self, delta: u32) {
-        self.elapsed_sim_ticks = self.elapsed_sim_ticks.wrapping_add(delta);
+    pub fn update_sim(&self, delta: u32) {
+        write_live!(self, elapsed_sim_ticks, self.elapsed_sim_ticks.wrapping_add(delta));
 
         let dat_addr = get_module_base("zoo.exe") as u32 + DAT_006394B8_RVA;
         let mut tick_accumulator: i32 = get_from_memory(dat_addr);
         tick_accumulator = tick_accumulator.wrapping_add(delta as i32);
         save_to_memory(dat_addr, tick_accumulator);
 
-        let zoostatus_ptr = (self as *mut Self as u32 + 0x10) as *const u32;
+        let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
         unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.update(delta as i32);
 
         if tick_accumulator > 0x3e9 {
@@ -621,18 +629,18 @@ impl ZTGameMgr {
         if unsafe { FileTimeToSystemTime(&file_time, &mut new_sys_time) }.is_err() {
             return;
         }
-        self.date = Systemtime::from_win32(new_sys_time);
+        write_live!(self, date, Systemtime::from_win32(new_sys_time));
 
         if self.date.w_month != previous_month {
-            self.day_changed_flag = true;
+            write_live!(self, day_changed_flag, true);
         }
     }
 
     /// Test-only accessors for the `ZTGAMEMGR_UPDATE_SIM` live test, letting it seed/read
     /// `day_changed_flag` without exposing it as public API.
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn set_day_changed_flag(&mut self, value: bool) {
-        self.day_changed_flag = value;
+    pub(crate) fn set_day_changed_flag(&self, value: bool) {
+        write_live!(self, day_changed_flag, value);
     }
 
     #[cfg(feature = "reimplementation-tests")]
@@ -703,8 +711,8 @@ impl ZTGameMgr {
     /// comment's "Methods deliberately not detoured" section), so there's no other way to exercise
     /// [`Self::destruct`]'s non-null handler branch from a synthetic instance.
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn set_menu_music_handler_ptr(&mut self, value: u32) {
-        self.menu_music_handler_ptr = value;
+    pub(crate) fn set_menu_music_handler_ptr(&self, value: u32) {
+        write_live!(self, menu_music_handler_ptr, value);
     }
 
     /// Ports `~ZTGameMgr` (`ztgamemgr::DESTRUCTOR_0`/`DESTRUCTOR_1`'s shared body). Still leaves the
@@ -735,22 +743,22 @@ impl ZTGameMgr {
     ///
     /// Called from both `gamemgr_allocator_detours`' `DESTRUCTOR_0`/`DESTRUCTOR_1` detours (Stage 5's
     /// production wiring) and the standalone-instance test harness.
-    pub(crate) fn destruct(&mut self) {
-        self.vtable = ZTGAMEMGR_VTABLE;
+    pub(crate) fn destruct(&self) {
+        write_live!(self, vtable, ZTGAMEMGR_VTABLE);
 
         if self.soundscape_ptr != 0 {
             unsafe { mut_from_memory::<ZTSoundscape>(self.soundscape_ptr) }.destruct();
             unsafe { OPERATOR_DELETE.original()(self.soundscape_ptr) };
-            self.soundscape_ptr = 0;
+            write_live!(self, soundscape_ptr, 0u32);
         }
 
         if self.menu_music_handler_ptr != 0 {
             unsafe { mut_from_memory::<MenuMusicHandler>(self.menu_music_handler_ptr) }.destruct();
             unsafe { OPERATOR_DELETE.original()(self.menu_music_handler_ptr) };
-            self.menu_music_handler_ptr = 0;
+            write_live!(self, menu_music_handler_ptr, 0u32);
         }
 
-        self.vtable = BFMGR_VTABLE;
+        write_live!(self, vtable, BFMGR_VTABLE);
     }
 
     /// Ports `ZTGameMgr::start` (`ZTGameMgr_start.c`/`.asm`, both agree cleanly - unlike [`Self::stop`],
@@ -767,18 +775,19 @@ impl ZTGameMgr {
     ///    four into the reimplemented [`ZTSoundscape::init`] on the new soundscape (direct call, as above;
     ///    no null guard on `soundscape_ptr`, matching the real body).
     /// 4. `started = true`.
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         if self.started {
             self.stop();
         }
 
         let new_block = unsafe { OPERATOR_NEW.original()(0x54) };
-        self.soundscape_ptr = if new_block.is_null() {
+        let soundscape_ptr = if new_block.is_null() {
             0
         } else {
             unsafe { mut_from_memory::<ZTSoundscape>(new_block) }.construct();
             new_block as u32
         };
+        write_live!(self, soundscape_ptr, soundscape_ptr);
 
         let scenariomgr_ptr: u32 = get_from_memory(get_module_base("zoo.exe") as u32 + GLOBAL_ZTSCENARIOMGR_RVA);
         let crowd_ambients = unsafe { GET_CROWD_AMBIENTS_NAME.original()(scenariomgr_ptr as i32) };
@@ -795,7 +804,7 @@ impl ZTGameMgr {
             )
         };
 
-        self.started = true;
+        write_live!(self, started, true);
     }
 
     /// Ports `ZTGameMgr::stop`. **The `.c` export for this method is corrupted** - it inlines the entire
@@ -823,14 +832,14 @@ impl ZTGameMgr {
     /// somehow null anyway, this port just treats that as "app not ready" and skips the `unpauseGame` call,
     /// rather than writing a nonsensical code-address-as-data-pointer into live global state to match a
     /// real but never-taken vanilla path.
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
         if self.soundscape_ptr != 0 {
             unsafe { ZTSOUNDSCAPE_DESTRUCTOR.original()(self.soundscape_ptr as *const c_void) };
             unsafe { OPERATOR_DELETE.original()(self.soundscape_ptr) };
-            self.soundscape_ptr = 0;
+            write_live!(self, soundscape_ptr, 0u32);
         }
 
-        self.started = false;
+        write_live!(self, started, false);
 
         let ztapp_ptr: u32 = get_from_memory(get_module_base("zoo.exe") as u32 + GLOBAL_ZTAPP_RVA);
         if ztapp_ptr != 0 {

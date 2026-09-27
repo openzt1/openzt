@@ -43,6 +43,29 @@ impl fmt::Display for Addr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{:#010x}", self.0) }
 }
 
+/// Zero-sized; makes the containing struct `!Freeze`, so `&T` over live game memory is not
+/// emitted as noalias+readonly (vanilla calls may rewrite any field while a `&T` is live).
+///
+/// Every `#[repr(C)]` struct reached through [`ref_from_memory`]/[`mut_from_memory`]/`globals()` carries
+/// one as its last field. A struct that embeds another marked struct inherits the property, so only the
+/// base needs it.
+#[derive(Default)]
+pub struct LiveMemory(std::cell::UnsafeCell<()>);
+
+unsafe impl Sync for LiveMemory {}
+
+impl Clone for LiveMemory {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl fmt::Debug for LiveMemory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("LiveMemory")
+    }
+}
+
 pub unsafe fn ref_from_memory<T>(address: impl MemAddr) -> &'static T {
     unsafe { &*(address.as_u32() as *const T) }
 }
@@ -68,6 +91,17 @@ pub fn checked_get_from_memory<T: Checkable>(address: impl MemAddr) -> anyhow::R
 
 pub fn save_to_memory<T>(address: impl MemAddr, value: T) {
     unsafe { ptr::write_volatile(address.as_u32() as *mut T, value) };
+}
+
+/// Volatile write of `$this.$field`, sound through `&self` on a [`LiveMemory`] struct (vanilla may
+/// rewrite any field while a `&T` is live - see `LiveMemory`'s docs). `addr_of!` gives the field's real
+/// type, so the value must match it exactly; there's no `T` for a caller to get wrong.
+#[macro_export]
+macro_rules! write_live {
+    ($this:expr, $field:ident, $value:expr) => {{
+        let field = ::core::ptr::addr_of!($this.$field);
+        unsafe { field.cast_mut().write_volatile($value) }
+    }};
 }
 
 /// Interprets a raw vanilla return value as a bool using only its low byte, ignoring the upper 3 bytes.

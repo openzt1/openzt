@@ -436,7 +436,7 @@ pub mod live_support {
             (*sentinel).next = sentinel;
             (*sentinel).prev = sentinel;
         }
-        Box::into_raw(Box::new(ZTThoughtMgr { vtable: 0, flag: 0, _pad: [0; 3], sentinel_ptr: sentinel as u32, max_thoughts }))
+        Box::into_raw(Box::new(ZTThoughtMgr { vtable: 0, flag: 0, _pad: [0; 3], sentinel_ptr: sentinel as u32, max_thoughts, _live: Default::default() }))
     }
 
     /// Seeds `thought` into `mgr.sentinel_ptr`'s intrusive chain via direct raw-pointer manipulation,
@@ -579,7 +579,7 @@ mod tests {
 
     fn build_test_mgr(max_thoughts: u32) -> ZTThoughtMgr {
         let sentinel_ptr = Box::into_raw(Box::new(0u8)) as u32;
-        ZTThoughtMgr { vtable: 0, flag: 0, _pad: [0; 3], sentinel_ptr, max_thoughts }
+        ZTThoughtMgr { vtable: 0, flag: 0, _pad: [0; 3], sentinel_ptr, max_thoughts, _live: Default::default() }
     }
 
     #[test]

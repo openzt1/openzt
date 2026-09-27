@@ -181,6 +181,7 @@ pub struct Ambients {
     x: i32,            // 0x0c - world position, jittered in place by ZTSoundscape::update today
     y: i32,            // 0x10
     z: i32,            // 0x14
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<Ambients>() == 0x18);
@@ -369,6 +370,7 @@ pub struct AmbientsGroup {
     range_hi: i32, // 0x204 - guest-count band upper bound
     /// Borrowed, not owned - see the struct doc comment.
     sound_group: u32, // 0x208 - *const SoundGroup
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<AmbientsGroup>() == 0x20c);

@@ -398,6 +398,7 @@ pub(crate) mod research_config_reimplementation {
                 effect_param_1: reimpl.effect_params.1,
                 effect_param_2: reimpl.effect_params.2,
                 help_id: reimpl.help_id,
+                _live: Default::default(),
             });
             let ptr = Box::into_raw(program);
             unsafe { (*ptr).reset() };
@@ -420,6 +421,7 @@ pub(crate) mod research_config_reimplementation {
                 enabled: 1,
                 pad2: [0; 3],
                 program_array: ptr_array_from_vec(programs),
+                _live: Default::default(),
             });
             Box::into_raw(category)
         }
@@ -450,6 +452,7 @@ pub(crate) mod research_config_reimplementation {
                         funding_table_start: 0,
                         funding_table_end: 0,
                         funding_table_capacity: 0,
+                        _live: Default::default(),
                     });
                     let ptr = Box::into_raw(branch);
                     append_branch(mgr, ptr as u32);
@@ -624,6 +627,7 @@ pub(crate) mod research_config_reimplementation {
                     effect_param_1: -1,
                     effect_param_2: 0,
                     help_id: 0,
+                    _live: Default::default(),
                 }))
             }
 
@@ -640,6 +644,7 @@ pub(crate) mod research_config_reimplementation {
                     enabled: 1,
                     pad2: [0; 3],
                     program_array: ptr_array_from_vec(programs),
+                    _live: Default::default(),
                 }))
             }
 
@@ -661,6 +666,7 @@ pub(crate) mod research_config_reimplementation {
                     funding_table_start,
                     funding_table_end,
                     funding_table_capacity,
+                    _live: Default::default(),
                 }))
             }
 
@@ -748,7 +754,7 @@ pub(crate) mod research_config_reimplementation {
             #[test]
             fn clear_branches_empties_array_and_resets_elapsed_ticks() {
                 let branches: Vec<u32> = (0..2).map(|i| build_test_branch(i, 1, 1) as u32).collect();
-                let mut mgr = ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 123, branch_array: ptr_array_from_vec(branches) };
+                let mut mgr = ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 123, branch_array: ptr_array_from_vec(branches), _live: Default::default() };
                 let original_branch_array_capacity = mgr.branch_array.capacity();
                 assert!(original_branch_array_capacity > 0);
 

@@ -5600,7 +5600,7 @@ pub(crate) fn run_habitat_keeper_maintenance_flow_multi_reimpl_live_test(failure
                     zthabitat::TRIGGER_KEEPER_ARRIVED.original()(ptr as *const u32, keeper as *const u32, scheduled)
                 });
                 let port_set = assert_keeper_arrival_flagged_set_pass(&mut failures, "port", i, ptr, keeper, scheduled, || {
-                    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.trigger_keeper_arrived(keeper, scheduled)
+                    unsafe { ref_from_memory::<ZTHabitat>(ptr) }.trigger_keeper_arrived(keeper, scheduled)
                 });
                 arrival_passes += 1;
                 if real_set != port_set {
@@ -6388,7 +6388,7 @@ pub(crate) fn run_habitat_trigger_keeper_arrived_live_test(failure_log: &mut Opt
                 zthabitat::TRIGGER_KEEPER_ARRIVED.original()(ptr as *const u32, keeper_ptr as *const u32, scheduled)
             });
             assert_trigger_keeper_arrived_pass(&mut failures, "reimpl", i, ptr, keeper_ptr, scheduled, || {
-                unsafe { mut_from_memory::<ZTHabitat>(ptr) }.trigger_keeper_arrived(keeper_ptr, scheduled)
+                unsafe { ref_from_memory::<ZTHabitat>(ptr) }.trigger_keeper_arrived(keeper_ptr, scheduled)
             });
         }
     }
@@ -6707,7 +6707,7 @@ pub(crate) fn run_habitat_set_dirty_characteristics_smoke_live_test(failure_log:
         if ptr == 0 {
             continue;
         }
-        unsafe { mut_from_memory::<ZTHabitat>(ptr) }.set_dirty_characteristics();
+        unsafe { ref_from_memory::<ZTHabitat>(ptr) }.set_dirty_characteristics();
         let now_dirty = *unsafe { ref_from_memory::<ZTHabitat>(ptr) }.characteristics_dirty() != 0;
         if !now_dirty {
             failures.push(format!("habitat {} ({:#010x}): set_dirty_characteristics left characteristics_dirty clear", i, ptr));
@@ -6744,7 +6744,7 @@ pub(crate) fn run_habitat_set_time_last_serviced_roundtrip_live_test(failure_log
     let original: u32 = get_from_memory(ptr + 0xec);
     const SENTINEL: u32 = 0x1234_5678;
 
-    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.set_time_last_serviced(SENTINEL, true);
+    unsafe { ref_from_memory::<ZTHabitat>(ptr) }.set_time_last_serviced(SENTINEL, true);
     let written: u32 = get_from_memory(ptr + 0xec);
 
     save_to_memory(ptr + 0xec, original);
@@ -6792,10 +6792,10 @@ pub(crate) fn run_habitat_create_edge_pairs_matches_real_live_test(failure_log: 
         return false;
     };
 
-    unsafe { zthabitat::CREATE_EDGE_PAIRS.original()(ptr as *const u32) };
+    hooks_zthabitatmgr::create_edge_pairs_real(ptr as *const u32);
     let real_pairs = snapshot_boundary_pairs(ptr);
 
-    unsafe { mut_from_memory::<ZTHabitat>(ptr) }.create_edge_pairs();
+    unsafe { ref_from_memory::<ZTHabitat>(ptr) }.create_edge_pairs();
     let reimpl_pairs = snapshot_boundary_pairs(ptr);
 
     if real_pairs == reimpl_pairs {

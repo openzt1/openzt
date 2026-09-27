@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 use crate::bfentitytype::{read_zt_entity_type_from_memory, ZTEntityTypeClass, ZTSceneryType};
 use crate::command_console::CommandError;
-use crate::geom::{Direction, IVec3};
+use crate::geom::IVec3;
 use crate::globals::globals;
 use crate::lua_fn;
 use crate::util::{get_from_memory, map_from_memory, ref_from_memory};
@@ -67,13 +67,7 @@ pub mod hooks_ztworldmgr {
 
     #[detour(GET_NEIGHBOR_1)]
     unsafe extern "thiscall" fn bfmap_get_neighbour(_this: *const u32, bftile: *const u32, direction: u32) -> u32 {
-        let ztwm = globals().ztworldmgr();
-        let bftile = unsafe { ref_from_memory::<BFTile>(bftile) };
-        let direction = Direction::from(direction);
-        match ztwm.get_neighbour(bftile, direction) {
-            Some(neighbour) => ztwm.get_ptr_from_bftile(&neighbour),
-            None => 0,
-        }
+        globals().ztworldmgr().get_neighbour_ptr_raw(bftile as u32, direction)
     }
 
     // 0x0040f916 int * __thiscall OOAnalyzer::BFEntity::getFootprint(BFEntity *this,undefined4 *param_1)
@@ -121,8 +115,8 @@ pub mod hooks_ztworldmgr {
     unsafe extern "thiscall" fn bfentity_is_on_tile(_this: *const u32, param_1: *const u32) -> bool {
         let result = unsafe { IS_ON_TILE_DETOUR.call(_this, param_1) };
         let entity = unsafe { ref_from_memory::<BFEntity>(_this) };
-        let tile = unsafe { ref_from_memory::<BFTile>(param_1) };
-        let reimimplented_result = entity.is_on_tile(tile);
+        let tile = get_from_memory::<BFTile>(param_1);
+        let reimimplented_result = entity.is_on_tile(&tile);
         if result != reimimplented_result {
             error!(
                 "BFEntity::is_on_tile: Detour result ({}) does not match reimplemented result ({}) for entity {}",

@@ -53,6 +53,7 @@ pub struct ZTMegatileMgr {
     row_start: *mut MegatileRow, // 0x18 - outer vector<vector<ZTMegatile>> begin
     row_end: *mut MegatileRow,   // 0x1c - outer vector end
     row_capacity_end: *mut MegatileRow, // 0x20 - outer vector end-of-storage
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(mem::size_of::<ZTMegatileMgr>() == 0x24);
@@ -735,6 +736,7 @@ mod tests {
             row_start: std::ptr::null_mut(),
             row_end: std::ptr::null_mut(),
             row_capacity_end: std::ptr::null_mut(),
+            _live: Default::default(),
         }
     }
 

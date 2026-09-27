@@ -97,6 +97,7 @@ pub struct ZTSoundscape {
     pub world_atten: i32,         // 0x48
     pub crowd_ambients: u32,      // 0x4c - Ambients*, 0 = none (ctor-zeroed; init fills via vanilla operator_new(0x18))
     pub world_ambients: u32,      // 0x50 - Ambients*, 0 = none (same)
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<ZTSoundscape>() == 0x54);

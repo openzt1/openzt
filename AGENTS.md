@@ -780,6 +780,27 @@ independent wiring step, not implied by the `lib.rs` one.
    global address (can't be run against a second instance) - live tests then have to compare `.original()`
    *behavior/return values* against the Rust store's outputs instead of diffing shared memory.
 
+### Live-memory structs (style 1 only)
+
+Vanilla code can rewrite any field of a live game struct while Rust holds a reference to it, either
+directly or by re-entering one of our detours on the same object. Rust's default reference rules don't
+allow for that, and `[profile.dev]` is `opt-level = 3`, so both batteries run code the optimizer is
+allowed to break.
+
+- Every new vanilla-layout `#[repr(C)]` struct reached through `ref_from_memory`/`mut_from_memory`/
+  `globals()` ends with `pub _live: crate::util::LiveMemory` (a trailing ZST, so `size_of` asserts are
+  unchanged). This makes the struct `!Freeze`, so `&T` is no longer emitted as noalias+readonly. A struct
+  that embeds a marked base (e.g. `ZTTankExhibit` embeds `ZTHabitat`) inherits it. Add `#[getset(skip)]`/
+  `#[skip_field]` when the struct derives `Getters`/`FieldAccessorAsString`. Plain value snapshots that
+  are only ever copied out with `get_from_memory` (e.g. `BFTile`) don't need it.
+- A method that recurses into neighbours, or calls vanilla code that can re-enter a detour on the same
+  object, takes `&self` and writes fields volatilely (`save_to_memory(self_addr + offset_of!(Self, f), v)`,
+  or a `write_field` helper like `ZTHabitat`/`ZTGameMgr` have). Never create a `&mut` to an object that
+  may already be borrowed up the stack. This includes a sub-object embedded in a borrowed parent, such as
+  `ZooStatus` inside `ZTGameMgr`.
+- When recursing, write the flag before the recursive call (see `ZTHabitat::set_dirty_characteristics`),
+  so the store can't be sunk past it.
+
 ### Cross-allocator memory safety (style 1 only)
 
 **Never free real vanilla-allocated output through Rust's allocator, or vice versa.** If a class manages its

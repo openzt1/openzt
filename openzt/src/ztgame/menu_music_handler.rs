@@ -74,6 +74,7 @@ pub struct MenuMusicHandler {
     ini_menu_music_disabled: u8,  // 0xc
     _pad2: [u8; 3],
     warmup_ticks: i32,            // 0x10
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<MenuMusicHandler>() == 0x14);

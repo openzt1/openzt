@@ -17,13 +17,13 @@ use openzt_detour::generated::{
         UPDATE as ZTHABITATMGR_UPDATE,
     },
 };
-use tracing::info;
+use tracing::error;
 
 use crate::{
     command_console::CommandError,
     globals::globals,
     lua_fn,
-    util::{mut_from_memory, ref_from_memory},
+    util::ref_from_memory,
 };
 use super::habitat::ZTHabitat;
 
@@ -57,7 +57,7 @@ pub mod hooks_zthabitatmgr {
             GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
             SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE, BLOCK_SERVICE,
             GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1,
-            RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS,
+            RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS, CREATE_EDGE_PAIRS,
             ADD_LAND_TILES, ADD_WATER_TILES, ADD_UNDERWATER_TILES,
             GET_LAND_TILES, GET_WATER_TILES, GET_UNDERWATER_TILES, GET_TILES_COPY,
             GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
@@ -83,20 +83,12 @@ pub mod hooks_zthabitatmgr {
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
     #[detour(GET_GATE_TILE_IN)]
     unsafe extern "thiscall" fn get_gate_tile_in(_this: *const u32) -> *const u32 {
-        let habitat = unsafe { ref_from_memory::<ZTHabitat>(_this) };
-        match habitat.get_gate_tile_in() {
-            Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile) as *const u32,
-            None => std::ptr::null(),
-        }
+        unsafe { ref_from_memory::<ZTHabitat>(_this) }.gate_tile_in_ptr() as *const u32
     }
 
     #[detour(GET_GATE_TILE_OUT)]
     unsafe extern "thiscall" fn get_gate_tile_out(_this: *const u32) -> i32 {
-        let habitat = unsafe { ref_from_memory::<ZTHabitat>(_this) };
-        match habitat.get_gate_tile_out() {
-            Some(tile) => globals().ztworldmgr().get_ptr_from_bftile(&tile) as i32,
-            None => 0,
-        }
+        unsafe { ref_from_memory::<ZTHabitat>(_this) }.gate_tile_out_ptr() as i32
     }
 
     /// Both gate-pass resolvers compose a gate-tile getter with `getAdjacentClearTile`, whose picked
@@ -187,12 +179,12 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(SET_IS_SHOW_EXHIBIT)]
     unsafe extern "thiscall" fn set_is_show_exhibit(this: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.set_is_show_exhibit()
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.set_is_show_exhibit()
     }
 
     #[detour(SET_IS_NOT_SHOW_EXHIBIT)]
     unsafe extern "thiscall" fn set_is_not_show_exhibit(this: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.set_is_not_show_exhibit()
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.set_is_not_show_exhibit()
     }
 
     #[detour(VALIDATE_POSITIONS)]
@@ -202,7 +194,7 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(REMOVE_HABITAT_TILES)]
     unsafe extern "thiscall" fn remove_habitat_tiles(this: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.remove_habitat_tiles()
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_habitat_tiles()
     }
 
     #[detour(RESET_UNIT_AI)]
@@ -214,12 +206,12 @@ pub mod hooks_zthabitatmgr {
     /// real third parameter is always `this` in practice.
     #[detour(ADD_HABITAT_TILES)]
     unsafe extern "thiscall" fn add_habitat_tiles(this: *const u32, seed_tile: *const u32, _other_habitat: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.add_habitat_tiles(seed_tile as u32)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_habitat_tiles(seed_tile as u32)
     }
 
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const u32, elapsed: u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.update(elapsed)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.update(elapsed)
     }
 
     #[detour(BLOCK_SERVICE)]
@@ -527,7 +519,7 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(REMOVE_VIEWING_AREAS)]
     unsafe extern "thiscall" fn remove_viewing_areas(this: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.remove_viewing_areas()
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_viewing_areas()
     }
 
     /// Real vanilla returns `&this->field_0x6c` itself (`.asm`-confirmed `LEA EAX,[ESI+0x6c]`) rather
@@ -548,7 +540,7 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(REMOVE_SPECIES)]
     unsafe extern "thiscall" fn remove_species(this: *const u32, species_key: i32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.remove_species(species_key as u32)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_species(species_key as u32)
     }
 
     #[detour(REMOVE_FOOD_TARGET)]
@@ -619,22 +611,22 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(ZTHABITAT_SET_DIRTY_CHARACTERISTICS)]
     unsafe extern "thiscall" fn set_dirty_characteristics(this: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.set_dirty_characteristics()
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.set_dirty_characteristics()
     }
 
     #[detour(ACCEPT_DONATION)]
     unsafe extern "thiscall" fn accept_donation(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.accept_donation(amount)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.accept_donation(amount)
     }
 
     #[detour(SET_TIME_LAST_SERVICED)]
     unsafe extern "thiscall" fn set_time_last_serviced(this: *const u32, time: u32, propagate: bool) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.set_time_last_serviced(time, propagate)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.set_time_last_serviced(time, propagate)
     }
 
     #[detour(TRIGGER_KEEPER_ARRIVED)]
     unsafe extern "thiscall" fn trigger_keeper_arrived(this: *const u32, keeper: *const u32, scheduled: bool) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.trigger_keeper_arrived(keeper as u32, scheduled)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.trigger_keeper_arrived(keeper as u32, scheduled)
     }
 
     /// Detoured (byte-for-byte reproducing real vanilla's own call graph adds no new risk over baseline),
@@ -1002,7 +994,7 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(RECALCULATE_DETERIORATION)]
     unsafe extern "thiscall" fn recalculate_deterioration(this: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitatMgr>(this) }.recalculate_deterioration()
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.recalculate_deterioration()
     }
 
     #[detour(FILL_ZOO_EXTERIOR)]
@@ -1025,21 +1017,16 @@ pub mod hooks_zthabitatmgr {
         unsafe { ZTHabitatMgr::can_see_habitat_from_building(habitat_ptr, building_ptr as u32) }
     }
 
-    /// Implemented and confirmed correct against real vanilla via a direct call
-    /// (`ZTHABITAT_CREATE_EDGE_PAIRS_MATCHES_REAL_LIVE`), but **deliberately left un-hooked** - same
-    /// "implemented but detour disabled" precedent this file's own `ZTHabitatMgr::add_habitat`/
-    /// `create_habitat` already established. Bisected directly: with every other stage-6h detour enabled,
-    /// hooking this one specifically hangs `run_load_live_zoo` dead before it can even log (real, un-ported
-    /// `ZTHabitat::resize` calls through to this address during real vanilla's own habitat reconstruction
-    /// path); disabling only this one detour (all 8 others enabled) lets the full battery pass
-    /// (205/205). Not yet root-caused *why* the hook alone misbehaves when the direct call doesn't -
-    /// candidates worth checking first: whether the real vanilla-reconstructed habitat this gets called on
-    /// mid-load has an already-consistent `boundary_tile_pairs_begin`/`_end`/`_cap_end` triple at that
-    /// exact point, or whether `PoolAlloc::allocate`/`deallocate`'s own real behavior during that specific
-    /// load phase differs from a live, already-loaded zoo's steady state.
-    #[allow(dead_code)]
+    #[detour(CREATE_EDGE_PAIRS)]
     unsafe extern "thiscall" fn create_edge_pairs(this: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.create_edge_pairs()
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.create_edge_pairs()
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test, same as
+    /// [`get_tiles_copy_real`].
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn create_edge_pairs_real(this: *const u32) {
+        unsafe { CREATE_EDGE_PAIRS_DETOUR.call(this) }
     }
 
     #[detour(RECALCULATE_VIEWING_AREAS)]
@@ -1049,17 +1036,17 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(ADD_VIEWING_AREA)]
     unsafe extern "thiscall" fn add_viewing_area(this: *const u32, va_ptr: u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.add_viewing_area(va_ptr)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_viewing_area(va_ptr)
     }
 
     #[detour(REMOVE_VIEWING_AREA)]
     unsafe extern "thiscall" fn remove_viewing_area(this: *const u32, va_ptr: *const u32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.remove_viewing_area(va_ptr as u32)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_viewing_area(va_ptr as u32)
     }
 
     #[detour(REMOVE_FROM_ALL_VAS)]
     unsafe extern "thiscall" fn remove_from_all_vas(this: *const u32, tile_ptr: i32) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.remove_from_all_vas(tile_ptr as u32)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_from_all_vas(tile_ptr as u32)
     }
 
     #[detour(RECREATE_OAS)]
@@ -1069,7 +1056,7 @@ pub mod hooks_zthabitatmgr {
 
     #[detour(ZTHABITAT_PATH_PLACED)]
     unsafe extern "thiscall" fn zthabitat_path_placed(this: *const u32, tile_ptr: *const std::ffi::c_void) {
-        unsafe { mut_from_memory::<ZTHabitat>(this) }.path_placed(tile_ptr as u32)
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.path_placed(tile_ptr as u32)
     }
 
     #[detour(ZTHABITATMGR_PATH_PLACED)]
@@ -1168,6 +1155,6 @@ pub fn init() {
     register_lua_commands();
 
     if let Err(e) = unsafe { hooks_zthabitatmgr::init_detours() } {
-        info!("Error initialising zthabitatmgr detours: {}", e);
+        error!("Error initialising zthabitatmgr detours: {}", e);
     }
 }

@@ -35,16 +35,15 @@ use openzt_detour::generated::{
     uielement::{DISABLE, ENABLE},
     zoostatus::{F_CHANCE, F_CREATE_GUEST, FINANCE_CHECKS},
     ztapp::GET_APP,
-    zthabitat::GET_NUM_ANIMALS,
-    zthabitatmgr::GET_NUM_SPECIES,
 };
 use openzt_configparser::ini::Ini;
 use tracing::error;
 
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, get_ini_path, save_to_memory},
+    util::{get_from_memory, get_ini_path, ref_from_memory, save_to_memory},
     vanilla_string::VanillaString,
+    zthabitatmgr::ZTHabitat,
     vanilla_vector::VanillaFloatVector,
     ztworldmgr::IVec3,
 };
@@ -359,6 +358,7 @@ pub struct ZooStatus {
     /// Saved/loaded.
     pub(crate) last_animal_escape_timestamp_low: u32, // 0x1178
     pub(crate) last_animal_escape_timestamp_high: u32, // 0x117c
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(mem::size_of::<ZooStatus>() == 0x1180);
@@ -396,16 +396,17 @@ pub(crate) fn donation_outcome(count_after_increment: f32, bound: i32) -> Donati
     }
 }
 
-/// Loads a game string by id through real vanilla `ZTApp::getApp`/`BFApp::loadString`, matching
+/// Loads a game string by id through `ZTApp::getApp`/`BFApp::loadString`, matching
 /// `ZooStatus_fGrantDonation.asm`'s own call shape exactly (`loadString` takes no length argument - it
 /// writes into a fixed-size caller buffer, so this uses the same `512`-byte size vanilla's own stack
 /// buffer (`local_600`) does; no more/less safe than vanilla's own call here). The buffer is
 /// Rust-owned/stack-allocated, so there's no cross-allocator concern - vanilla only ever writes bytes
-/// into memory we supplied, never allocates/frees anything of its own here.
+/// into memory we supplied, never allocates/frees anything of its own here. `loadString` goes through
+/// `.hooked()` so it's string-registry-aware, the same as vanilla's own `fGrantDonation` call.
 fn load_localized_string(id: u32) -> String {
     let app_ptr = unsafe { GET_APP.original()() };
     let mut buffer = [0u8; 512];
-    unsafe { LOAD_STRING.original()(app_ptr, id as *const u32, buffer.as_mut_ptr()) };
+    unsafe { LOAD_STRING.hooked()(app_ptr, id as *const u32, buffer.as_mut_ptr()) };
     unsafe { CStr::from_ptr(buffer.as_ptr() as *const i8) }.to_string_lossy().into_owned()
 }
 
@@ -430,7 +431,7 @@ fn display_message_string(message: *const u32, priority: i32) {
 pub(crate) fn f_zoo_message(message_id: *const u32, param_2: u32, tile: u32, entity: i32) {
     let bfuimgr_ptr = get_module_base("zoo.exe") as u32 + raw_globals::GLOBAL_BFUIMGR_RVA;
     unsafe {
-        DISPLAY_MESSAGE_0.original()(
+        DISPLAY_MESSAGE_0.hooked()(
             bfuimgr_ptr as *const u32,
             message_id as u32,
             param_2 as i32,
@@ -546,7 +547,7 @@ pub(crate) fn describe_calculate_sums_fixture() -> String {
     let total_tiles = world.map_x_size * world.map_y_size;
     let non_blank_tiles = total_tiles.saturating_sub(blank_tiles);
 
-    let num_species: i32 = unsafe { GET_NUM_SPECIES.original()(globals().zthabitatmgr_ptr() as *const u32) };
+    let num_species: i32 = globals().zthabitatmgr().get_num_species();
 
     let (mut research_total, mut research_complete) = (0i32, 0i32);
     for branch in globals().ztresearchmgr().branches() {
@@ -1456,7 +1457,7 @@ impl ZooStatus {
         let mut occupied_habitats = 0i32;
         for i in 0..habitat_mgr.exhibit_array().len() {
             let habitat_ptr = habitat_mgr.exhibit_array().get_ptr(i);
-            if unsafe { GET_NUM_ANIMALS.original()(habitat_ptr as *const u32, false) } != 0 {
+            if unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_num_animals(false) != 0 {
                 occupied_habitats += 1;
             }
         }
@@ -1789,7 +1790,13 @@ impl ZooStatus {
 
                 let ztgamemgr_ptr = globals().ztgamemgr_ptr();
                 let global_zoostatus_ptr = (ztgamemgr_ptr as u32 + 0x10) as *mut ZooStatus;
-                unsafe { (*global_zoostatus_ptr).increase_donations(amount_f) };
+                // `self` is normally the global's own `ZooStatus`; reuse it rather than creating a second
+                // `&mut` to the same object.
+                if std::ptr::eq(global_zoostatus_ptr, self) {
+                    self.increase_donations(amount_f);
+                } else {
+                    unsafe { (*global_zoostatus_ptr).increase_donations(amount_f) };
+                }
                 unsafe { (*ztgamemgr_ptr).add_cash(amount_f) };
 
                 let template = load_localized_string(0x3a9a);
@@ -2112,7 +2119,7 @@ impl ZooStatus {
             self.non_blank_tile_fraction /= non_blank as f32;
         }
 
-        self.num_species = unsafe { GET_NUM_SPECIES.original()(globals().zthabitatmgr_ptr() as *const u32) } as u16;
+        self.num_species = globals().zthabitatmgr().get_num_species() as u16;
         save_to_memory(base_ptr + 0x420 + month_offset, self.field_0x4c as f32);
         save_to_memory(base_ptr + 0xbd4 + year_offset, self.field_0x4c as f32);
         save_to_memory(base_ptr + 0x1110, self.field_0x4c as f32);

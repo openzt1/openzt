@@ -13,7 +13,7 @@ use openzt_detour::{
 use std::{
     collections::HashMap,
     mem,
-    sync::{LazyLock, Mutex},
+    sync::{LazyLock, Mutex, MutexGuard, PoisonError},
 };
 
 use crate::{
@@ -97,6 +97,12 @@ pub struct SpeciesRatingCacheEntry {
 /// machinery (see the handover doc's Follow-ups 2/4) collapses to a plain `HashMap` per entry.
 pub static SPECIES_RATING_CACHE: LazyLock<Mutex<Vec<SpeciesRatingCacheEntry>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
+/// Locks [`SPECIES_RATING_CACHE`], recovering the data from a poisoned lock rather than panicking
+/// inside a detour. Callers must not hold the guard across a call into vanilla code.
+pub fn lock_species_rating_cache() -> MutexGuard<'static, Vec<SpeciesRatingCacheEntry>> {
+    SPECIES_RATING_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 
 /// Base of vanilla's shared small-object freelist bucket array, bucketed by `(byte_capacity - 1) >> 3` -
 /// the same `DAT_00638000` family `ambients.rs`'s `RVA_GROUP_ARRAY_FREELIST_BUCKETS` already documents
@@ -108,7 +114,7 @@ pub const RVA_EVENT_VECTOR_FREELIST_BUCKETS: u32 = 0x0023_8000;
 
 /// One node of the generic small-object circular doubly-linked list container `ZTHabitat::owned_tiles_ptr`
 /// (`+0x40`) points to as a sentinel - the same node/sentinel shape `BFTile`'s own `+0x0` occupant list
-/// uses (see `ZTHabitat::reset_unit_ai`'s doc comment, not yet ported). Confirmed directly against
+/// uses (see `ZTHabitat::reset_unit_ai`). Confirmed directly against
 /// `.asm`, not just decompiled pseudocode: the node allocator `BFTile::cls_0x40143b` (`0x0040143b`)
 /// only ever self-references offsets `0x0`/`0x4` when carving a fresh, empty sentinel node - identically
 /// on its freelist-reuse fast path (`0x401454`-`0x401469`) and its bump-allocate-a-fresh-chunk cold path
@@ -348,7 +354,7 @@ pub const RVA_ZTFOOD_TYPE_CHECK_ARG: u32 = 0x0023_86c0;
 
 /// `DAT_00639148`'s RVA - a shared "gate placement/conversion in progress" flag, set to `1` for the
 /// duration of `ZTHabitatMgr::replaceGateWithFence`/`replaceFenceWithGate` and read as an early-return
-/// guard by `ZTHabitatMgr::fencePlaced`/`fenceRemoved` (both still real/un-ported) to suppress their own
+/// guard by `ZTHabitatMgr::fencePlaced`/`fenceRemoved` (`ZTHabitatMgr::fence_placed`/`fence_removed`) to suppress their own
 /// reaction while a gate conversion is already underway. RVA = `0x00639148 - 0x400000`.
 pub const GATE_CONVERSION_IN_PROGRESS_RVA: u32 = 0x0023_9148;
 
@@ -589,22 +595,12 @@ pub fn get_neighbour_ptr(world: &ZTWorldMgr, tile_ptr: u32, direction: Direction
     }
 }
 
-/// `BFMap::getNeighbor` (`BFMap_getNeighbor_0.c`) called with a raw, unvalidated direction rather than a
-/// [`Direction`] enum value. Real vanilla's own fallback for anything outside `0..=7` (its `(param_2 & 7)
-/// == param_2` guard) is a `(0, 0)` offset - i.e. `tile_ptr` itself, **not** null and **not** a
-/// wrapped/defaulted direction. [`ZTHabitatMgr::fence_placed`] needs this exact fallback (its own
-/// direction argument can be the `0xffffffff` "no direction" sentinel) rather than reusing
-/// [`get_neighbour_ptr`]'s [`Direction::from`]-based North fallback, which would silently substitute a
-/// real shifted neighbour tile instead of reproducing this "no movement" behaviour.
+/// `BFMap::getNeighbor` called with a raw, unvalidated direction rather than a [`Direction`] enum value -
+/// see [`ZTWorldMgr::get_neighbour_ptr_raw`]. A direction outside `0..=7` returns `tile_ptr` itself,
+/// which [`ZTHabitatMgr::fence_placed`] relies on (its direction argument can be the `0xffffffff` "no
+/// direction" sentinel); [`get_neighbour_ptr`]'s [`Direction::from`] would step North instead.
 pub fn get_neighbour_raw(world: &ZTWorldMgr, tile_ptr: u32, direction: u32) -> u32 {
-    if direction > 7 {
-        return tile_ptr;
-    }
-    let tile = get_from_memory::<BFTile>(tile_ptr);
-    match world.get_neighbour(&tile, Direction::from(direction)) {
-        Some(neighbour) => world.get_ptr_from_bftile(&neighbour),
-        None => 0,
-    }
+    world.get_neighbour_ptr_raw(tile_ptr, direction)
 }
 
 /// Rotates a cardinal `BFTile` direction (`0`/`2`/`4`/`6` - `North`/`East`/`South`/`West`) by `steps`

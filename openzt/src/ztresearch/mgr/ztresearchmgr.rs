@@ -13,6 +13,7 @@ pub struct ZTResearchMgr {
     pub(crate) pad0: [u8; 0x8],                          // 0x00 - vtable? see `always_check_expansion` below for the flag byte both `ZTResearchBranch::update`/`pickRandomProgram` read via pointer arithmetic that lands just past this struct's own confirmed 0x18 bytes, not a real field of it
     pub(crate) elapsed_ticks: u32,                       // 0x08 - accumulates `ZTResearchMgr::update`'s delta; once ~359 in-game days have accrued, every branch is updated and this resets to 0
     pub(crate) branch_array: ZTArray<ZTResearchBranch>,  // 0x0c
+    pub _live: crate::util::LiveMemory,
 }
 
 /// Pure prediction for `ZTResearchMgr::update`'s accumulator/day-count bookkeeping, per

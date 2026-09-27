@@ -1,6 +1,5 @@
 use openzt_detour::generated::{
     standalone::OPERATOR_NEW,
-    ztgamemgr::GET_DATE,
     ztshowinfo::{ADD_SHOW, IS_STARTED, REMOVE_SHOW},
 };
 use windows::Win32::Foundation::FILETIME;
@@ -196,7 +195,9 @@ pub fn add_script(show_info: u32, unit_type_id: u32, new_script_id: u16) -> bool
     let (node, was_inserted) = find_or_insert_pending_script_node(show_info, unit_type_id);
     if was_inserted {
         let mut date = FILETIME::default();
-        unsafe { GET_DATE.original()(globals().ztgamemgr_ptr() as *const u32, &mut date as *const FILETIME) };
+        let ticks = globals().ztgamemgr().get_date();
+        date.dwLowDateTime = ticks as u32;
+        date.dwHighDateTime = (ticks >> 32) as u32;
         let date_ticks = ((date.dwHighDateTime as u64) << 32) | date.dwLowDateTime as u64;
         save_to_memory(node + 0x40, date_ticks as i64);
     }

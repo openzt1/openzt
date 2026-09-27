@@ -78,6 +78,9 @@ pub struct BFEntityType {
     pub placement_footprintz: i32,    // 0x0C8
     pub available_at_startup: bool,   // 0x0CC
     pad11: [u8; 0x100 - 0x0CD],       // ----------------------- padding: 51 bytes
+    #[getset(skip)]
+    #[skip_field]
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<BFEntityType>() == 0x100);

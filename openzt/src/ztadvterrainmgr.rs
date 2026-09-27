@@ -50,7 +50,7 @@ const QUEUE_SENTINEL_PTR_OFFSET: u32 = 0x1d8;
 /// MOV DAT_00638008,EAX`). RVA = `0x00638008 - 0x400000`.
 const RVA_BFPOS_NODE_FREELIST_HEAD: u32 = 0x0023_8008;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct ZTAdvTerrainMgr_raw {
     vtable: u32,
@@ -81,6 +81,7 @@ pub struct ZTAdvTerrainMgr_raw {
     // Total size is 0x1dc. Only the front ~0x1c bytes plus one far-away field (update()'s queue sentinel
     // pointer at +0x1d8, accessed via raw offset arithmetic - see QUEUE_SENTINEL_PTR_OFFSET - not
     // modeled as a struct field) are load-bearing here.
+    pub _live: crate::util::LiveMemory,
 }
 
 /// One node of the vanilla `std::list<BFPos>` `update()` drains - `{next, prev, x, y}`, confirmed from
@@ -103,8 +104,8 @@ struct ZTAdvTerrainMgr {
     bf_terrain_type_info_array: Vec<BFTerrainTypeInfo>,
 }
 
-impl From<ZTAdvTerrainMgr_raw> for ZTAdvTerrainMgr {
-    fn from(raw: ZTAdvTerrainMgr_raw) -> Self {
+impl From<&ZTAdvTerrainMgr_raw> for ZTAdvTerrainMgr {
+    fn from(raw: &ZTAdvTerrainMgr_raw) -> Self {
         info!(
             "Reading terrain types from {:#x} to {:#x}",
             raw.bf_terrain_type_info_array_start, raw.bf_terrain_type_info_array_end
@@ -294,7 +295,7 @@ struct BFTerrainTypeInfo {
 
 
 fn read_ztadvterrainmgr_from_memory() -> ZTAdvTerrainMgr {
-    ZTAdvTerrainMgr::from(*globals().ztadvterrainmgr())
+    ZTAdvTerrainMgr::from(globals().ztadvterrainmgr())
 }
 
 fn read_bfterraintypeinfo_from_memory(address: u32) -> BFTerrainTypeInfo {

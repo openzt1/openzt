@@ -67,6 +67,7 @@ pub struct ZTShowScriptState {
     flag_d: u8,       // 0x11 - read by real ZTShow::run()
     trick_done: u8,   // 0x12 - set by do_current_item after a completed trick call
     flag_f: u8,       // 0x13 - read by real ZTShow::run(); not touched by setNextItem
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(mem::size_of::<ZTShowScriptState>() == 0x14);

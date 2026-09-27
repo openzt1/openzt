@@ -56,7 +56,7 @@ pub fn build_standalone_mgr(max_thoughts: u32) -> *mut ZTThoughtMgr {
         (*sentinel).next = sentinel;
         (*sentinel).prev = sentinel;
     }
-    Box::into_raw(Box::new(ZTThoughtMgr { vtable: 0, flag: 0, _pad: [0; 3], sentinel_ptr: sentinel as u32, max_thoughts }))
+    Box::into_raw(Box::new(ZTThoughtMgr { vtable: 0, flag: 0, _pad: [0; 3], sentinel_ptr: sentinel as u32, max_thoughts, _live: Default::default() }))
 }
 
 /// Splices `thought` in as a new `Box`-owned node at the front of `mgr`'s *raw* `sentinel_ptr`

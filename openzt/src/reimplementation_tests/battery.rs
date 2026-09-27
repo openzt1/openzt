@@ -353,12 +353,6 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_SET_TIME_LAST_SERVICED_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_set_time_last_serviced_roundtrip_live_test,
             },
-            // ZTHABITAT_CREATE_EDGE_PAIRS_MATCHES_REAL_LIVE calls `ZTHabitat::create_edge_pairs` directly
-            // (not through its own address) - correctness is verified here even though, per
-            // `hooks_zthabitatmgr::create_edge_pairs`'s own doc comment, its `#[detour]` is deliberately
-            // NOT installed: hooking it hung `run_load_live_zoo` dead (real, un-ported `ZTHabitat::resize`
-            // calls through to this address during real vanilla's own habitat reconstruction), bisected
-            // directly against the other 8 stage-6h detours, all of which are enabled.
             RegisteredTest {
                 name: "ZTHABITAT_CREATE_EDGE_PAIRS_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_create_edge_pairs_matches_real_live_test,

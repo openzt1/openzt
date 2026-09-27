@@ -469,6 +469,7 @@ pub(crate) mod live_support {
             effect_param_1: NO_MATCHING_ENTITY,
             effect_param_2: 0,
             help_id: 0,
+            _live: Default::default(),
         });
         Box::into_raw(program)
     }
@@ -499,6 +500,7 @@ pub(crate) mod live_support {
             effect_param_1: NO_MATCHING_ENTITY,
             effect_param_2: 0,
             help_id: 0,
+            _live: Default::default(),
         }))
     }
 
@@ -526,6 +528,7 @@ pub(crate) mod live_support {
             funding_table_start,
             funding_table_end,
             funding_table_capacity,
+            _live: Default::default(),
         }))
     }
 
@@ -554,6 +557,7 @@ pub(crate) mod live_support {
             enabled: spec.enabled,
             pad2: [0; 3],
             program_array: ptr_array_from_vec(programs),
+            _live: Default::default(),
         });
         Box::into_raw(category)
     }
@@ -590,6 +594,7 @@ pub(crate) mod live_support {
             funding_table_start,
             funding_table_end,
             funding_table_capacity,
+            _live: Default::default(),
         });
         Box::into_raw(branch)
     }
@@ -627,7 +632,7 @@ pub(crate) mod live_support {
     }
 
     pub(crate) fn with_standalone_mgr<R>(specs: &[GeneratedBranch], f: impl FnOnce(&mut ZTResearchMgr) -> R) -> R {
-        let mut mgr = Box::new(ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 0, branch_array: ZTArray::from_raw_parts(0, 0, 0) });
+        let mut mgr = Box::new(ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 0, branch_array: ZTArray::from_raw_parts(0, 0, 0), _live: Default::default() });
         with_synthetic_branches(&mut mgr, specs, f)
     }
 
@@ -660,6 +665,7 @@ pub(crate) mod live_support {
             enabled: 1,
             pad2: [0; 3],
             program_array: ptr_array_from_vec(vec![program_ptr as u32]),
+            _live: Default::default(),
         }));
 
         let funding_table = vec![ZTResearchFundingLevel { name_id: 0, rate: funding_rate, cost: funding_cost }];
@@ -679,6 +685,7 @@ pub(crate) mod live_support {
             funding_table_start,
             funding_table_end,
             funding_table_capacity,
+            _live: Default::default(),
         }))
     }
 
@@ -701,7 +708,7 @@ pub(crate) mod live_support {
         f: impl FnOnce(&mut ZTResearchMgr) -> R,
     ) -> R {
         let mut wrapper = Box::new(MgrWithZeroedExpansionFlag {
-            mgr: ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 0, branch_array: ZTArray::from_raw_parts(0, 0, 0) },
+            mgr: ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 0, branch_array: ZTArray::from_raw_parts(0, 0, 0), _live: Default::default() },
             always_check_expansion_flag: 0,
             _pad: [0; 3],
         });
@@ -731,7 +738,7 @@ pub(crate) mod live_support {
 
     pub(crate) fn with_update_test_branches<R>(specs: &[UpdateTestBranchSpec], f: impl FnOnce(&mut ZTResearchMgr) -> R) -> R {
         let mut wrapper = Box::new(MgrWithZeroedExpansionFlag {
-            mgr: ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 0, branch_array: ZTArray::from_raw_parts(0, 0, 0) },
+            mgr: ZTResearchMgr { pad0: [0; 8], elapsed_ticks: 0, branch_array: ZTArray::from_raw_parts(0, 0, 0), _live: Default::default() },
             always_check_expansion_flag: 0,
             _pad: [0; 3],
         });

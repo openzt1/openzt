@@ -195,6 +195,7 @@ pub struct ZTMarketingMgr {
     _pad: [u8; 3],         // 0x05
     tick_accumulator: u32, // 0x08 - accumulates ticks in ZTMarketingMgr::update, converted to an in-game day count once enough have accrued
     marketing_ptr: u32,    // 0x0c - pointer to the single owned ZTMarketing, null until loadConfigurations succeeds
+    pub _live: crate::util::LiveMemory,
 }
 
 /// Pure prediction for `ZTMarketingMgr::update`'s accumulator/day-count bookkeeping. Same shape as
@@ -959,7 +960,7 @@ pub(crate) mod live_support {
     /// Builds a standalone `ZTMarketingMgr` - **not** the real live singleton - wired to own
     /// `marketing_ptr` (or none, if null).
     pub(crate) fn build_standalone_marketing_mgr(tick_accumulator: u32, marketing_ptr: *mut ZTMarketing) -> *mut ZTMarketingMgr {
-        Box::into_raw(Box::new(ZTMarketingMgr { vtable: 0, flag: 0, _pad: [0; 3], tick_accumulator, marketing_ptr: marketing_ptr as u32 }))
+        Box::into_raw(Box::new(ZTMarketingMgr { vtable: 0, flag: 0, _pad: [0; 3], tick_accumulator, marketing_ptr: marketing_ptr as u32, _live: Default::default() }))
     }
 
     pub(crate) fn destroy_standalone_marketing_mgr(ptr: *mut ZTMarketingMgr) {

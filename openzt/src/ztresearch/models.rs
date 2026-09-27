@@ -97,6 +97,7 @@ pub struct ZTResearchProgram {
     pub(crate) effect_param_1: i32,         // 0x4c - confirmed: the `.cfg` `effectval2` field
     pub(crate) effect_param_2: i32,         // 0x50 - confirmed: the `.cfg` `effectval3` field
     pub(crate) help_id: i32,                // 0x54 - confirmed: the `.cfg` `helpid` field (only set if present; 0 by default from the constructor)
+    pub _live: crate::util::LiveMemory,
 }
 
 /// Abstraction over the underlying manager calls `ZTResearchProgram::on_completion`/`reset` dispatch
@@ -498,6 +499,7 @@ mod effect_dispatch_tests {
             effect_param_1: 2,
             effect_param_2: 3,
             help_id: 0,
+            _live: Default::default(),
         }
     }
 
@@ -668,6 +670,7 @@ pub struct ZTResearchCategory {
     pub(crate) enabled: u8,                 // 0x34 - unlocked/available flag; gates `ZTResearchBranch::pick_random_program` and is persisted by `ZTResearchMgr::save`; not set by `loadCategory` itself
     pub(crate) pad2: [u8; 0x38 - 0x35],     // 0x35 - alignment padding
     pub(crate) program_array: ZTArray<ZTResearchProgram>, // 0x38
+    pub _live: crate::util::LiveMemory,
 }
 
 impl ZTResearchCategory {
@@ -815,6 +818,7 @@ pub struct ZTResearchBranch {
     pub(crate) funding_table_start: u32,                    // 0x48 - confirmed by `loadBranch`: inline `ZTResearchFundingLevel` table (stride 0xc, populated from the `.cfg` `funding=` list), *not* a `ZTArray` of pointers
     pub(crate) funding_table_end: u32,                      // 0x4c - confirmed by `loadBranch`
     pub(crate) funding_table_capacity: u32,                  // 0x50 - confirmed by `loadBranch` (checked to decide whether the table needs to grow); unused by us
+    pub _live: crate::util::LiveMemory,
 }
 
 impl ZTResearchBranch {
@@ -1150,6 +1154,7 @@ mod pct_days_remaining_tests {
             effect_param_1: -1,
             effect_param_2: 0,
             help_id: 0,
+            _live: Default::default(),
         }))
     }
 
@@ -1196,6 +1201,7 @@ mod pct_days_remaining_tests {
             funding_table_start,
             funding_table_end,
             funding_table_capacity,
+            _live: Default::default(),
         }
     }
 

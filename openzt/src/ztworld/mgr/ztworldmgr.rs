@@ -23,6 +23,7 @@ pub struct ZTWorldMgr {
     pub(crate) entity_type_array_start: u32,
     pub(crate) entity_type_array_end: u32,
     entity_type_array_buffer_end: u32,
+    pub _live: crate::util::LiveMemory,
 }
 
 impl ZTWorldMgr {
@@ -62,6 +63,25 @@ impl fmt::Display for ZTWorldMgr {
 }
 
 const TILE_SIZE: i32 = 0x40;
+
+/// `BFTile::pos`'s `x`/`y` offsets.
+const BFTILE_POS_X_OFFSET: u32 = 0x34;
+const BFTILE_POS_Y_OFFSET: u32 = 0x38;
+
+/// `BFMap::getNeighbor`'s `(dx, dy)` direction table; anything outside `0..=7` is `(0, 0)`.
+fn neighbour_offset(direction: u32) -> (i32, i32) {
+    match direction {
+        0 => (0, -1),
+        1 => (1, -1),
+        2 => (1, 0),
+        3 => (1, 1),
+        4 => (0, 1),
+        5 => (-1, 1),
+        6 => (-1, 0),
+        7 => (-1, -1),
+        _ => (0, 0),
+    }
+}
 const ELEVATION_SCALE: i32 = 0x10; // 16 units per elevation level
 
 impl ZTWorldMgr {
@@ -113,6 +133,24 @@ impl ZTWorldMgr {
         }
 
         Some(get_from_memory::<BFTile>(self.tile_array + (((y as u32 * self.map_x_size) + x as u32) * 0x8c_u32)))
+    }
+
+    /// Ports `BFMap::getNeighbor` (`BFMap_getNeighbor_0.c`/`_1.c`) by pointer: returns the address of the
+    /// tile one step from `tile_ptr` in `direction`, or `0` for a null `tile_ptr` or a step off the map.
+    /// A `direction` outside `0..=7` uses a `(0, 0)` offset, so it returns `tile_ptr` itself - unlike
+    /// [`Direction::from`], which maps those values to `North`. Reads only the tile's position, with no
+    /// `BFTile` copy.
+    pub fn get_neighbour_ptr_raw(&self, tile_ptr: u32, direction: u32) -> u32 {
+        if tile_ptr == 0 {
+            return 0;
+        }
+        let (dx, dy) = neighbour_offset(direction);
+        let x = get_from_memory::<i32>(tile_ptr + BFTILE_POS_X_OFFSET).wrapping_add(dx);
+        let y = get_from_memory::<i32>(tile_ptr + BFTILE_POS_Y_OFFSET).wrapping_add(dy);
+        if x < 0 || y < 0 || x >= self.map_x_size as i32 || y >= self.map_y_size as i32 {
+            return 0;
+        }
+        self.get_tile_ptr(x as u32, y as u32)
     }
 
     pub fn get_ptr_from_bftile(&self, bftile: &BFTile) -> u32 {
@@ -190,5 +228,56 @@ impl ZTWorldMgr {
             std::mem::transmute::<u32, extern "thiscall" fn(this: *const ZTWorldMgr, id: u32, flag: u8) -> *mut BFEntity>(function_address)
         };
         resolve_fn(self, id, 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TILE_STRIDE: usize = 0x8c;
+
+    /// A zeroed `ZTWorldMgr` over a `width` x `height` tile buffer whose tiles carry their own positions.
+    fn fixture(width: u32, height: u32) -> (ZTWorldMgr, Vec<u32>) {
+        let mut tiles = vec![0u32; (width * height) as usize * TILE_STRIDE / 4];
+        for y in 0..height {
+            for x in 0..width {
+                let base = (y * width + x) as usize * TILE_STRIDE / 4;
+                tiles[base + BFTILE_POS_X_OFFSET as usize / 4] = x;
+                tiles[base + BFTILE_POS_Y_OFFSET as usize / 4] = y;
+            }
+        }
+        let mut world: ZTWorldMgr = unsafe { std::mem::zeroed() };
+        world.map_x_size = width;
+        world.map_y_size = height;
+        world.tile_array = tiles.as_ptr() as u32;
+        (world, tiles)
+    }
+
+    #[test]
+    fn get_neighbour_ptr_raw_steps_in_each_direction() {
+        let (world, _tiles) = fixture(3, 3);
+        let centre = world.get_tile_ptr(1, 1);
+        let expected = [(1, 0), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (0, 1), (0, 0)];
+        for (direction, (x, y)) in expected.into_iter().enumerate() {
+            assert_eq!(world.get_neighbour_ptr_raw(centre, direction as u32), world.get_tile_ptr(x, y), "direction {direction}");
+        }
+    }
+
+    #[test]
+    fn get_neighbour_ptr_raw_out_of_range_direction_returns_input_tile() {
+        let (world, _tiles) = fixture(3, 3);
+        let corner = world.get_tile_ptr(0, 0);
+        for direction in [8, 9, 0xff, 0xffff_ffff] {
+            assert_eq!(world.get_neighbour_ptr_raw(corner, direction), corner, "direction {direction:#x}");
+        }
+    }
+
+    #[test]
+    fn get_neighbour_ptr_raw_off_map_or_null_returns_zero() {
+        let (world, _tiles) = fixture(3, 3);
+        assert_eq!(world.get_neighbour_ptr_raw(world.get_tile_ptr(0, 0), 0), 0);
+        assert_eq!(world.get_neighbour_ptr_raw(world.get_tile_ptr(2, 2), 3), 0);
+        assert_eq!(world.get_neighbour_ptr_raw(0, 0), 0);
     }
 }

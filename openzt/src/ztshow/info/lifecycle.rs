@@ -2,7 +2,6 @@ use openzt_detour::generated::{
     bfevent::{CONSTRUCTOR as BFEVENT_CONSTRUCTOR, LOAD as BFEVENT_LOAD, SAVE as BFEVENT_SAVE},
     poolalloc::ALLOCATE as ALLOCATE_UNIT_ARRAY,
     standalone::{DEALLOCATE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
-    ztgamemgr::GET_DATE,
     ztshow::{ABORT_SHOW, LOAD as ZTSHOW_LOAD, SAVE as ZTSHOW_SAVE},
     ztshowinfo::CALCULATE_ALL_FROM_TYPES as SET_DEFAULT_SATISFACTION_FIELDS,
     ztworldmgr::GET_GRANDSTANDS_UPKEEP,
@@ -412,7 +411,9 @@ pub fn show_info_load(this: u32, file: *const u32, version: u32) -> bool {
 
         let record = if version < 99 {
             let mut date = FILETIME::default();
-            unsafe { GET_DATE.original()(globals().ztgamemgr_ptr() as *const u32, &mut date as *const FILETIME) };
+            let ticks = globals().ztgamemgr().get_date();
+            date.dwLowDateTime = ticks as u32;
+            date.dwHighDateTime = (ticks >> 32) as u32;
             PendingScriptRecord::defaulted(current, date.dwLowDateTime, date.dwHighDateTime)
         } else {
             let mut pending: u16 = 0;
