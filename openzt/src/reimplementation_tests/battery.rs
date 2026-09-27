@@ -433,6 +433,10 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITATMGR_CHECK_ENTER_HABITAT_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_zthabitatmgr_check_enter_habitat_matches_real_live_test,
             },
+            RegisteredTest {
+                name: "ZTHABITATMGR_CHECK_EXHIBIT_MORPH_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_check_exhibit_morph_live_test,
+            },
             // Step 6o: guest/animal-experience and donation/upkeep leaf getters (see
             // zthabitatmgr-implementation-plan.md).
             RegisteredTest { name: "ZTHABITAT_GET_NUM_KEEPERS_LIVE", run: tests::zthabitatmgr::run_habitat_get_num_keepers_live_test },
@@ -706,11 +710,11 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITATMGR_UPDATE_GATES_SMOKE_LIVE",
                 run: tests::zthabitatmgr::run_update_gates_smoke_live_test,
             },
-            // ZTHABITATMGR_FENCE_REPLACED is deliberately NOT exercised by a live test - it calls through
-            // unconditionally to still-un-ported real vanilla `checkExhibitMorph`/`morphExhibit`, whose own
-            // happy path can destroy and recreate a real habitat in place (see `ZTHabitatMgr::fence_replaced`'s
-            // own doc comment and this file's own `morphExhibit` deferral notes) - same "no known safe way
-            // to exercise this live" reasoning as `ZTHabitatMgr::clear_staff_habitat`. Detoured (byte-for-byte
+            // ZTHABITATMGR_FENCE_REPLACED is deliberately NOT exercised by a live test - it calls
+            // `check_exhibit_morph` unconditionally, whose own `morph_exhibit` happy path can destroy and
+            // recreate a tank-mismatched real habitat in place (see `ZTHabitatMgr::fence_replaced`'s own doc
+            // comment and this file's own `morphExhibit` deferral notes) - same "no known safe way to
+            // exercise this live" reasoning as `ZTHabitatMgr::clear_staff_habitat`. Detoured (byte-for-byte
             // reproducing real vanilla's own call graph adds no new risk over baseline) and covered by
             // `DETOURS_ENABLED`.
             // Destructive/irreversible - must stay last among the ZTHABITAT_*/ZTHABITATMGR_* entries

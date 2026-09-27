@@ -27,7 +27,7 @@ use crate::ztshowinfo::needs_keeper;
 use crate::zthabitatmgr::{
     animal_food_target, call_bfunit_tile_cost_vtable_slot, call_vtable_slot_noargs_ret_bool, entity_name_bytes, free_event_vector_buffer,
     hooks_zthabitatmgr, map_int_habitatsuitability_find_or_insert, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr, ZTTankExhibit,
-    MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
+    MAX_PATH_COST_RVA, MORPH_EXHIBIT_CALL_LOG, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
 };
 use crate::zthabitatmgr::tank_exhibit::detours;
 
@@ -7465,6 +7465,188 @@ pub(crate) fn run_zthabitatmgr_check_enter_habitat_matches_real_live_test(failur
 
     if failures.is_empty() {
         write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+fn morph_exhibit_log_snapshot() -> Vec<(u32, u32, u32)> {
+    MORPH_EXHIBIT_CALL_LOG.lock().map(|log| log.clone()).unwrap_or_default()
+}
+
+fn clear_morph_exhibit_log() {
+    if let Ok(mut log) = MORPH_EXHIBIT_CALL_LOG.lock() {
+        log.clear();
+    }
+}
+
+/// `ZTHABITATMGR_CHECK_EXHIBIT_MORPH_MATCHES_REAL_LIVE` - compares the ported
+/// `ZTHabitatMgr::check_exhibit_morph` boundary orchestrator against real vanilla over real in-map
+/// east/south tile pairs from the loaded zoo. Each pole runs against the same independently computed
+/// expectation (owners differ -> `[(a, tile, nbr)]`/`[(b, nbr, tile)]` for each side that is non-null
+/// and not the "world" habitat, in vanilla's own argument order; owners equal -> empty), so a port and
+/// real vanilla that both diverge the same way can't cancel out.
+///
+/// The morph calls themselves are observed through [`MORPH_EXHIBIT_CALL_LOG`], which the ported
+/// `morph_exhibit` fills for both poles (real vanilla's own `morphExhibit` calls hit the `MORPH_EXHIBIT`
+/// detour and forward into that same method). Probes are pre-screened so neither pole can execute a
+/// real morph: `morph_exhibit` early-returns unless a habitat's `do_tank_check()` disagrees with its
+/// `is_tank()`, so every probe's non-"world" owner is required to be tank-consistent first - a real
+/// morph would destroy/recreate the habitat in place (same reasoning as the ZTHABITATMGR_FENCE_REPLACED
+/// deferral note in battery.rs). Pairs with a null owner on either side are excluded too - real vanilla
+/// dereferences a differing non-null owner's `+0x2c` flag unconditionally - that case is covered
+/// synthetically by the host-safe unit tests instead.
+pub(crate) fn run_check_exhibit_morph_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_CHECK_EXHIBIT_MORPH_MATCHES_REAL_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+    let habitat_mgr = globals().zthabitatmgr();
+    let world = globals().ztworldmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    struct Probe {
+        x: u32,
+        y: u32,
+        direction: u32,
+        tile_ptr: u32,
+        neighbour_ptr: u32,
+    }
+
+    // In-map east (2) / south (4) pairs only: an out-of-map neighbour resolves to null, and real
+    // vanilla's own latent null-deref on such inputs must never be driven through the real pole.
+    let mut both_real: Vec<Probe> = Vec::new();
+    let mut one_world: Vec<Probe> = Vec::new();
+    let mut same_owner: Vec<Probe> = Vec::new();
+    let mut skipped_null_owner = 0usize;
+    let mut skipped_morph_risk = 0usize;
+    'scan: for x in 0..world.map_x_size {
+        for y in 0..world.map_y_size {
+            'dirs: for direction in [2u32, 4] {
+                match direction {
+                    2 if x + 1 >= world.map_x_size => continue,
+                    4 if y + 1 >= world.map_y_size => continue,
+                    _ => {}
+                }
+                if both_real.len() >= 8 && one_world.len() >= 8 && same_owner.len() >= 8 {
+                    break 'scan;
+                }
+                let tile_ptr = world.get_tile_ptr(x, y);
+                let neighbour_ptr = world.get_neighbour_ptr_raw(tile_ptr, direction);
+                if tile_ptr == 0 || neighbour_ptr == 0 {
+                    continue;
+                }
+                let tile = get_from_memory::<BFTile>(tile_ptr);
+                let neighbour = get_from_memory::<BFTile>(neighbour_ptr);
+                let owner_a = habitat_mgr.get_habitat_ptr(tile.pos.x, tile.pos.y);
+                let owner_b = habitat_mgr.get_habitat_ptr(neighbour.pos.x, neighbour.pos.y);
+                let probe = Probe { x, y, direction, tile_ptr, neighbour_ptr };
+                if owner_a == owner_b {
+                    if owner_a != 0 && same_owner.len() < 8 {
+                        same_owner.push(probe);
+                    }
+                    continue;
+                }
+                if owner_a == 0 || owner_b == 0 {
+                    skipped_null_owner += 1;
+                    continue;
+                }
+                let a_is_world = unsafe { ref_from_memory::<ZTHabitat>(owner_a) }.unknown_flag_0x2c != 0;
+                let b_is_world = unsafe { ref_from_memory::<ZTHabitat>(owner_b) }.unknown_flag_0x2c != 0;
+                let bucket = if a_is_world != b_is_world { &mut one_world } else { &mut both_real };
+                if bucket.len() >= 8 {
+                    continue;
+                }
+                // `morph_exhibit` destroys/recreates a habitat only when its tank-consistency check
+                // disagrees with what it is; require agreement on every side that would actually
+                // receive a morph call so neither pole can mutate the live zoo.
+                for owner in [owner_a, owner_b] {
+                    let habitat = unsafe { ref_from_memory::<ZTHabitat>(owner) };
+                    if habitat.unknown_flag_0x2c == 0 && habitat.do_tank_check() != habitat.is_tank() {
+                        skipped_morph_risk += 1;
+                        continue 'dirs;
+                    }
+                }
+                bucket.push(probe);
+            }
+        }
+    }
+
+    let expected_calls = |tile_ptr: u32, neighbour_ptr: u32| -> Vec<(u32, u32, u32)> {
+        let owner_of = |p: u32| -> u32 {
+            if p == 0 {
+                0
+            } else {
+                let t = get_from_memory::<BFTile>(p);
+                habitat_mgr.get_habitat_ptr(t.pos.x, t.pos.y)
+            }
+        };
+        let owner_a = owner_of(tile_ptr);
+        let owner_b = owner_of(neighbour_ptr);
+        let mut calls = Vec::new();
+        if owner_a != owner_b {
+            if owner_a != 0 && unsafe { ref_from_memory::<ZTHabitat>(owner_a) }.unknown_flag_0x2c == 0 {
+                calls.push((owner_a, tile_ptr, neighbour_ptr));
+            }
+            if owner_b != 0 && unsafe { ref_from_memory::<ZTHabitat>(owner_b) }.unknown_flag_0x2c == 0 {
+                calls.push((owner_b, neighbour_ptr, tile_ptr));
+            }
+        }
+        calls
+    };
+
+    let mut checked = 0usize;
+    for (kind, probes) in [("habitat-vs-habitat", &both_real), ("habitat-vs-world", &one_world), ("same-owner", &same_owner)] {
+        for probe in probes {
+            checked += 1;
+            let label = format!("{} (dir {}, at {},{}): ", kind, probe.direction, probe.x, probe.y);
+            let expected = expected_calls(probe.tile_ptr, probe.neighbour_ptr);
+
+            clear_morph_exhibit_log();
+            habitat_mgr.check_exhibit_morph(probe.tile_ptr, probe.direction);
+            let port_calls = morph_exhibit_log_snapshot();
+
+            clear_morph_exhibit_log();
+            hooks_zthabitatmgr::check_exhibit_morph_real(mgr_ptr as *const u32, probe.tile_ptr as *const u32, probe.direction);
+            let real_calls = morph_exhibit_log_snapshot();
+
+            if port_calls != expected {
+                failures.push(format!("{}reimpl produced {:?}, expected {:?}", label, port_calls, expected));
+            }
+            if real_calls != expected {
+                failures.push(format!("{}real produced {:?}, expected {:?}", label, real_calls, expected));
+            }
+        }
+    }
+    clear_morph_exhibit_log();
+
+    if checked == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no in-map boundary/same-owner pairs found)", test_name));
+        return false;
+    }
+
+    if failures.is_empty() {
+        // Coverage counts ride along in the success line (same pattern as
+        // ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE's own guest-count suffix) so a vacuous same-owner-only
+        // pass is visible from the log alone.
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} ({} habitat-vs-habitat, {} habitat-vs-world, {} same-owner probes; {} skipped: {} null-owner, {} tank-mismatched owner)",
+                test_name,
+                both_real.len(),
+                one_world.len(),
+                same_owner.len(),
+                skipped_null_owner + skipped_morph_risk,
+                skipped_null_owner,
+                skipped_morph_risk
+            ),
+        );
         false
     } else {
         for msg in &failures {

@@ -77,6 +77,7 @@ pub mod hooks_zthabitatmgr {
             GET_OUTERMOST_TANK, GET_NEEDY_NESTED_TANK, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
             BEFORE_ENTITY_CHANGE, TERRAIN_ABOUT_TO_BE_CHANGED, TERRAIN_CHANGED, CREATE_DOUBLE_FENCE,
             UPDATE_GATES, FORMAT_HABITAT_MESSAGE, FIND_BEST_PLACE_FOR_GATE, FIND_BETTER_GATES_FOR_NEIGHBORS, CHECK_GATE, GET_NEXT_FENCE_PAIR, PLACE_GATE,
+            CHECK_EXHIBIT_MORPH,
         },
     };
 
@@ -797,6 +798,22 @@ pub mod hooks_zthabitatmgr {
     #[detour(MORPH_EXHIBIT)]
     unsafe extern "thiscall" fn morph_exhibit(this: *const u32, habitat_ptr: *const u32, tile_2_ptr: *const u32, tile_3_ptr: *const u32) {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.morph_exhibit(habitat_ptr as u32, tile_2_ptr as u32, tile_3_ptr as u32)
+    }
+
+    /// `ZTHabitatMgr::check_exhibit_morph` is fully ported (see its own doc comment) - a pure boundary
+    /// decision over [`ZTHabitatMgr::get_habitat_ptr`] results feeding [`ZTHabitatMgr::morph_exhibit`],
+    /// which no-ops for every tank-consistent habitat, so the composed path is read-only over a settled
+    /// zoo.
+    #[detour(CHECK_EXHIBIT_MORPH)]
+    unsafe extern "thiscall" fn check_exhibit_morph(this: *const u32, tile_ptr: *const u32, direction: u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.check_exhibit_morph(tile_ptr as u32, direction)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn check_exhibit_morph_real(this: *const u32, tile_ptr: *const u32, direction: u32) {
+        unsafe { CHECK_EXHIBIT_MORPH_DETOUR.call(this, tile_ptr, direction) }
     }
 
     /// Real vanilla is a plain free `stdcall` helper (`generated.rs`'s own signature has no `this`) -

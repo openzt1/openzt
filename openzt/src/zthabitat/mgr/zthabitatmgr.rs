@@ -17,9 +17,7 @@ use openzt_detour::generated::{
             ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
             CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, GET_SIZE, RESIZE as ZTHABITAT_RESIZE, SET_NAME as ZTHABITAT_SET_NAME,
         },
-        zthabitatmgr::{
-            AFTER_ENTITY_CHANGE, CHECK_EXHIBIT_MORPH, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND,
-        },
+        zthabitatmgr::{AFTER_ENTITY_CHANGE, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
             ADD_TANK_WALL as ZTTANKEXHIBIT_ADD_TANK_WALL, CLEAR_WALL_VECTOR as ZTTANKEXHIBIT_CLEAR_WALL_VECTOR,
             CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR, FILL as ZTTANKEXHIBIT_FILL,
@@ -99,6 +97,19 @@ pub struct ZTHabitatMgr {
 
 const _: () = assert!(std::mem::size_of::<ZTHabitatMgr>() == 0x70);
 const _: () = assert!(std::mem::offset_of!(ZTHabitatMgr, habitat_num) == 0x68);
+
+/// Test-only record of every [`Self::morph_exhibit`] entry, pushed by that method itself - so it
+/// captures both the port's own calls and real vanilla's (whose `morphExhibit` calls hit the
+/// `MORPH_EXHIBIT` detour and forward into the same ported method), which is what lets
+/// `ZTHABITATMGR_CHECK_EXHIBIT_MORPH_MATCHES_REAL_LIVE` diff the boundary decisions the two poles
+/// make without either side executing a real morph. Single game thread, and the lock is scoped to
+/// each push/clear only.
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) static MORPH_EXHIBIT_CALL_LOG: std::sync::Mutex<Vec<(u32, u32, u32)>> = std::sync::Mutex::new(Vec::new());
+
+/// One side's pending `morph_exhibit` call - its `(habitat, tile, neighbour)` triple, or `None` when
+/// that side is the "world" habitat (or unowned). See [`ZTHabitatMgr::exhibit_morph_boundary_calls`].
+type ExhibitMorphCall = Option<(u32, u32, u32)>;
 
 impl ZTHabitatMgr {
     // fn get_tank(tile: &BFTile) -> Option<ZTHabitat> {
@@ -809,7 +820,7 @@ impl ZTHabitatMgr {
     /// macOS's own independent decompile of the same function - both agree step-for-step) as an
     /// orchestrator, in the same style as [`Self::create_habitat`]: reimplements the real logic directly
     /// but calls through to real vanilla (`.original()`) for every step this pass doesn't separately
-    /// port (`splitTank`/`splitTankIntoLand`/`ZTHabitat::resize`/`setName`/`checkExhibitMorph`, the
+    /// port (`splitTank`/`splitTankIntoLand`/`ZTHabitat::resize`/`setName`, the
     /// `ZTHabitat` constructor, `ZTTankExhibit::updateTankInfo`) - [`Self::snap_tank_walls_inward`] itself
     /// is genuinely reimplemented.
     ///
@@ -830,7 +841,7 @@ impl ZTHabitatMgr {
     ///    byte, same fixed address [`Self::place_gate`] and `ZTHabitat::reset_unit_ai` already read), snaps
     ///    the tank occupying `tile_ptr` ([`Self::get_tank`]) back inward
     ///    ([`SNAP_TANK_WALLS_INWARD`]/[`Self::do_show_check`]/`ZTTankExhibit::updateTankInfo`). Either
-    ///    way, calls through to still-un-ported `checkExhibitMorph` and re-derives both neighbour kinds
+    ///    way, calls [`Self::check_exhibit_morph`] and re-derives both neighbour kinds
     ///    ([`Self::update_amphibious_neighbors_from_tile`]/[`Self::update_show_neighbors_from_tile`]), then
     ///    returns.
     /// 4. Otherwise (no wall directly between the two tiles) takes the **long branch**: computes 4 more
@@ -849,13 +860,13 @@ impl ZTHabitatMgr {
     ///    [`Self::create_habitat`] (resized/gated using the other tile), and the function returns.
     /// 6. If neither side can reach the entrance, the habitat currently occupying `tile_ptr` needs
     ///    splitting instead. A tank ([`ZTHabitat::is_tank`]) goes through `splitTank`, falling back to
-    ///    `splitTankIntoLand` + a `checkExhibitMorph` call-through if the split itself fails. A plain
+    ///    `splitTankIntoLand` + [`Self::check_exhibit_morph`] if the split itself fails. A plain
     ///    habitat is split by construction: allocates a second `ZTHabitat` seeded at the neighbour tile,
     ///    names it (or the original, whichever isn't a tank - `decrementHabitatNum` if both are),
     ///    [`Self::add_habitat`]s it, resizes both around whichever side still owns the original's own
     ///    entrance tile, places a gate between them ([`Self::place_gate`]), preserves the original's own
     ///    name on whichever new habitat doesn't already carry it, re-derives both neighbour kinds and
-    ///    `doShowCheck`, and finally calls through to `checkExhibitMorph`. The name-preservation buffer is
+    ///    `doShowCheck`, and finally calls [`Self::check_exhibit_morph`]. The name-preservation buffer is
     ///    built/torn down via the same real-`PoolAlloc`-backed `vector<byte>` idiom already established by
     ///    [`Self::display_gate_placement_message`]'s own `final_buf` ([`VECTORBYTE`]/[`free_event_vector_buffer`]).
     ///
@@ -898,7 +909,7 @@ impl ZTHabitatMgr {
                     }
                 }
             }
-            unsafe { CHECK_EXHIBIT_MORPH.original()(mgr_ptr, tile_ptr as *const u32, direction) };
+            self.check_exhibit_morph(tile_ptr, direction);
             self.update_amphibious_neighbors_from_tile(tile_ptr, direction);
             self.update_show_neighbors_from_tile(tile_ptr, direction);
             return;
@@ -971,7 +982,7 @@ impl ZTHabitatMgr {
                 unsafe {
                     SPLIT_TANK_INTO_LAND.original()(mgr_ptr, old_habitat_ptr as *const u32, tile_ptr as *const u32, neighbour_ptr as *const u32, tile_ptr as *const u32)
                 };
-                unsafe { CHECK_EXHIBIT_MORPH.original()(mgr_ptr, tile_ptr as *const u32, direction) };
+                self.check_exhibit_morph(tile_ptr, direction);
             }
             return;
         }
@@ -1068,7 +1079,7 @@ impl ZTHabitatMgr {
         self.do_show_check(old_habitat_ptr, false);
         self.update_amphibious_neighbors(new_habitat_ptr);
         self.update_amphibious_neighbors(old_habitat_ptr);
-        unsafe { CHECK_EXHIBIT_MORPH.original()(mgr_ptr, tile_ptr as *const u32, direction) };
+        self.check_exhibit_morph(tile_ptr, direction);
 
         free_event_vector_buffer(name_buf[0], name_buf[2] - name_buf[0]);
     }
@@ -1102,7 +1113,7 @@ impl ZTHabitatMgr {
     ///    gate-placement. Neither queue is touched if neither side's entrance matches. Either way, then -
     ///    gated on `ZTApp`'s own `appInitSuccess` byte ([`RVA_APP_INIT_SUCCESS_BASE`]`+0x440`, one byte before
     ///    `fence_placed`'s own `+0x441` `loadInProgress` read) - applies the queue immediately via
-    ///    `updateGates` rather than waiting for the next tick, then calls through to `checkExhibitMorph`
+    ///    `updateGates` rather than waiting for the next tick, then calls [`Self::check_exhibit_morph`]
     ///    and re-derives both neighbour kinds.
     /// 6. **Merge path**: picks a survivor (the habitat that absorbs the other) - the "world" habitat
     ///    always wins; otherwise whichever side's own entrance *isn't* sitting exactly on the removed
@@ -1279,7 +1290,7 @@ impl ZTHabitatMgr {
         if app_init_success {
             self.update_gates();
         }
-        unsafe { CHECK_EXHIBIT_MORPH.original()(mgr_ptr, tile_ptr as *const u32, direction) };
+        self.check_exhibit_morph(tile_ptr, direction);
         self.update_amphibious_neighbors_from_tile(tile_ptr, direction);
         self.update_show_neighbors_from_tile(tile_ptr, direction);
     }
@@ -1322,6 +1333,10 @@ impl ZTHabitatMgr {
     /// creates a real undo action and destroys/recreates real habitat state with no known synthetic-safe
     /// input - detoured for manual/interactive live verification, not covered by an automated live test.
     pub fn morph_exhibit(&self, habitat_ptr: u32, tile_2_ptr: u32, tile_3_ptr: u32) {
+        #[cfg(feature = "reimplementation-tests")]
+        if let Ok(mut log) = MORPH_EXHIBIT_CALL_LOG.lock() {
+            log.push((habitat_ptr, tile_2_ptr, tile_3_ptr));
+        }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
         let was_tank = habitat.is_tank();
         if habitat.do_tank_check() == was_tank {
@@ -1405,6 +1420,68 @@ impl ZTHabitatMgr {
 
         let (seed_ptr, resize_ptr) = if gate_tile_in_ptr == 0 { (cand_a, cand_b) } else { (gate_tile_in_ptr, gate_tile_out_ptr) };
         self.create_habitat(seed_ptr, resize_ptr, seed_ptr, 0);
+    }
+
+    /// Ports `ZTHabitatMgr::checkExhibitMorph` (`ZTHabitatMgr_checkExhibitMorph.c`/`.asm`, cross-checked
+    /// against the macOS decompile): if `tile_ptr` and its `direction` neighbour sit in different
+    /// habitats, calls [`Self::morph_exhibit`] for each side that isn't the "world" habitat
+    /// ([`ZTHabitat::unknown_flag_0x2c`] clear) - `(habitat_a, tile, neighbour)` then
+    /// `(habitat_b, neighbour, tile)`, real vanilla's own argument order.
+    ///
+    /// Composes three already-ported pieces: [`crate::ztworldmgr::ZTWorldMgr::get_neighbour_ptr_raw`]
+    /// (the `BFMap::getNeighbor` port [`Self::fence_replaced`] already uses), [`Self::get_habitat_ptr`]
+    /// (vanilla's raw grid read plus the file-standard defensive bounds checks - identical results for
+    /// every in-map tile), and [`Self::morph_exhibit`]. Both `unknown_flag_0x2c` reads are guarded with
+    /// a null check real vanilla lacks - same "dead in practice, guard anyway" convention as
+    /// [`Self::fence_replaced`]'s own identical owners-differ-then-read-flag shape (a literal null
+    /// dereference is UB in Rust, and the only way one side resolves to null is a tile with no grid
+    /// owner, which real vanilla's own call sites never produce).
+    pub fn check_exhibit_morph(&self, tile_ptr: u32, direction: u32) {
+        let neighbour_ptr = globals().ztworldmgr().get_neighbour_ptr_raw(tile_ptr, direction);
+        let (call_a, call_b) = self.exhibit_morph_boundary_calls(tile_ptr, neighbour_ptr);
+        if let Some((habitat_ptr, tile_2_ptr, tile_3_ptr)) = call_a {
+            self.morph_exhibit(habitat_ptr, tile_2_ptr, tile_3_ptr);
+        }
+        if let Some((habitat_ptr, tile_2_ptr, tile_3_ptr)) = call_b {
+            self.morph_exhibit(habitat_ptr, tile_2_ptr, tile_3_ptr);
+        }
+    }
+
+    /// The boundary-morph decision [`Self::check_exhibit_morph`] executes, returned instead of run so
+    /// both the host-safe unit fixtures and the live comparison test can observe which `morphExhibit`
+    /// calls vanilla's shape produces without executing them ([`Self::morph_exhibit`] itself reaches
+    /// real vanilla and is not host-safe).
+    pub(crate) fn exhibit_morph_boundary_calls(&self, tile_ptr: u32, neighbour_ptr: u32) -> (ExhibitMorphCall, ExhibitMorphCall) {
+        let habitat_a_ptr = if tile_ptr == 0 {
+            0
+        } else {
+            let tile = get_from_memory::<BFTile>(tile_ptr);
+            self.get_habitat_ptr(tile.pos.x, tile.pos.y)
+        };
+        let habitat_b_ptr = if neighbour_ptr == 0 {
+            0
+        } else {
+            let neighbour = get_from_memory::<BFTile>(neighbour_ptr);
+            self.get_habitat_ptr(neighbour.pos.x, neighbour.pos.y)
+        };
+        if habitat_a_ptr == habitat_b_ptr {
+            return (None, None);
+        }
+        let call_a = if habitat_a_ptr != 0
+            && unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) }.unknown_flag_0x2c == 0
+        {
+            Some((habitat_a_ptr, tile_ptr, neighbour_ptr))
+        } else {
+            None
+        };
+        let call_b = if habitat_b_ptr != 0
+            && unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) }.unknown_flag_0x2c == 0
+        {
+            Some((habitat_b_ptr, neighbour_ptr, tile_ptr))
+        } else {
+            None
+        };
+        (call_a, call_b)
     }
 
     /// Creates a temporary `ZTKeeper`/tank-keeper-type unit purely to drive [`Self::place_gate`]'s own
@@ -3622,11 +3699,7 @@ impl ZTHabitatMgr {
     /// `zthabitatmgr-implementation-plan.md`'s "Regeneration corrections"): checks whether `tile_ptr` and
     /// its own neighbour in `direction` sit in different habitats, calls [`Self::do_show_check`] on
     /// whichever side isn't the "world" habitat ([`ZTHabitat::unknown_flag_0x2c`] clear), then calls
-    /// through to the still-un-ported real vanilla `checkExhibitMorph` unconditionally (see that method's
-    /// own deferral in the "Fence/gate placement" table - `morphExhibit`'s own heavy UI/undo-action
-    /// orchestration and permanent habitat destroy/recreate make it unsafe to reimplement or exercise
-    /// synthetically, but calling through here reproduces exactly what real, un-ported vanilla already
-    /// does on every fence replacement today - no new risk over baseline).
+    /// [`Self::check_exhibit_morph`] unconditionally.
     ///
     /// Real vanilla's own `.asm` reads each habitat's `+0x2c` byte unconditionally once the two occupants
     /// differ, with no null guard - guarded here instead of crashing on a tile with no habitat occupant at
@@ -3657,7 +3730,7 @@ impl ZTHabitatMgr {
             }
         }
 
-        unsafe { CHECK_EXHIBIT_MORPH.original()(self as *const Self as *const u32, tile_ptr as *const u32, direction) };
+        self.check_exhibit_morph(tile_ptr, direction);
     }
 
     /// Ports `ZTHabitatMgr::recalculateDeterioration` (`ZTHabitatMgr_recalculateDeterioration.c`/`.asm`):
@@ -4001,5 +4074,98 @@ mod tests {
     fn all_show_tanks_count_zero() {
         let mgr = fixture_mgr(&[(ZTHabitat::TANK_VTABLE_PTR, 0x1000); 3]);
         assert_eq!(mgr.get_num_non_show_non_world_habitats(), 0);
+    }
+
+    /// Leaks a tile-shaped block (the struct's own `0x8c` bytes) carrying just the two coordinates the
+    /// ownership-grid lookups read (`+0x34`/`+0x38`), returning its address.
+    fn leak_tile(x: i32, y: i32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x8c].into_boxed_slice());
+        let tile_ptr = block.as_ptr() as u32;
+        save_to_memory(tile_ptr + 0x34, x);
+        save_to_memory(tile_ptr + 0x38, y);
+        tile_ptr
+    }
+
+    /// Leaks a synthetic 2x2 ownership grid wired into `mgr.other_array_start`/`_end`: a 2-entry column
+    /// array (`start`/`end`/pad, `0xc` bytes per entry) whose columns each point at a 2-row x `0x28`-byte
+    /// run with the owning `ZTHabitat*` at row+0 - the exact shape `get_habitat_cell_addr` walks.
+    /// Returns each cell's own address so tests can point it at a habitat fixture (or `0`).
+    fn leak_grid_2x2(mgr: &mut ZTHabitatMgr) -> [[u32; 2]; 2] {
+        let mut cells = [[0u32; 2]; 2];
+        let mut columns: Vec<u32> = Vec::new();
+        for x in 0..2usize {
+            let rows: &'static mut [u8] = Box::leak(vec![0u8; 2 * 0x28].into_boxed_slice());
+            let start = rows.as_ptr() as u32;
+            columns.extend_from_slice(&[start, start + 2 * 0x28, 0]);
+            for y in 0..2usize {
+                cells[x][y] = start + y as u32 * 0x28;
+            }
+        }
+        let columns: &'static mut [u32] = Box::leak(columns.into_boxed_slice());
+        mgr.other_array_start = columns.as_ptr() as u32;
+        mgr.other_array_end = columns.as_ptr() as u32 + columns.len() as u32 * 0xc;
+        cells
+    }
+
+    #[test]
+    fn same_owner_boundary_morphs_nothing() {
+        let mgr = fixture_mgr(&[]);
+        let cells = leak_grid_2x2(mgr);
+        let habitat = leak_fake_habitat(0x1000, 0);
+        for cell in cells.iter().flatten() {
+            save_to_memory(*cell, habitat);
+        }
+        let tile = leak_tile(0, 0);
+        let neighbour = leak_tile(1, 0);
+        assert_eq!(mgr.exhibit_morph_boundary_calls(tile, neighbour), (None, None));
+    }
+
+    #[test]
+    fn differing_habitats_morph_both_sides_in_vanilla_order() {
+        let mgr = fixture_mgr(&[]);
+        let cells = leak_grid_2x2(mgr);
+        let habitat_a = leak_fake_habitat(0x1000, 0);
+        let habitat_b = leak_fake_habitat(0x2000, 0);
+        save_to_memory(cells[0][0], habitat_a);
+        save_to_memory(cells[1][0], habitat_b);
+        let tile = leak_tile(0, 0);
+        let neighbour = leak_tile(1, 0);
+        assert_eq!(
+            mgr.exhibit_morph_boundary_calls(tile, neighbour),
+            (Some((habitat_a, tile, neighbour)), Some((habitat_b, neighbour, tile)))
+        );
+    }
+
+    #[test]
+    fn world_flagged_side_is_skipped() {
+        let mgr = fixture_mgr(&[]);
+        let cells = leak_grid_2x2(mgr);
+        let world_habitat = leak_fake_habitat(0x1000, 0);
+        save_to_memory(world_habitat + 0x2c, 1u8);
+        let habitat = leak_fake_habitat(0x2000, 0);
+        save_to_memory(cells[0][0], world_habitat);
+        save_to_memory(cells[1][0], habitat);
+        let tile = leak_tile(0, 0);
+        let neighbour = leak_tile(1, 0);
+        assert_eq!(mgr.exhibit_morph_boundary_calls(tile, neighbour), (None, Some((habitat, neighbour, tile))));
+
+        save_to_memory(cells[0][0], habitat);
+        save_to_memory(cells[1][0], world_habitat);
+        assert_eq!(mgr.exhibit_morph_boundary_calls(tile, neighbour), (Some((habitat, tile, neighbour)), None));
+    }
+
+    #[test]
+    fn null_owner_side_is_skipped() {
+        // Documents the deliberate deviation from real vanilla, which dereferences a differing
+        // non-null owner's `+0x2c` flag unconditionally - a null owner side is skipped rather than
+        // dereferenced (see `check_exhibit_morph`'s own doc comment).
+        let mgr = fixture_mgr(&[]);
+        let cells = leak_grid_2x2(mgr);
+        let habitat = leak_fake_habitat(0x1000, 0);
+        save_to_memory(cells[0][0], habitat); // neighbour cell left unowned
+        let tile = leak_tile(0, 0);
+        let neighbour = leak_tile(1, 0);
+        assert_eq!(mgr.exhibit_morph_boundary_calls(tile, neighbour), (Some((habitat, tile, neighbour)), None));
+        assert_eq!(mgr.exhibit_morph_boundary_calls(neighbour, tile), (None, Some((habitat, tile, neighbour))));
     }
 }
