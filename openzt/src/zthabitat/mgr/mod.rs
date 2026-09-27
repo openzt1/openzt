@@ -723,6 +723,18 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.enter_new_month()
     }
 
+    #[detour(DECREMENT_HABITAT_NUM)]
+    unsafe extern "thiscall" fn decrement_habitat_num(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.decrement_habitat_num()
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn decrement_habitat_num_real(this: *const u32) {
+        unsafe { DECREMENT_HABITAT_NUM_DETOUR.call(this) }
+    }
+
     /// Both known correctness bugs are fixed (see `ZTHabitat::move_gate_to`/`move_gate_to_inner`'s own
     /// doc comments). Enabled for manual/interactive live verification - moving a gate mutates real
     /// habitat/fence state with no known synthetic-safe candidate, so this has no automated live test.

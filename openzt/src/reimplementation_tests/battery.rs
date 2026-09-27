@@ -252,6 +252,10 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITATMGR_ENTER_NEW_MONTH_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_zthabitatmgr_enter_new_month_roundtrip_live_test,
             },
+            RegisteredTest {
+                name: "ZTHABITATMGR_DECREMENT_HABITAT_NUM_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_decrement_habitat_num_live_test,
+            },
             RegisteredTest { name: "ZTHABITATMGR_REPLACE_GATE_SMOKE_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_replace_gate_smoke_live_test },
             RegisteredTest {
                 name: "ZTHABITATMGR_HABITAT_TILE_CHANGED_SMOKE_LIVE",

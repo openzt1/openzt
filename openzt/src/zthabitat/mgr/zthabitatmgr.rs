@@ -18,7 +18,7 @@ use openzt_detour::generated::{
             CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, GET_SIZE, RESIZE as ZTHABITAT_RESIZE, SET_DETERIORATION as ZTHABITAT_SET_DETERIORATION, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{
-            AFTER_ENTITY_CHANGE, CHECK_EXHIBIT_MORPH, DECREMENT_HABITAT_NUM, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND,
+            AFTER_ENTITY_CHANGE, CHECK_EXHIBIT_MORPH, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND,
         },
         zttankexhibit::{
             ADD_TANK_WALL as ZTTANKEXHIBIT_ADD_TANK_WALL, CLEAR_WALL_VECTOR as ZTTANKEXHIBIT_CLEAR_WALL_VECTOR,
@@ -54,6 +54,7 @@ use crate::{
 };
 use super::super::habitat::ZTHabitat;
 use super::super::support::*;
+use crate::write_live;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -386,15 +387,33 @@ impl ZTHabitatMgr {
         unsafe { ZTUI_BUYH_REFRESH.original()() };
     }
 
+    /// Ports `ZTHabitatMgr::decrementHabitatNum`: steps the running exhibit-number counter
+    /// ([`Self::habitat_num`]) back by one, skipped while the live `ZTMapView` is undoing
+    /// (`ZTUI::general::getMapview()`'s own `+0x378` byte - `ZTMapView::isUndoing`, macOS-confirmed at the
+    /// identical call site; see [`Self::place_gate`]'s step 2). Real vanilla's decompile dereferences
+    /// `getMapview()`'s result with no null guard; like this file's other mapview-flag reads
+    /// ([`Self::create_habitat`]/[`Self::place_gate`]), a null mapview is treated as flag-clear (decrement).
+    /// The decrement is wrapping, matching vanilla's `SUB dword ptr [ECX+0x68], 1` - the counter starts at 1
+    /// and is only consumed by `nameHabitat`'s own `getNextNum` read-then-increment, so a wrapped value is
+    /// exactly what real vanilla would carry (dev builds have overflow checks on, so plain `-` would panic
+    /// where vanilla wraps).
+    pub fn decrement_habitat_num(&self) {
+        let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+        if mapview_ptr == 0 || get_from_memory::<u8>(mapview_ptr + 0x378) == 0 {
+            write_live!(self, habitat_num, self.habitat_num.wrapping_sub(1));
+        }
+    }
+
     /// Ports `ZTHabitatMgr::createHabitat` (`ZTHabitatMgr_createHabitat.c`/`.asm`) as an orchestrator:
     /// constructs the new exhibit and reproduces the real branching exactly, but calls through to real
     /// vanilla (`.original()`) for every step this pass doesn't separately reimplement -
-    /// `doTankCheck`/`decrementHabitatNum`/`nameHabitat`/`ZTHabitat::setName`/`ZTHabitat::resize`, the two
+    /// `doTankCheck`/`nameHabitat`/`ZTHabitat::setName`/`ZTHabitat::resize`, the two
     /// constructors, and (tank-only) `findBetterGatesForNeighbors`/`ZTTankExhibit::updateTankInfo`/
-    /// `removeIllegalEntities`/`fill`. [`Self::add_habitat`], (tank-only) [`Self::snap_tank_walls_inward`],
+    /// `removeIllegalEntities`/`fill`. [`Self::add_habitat`], [`Self::decrement_habitat_num`],
+    /// (tank-only) [`Self::snap_tank_walls_inward`],
     /// and the four steps that already have their own genuine ports elsewhere in this file
     /// ([`ZTHabitat::set_dirty_characteristics`], [`Self::place_gate`], [`Self::update_amphibious_neighbors`],
-    /// [`Self::do_show_check`]) are called directly rather than through `.original()`: each of those four
+    /// [`Self::do_show_check`]) are called directly rather than through `.original()`: each of those
     /// addresses is separately detoured (`#[detour(...)]`) elsewhere in this file, and `FunctionDef::original()`
     /// re-enters that *same* detour in a release build (it's only a raw address cast there - see
     /// `CLAUDE.md`'s own `generated.rs` section) - meaning `.original()` here would have silently called
@@ -438,7 +457,7 @@ impl ZTHabitatMgr {
 
         let is_tank = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.do_tank_check();
         if is_tank {
-            unsafe { DECREMENT_HABITAT_NUM.original()(mgr_ptr) };
+            self.decrement_habitat_num();
             if habitat_ptr != 0 {
                 unsafe { call_vtable_slot_with_u8(habitat_ptr, 0x18, 1) };
             }
@@ -471,7 +490,7 @@ impl ZTHabitatMgr {
                 if mapview_ptr3 != 0 {
                     save_to_memory::<u8>(mapview_ptr3 + 0x455, 1);
                 }
-                unsafe { DECREMENT_HABITAT_NUM.original()(mgr_ptr) };
+                self.decrement_habitat_num();
                 return;
             }
             unsafe { ZTTANKEXHIBIT_FILL.original()(tank_ptr as *const u32) };
@@ -481,7 +500,7 @@ impl ZTHabitatMgr {
             unsafe { NAME_HABITAT.original()(mgr_ptr, habitat_ptr as *const u32) };
         } else {
             unsafe { ZTHABITAT_SET_NAME.original()(habitat_ptr as *const u32, name_ptr as *const u32) };
-            unsafe { DECREMENT_HABITAT_NUM.original()(mgr_ptr) };
+            self.decrement_habitat_num();
         }
         self.add_habitat(habitat_ptr);
 
@@ -1020,7 +1039,7 @@ impl ZTHabitatMgr {
         let new_is_tank = new_habitat_ptr != 0 && unsafe { ref_from_memory::<ZTHabitat>(new_habitat_ptr) }.do_tank_check();
         let old_is_tank = unsafe { ref_from_memory::<ZTHabitat>(old_habitat_ptr) }.do_tank_check();
         if new_is_tank || old_is_tank {
-            unsafe { DECREMENT_HABITAT_NUM.original()(mgr_ptr) };
+            self.decrement_habitat_num();
         } else {
             unsafe { NAME_HABITAT.original()(mgr_ptr, new_habitat_ptr as *const u32) };
         }

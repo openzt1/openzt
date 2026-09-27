@@ -9,7 +9,7 @@ use openzt_detour::generated::{
     msvc_std_mapint_habitatsuitability::{TREE as MSVC_MAP_INT_HABITATSUITABILITY_TREE, TREE_DTOR as MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR},
     standalone::OPERATOR_NEW,
     ztanimal::CAN_SERVICE as ZTANIMAL_CAN_SERVICE,
-    zthabitat, zthabitatmgr, ztviewingarea,
+    zthabitat, zthabitatmgr, ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW, ztviewingarea,
 };
 use std::fmt::Debug;
 use std::io::Write;
@@ -1702,6 +1702,66 @@ pub(crate) fn run_zthabitatmgr_enter_new_month_roundtrip_live_test(failure_log: 
         save_to_memory(ptr + 0x118, b.u3);
         save_to_memory(ptr + 0x108, b.cur_up);
         save_to_memory(ptr + 0x10c, b.last_up);
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// Mutates the manager's own running exhibit-number counter (`+0x68`, offset pinned by the struct's own
+/// `offset_of!` assert) and restores it - same rationale as [`run_zthabitatmgr_enter_new_month_roundtrip_live_test`]:
+/// the counter's only consumer is `nameHabitat`'s own `getNextNum` read-then-increment, so snapshot/call/
+/// restore between ticks leaves the live zoo's state unchanged for the rest of the battery run. Calls both
+/// poles - the reimplementation, then real vanilla through the release-safe `_real` helper - and compares
+/// each against an independently computed expectation (the `ZTMapView` `+0x378` undoing gate, read exactly
+/// the way production reads it), so a pass simultaneously proves the port honors the gate, both poles agree
+/// on the same live state, and the raw `+0x378`/`+0x68` offsets are correct.
+pub(crate) fn run_zthabitatmgr_decrement_habitat_num_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_DECREMENT_HABITAT_NUM_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    // Gate expectation read independently, exactly as production reads it.
+    let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+    let gate_set = mapview_ptr != 0 && get_from_memory::<u8>(mapview_ptr + 0x378) != 0;
+    let expected_delta: u32 = if gate_set { 0 } else { u32::MAX }; // wrapping -1
+
+    let before: u32 = get_from_memory(mgr_ptr + 0x68);
+
+    habitat_mgr.decrement_habitat_num();
+    let after_reimpl: u32 = get_from_memory(mgr_ptr + 0x68);
+    save_to_memory(mgr_ptr + 0x68, before);
+
+    hooks_zthabitatmgr::decrement_habitat_num_real(mgr_ptr as *const u32);
+    let after_real: u32 = get_from_memory(mgr_ptr + 0x68);
+    save_to_memory(mgr_ptr + 0x68, before);
+
+    if after_reimpl.wrapping_sub(before) != expected_delta {
+        failures.push(format!(
+            "reimpl: gate_set={} expected delta {}, got {}",
+            gate_set,
+            expected_delta as i32,
+            after_reimpl.wrapping_sub(before) as i32
+        ));
+    }
+    if after_real.wrapping_sub(before) != expected_delta {
+        failures.push(format!(
+            "real: gate_set={} expected delta {}, got {}",
+            gate_set,
+            expected_delta as i32,
+            after_real.wrapping_sub(before) as i32
+        ));
     }
 
     if failures.is_empty() {
