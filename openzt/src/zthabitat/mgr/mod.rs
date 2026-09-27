@@ -62,6 +62,7 @@ pub mod hooks_zthabitatmgr {
             GET_LAND_TILES, GET_WATER_TILES, GET_UNDERWATER_TILES, GET_TILES_COPY,
             GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
+            GET_SIZE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
             GET_NEAREST_DIRT_PILE, HAS_PORTAL_ANIMAL, IS_SHOW_NEIGHBOR, NEEDS_SHOW_KEEPER,
             ADD_TO_BUILDING_LIST, ADDITIONAL_SCENERY_SUITABILITY_CHANGE,
@@ -225,6 +226,20 @@ pub mod hooks_zthabitatmgr {
     #[detour(GET_NUM_ANIMALS)]
     unsafe extern "thiscall" fn get_num_animals(this: *const u32, include_neighbors: bool) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_animals(include_neighbors)
+    }
+
+    /// Same byte-only `subhabs` read as [`get_num_animals`] above (`ZTHabitat_getSize.asm`); the
+    /// return is a full i32 count, not a flag.
+    #[detour(GET_SIZE)]
+    unsafe extern "thiscall" fn get_size(this: *const u32, subhabs: bool) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_size(subhabs)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_size_real(this: *const u32, subhabs: bool) -> i32 {
+        unsafe { GET_SIZE_DETOUR.call(this, subhabs) }
     }
 
     #[detour(GET_NUM_ADULT_ANIMALS_0)]

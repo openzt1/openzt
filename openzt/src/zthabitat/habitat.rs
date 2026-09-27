@@ -12,7 +12,7 @@ use openzt_detour::generated::{
         ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING},
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            GET_EVENTS, GET_SIZE, NEEDS_SERVICE,
+            GET_EVENTS, NEEDS_SERVICE,
             RECALCULATE_CHARACTERISTICS,
             REVISE_SPECIES_LIST, SEND_EVENT,
             UPDATE_PORTALS,
@@ -54,7 +54,7 @@ use super::support::*;
 pub struct ZTHabitat {
     pub vtable: u32,                 // 0x000
     pub zt_show_info_ptr: u32,       // 0x004
-    pub amphibious_neighbors_head: u32, // 0x008 // MSVC `std::set<ZTHabitat*>` head/sentinel node pointer for the amphibious-neighbor set - confirmed red-black-tree node layout (`+0x0`=color/isnil, `+0x4`=parent, `+0x8`=left, `+0xc`=right, `+0x10`=value) via `ZTHabitat_hiliteAmphibiousNeighbors.c`'s own in-order walk (see `walk_neighbor_tree`) and `addAmphibiousNeighbor`'s own STL insert helper (both left un-ported - see `Self::hilite_amphibious_neighbors`'s own doc comment). `ZTHabitat_getSize.c` independently walks this exact same field with identical node arithmetic - `getSize` itself remains out of this pass's scope, but this corrects `zthabitatmgr-implementation-plan.md`'s own earlier step 6h note (which speculated this was an unrelated nested-sub-habitat tree).
+    pub amphibious_neighbors_head: u32, // 0x008 // MSVC `std::set<ZTHabitat*>` head/sentinel node pointer for the amphibious-neighbor set - confirmed red-black-tree node layout (`+0x0`=color/isnil, `+0x4`=parent, `+0x8`=left, `+0xc`=right, `+0x10`=value) via `ZTHabitat_hiliteAmphibiousNeighbors.c`'s own in-order walk (see `walk_neighbor_tree`) and `addAmphibiousNeighbor`'s own STL insert helper (both left un-ported - see `Self::hilite_amphibious_neighbors`'s own doc comment). `ZTHabitat_getSize.c` independently walks this exact same field with identical node arithmetic (see `Self::get_size`) - this corrects `zthabitatmgr-implementation-plan.md`'s own earlier step 6h note (which speculated this was an unrelated nested-sub-habitat tree).
     pub pad1a_a1: [u8; 0x8],          // ----------------------- padding: 8 bytes
     pub show_neighbors_head: u32,    // 0x014 // Same shape as `amphibious_neighbors_head`, for the show-neighbor set (`ZTHabitat_hiliteShowNeighbors.c`/`addShowNeighbor`/`clearShowNeighbors`). The C decompiles mislabel this field `zoo_entrance_y` (an OOAnalyzer type-propagation artifact bleeding in a `ZTHabitatMgr`-shaped name) - trust the `.asm`-confirmed `+0x14` offset, named here for what it actually is.
     pub pad1a_a2: [u8; 0xd],          // ----------------------- padding: 13 bytes
@@ -869,11 +869,36 @@ impl ZTHabitat {
         get_from_memory(begin + index * 4)
     }
 
+    /// Ports `ZTHabitat::getSize` (`ZTHabitat_getSize.c`/`.asm`, `generated.rs`'s `GET_SIZE`): the
+    /// habitat's owned-tile count, plus every amphibious neighbor's own count when `subhabs` is set.
+    /// The false arm is exactly the owned-tile node count [`walk_tile_list`] walks over
+    /// [`Self::owned_tiles_ptr`] (the loop both decompile arms run). When `subhabs` is set,
+    /// additionally walks the amphibious-neighbor set ([`walk_neighbor_tree`] over
+    /// [`Self::amphibious_neighbors_head`], `.asm`-confirmed identical `+0x8` node arithmetic to
+    /// [`Self::get_num_animals`]'s own walk, `ZTHabitat*` payload read directly from node `+0x10`),
+    /// summing each neighbor's own `get_size(false)` (never re-passing `true` down, matching real
+    /// vanilla's own `getSize(neighbor, false)` call exactly). A pure read both ways: no
+    /// `characteristics_dirty` lazy-recalculate, no RNG.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_num_animals`]; each neighbor visited must also be live (true for every
+    /// [`walk_neighbor_tree`] entry, which reads real `ZTHabitat*` pointers directly out of the tree).
+    pub fn get_size(&self, subhabs: bool) -> i32 {
+        let mut total = walk_tile_list(self.owned_tiles_ptr).count() as i32;
+        if subhabs {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_size(false);
+            }
+        }
+        total
+    }
+
     /// Ports `ZTHabitat::getRandomTile` (`ZTHabitat_getRandomTile.c`/`.asm`, `generated.rs`'s
     /// `GET_RANDOM_TILE`): picks a random tile from the habitat's owned-tile list. Gets the count
-    /// through the same `getSize(this, false)` call real vanilla makes ([`GET_SIZE`] undetoured
-    /// `.original()` call-through, the same shape [`Self::fence_removed`]'s neighbor-size reads use -
-    /// its false arm is exactly the owned-tile node count [`walk_tile_list`] walks), bails null on an
+    /// through the same `getSize(this, false)` call real vanilla makes ([`Self::get_size`], the
+    /// same owned-tile node count [`walk_tile_list`] walks - and the same port
+    /// [`ZTHabitatMgr::fence_removed`]'s neighbor-size reads use), bails null on an
     /// empty list without touching the shared game RNG state (the `.asm`'s `JLE` sitting before the
     /// LCG pair), then advances `DAT_00638060` with exactly one MSVC LCG step ([`lcg_next`]) and walks
     /// the owned-tile list ([`Self::owned_tiles_ptr`] sentinel, the same `+0x0`=next / `+0x8`=payload
@@ -886,7 +911,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_random_tile(&self) -> u32 {
-        let count = unsafe { GET_SIZE.original()(self as *const Self as *const u32, false) };
+        let count = self.get_size(false);
         if count <= 0 {
             return 0;
         }
@@ -4414,6 +4439,125 @@ mod tests {
         let habitat = fixture_habitat_with_show_tree(root);
 
         assert!(!habitat.is_show_neighbor(0));
+    }
+
+    /// Leaks a zeroed 16-byte [`TileListNode`](crate::zthabitat::support::TileListNode)-shaped block
+    /// with `next`/`payload` written at the `+0x0`/`+0x8` slots
+    /// [`walk_tile_list`](crate::zthabitat::support::walk_tile_list) and [`ZTHabitat::get_size`] read,
+    /// returning the block's address. `prev` (`+0x4`) stays zeroed - neither walker reads it.
+    fn leak_tile_node(next: u32, payload: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x10].into_boxed_slice());
+        let node_ptr = block.as_ptr() as u32;
+        save_to_memory(node_ptr, next);
+        save_to_memory(node_ptr + 0x8, payload);
+        node_ptr
+    }
+
+    /// Leaks a `TileListNode` sentinel plus one node per `tiles` entry, returning the sentinel's
+    /// address - the value [`ZTHabitat::owned_tiles_ptr`] must hold for
+    /// [`walk_tile_list`](crate::zthabitat::support::walk_tile_list) to walk
+    /// `tiles`. Nodes are spliced at the front (`get_size` counts by walking, so order is immaterial).
+    fn leak_tile_list(tiles: &[u32]) -> u32 {
+        let sentinel = leak_tile_node(0, 0);
+        save_to_memory(sentinel, sentinel); // empty list: the sentinel's own next points back at it
+        save_to_memory(sentinel + 0x4, sentinel);
+        let mut first = sentinel;
+        for &tile in tiles {
+            let node = leak_tile_node(first, tile);
+            save_to_memory(node + 0x4, sentinel);
+            first = node;
+        }
+        save_to_memory(sentinel, first);
+        sentinel
+    }
+
+    /// Leaks an MSVC `std::set` head over `payloads`, returning the head's address - the value
+    /// [`ZTHabitat::amphibious_neighbors_head`] must hold for
+    /// [`walk_neighbor_tree`](crate::zthabitat::support::walk_neighbor_tree) to visit exactly
+    /// `payloads`. Nodes chain in a right-leaning vine (`payloads[n]` the right child of
+    /// `payloads[n-1]`), which keeps the parent fixups to one per node. Every head slot follows MSVC's
+    /// own real construction - `+0x4`/`+0x8`/`+0xc` hold the root/leftmost/rightmost node (the head
+    /// itself when empty) - which matters for the successor walk's end-of-tree climb: a null `+0x8`
+    /// would send it reading address `0xc`, and a null `+0x4` would strand that climb on a
+    /// single-node set.
+    fn leak_neighbor_set(payloads: &[u32]) -> u32 {
+        let head = leak_tree_node(0, 0, 0, 0);
+        save_to_memory(head, 1u8); // the head's own isnil flag; real nodes are all 0 (zeroed)
+        let mut prev = head; // newest node = rightmost so far
+        let mut root = head; // first node added = tree root = leftmost in a right vine
+        for &payload in payloads {
+            let node = leak_tree_node(prev, 0, 0, payload);
+            save_to_memory(prev + 0xc, node);
+            if root == head {
+                root = node;
+            }
+            prev = node;
+        }
+        save_to_memory(head + 0x4, root); // head._Parent = root (the head itself when empty)
+        save_to_memory(head + 0x8, root); // head._Left = leftmost = root in a right vine
+        save_to_memory(head + 0xc, prev); // head._Right = rightmost (the head itself when empty)
+        head
+    }
+
+    /// A zeroed [`ZTHabitat`]-shaped leaked block whose `owned_tiles_ptr` (`+0x40`) points at a
+    /// leaked `tiles` list - the block address doubles as a neighbor-set tree payload (real `getSize`
+    /// reads the neighbor's own `ZTHabitat*` from node `+0x10` and recurses into its own `+0x40` list).
+    fn leak_neighbor_habitat(tiles: &[u32]) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; std::mem::size_of::<ZTHabitat>()].into_boxed_slice());
+        let habitat_ptr = block.as_ptr() as u32;
+        save_to_memory(habitat_ptr + 0x40, leak_tile_list(tiles));
+        habitat_ptr
+    }
+
+    /// A zeroed [`ZTHabitat`] with a leaked owned-tile list and a leaked amphibious-neighbor set
+    /// whose payloads are the given neighbor habitat block addresses.
+    fn fixture_habitat_with_tiles_and_neighbors(tiles: &[u32], neighbors: &[u32]) -> ZTHabitat {
+        let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
+        habitat.owned_tiles_ptr = leak_tile_list(tiles);
+        habitat.amphibious_neighbors_head = leak_neighbor_set(neighbors);
+        habitat
+    }
+
+    /// `getSize`'s `.c` empty arms: an empty owned-tile list counts 0 with or without the neighbor
+    /// walk, and an empty neighbor set adds nothing.
+    #[test]
+    fn get_size_empty_habitat_is_zero() {
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[], &[]);
+        assert_eq!(habitat.get_size(false), 0);
+        assert_eq!(habitat.get_size(true), 0);
+    }
+
+    /// The false arm is exactly the owned-tile node count; a set-but-empty neighbor set adds nothing
+    /// to the true arm.
+    #[test]
+    fn get_size_counts_owned_tiles_without_subhabs() {
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[0x1000, 0x2000, 0x3000], &[]);
+        assert_eq!(habitat.get_size(false), 3);
+        assert_eq!(habitat.get_size(true), 3);
+    }
+
+    /// Each neighbor's own count is added exactly once (the tree's nodes are visited once each by
+    /// the in-order walk; the neighbors' own tile lists are untouched by the sum).
+    #[test]
+    fn get_size_sums_each_neighbor_once() {
+        let b = leak_neighbor_habitat(&[1, 2, 3, 4, 5]);
+        let c = leak_neighbor_habitat(&[1, 2, 3, 4, 5, 6, 7]);
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[0x1000, 0x2000], &[b, c]);
+        assert_eq!(habitat.get_size(false), 2);
+        assert_eq!(habitat.get_size(true), 2 + 5 + 7);
+    }
+
+    /// Recursion re-passes `false` down: B's own neighbor set contains C, but `A.get_size(true)`
+    /// sums A + B only (16, not 25) - the decompile's `getSize(neighbor, '\0')` argument, proven
+    /// positively here without needing a crash-risk cycle fixture.
+    #[test]
+    fn get_size_passes_false_down() {
+        let c = leak_neighbor_habitat(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        let b = leak_neighbor_habitat(&[1, 2, 3, 4, 5, 6, 7]);
+        save_to_memory(b + 0x8, leak_neighbor_set(&[c]));
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[1, 2, 3, 4, 5, 6, 7, 8, 9], &[b]);
+        assert_eq!(habitat.get_size(false), 9);
+        assert_eq!(habitat.get_size(true), 16);
     }
 
     /// `ZTHabitat_isTank.c`/`.asm` - the base virtual is a constant `false` regardless of `self`.

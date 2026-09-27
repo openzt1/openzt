@@ -1051,7 +1051,8 @@ pub(crate) fn run_habitat_set_deterioration_matches_real_live_test(failure_log: 
 }
 
 /// Cross-checks [`crate::zthabitatmgr::walk_tile_list`]'s own node count against real vanilla
-/// `ZTHabitat::getSize(false)` (still un-ported, called via `.original()`) for every real habitat in
+/// `ZTHabitat::getSize(false)` (reached through [`hooks_zthabitatmgr::get_size_real`], since `GET_SIZE`
+/// is detoured) for every real habitat in
 /// the live zoo - both walk the exact same `owned_tiles_ptr` sentinel list, so any offset/layout error
 /// in the reimplemented [`crate::zthabitatmgr::TileListNode`] model (wrong `next` offset, wrong
 /// sentinel-termination check) would show up here as a count mismatch without needing to mutate
@@ -1065,7 +1066,7 @@ pub(crate) fn run_habitat_owned_tiles_count_matches_get_size_live_test(failure_l
         if ptr == 0 {
             continue;
         }
-        let real_size = unsafe { zthabitat::GET_SIZE.original()(ptr as *const u32, false) };
+        let real_size = hooks_zthabitatmgr::get_size_real(ptr as *const u32, false);
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
         let walked_count = crate::zthabitatmgr::walk_tile_list(*habitat.owned_tiles_ptr()).count() as i32;
         if real_size != walked_count {
@@ -1083,6 +1084,63 @@ pub(crate) fn run_habitat_owned_tiles_count_matches_get_size_live_test(failure_l
         write_success_line(failure_log, test_name);
     }
     fail_flag
+}
+
+/// Two-pole comparison of the ported [`ZTHabitat::get_size`] against real vanilla `ZTHabitat::getSize`
+/// (reached through [`hooks_zthabitatmgr::get_size_real`], since `GET_SIZE` is detoured) over every real
+/// habitat in the live zoo, for both `subhabs` values. Pure read on both poles (no
+/// `characteristics_dirty` recalculate, no RNG), so there's no state to restore and no ordering
+/// constraint on where this runs.
+///
+/// Coverage counters ride along in the success line (same pattern as
+/// [`run_check_exhibit_morph_live_test`]'s own probe suffix): a save where no habitat has amphibious
+/// neighbors makes the `subhabs=true` arm a vacuous `0 == 0` comparison on both poles - the counter
+/// makes that visible instead of letting the pass look stronger than it is.
+pub(crate) fn run_habitat_get_size_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_SIZE_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    let mut with_neighbors = 0usize;
+    let mut total_neighbor_visits = 0i64;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        checked += 1;
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for subhabs in [false, true] {
+            let real = hooks_zthabitatmgr::get_size_real(ptr as *const u32, subhabs);
+            let reimpl = habitat.get_size(subhabs);
+            if real != reimpl {
+                failures.push(format!("habitat {} ({:#010x}): getSize(subhabs={}) real={}, reimpl={}", i, ptr, subhabs, real, reimpl));
+            }
+        }
+        if walk_neighbor_tree(*habitat.amphibious_neighbors_head()).next().is_some() {
+            with_neighbors += 1;
+        }
+        total_neighbor_visits += habitat.get_size(true) as i64 - habitat.get_size(false) as i64;
+    }
+
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats checked: {}, with amphibious neighbors: {}, total subhabitat visits: {})",
+                test_name, checked, with_neighbors, total_neighbor_visits
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
 }
 
 /// Smoke test only, like [`run_habitat_listen_smoke_live_test`] - `ZTHabitat::validatePositions` has no
@@ -1148,7 +1206,7 @@ pub(crate) fn run_habitat_add_habitat_tiles_roundtrip_live_test(failure_log: &mu
         if ptr == 0 {
             continue;
         }
-        if unsafe { zthabitat::GET_SIZE.original()(ptr as *const u32, false) } > 0 {
+        if hooks_zthabitatmgr::get_size_real(ptr as *const u32, false) > 0 {
             target = Some((i, ptr));
             break;
         }
@@ -1159,7 +1217,7 @@ pub(crate) fn run_habitat_add_habitat_tiles_roundtrip_live_test(failure_log: &mu
         return false;
     };
 
-    let real_size_before = unsafe { zthabitat::GET_SIZE.original()(ptr as *const u32, false) };
+    let real_size_before = hooks_zthabitatmgr::get_size_real(ptr as *const u32, false);
     let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
     let coords_before: std::collections::HashSet<(i32, i32)> = crate::zthabitatmgr::walk_tile_list(*habitat.owned_tiles_ptr())
         .map(|node| {
@@ -1195,7 +1253,7 @@ pub(crate) fn run_habitat_add_habitat_tiles_roundtrip_live_test(failure_log: &mu
         let _ = log_file.write_all(format!("CHECKPOINT {} habitat {} ({:#010x}) add_habitat_tiles returned\n", test_name, i, ptr).as_bytes());
     }
 
-    let real_size_after = unsafe { zthabitat::GET_SIZE.original()(ptr as *const u32, false) };
+    let real_size_after = hooks_zthabitatmgr::get_size_real(ptr as *const u32, false);
     if real_size_after != real_size_before {
         failures.push(format!("habitat {} ({:#010x}): size before={}, after remove+add={}", i, ptr, real_size_before, real_size_after));
     }
@@ -1306,7 +1364,7 @@ pub(crate) fn run_habitat_remove_habitat_tiles_live_test(failure_log: &mut Optio
         if ptr == 0 {
             continue;
         }
-        if unsafe { zthabitat::GET_SIZE.original()(ptr as *const u32, false) } > 0 {
+        if hooks_zthabitatmgr::get_size_real(ptr as *const u32, false) > 0 {
             target = Some((i, ptr));
             break;
         }
@@ -1332,7 +1390,7 @@ pub(crate) fn run_habitat_remove_habitat_tiles_live_test(failure_log: &mut Optio
         let _ = log_file.write_all(format!("CHECKPOINT {} habitat {} ({:#010x}) remove_habitat_tiles returned\n", test_name, i, ptr).as_bytes());
     }
 
-    let real_size_after = unsafe { zthabitat::GET_SIZE.original()(ptr as *const u32, false) };
+    let real_size_after = hooks_zthabitatmgr::get_size_real(ptr as *const u32, false);
     if real_size_after != 0 {
         failures.push(format!("habitat {} ({:#010x}): real getSize() == {} after remove_habitat_tiles, expected 0", i, ptr, real_size_after));
     }
@@ -1760,7 +1818,7 @@ pub(crate) fn run_habitat_highlight_unhighlight_roundtrip_live_test(failure_log:
         if ptr == 0 {
             continue;
         }
-        if unsafe { zthabitat::GET_SIZE.original()(ptr as *const u32, false) } > 0 {
+        if hooks_zthabitatmgr::get_size_real(ptr as *const u32, false) > 0 {
             target = Some(ptr);
             break;
         }

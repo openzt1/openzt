@@ -15,7 +15,7 @@ use openzt_detour::generated::{
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
-            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, GET_SIZE, RESIZE as ZTHABITAT_RESIZE, SET_NAME as ZTHABITAT_SET_NAME,
+            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, RESIZE as ZTHABITAT_RESIZE, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{AFTER_ENTITY_CHANGE, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
@@ -1199,8 +1199,8 @@ impl ZTHabitatMgr {
                             } else if leads_a_to_b && !leads_b_to_a {
                                 false
                             } else {
-                                let size_b = unsafe { GET_SIZE.original()(habitat_b_ptr as *const u32, false) };
-                                let size_a = unsafe { GET_SIZE.original()(habitat_a_ptr as *const u32, false) };
+                                let size_b = unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) }.get_size(false);
+                                let size_a = unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) }.get_size(false);
                                 size_b < size_a
                             }
                         }

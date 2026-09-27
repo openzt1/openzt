@@ -222,6 +222,10 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_OWNED_TILES_COUNT_MATCHES_GET_SIZE_LIVE",
                 run: tests::zthabitatmgr::run_habitat_owned_tiles_count_matches_get_size_live_test,
             },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_SIZE_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_size_matches_real_live_test,
+            },
             RegisteredTest { name: "ZTHABITAT_VALIDATE_POSITIONS_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_validate_positions_smoke_live_test },
             RegisteredTest { name: "ZTHABITAT_RESET_UNIT_AI_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_reset_unit_ai_smoke_live_test },
             RegisteredTest {
