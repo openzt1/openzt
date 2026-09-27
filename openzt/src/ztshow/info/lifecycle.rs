@@ -10,7 +10,7 @@ use windows::Win32::Foundation::FILETIME;
 
 use crate::{
     globals::globals,
-    util::{get_from_memory, mut_from_memory, save_to_memory},
+    util::{get_from_memory, ref_from_memory, save_to_memory},
 };
 
 use super::{
@@ -246,7 +246,7 @@ pub fn update_from_load(this: u32, source: u32) {
     save_to_memory(dest_state + 0x20, get_from_memory::<u32>(source_state + 0x20));
 
     set_show_info_id(this, new_id);
-    let mgr = unsafe { mut_from_memory::<super::super::mgr::ZTShowMgr>(mgr_ptr as u32) };
+    let mgr = unsafe { ref_from_memory::<super::super::mgr::ZTShowMgr>(mgr_ptr as u32) };
     mgr.register_show(this as *const u32, false);
     if old_id != new_id {
         let old_show = super::super::mgr::ZTShowMgr::get_show_info(old_id);

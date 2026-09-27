@@ -1,7 +1,6 @@
 use std::{
     ffi::{c_char, CStr, CString},
     fmt, marker,
-    mem::transmute,
     path::PathBuf,
     ptr,
 };
@@ -74,11 +73,6 @@ pub unsafe fn mut_from_memory<T>(address: impl MemAddr) -> &'static mut T {
     unsafe { &mut *(address.as_u32() as *mut T) }
 }
 
-// TODO: Test replacing most uses of get_from_memory with map_from_memory : Unclear if we need mem::forget each reference afterwards?
-pub fn map_from_memory<T>(address: impl MemAddr) -> &'static mut T {
-    unsafe { transmute::<u32, &mut T>(address.as_u32()) }
-}
-
 pub fn get_from_memory<T>(address: impl MemAddr) -> T {
     unsafe { ptr::read_volatile(address.as_u32() as *const T) }
 }
@@ -100,8 +94,18 @@ pub fn save_to_memory<T>(address: impl MemAddr, value: T) {
 macro_rules! write_live {
     ($this:expr, $field:ident, $value:expr) => {{
         let field = ::core::ptr::addr_of!($this.$field);
-        unsafe { field.cast_mut().write_volatile($value) }
+        let value = $value;
+        unsafe { field.cast_mut().write_volatile(value) }
     }};
+}
+
+/// Volatile write through a raw pointer taken with `addr_of!` over a place inside a `LiveMemory`
+/// struct - the indexed-element counterpart to [`write_live!`], whose `$field:ident` doesn't accept an
+/// array-indexing place expression (e.g. `self.arr[i]`). Call as
+/// `write_live_ptr(::core::ptr::addr_of!(self.arr[i]), value)`; `T` is inferred from the pointer, so the
+/// value must match the indexed element's real type exactly.
+pub unsafe fn write_live_ptr<T>(ptr: *const T, value: T) {
+    unsafe { ptr.cast_mut().write_volatile(value) }
 }
 
 /// Interprets a raw vanilla return value as a bool using only its low byte, ignoring the upper 3 bytes.
@@ -204,17 +208,24 @@ pub fn save_string_to_memory(address: impl MemAddr, string: &str) {
 pub trait ZTString {
     fn len(&self) -> usize;
     fn capacity(&self) -> usize;
-    fn replace(&mut self, new_string: String) -> anyhow::Result<()>;
+    fn replace(&self, new_string: String) -> anyhow::Result<()>;
     fn get_cstr(&self) -> &CStr;
     fn copy_to_string(&self) -> String;
 }
 
+/// `#[repr(C)]`, sometimes embedded live inside vanilla memory (e.g. `BFEntity::name` at `+0x108`) and
+/// sometimes a plain Rust-owned value (e.g. `ZTResearchProgram::cached_name`, built via
+/// [`ZTBufferString::from_raw_parts`]) - carries the [`LiveMemory`] marker unconditionally, since marking
+/// a Rust-owned instance `!Freeze` is always sound (just forgoes an optimization the compiler wasn't
+/// entitled to make anyway), while omitting it on the live-embedded case would let `replace`'s field write
+/// below be miscompiled.
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ZTBufferString {
     start_ptr: u32,
     end_ptr: u32,
     buffer_end_ptr: u32,
+    pub _live: LiveMemory,
 }
 
 impl ZTBufferString {
@@ -222,7 +233,7 @@ impl ZTBufferString {
     /// callers constructing/repointing the buffer themselves (e.g. allocating via Rust's own
     /// allocator instead of vanilla's game heap).
     pub fn from_raw_parts(start_ptr: u32, end_ptr: u32, buffer_end_ptr: u32) -> Self {
-        Self { start_ptr, end_ptr, buffer_end_ptr }
+        Self { start_ptr, end_ptr, buffer_end_ptr, _live: LiveMemory::default() }
     }
 
     /// The raw `(start_ptr, end_ptr, buffer_end_ptr)` triple, for callers that need to
@@ -247,13 +258,13 @@ impl ZTString for ZTBufferString {
         (self.buffer_end_ptr - self.start_ptr) as usize
     }
 
-    fn replace(&mut self, new_string: String) -> anyhow::Result<()> {
+    fn replace(&self, new_string: String) -> anyhow::Result<()> {
         if new_string.len() + 1 > self.capacity() {
             Err(anyhow::anyhow!("New string is too long"))
         } else {
             let new_end_ptr = self.start_ptr + new_string.len() as u32;
             save_string_to_memory(self.start_ptr, &new_string);
-            self.end_ptr = new_end_ptr;
+            write_live!(self, end_ptr, new_end_ptr);
             Ok(())
         }
     }
@@ -267,11 +278,14 @@ impl ZTString for ZTBufferString {
     }
 }
 
+/// `#[repr(C)]`, embedded live inside vanilla memory (`BFEntityType::zt_type`/`zt_sub_type`) - see
+/// [`ZTBufferString`]'s doc comment for why it carries the [`LiveMemory`] marker unconditionally.
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct ZTBoundedString {
     start_ptr: u32,
     end_ptr: u32,
+    pub _live: LiveMemory,
 }
 
 impl ZTString for ZTBoundedString {
@@ -283,13 +297,13 @@ impl ZTString for ZTBoundedString {
         self.len()
     }
 
-    fn replace(&mut self, new_string: String) -> anyhow::Result<()> {
+    fn replace(&self, new_string: String) -> anyhow::Result<()> {
         if new_string.len() + 1 != self.capacity() {
             Err(anyhow::anyhow!("New string is too long"))
         } else {
             let new_end_ptr = self.start_ptr + new_string.len() as u32;
             save_string_to_memory(self.start_ptr, &new_string);
-            self.end_ptr = new_end_ptr;
+            write_live!(self, end_ptr, new_end_ptr);
             Ok(())
         }
     }
@@ -324,7 +338,7 @@ impl ZTString for ZTStringPtr {
         self.len()
     }
 
-    fn replace(&mut self, _new_string: String) -> anyhow::Result<()> {
+    fn replace(&self, _new_string: String) -> anyhow::Result<()> {
         // TODO: We could probably implement this, by getting the current length of the string and making sure the new string is the exact same size? Or padding with spaces if smaller?
         Err(anyhow::anyhow!("Cannot replace string without bounds"))
     }

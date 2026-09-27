@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::geom::{Direction, IVec3};
 use crate::util::get_from_memory;
+use crate::write_live;
 use crate::ztmapview::BFTile;
 use crate::ztworld::entity::BFEntity;
 
@@ -89,8 +90,8 @@ impl ZTWorldMgr {
         self.zoom_level
     }
 
-    pub fn set_zoom_level(&mut self, zoom_level: i32) {
-        self.zoom_level = zoom_level;
+    pub fn set_zoom_level(&self, zoom_level: i32) {
+        write_live!(self, zoom_level, zoom_level);
     }
 
     /// Get the start of the entity array in memory

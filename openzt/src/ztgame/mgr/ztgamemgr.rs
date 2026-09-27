@@ -88,7 +88,7 @@ use windows::Win32::{
 use crate::{
     command_console::CommandError,
     globals::{get_module_base, globals},
-    util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory},
+    util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
     write_live,
     ztgame::menu_music_handler::MenuMusicHandler,
     ztsoundscape::ZTSoundscape,
@@ -268,7 +268,8 @@ impl ZTGameMgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn set_date_bytes(&self, bytes: [u8; 0x10]) {
-        write_live!(self, date, bytes);
+        // Same size, `#[repr(C)]`, all-u16 fields (no padding, every bit pattern valid) - a sound reinterpret.
+        write_live!(self, date, unsafe { std::mem::transmute::<[u8; 0x10], Systemtime>(bytes) });
     }
 
     #[cfg(feature = "reimplementation-tests")]
@@ -402,7 +403,7 @@ impl ZTGameMgr {
     /// to match vanilla's own call order.
     pub fn spend_research(&self, amount: f32) {
         let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
-        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_research(amount)
+        unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_research(amount)
     }
 
     /// Calls the reimplemented `ZooStatus::spendMarketing` on the same embedded `ZooStatus` sub-object as
@@ -410,7 +411,7 @@ impl ZTGameMgr {
     /// match vanilla's own call order.
     pub fn spend_marketing(&self, amount: f32) {
         let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
-        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_marketing(amount)
+        unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.spend_marketing(amount)
     }
 
     /// Ports `ZTGameMgr::setNewGameDefaults` (vtable `+0x4`), with `BFGameMgr::setNewGameDefaults`'s own
@@ -436,7 +437,7 @@ impl ZTGameMgr {
         write_live!(self, cash, 0.0f32);
 
         let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
-        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.init(config as *const c_void);
+        unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.init(config as *const c_void);
 
         write_live!(self, date, Systemtime {
             w_year: 0x7d1,
@@ -453,7 +454,7 @@ impl ZTGameMgr {
             unsafe { BFAIMGR_LOAD_DATA.original()(globals().ztaimgr_ptr(), false) };
         }
 
-        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.rating_checks();
+        unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.rating_checks();
 
         write_live!(self, elapsed_sim_ticks, 0u32);
     }
@@ -465,7 +466,7 @@ impl ZTGameMgr {
     /// the same shape as [`Self::spend_research`]/[`Self::spend_marketing`].
     pub fn override_new_game_defaults(&self, config: *const u32) {
         let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
-        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.override_config(config as *const c_void)
+        unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.override_config(config as *const c_void)
     }
 
     /// Ports `ZTGameMgr::save` (vtable `+0x8`), with `BFGameMgr::save`'s own base-class body (just
@@ -520,7 +521,7 @@ impl ZTGameMgr {
         }
 
         let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
-        let zoostatus_result = unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.load(file, version);
+        let zoostatus_result = unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.load(file, version);
         if !low_byte_bool(zoostatus_result) {
             return false;
         }
@@ -553,7 +554,7 @@ impl ZTGameMgr {
     /// could diverge for no benefit.
     pub fn update(&self, delta: u32) {
         if self.menu_music_handler_ptr != 0 {
-            unsafe { mut_from_memory::<MenuMusicHandler>(self.menu_music_handler_ptr) }.update(delta);
+            unsafe { ref_from_memory::<MenuMusicHandler>(self.menu_music_handler_ptr) }.update(delta);
         }
     }
 
@@ -590,7 +591,7 @@ impl ZTGameMgr {
         save_to_memory(dat_addr, tick_accumulator);
 
         let zoostatus_ptr = (self as *const Self as u32 + 0x10) as *const u32;
-        unsafe { mut_from_memory::<ZooStatus>(zoostatus_ptr) }.update(delta as i32);
+        unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.update(delta as i32);
 
         if tick_accumulator > 0x3e9 {
             tick_accumulator %= 0x3e9;
@@ -610,7 +611,7 @@ impl ZTGameMgr {
         }
 
         if self.soundscape_ptr != 0 {
-            unsafe { mut_from_memory::<ZTSoundscape>(self.soundscape_ptr) }.update(delta as i32);
+            unsafe { ref_from_memory::<ZTSoundscape>(self.soundscape_ptr) }.update(delta as i32);
         }
 
         let previous_month = self.date.w_month;
@@ -675,7 +676,7 @@ impl ZTGameMgr {
 
             (*this).vtable = BFGAMEMGR_VTABLE;
             let zoostatus_ptr = (this as u32 + 0x10) as *const u32;
-            mut_from_memory::<ZooStatus>(zoostatus_ptr).init(std::ptr::null());
+            ref_from_memory::<ZooStatus>(zoostatus_ptr).init(std::ptr::null());
             (*this).vtable = ZTGAMEMGR_VTABLE;
 
             (*this).soundscape_ptr = 0;
@@ -747,13 +748,13 @@ impl ZTGameMgr {
         write_live!(self, vtable, ZTGAMEMGR_VTABLE);
 
         if self.soundscape_ptr != 0 {
-            unsafe { mut_from_memory::<ZTSoundscape>(self.soundscape_ptr) }.destruct();
+            unsafe { ref_from_memory::<ZTSoundscape>(self.soundscape_ptr) }.destruct();
             unsafe { OPERATOR_DELETE.original()(self.soundscape_ptr) };
             write_live!(self, soundscape_ptr, 0u32);
         }
 
         if self.menu_music_handler_ptr != 0 {
-            unsafe { mut_from_memory::<MenuMusicHandler>(self.menu_music_handler_ptr) }.destruct();
+            unsafe { ref_from_memory::<MenuMusicHandler>(self.menu_music_handler_ptr) }.destruct();
             unsafe { OPERATOR_DELETE.original()(self.menu_music_handler_ptr) };
             write_live!(self, menu_music_handler_ptr, 0u32);
         }
@@ -784,7 +785,7 @@ impl ZTGameMgr {
         let soundscape_ptr = if new_block.is_null() {
             0
         } else {
-            unsafe { mut_from_memory::<ZTSoundscape>(new_block) }.construct();
+            unsafe { ref_from_memory::<ZTSoundscape>(new_block) }.construct();
             new_block as u32
         };
         write_live!(self, soundscape_ptr, soundscape_ptr);
@@ -796,7 +797,7 @@ impl ZTGameMgr {
         let world_config = unsafe { GET_WORLD_CONFIG_NAME.original()(scenariomgr_ptr as i32) };
 
         unsafe {
-            mut_from_memory::<ZTSoundscape>(self.soundscape_ptr).init(
+            ref_from_memory::<ZTSoundscape>(self.soundscape_ptr).init(
                 crowd_ambients,
                 world_ambients,
                 crowd_config,

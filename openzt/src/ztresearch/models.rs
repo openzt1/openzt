@@ -19,7 +19,8 @@ use crate::{
     bfconfigfile::BFConfigFile,
     globals::get_module_base,
     string_registry::load_string_by_id,
-    util::{get_from_memory, mut_from_memory, ref_from_memory, ZTArray, ZTBufferString, ZTString},
+    util::{get_from_memory, ref_from_memory, ZTArray, ZTBufferString, ZTString},
+    write_live,
 };
 
 /// The kind of effect a `ZTResearchProgram` applies once it completes, dispatched by the vanilla
@@ -125,7 +126,7 @@ trait ResearchEffects {
 /// `private/resources/decompiles/ZTResearchProgram_onCompletion.c`: every valid `effect_kind` calls exactly
 /// one underlying effect function, then notifies `ZTUI::zoostatus` iff that call reports success. An
 /// invalid `effect_kind_raw` (anything `ZTResearchEffectKind::try_from` rejects) is a no-op.
-fn dispatch_on_completion(effects: &mut impl ResearchEffects, program: &mut ZTResearchProgram) -> bool {
+fn dispatch_on_completion(effects: &mut impl ResearchEffects, program: &ZTResearchProgram) -> bool {
     let success = match program.effect_kind() {
         Some(ZTResearchEffectKind::UnlockEntity) => {
             effects.set_avail(program.target_id, true);
@@ -141,7 +142,7 @@ fn dispatch_on_completion(effects: &mut impl ResearchEffects, program: &mut ZTRe
         None => return false,
     };
     if success {
-        effects.add_completed_research(program as *mut ZTResearchProgram);
+        effects.add_completed_research(program as *const ZTResearchProgram as *mut ZTResearchProgram);
     }
     success
 }
@@ -166,23 +167,23 @@ fn dispatch_on_completion(effects: &mut impl ResearchEffects, program: &mut ZTRe
 ///   `set*Characteristic`/`setTrickAvailable`/`setEffectDiscount` for every one of these).
 /// - Anything outside `-1..=7`: a genuine no-op (beyond the unconditional `current_progress` reset
 ///   above) - this is the real out-of-range default, confirmed by the `.asm`'s `JA` guard.
-fn dispatch_reset(effects: &mut impl ResearchEffects, program: &mut ZTResearchProgram) -> bool {
-    program.current_progress = 0.0;
+fn dispatch_reset(effects: &mut impl ResearchEffects, program: &ZTResearchProgram) -> bool {
+    write_live!(program, current_progress, 0.0);
     match program.effect_kind_raw {
         0 => {
             effects.set_avail(program.target_id, false);
-            effects.remove_completed_research(program as *mut ZTResearchProgram);
+            effects.remove_completed_research(program as *const ZTResearchProgram as *mut ZTResearchProgram);
             true
         }
         1 => {
             let success = effects.set_building_upgrade(program, false);
             if success {
-                effects.remove_completed_research(program as *mut ZTResearchProgram);
+                effects.remove_completed_research(program as *const ZTResearchProgram as *mut ZTResearchProgram);
             }
             success
         }
         -1 | 2..=7 => {
-            effects.remove_completed_research(program as *mut ZTResearchProgram);
+            effects.remove_completed_research(program as *const ZTResearchProgram as *mut ZTResearchProgram);
             true
         }
         _ => false,
@@ -393,7 +394,7 @@ impl ZTResearchProgram {
     /// `ZTResearchProgram_onCompletion.c` for the source this was reimplemented from. Returns `1` on
     /// success, `0` otherwise (vanilla's raw return value has undefined garbage in its upper 3 bytes -
     /// only the low byte, i.e. this success flag, is ever meaningful).
-    pub fn on_completion(&mut self) -> u32 {
+    pub fn on_completion(&self) -> u32 {
         dispatch_on_completion(&mut LiveResearchEffects, self) as u32
     }
 
@@ -405,12 +406,12 @@ impl ZTResearchProgram {
     /// unconditionally removes the program from the completed-research list with no attempt to undo
     /// the effect. Returns `1` on success, `0` otherwise (see `on_completion`'s doc comment on why the
     /// raw vanilla return value isn't reproduced exactly).
-    pub fn reset(&mut self) -> u32 {
+    pub fn reset(&self) -> u32 {
         dispatch_reset(&mut LiveResearchEffects, self) as u32
     }
 
-    pub fn load_program(&mut self, reader: *const u32) -> bool {
-        unsafe { ztresearchprogram::LOAD_PROGRAM.original()((self as *mut Self) as *const u32, reader) }
+    pub fn load_program(&self, reader: *const u32) -> bool {
+        unsafe { ztresearchprogram::LOAD_PROGRAM.original()((self as *const Self) as *const u32, reader) }
     }
 }
 
@@ -726,8 +727,8 @@ impl ZTResearchCategory {
     /// (a multi-select list, not a single "current category" picker), and read by
     /// `ZTResearchBranch::pick_random_program`/persisted by `ZTResearchMgr::save` like the rest of
     /// the category's state.
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled as u8;
+    pub fn set_enabled(&self, enabled: bool) {
+        write_live!(self, enabled, enabled as u8);
     }
 
     pub fn expansion_id(&self) -> i32 {
@@ -742,22 +743,14 @@ impl ZTResearchCategory {
         unsafe { ref_from_memory(self.program_array.get_ptr(index)) }
     }
 
-    pub fn program_mut(&self, index: usize) -> &'static mut ZTResearchProgram {
-        unsafe { mut_from_memory(self.program_array.get_ptr(index)) }
-    }
-
     pub fn programs(&self) -> impl Iterator<Item = &'static ZTResearchProgram> + '_ {
         (0..self.program_count()).map(move |i| self.program(i))
     }
 
-    pub fn programs_mut(&self) -> impl Iterator<Item = &'static mut ZTResearchProgram> + '_ {
-        (0..self.program_count()).map(move |i| self.program_mut(i))
-    }
-
     /// Calls the vanilla `ZTResearchCategory::loadCategory`; used while reading a mod/save's
     /// research definitions. `reader` is whatever stream/buffer pointer the original expects.
-    pub fn load_category(&mut self, reader: *const i32) -> bool {
-        unsafe { ztresearchcategory::LOAD_CATEGORY.original()((self as *mut Self) as *const u32, reader) }
+    pub fn load_category(&self, reader: *const i32) -> bool {
+        unsafe { ztresearchcategory::LOAD_CATEGORY.original()((self as *const Self) as *const u32, reader) }
     }
 
     /// Clears this category back to an empty, disabled-id state in place. Which implementation runs
@@ -867,16 +860,8 @@ impl ZTResearchBranch {
         unsafe { ref_from_memory(self.category_array.get_ptr(index)) }
     }
 
-    pub fn category_mut(&self, index: usize) -> &'static mut ZTResearchCategory {
-        unsafe { mut_from_memory(self.category_array.get_ptr(index)) }
-    }
-
     pub fn categories(&self) -> impl Iterator<Item = &'static ZTResearchCategory> + '_ {
         (0..self.category_count()).map(move |i| self.category(i))
-    }
-
-    pub fn categories_mut(&self) -> impl Iterator<Item = &'static mut ZTResearchCategory> + '_ {
-        (0..self.category_count()).map(move |i| self.category_mut(i))
     }
 
     pub fn current_category(&self) -> Option<&'static ZTResearchCategory> {
@@ -885,12 +870,6 @@ impl ZTResearchBranch {
 
     pub fn current_program(&self) -> Option<&'static ZTResearchProgram> {
         (self.current_program_ptr != 0).then(|| unsafe { ref_from_memory(self.current_program_ptr) })
-    }
-
-    /// Mutable counterpart to `current_program`, used by `update` to accumulate progress on the
-    /// selected program.
-    pub(crate) fn current_program_mut(&self) -> Option<&'static mut ZTResearchProgram> {
-        (self.current_program_ptr != 0).then(|| unsafe { mut_from_memory(self.current_program_ptr) })
     }
 
     pub fn current_funding_level(&self) -> i32 {
@@ -923,23 +902,23 @@ impl ZTResearchBranch {
     /// `current_funding_level == -1` doesn't diverge (`-1 + 1 == 0`, non-negative either way). A naive
     /// signed `<` would disagree with vanilla for `current_funding_level <= -2` (confirmed live via
     /// `ZTRESEARCHBRANCH_FUNDING`).
-    pub fn increase_funding(&mut self) {
+    pub fn increase_funding(&self) {
         let count = self.funding_level_count() as i32;
         if count == 0 {
-            self.current_funding_level = 0;
+            write_live!(self, current_funding_level, 0);
         } else if (self.current_funding_level.wrapping_add(1) as u32) < count as u32 {
-            self.current_funding_level = self.current_funding_level.wrapping_add(1);
+            write_live!(self, current_funding_level, self.current_funding_level.wrapping_add(1));
         } else {
-            self.current_funding_level = count - 1;
+            write_live!(self, current_funding_level, count - 1);
         }
     }
 
     /// Reimplementation of `OOAnalyzer::ZTResearchBranch::decreaseFunding`.
-    pub fn decrease_funding(&mut self) {
+    pub fn decrease_funding(&self) {
         if self.funding_level_count() > 0 && self.current_funding_level != 0 {
-            self.current_funding_level -= 1;
+            write_live!(self, current_funding_level, self.current_funding_level - 1);
         } else {
-            self.current_funding_level = 0;
+            write_live!(self, current_funding_level, 0);
         }
     }
 
@@ -1019,7 +998,7 @@ impl ZTResearchBranch {
     /// dynamically-substituted caption text. This is a cosmetic gap only - every gameplay-affecting
     /// side effect (cash, progress, completion effects, program selection) still happens exactly as
     /// vanilla does.
-    pub fn update(&mut self, days: u32) {
+    pub fn update(&self, days: u32) {
         let should_check_expansion =
             global_always_check_expansion() || unsafe { ztui_expansionselect::GET_ANY_EXPANSIONS_DISABLED.original()() };
 
@@ -1044,16 +1023,17 @@ impl ZTResearchBranch {
         let cash = unsafe { &*global_ztgamemgr_ptr() }.cash();
         let (cash_delta, progress_delta) = predict_branch_progress(days, level.cost(), level.rate(), cash);
         if cash_delta != 0.0 || progress_delta != 0.0 {
-            unsafe { &mut *global_ztgamemgr_ptr() }.spend_research(cash_delta);
-            unsafe { &mut *global_ztgamemgr_ptr() }.subtract_cash(cash_delta);
-            self.current_program_mut().expect("checked above").current_progress += progress_delta;
+            unsafe { &*global_ztgamemgr_ptr() }.spend_research(cash_delta);
+            unsafe { &*global_ztgamemgr_ptr() }.subtract_cash(cash_delta);
+            let program = self.current_program().expect("checked above");
+            write_live!(program, current_progress, program.current_progress + progress_delta);
         }
 
         let program = self.current_program().expect("checked above");
         if program.current_progress < program.target_cost {
             return;
         }
-        self.current_program_mut().expect("checked above").on_completion();
+        program.on_completion();
 
         let icon = get_research_dialog_element(RESEARCH_DIALOG_ICON_ELEMENT_ID);
         let label_present = get_research_dialog_element(RESEARCH_DIALOG_LABEL_ELEMENT_ID).is_some();
@@ -1070,16 +1050,16 @@ impl ZTResearchBranch {
     /// active program (preferring one already in progress) using the game's own RNG stream.
     /// Reimplementing this natively risks desyncing that RNG stream from the rest of the game, so
     /// it's left as a call into the original implementation.
-    pub fn pick_random_program(&mut self) {
-        unsafe { ztresearchbranch::PICK_RANDOM_PROGRAM.original()((self as *mut Self) as *const u32) }
+    pub fn pick_random_program(&self) {
+        unsafe { ztresearchbranch::PICK_RANDOM_PROGRAM.original()((self as *const Self) as *const u32) }
     }
 
     /// Calls the vanilla `ZTResearchBranch::loadBranch`, which reads a `.cfg` file (the same shape
     /// as this struct's own doc comment) and populates this branch's fields/`category_array`/funding
     /// table from it - the branch-level counterpart to `ZTResearchCategory::load_category`/
     /// `ZTResearchProgram::load_program`. `path` is a null-terminated path string.
-    pub fn load_branch(&mut self, path: *const i8) -> bool {
-        unsafe { ztresearchbranch::LOAD_BRANCH.original()((self as *mut Self) as *const u32, path) }
+    pub fn load_branch(&self, path: *const i8) -> bool {
+        unsafe { ztresearchbranch::LOAD_BRANCH.original()((self as *const Self) as *const u32, path) }
     }
 
     /// Resets `id` to `-1`, empties the cached name/desc buffers, zeroes

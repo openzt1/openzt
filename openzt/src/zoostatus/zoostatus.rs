@@ -41,8 +41,9 @@ use tracing::error;
 
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, get_ini_path, ref_from_memory, save_to_memory},
+    util::{get_from_memory, get_ini_path, ref_from_memory, save_to_memory, write_live_ptr},
     vanilla_string::VanillaString,
+    write_live,
     zthabitatmgr::ZTHabitat,
     vanilla_vector::VanillaFloatVector,
     ztworldmgr::IVec3,
@@ -718,7 +719,14 @@ fn write_bytes_to_file<T>(value: &T, file: *const i8) -> bool {
 /// [`write_bytes_to_file`]'s counterpart doc comment for the full `.hooked()`/`io_redirect` reasoning,
 /// which applies identically here).
 fn read_bytes<T>(value: &mut T, file: *const u32) -> bool {
-    unsafe { DEALLOCATE.hooked()(value as *mut T as *const u32, mem::size_of::<T>() as u32, 1, file as *const u8) == 1 }
+    read_bytes_at(value as *mut T, file)
+}
+
+/// [`read_bytes`]'s raw-pointer counterpart, for reading straight into a place inside a live `ZooStatus`.
+/// `self` is `&self` (see the module's `!Freeze`/`LiveMemory` discipline), so a field there is reached
+/// via `addr_of!(self.field).cast_mut()`, never a `&mut` reference.
+fn read_bytes_at<T>(ptr: *mut T, file: *const u32) -> bool {
+    unsafe { DEALLOCATE.hooked()(ptr as *const u32, mem::size_of::<T>() as u32, 1, file as *const u8) == 1 }
 }
 
 impl ZooStatus {
@@ -753,121 +761,121 @@ impl ZooStatus {
     /// `setAdultAdmissionPrice` is called with whatever was already at that offset before `init` ran
     /// (vanilla's own `init` never writes `+0x1150` itself either), so this method must not assign
     /// [`Self::admission_price`] before that call.
-    pub fn init(&mut self, config: *const c_void) {
-        self.rating_check_interval = 10000;
-        self.message_check_interval = 10000;
-        self.newguest_check_interval = 10000;
-        self.rating_check_elapsed = 0;
-        self.message_check_elapsed = 0;
-        self.newguest_check_elapsed = 0;
-        self.finance_check_pending = false;
-        self.zoo_rating_current = 0;
-        self.num_animals = 0;
+    pub fn init(&self, config: *const c_void) {
+        write_live!(self, rating_check_interval, 10000);
+        write_live!(self, message_check_interval, 10000);
+        write_live!(self, newguest_check_interval, 10000);
+        write_live!(self, rating_check_elapsed, 0);
+        write_live!(self, message_check_elapsed, 0);
+        write_live!(self, newguest_check_elapsed, 0);
+        write_live!(self, finance_check_pending, false);
+        write_live!(self, zoo_rating_current, 0);
+        write_live!(self, num_animals, 0);
         // num_species/animal_condition_counter_1 (+0x24/+0x28) are deliberately left untouched -
         // `init.asm` does not zero them either (they're always freshly recomputed by `calculateSums`).
-        self.num_tired_guests = 0;
-        self.num_hungry_guests = 0;
-        self.num_thirst_guests = 0;
-        self.num_guests_restroom_need = 0;
-        self.guest_condition_counter_1 = 0;
-        self.guest_condition_counter_2 = 0;
-        self.guest_tile_count = 0;
-        self.field_0x48 = 2;
-        self.field_0x4c = 10000;
-        self.field_0x50 = 0;
-        self.field_0x54 = 0;
-        self.field_0x58 = 0;
-        self.animal_rating_metric = 0;
-        self.guest_rating_metric = 0;
-        self.non_blank_tile_fraction = 0.0;
-        self.research_completion_percent = 0;
+        write_live!(self, num_tired_guests, 0);
+        write_live!(self, num_hungry_guests, 0);
+        write_live!(self, num_thirst_guests, 0);
+        write_live!(self, num_guests_restroom_need, 0);
+        write_live!(self, guest_condition_counter_1, 0);
+        write_live!(self, guest_condition_counter_2, 0);
+        write_live!(self, guest_tile_count, 0);
+        write_live!(self, field_0x48, 2);
+        write_live!(self, field_0x4c, 10000);
+        write_live!(self, field_0x50, 0);
+        write_live!(self, field_0x54, 0);
+        write_live!(self, field_0x58, 0);
+        write_live!(self, animal_rating_metric, 0);
+        write_live!(self, guest_rating_metric, 0);
+        write_live!(self, non_blank_tile_fraction, 0.0);
+        write_live!(self, research_completion_percent, 0);
 
         self.zero_history_regions();
-        self.current_month_index = 1;
-        self.current_year_index = 0;
+        write_live!(self, current_month_index, 1);
+        write_live!(self, current_year_index, 0);
 
         let mut zoo_ini = Ini::new();
         zoo_ini.set_comment_symbols(&['#']);
         if let Err(e) = zoo_ini.load(get_ini_path()) {
             error!("ZooStatus::init: failed to load zoo.ini, using AI-section defaults: {e}");
         }
-        self.max_guests = zoo_ini.get_parse::<i32>("AI", "maxGuests").unwrap_or(Some(1000)).unwrap_or(1000);
+        write_live!(self, max_guests, zoo_ini.get_parse::<i32>("AI", "maxGuests").unwrap_or(Some(1000)).unwrap_or(1000));
         let escape_decay_baseline = zoo_ini.get_parse::<i32>("AI", "cEscapedAnimalChange").unwrap_or(Some(50)).unwrap_or(50);
         let escape_decay_per_day = zoo_ini.get_parse::<i32>("AI", "cEscapedAnimalTime").unwrap_or(Some(2)).unwrap_or(2);
         let base = get_module_base("zoo.exe") as u32;
         save_to_memory(base + raw_globals::ESCAPE_DECAY_BASELINE_RVA, escape_decay_baseline);
         save_to_memory(base + raw_globals::ESCAPE_DECAY_PER_DAY_RVA, escape_decay_per_day);
 
-        self.message_threshold_0x70 = 0.5;
-        self.message_threshold_0x74 = 0.5;
-        self.message_threshold_0x7c = 0.5;
-        self.message_threshold_0x84 = 0.5;
-        self.message_threshold_0x8c = 0.5;
-        self.message_threshold_0x94 = 0.5;
-        self.message_threshold_0xa0 = 0.5;
-        self.message_threshold_0xa8 = 0.5;
-        self.angry_animals_sick_change = 0;
-        self.angry_hungry_guests_change = 0;
-        self.angry_thirsty_guests_change = 0;
-        self.angry_bathroom_guests_change = 0;
-        self.angry_souvenir_guests_change = 0;
-        self.angry_remove_animal_change = 0;
-        self.angry_tired_guests_change = 0;
-        self.angry_trash_guests_change = 0;
+        write_live!(self, message_threshold_0x70, 0.5);
+        write_live!(self, message_threshold_0x74, 0.5);
+        write_live!(self, message_threshold_0x7c, 0.5);
+        write_live!(self, message_threshold_0x84, 0.5);
+        write_live!(self, message_threshold_0x8c, 0.5);
+        write_live!(self, message_threshold_0x94, 0.5);
+        write_live!(self, message_threshold_0xa0, 0.5);
+        write_live!(self, message_threshold_0xa8, 0.5);
+        write_live!(self, angry_animals_sick_change, 0);
+        write_live!(self, angry_hungry_guests_change, 0);
+        write_live!(self, angry_thirsty_guests_change, 0);
+        write_live!(self, angry_bathroom_guests_change, 0);
+        write_live!(self, angry_souvenir_guests_change, 0);
+        write_live!(self, angry_remove_animal_change, 0);
+        write_live!(self, angry_tired_guests_change, 0);
+        write_live!(self, angry_trash_guests_change, 0);
 
-        self.guest_type_arrival_multiplier = [1; 5];
+        write_live!(self, guest_type_arrival_multiplier, [1; 5]);
 
-        self.loan_available = 0;
-        self.high_zoo_value_change = 0;
-        self.low_zoo_value_change = 0;
-        self.high_zoo_value = f32::from_bits(0x47c35000); // 97400.0
-        self.low_zoo_value = 0.0;
-        self.high_species_threshold = 10;
-        self.happy_diverse_animals_change = 0;
-        self.low_species_threshold = 2;
-        self.angry_diverse_animals_change = 0;
-        self.high_avg_animal_happy_threshold = 90;
-        self.happy_animals_change = 10;
-        self.low_avg_animal_happy_threshold = 0;
-        self.angry_animals_change = 0;
-        self.high_avg_guest_happy_threshold = 90;
-        self.happy_guest_change = 10;
-        self.low_avg_guest_happy_threshold = 0;
-        self.angry_guest_change = 0;
-        self.item_cheap = f32::from_bits(0x3f4ccccd); // 0.7999...
-        self.item_expensive = f32::from_bits(0x3f99999a); // 1.2
+        write_live!(self, loan_available, 0);
+        write_live!(self, high_zoo_value_change, 0);
+        write_live!(self, low_zoo_value_change, 0);
+        write_live!(self, high_zoo_value, f32::from_bits(0x47c35000)); // 97400.0
+        write_live!(self, low_zoo_value, 0.0);
+        write_live!(self, high_species_threshold, 10);
+        write_live!(self, happy_diverse_animals_change, 0);
+        write_live!(self, low_species_threshold, 2);
+        write_live!(self, angry_diverse_animals_change, 0);
+        write_live!(self, high_avg_animal_happy_threshold, 90);
+        write_live!(self, happy_animals_change, 10);
+        write_live!(self, low_avg_animal_happy_threshold, 0);
+        write_live!(self, angry_animals_change, 0);
+        write_live!(self, high_avg_guest_happy_threshold, 90);
+        write_live!(self, happy_guest_change, 10);
+        write_live!(self, low_avg_guest_happy_threshold, 0);
+        write_live!(self, angry_guest_change, 0);
+        write_live!(self, item_cheap, f32::from_bits(0x3f4ccccd)); // 0.7999...
+        write_live!(self, item_expensive, f32::from_bits(0x3f99999a)); // 1.2
 
-        self.donation_count_this_period = 0.0;
-        self.donation_count_bound = 3;
-        self.donation_amount_min = 10000;
-        self.donation_amount_max = 20000;
+        write_live!(self, donation_count_this_period, 0.0);
+        write_live!(self, donation_count_bound, 3);
+        write_live!(self, donation_amount_min, 10000);
+        write_live!(self, donation_amount_max, 20000);
 
-        self.donation_chance_percent = 0;
-        self.species_rating_cap = 44;
-        self.membership_join_happiness = 80;
-        self.membership_join_factor = 10;
-        self.endowment_gift_low = 10000;
-        self.endowment_gift_high = 20000;
-        self.membership_join_chance = 50;
-        self.high_zoo_esthetic = f32::from_bits(0x3e4ccccd); // 0.2
-        self.high_zoo_esthetic_change = 0;
-        self.low_zoo_esthetic = 0.0;
-        self.low_zoo_esthetic_change = 0;
-        self.research_cost = f32::from_bits(0x447a0000); // 1000.0
+        write_live!(self, donation_chance_percent, 0);
+        write_live!(self, species_rating_cap, 44);
+        write_live!(self, membership_join_happiness, 80);
+        write_live!(self, membership_join_factor, 10);
+        write_live!(self, endowment_gift_low, 10000);
+        write_live!(self, endowment_gift_high, 20000);
+        write_live!(self, membership_join_chance, 50);
+        write_live!(self, high_zoo_esthetic, f32::from_bits(0x3e4ccccd)); // 0.2
+        write_live!(self, high_zoo_esthetic_change, 0);
+        write_live!(self, low_zoo_esthetic, 0.0);
+        write_live!(self, low_zoo_esthetic_change, 0);
+        write_live!(self, research_cost, f32::from_bits(0x447a0000)); // 1000.0
 
-        self.pricing_factor = f32::from_bits(0x3f800000); // 1.0
-        self.donation_factor = f32::from_bits(0x2a9c5fff);
-        self.building_use_cost_default = f32::from_bits(0x41e80000); // 29.0
-        self.building_use_cost_max = f32::from_bits(0x42c80000); // 100.0
-        self.zoo_doo_recycling_amount = f32::from_bits(0x42480000); // 50.0
-        self.admission_income_multiplier = f32::from_bits(0x3f800000); // 1.0
+        write_live!(self, pricing_factor, f32::from_bits(0x3f800000)); // 1.0
+        write_live!(self, donation_factor, f32::from_bits(0x2a9c5fff));
+        write_live!(self, building_use_cost_default, f32::from_bits(0x41e80000)); // 29.0
+        write_live!(self, building_use_cost_max, f32::from_bits(0x42c80000)); // 100.0
+        write_live!(self, zoo_doo_recycling_amount, f32::from_bits(0x42480000)); // 50.0
+        write_live!(self, admission_income_multiplier, f32::from_bits(0x3f800000)); // 1.0
 
         let old_date = unsafe { GET_OLD_DATE.original()() } as u64;
-        self.last_animal_escape_timestamp_low = old_date as u32;
-        self.last_animal_escape_timestamp_high = (old_date >> 32) as u32;
+        write_live!(self, last_animal_escape_timestamp_low, old_date as u32);
+        write_live!(self, last_animal_escape_timestamp_high, (old_date >> 32) as u32);
 
-        self.admission_price_min = 0.0;
-        self.admission_price_max = f32::from_bits(0x42c80000); // 100.0
+        write_live!(self, admission_price_min, 0.0);
+        write_live!(self, admission_price_max, f32::from_bits(0x42c80000)); // 100.0
 
         // admission_price (+0x1150) is deliberately never written above - see this method's doc
         // comment. Whatever the buffer already held gets clamped in place by the call below.
@@ -929,7 +937,7 @@ impl ZooStatus {
     /// live-verified byte-identical against real vanilla by `ZOOSTATUS_OVERRIDE`
     /// (`reimplementation_tests/mod.rs`), which runs both poles against the same real, loaded
     /// `economy.cfg` and confirms this write lands in the same place real vanilla's does.
-    pub fn override_config(&mut self, config: *const c_void) {
+    pub fn override_config(&self, config: *const c_void) {
         if config.is_null() {
             return;
         }
@@ -946,9 +954,9 @@ impl ZooStatus {
             GET_FLOAT.original()(config_ptr, base + section, base + key, out as *const f32);
         };
 
-        get_i(CHECKS_SECTION_RVA, RATING_KEY_RVA, &raw mut self.rating_check_interval);
-        get_i(CHECKS_SECTION_RVA, MESSAGE_KEY_RVA, &raw mut self.message_check_interval);
-        get_i(CHECKS_SECTION_RVA, NEWGUEST_KEY_RVA, &raw mut self.newguest_check_interval);
+        get_i(CHECKS_SECTION_RVA, RATING_KEY_RVA, ::core::ptr::addr_of!(self.rating_check_interval).cast_mut());
+        get_i(CHECKS_SECTION_RVA, MESSAGE_KEY_RVA, ::core::ptr::addr_of!(self.message_check_interval).cast_mut());
+        get_i(CHECKS_SECTION_RVA, NEWGUEST_KEY_RVA, ::core::ptr::addr_of!(self.newguest_check_interval).cast_mut());
 
         // cAdultAdmission getFloatList + copy loop (formerly an opaque `FUN_00591c0f` tail-call - see
         // this method's own doc comment for how that got resolved). Writes into a global, not `this` -
@@ -975,76 +983,78 @@ impl ZooStatus {
             }
         }
 
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_ANIMALS_SICK_CHANGE_KEY_RVA, &raw mut self.angry_animals_sick_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_SICK_KEY_RVA, &raw mut self.message_threshold_0x70);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_PROTESTORS_KEY_RVA, &raw mut self.message_threshold_0x74);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_HUNGRY_GUESTS_CHANGE_KEY_RVA, &raw mut self.angry_hungry_guests_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_HUNGRY_KEY_RVA, &raw mut self.message_threshold_0x7c);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_THIRSTY_GUESTS_CHANGE_KEY_RVA, &raw mut self.angry_thirsty_guests_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_THIRSTY_KEY_RVA, &raw mut self.message_threshold_0x84);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_BATHROOM_GUESTS_CHANGE_KEY_RVA, &raw mut self.angry_bathroom_guests_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_BATHROOM_KEY_RVA, &raw mut self.message_threshold_0x8c);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_SOUVENIR_GUESTS_CHANGE_KEY_RVA, &raw mut self.angry_souvenir_guests_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_SOUVENIR_KEY_RVA, &raw mut self.message_threshold_0x94);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_REMOVE_ANIMAL_CHANGE_KEY_RVA, &raw mut self.angry_remove_animal_change);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_TIRED_GUESTS_CHANGE_KEY_RVA, &raw mut self.angry_tired_guests_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_TIRED_KEY_RVA, &raw mut self.message_threshold_0xa0);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_TRASH_GUESTS_CHANGE_KEY_RVA, &raw mut self.angry_trash_guests_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_TRASH_KEY_RVA, &raw mut self.message_threshold_0xa8);
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_ANIMALS_SICK_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_animals_sick_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_SICK_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0x70).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_PROTESTORS_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0x74).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_HUNGRY_GUESTS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_hungry_guests_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_HUNGRY_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0x7c).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_THIRSTY_GUESTS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_thirsty_guests_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_THIRSTY_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0x84).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_BATHROOM_GUESTS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_bathroom_guests_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_BATHROOM_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0x8c).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_SOUVENIR_GUESTS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_souvenir_guests_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_SOUVENIR_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0x94).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_REMOVE_ANIMAL_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_remove_animal_change).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_TIRED_GUESTS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_tired_guests_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_TIRED_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0xa0).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_TRASH_GUESTS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_trash_guests_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PCT_TRASH_KEY_RVA, ::core::ptr::addr_of!(self.message_threshold_0xa8).cast_mut());
 
-        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_VERY_LOW_KEY_RVA, &raw mut self.guest_type_arrival_multiplier[0]);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_LOW_KEY_RVA, &raw mut self.guest_type_arrival_multiplier[1]);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_MED_KEY_RVA, &raw mut self.guest_type_arrival_multiplier[2]);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_HIGH_KEY_RVA, &raw mut self.guest_type_arrival_multiplier[3]);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_VERY_HIGH_KEY_RVA, &raw mut self.guest_type_arrival_multiplier[4]);
+        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_VERY_LOW_KEY_RVA, ::core::ptr::addr_of!(self.guest_type_arrival_multiplier[0]).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_LOW_KEY_RVA, ::core::ptr::addr_of!(self.guest_type_arrival_multiplier[1]).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_MED_KEY_RVA, ::core::ptr::addr_of!(self.guest_type_arrival_multiplier[2]).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_HIGH_KEY_RVA, ::core::ptr::addr_of!(self.guest_type_arrival_multiplier[3]).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_CREATE_GUEST_CHANCE_VERY_HIGH_KEY_RVA, ::core::ptr::addr_of!(self.guest_type_arrival_multiplier[4]).cast_mut());
 
-        get_i(CHARACTERISTICS_SECTION_RVA, C_LOAN_AVAILABLE_KEY_RVA, &raw mut self.loan_available);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_VALUE_CHANGE_KEY_RVA, &raw mut self.high_zoo_value_change);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_VALUE_CHANGE_KEY_RVA, &raw mut self.low_zoo_value_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_VALUE_KEY_RVA, &raw mut self.high_zoo_value);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_VALUE_KEY_RVA, &raw mut self.low_zoo_value);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_SPECIES_THRESHOLD_KEY_RVA, &raw mut self.high_species_threshold);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HAPPY_DIVERSE_ANIMALS_CHANGE_KEY_RVA, &raw mut self.happy_diverse_animals_change);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_SPECIES_THRESHOLD_KEY_RVA, &raw mut self.low_species_threshold);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_DIVERSE_ANIMALS_CHANGE_KEY_RVA, &raw mut self.angry_diverse_animals_change);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_AVG_ANIMAL_HAPPY_THRESHOLD_KEY_RVA, &raw mut self.high_avg_animal_happy_threshold);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HAPPY_ANIMALS_CHANGE_KEY_RVA, &raw mut self.happy_animals_change);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_AVG_ANIMAL_HAPPY_THRESHOLD_KEY_RVA, &raw mut self.low_avg_animal_happy_threshold);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_ANIMALS_CHANGE_KEY_RVA, &raw mut self.angry_animals_change);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_AVG_GUEST_HAPPY_THRESHOLD_KEY_RVA, &raw mut self.high_avg_guest_happy_threshold);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HAPPY_GUEST_CHANGE_KEY_RVA, &raw mut self.happy_guest_change);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_AVG_GUEST_HAPPY_THRESHOLD_KEY_RVA, &raw mut self.low_avg_guest_happy_threshold);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_GUEST_CHANGE_KEY_RVA, &raw mut self.angry_guest_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_ITEM_CHEAP_KEY_RVA, &raw mut self.item_cheap);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_ITEM_EXPENSIVE_KEY_RVA, &raw mut self.item_expensive);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_ESTHETIC_KEY_RVA, &raw mut self.high_zoo_esthetic);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_ESTHETIC_CHANGE_KEY_RVA, &raw mut self.high_zoo_esthetic_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_ESTHETIC_KEY_RVA, &raw mut self.low_zoo_esthetic);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_ESTHETIC_CHANGE_KEY_RVA, &raw mut self.low_zoo_esthetic_change);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_RESEARCH_COST_KEY_RVA, &raw mut self.research_cost);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_ADMISSION_MULTIPLE_KEY_RVA, &raw mut self.admission_income_multiplier);
+        get_i(CHARACTERISTICS_SECTION_RVA, C_LOAN_AVAILABLE_KEY_RVA, ::core::ptr::addr_of!(self.loan_available).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_VALUE_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.high_zoo_value_change).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_VALUE_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.low_zoo_value_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_VALUE_KEY_RVA, ::core::ptr::addr_of!(self.high_zoo_value).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_VALUE_KEY_RVA, ::core::ptr::addr_of!(self.low_zoo_value).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_SPECIES_THRESHOLD_KEY_RVA, ::core::ptr::addr_of!(self.high_species_threshold).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HAPPY_DIVERSE_ANIMALS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.happy_diverse_animals_change).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_SPECIES_THRESHOLD_KEY_RVA, ::core::ptr::addr_of!(self.low_species_threshold).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_DIVERSE_ANIMALS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_diverse_animals_change).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_AVG_ANIMAL_HAPPY_THRESHOLD_KEY_RVA, ::core::ptr::addr_of!(self.high_avg_animal_happy_threshold).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HAPPY_ANIMALS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.happy_animals_change).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_AVG_ANIMAL_HAPPY_THRESHOLD_KEY_RVA, ::core::ptr::addr_of!(self.low_avg_animal_happy_threshold).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_ANIMALS_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_animals_change).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_AVG_GUEST_HAPPY_THRESHOLD_KEY_RVA, ::core::ptr::addr_of!(self.high_avg_guest_happy_threshold).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HAPPY_GUEST_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.happy_guest_change).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_AVG_GUEST_HAPPY_THRESHOLD_KEY_RVA, ::core::ptr::addr_of!(self.low_avg_guest_happy_threshold).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ANGRY_GUEST_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.angry_guest_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_ITEM_CHEAP_KEY_RVA, ::core::ptr::addr_of!(self.item_cheap).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_ITEM_EXPENSIVE_KEY_RVA, ::core::ptr::addr_of!(self.item_expensive).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_ESTHETIC_KEY_RVA, ::core::ptr::addr_of!(self.high_zoo_esthetic).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_HIGH_ZOO_ESTHETIC_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.high_zoo_esthetic_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_ESTHETIC_KEY_RVA, ::core::ptr::addr_of!(self.low_zoo_esthetic).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_LOW_ZOO_ESTHETIC_CHANGE_KEY_RVA, ::core::ptr::addr_of!(self.low_zoo_esthetic_change).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_RESEARCH_COST_KEY_RVA, ::core::ptr::addr_of!(self.research_cost).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_ADMISSION_MULTIPLE_KEY_RVA, ::core::ptr::addr_of!(self.admission_income_multiplier).cast_mut());
 
-        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATIONS_AVAIL_KEY_RVA, &raw mut self.donation_count_bound);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATION_LOW_KEY_RVA, &raw mut self.donation_amount_min);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATION_HIGH_KEY_RVA, &raw mut self.donation_amount_max);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATION_CHANCE_KEY_RVA, &raw mut self.donation_chance_percent);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_SPECIES_AVAILABLE_KEY_RVA, &raw mut self.species_rating_cap);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_MEMBERSHIP_JOIN_FACTOR_KEY_RVA, &raw mut self.membership_join_factor);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_MEMBERSHIP_JOIN_HAPPINESS_KEY_RVA, &raw mut self.membership_join_happiness);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ENDOWMENT_GIFT_LOW_KEY_RVA, &raw mut self.endowment_gift_low);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_ENDOWMENT_GIFT_HIGH_KEY_RVA, &raw mut self.endowment_gift_high);
-        get_i(CHARACTERISTICS_SECTION_RVA, C_MEMBERSHIP_JOIN_CHANCE_KEY_RVA, &raw mut self.membership_join_chance);
+        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATIONS_AVAIL_KEY_RVA, ::core::ptr::addr_of!(self.donation_count_bound).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATION_LOW_KEY_RVA, ::core::ptr::addr_of!(self.donation_amount_min).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATION_HIGH_KEY_RVA, ::core::ptr::addr_of!(self.donation_amount_max).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_DONATION_CHANCE_KEY_RVA, ::core::ptr::addr_of!(self.donation_chance_percent).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_SPECIES_AVAILABLE_KEY_RVA, ::core::ptr::addr_of!(self.species_rating_cap).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_MEMBERSHIP_JOIN_FACTOR_KEY_RVA, ::core::ptr::addr_of!(self.membership_join_factor).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_MEMBERSHIP_JOIN_HAPPINESS_KEY_RVA, ::core::ptr::addr_of!(self.membership_join_happiness).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ENDOWMENT_GIFT_LOW_KEY_RVA, ::core::ptr::addr_of!(self.endowment_gift_low).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_ENDOWMENT_GIFT_HIGH_KEY_RVA, ::core::ptr::addr_of!(self.endowment_gift_high).cast_mut());
+        get_i(CHARACTERISTICS_SECTION_RVA, C_MEMBERSHIP_JOIN_CHANCE_KEY_RVA, ::core::ptr::addr_of!(self.membership_join_chance).cast_mut());
 
-        get_f(CHARACTERISTICS_SECTION_RVA, C_PRICING_FACTOR_KEY_RVA, &raw mut self.pricing_factor);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_DONATION_FACTOR_KEY_RVA, &raw mut self.donation_factor);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_BUILDING_USE_COST_DEFAULT_KEY_RVA, &raw mut self.building_use_cost_default);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_BUILDING_USE_COST_MAX_KEY_RVA, &raw mut self.building_use_cost_max);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_ZOO_DOO_RECYCLING_AMOUNT_KEY_RVA, &raw mut self.zoo_doo_recycling_amount);
+        get_f(CHARACTERISTICS_SECTION_RVA, C_PRICING_FACTOR_KEY_RVA, ::core::ptr::addr_of!(self.pricing_factor).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_DONATION_FACTOR_KEY_RVA, ::core::ptr::addr_of!(self.donation_factor).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_BUILDING_USE_COST_DEFAULT_KEY_RVA, ::core::ptr::addr_of!(self.building_use_cost_default).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_BUILDING_USE_COST_MAX_KEY_RVA, ::core::ptr::addr_of!(self.building_use_cost_max).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_ZOO_DOO_RECYCLING_AMOUNT_KEY_RVA, ::core::ptr::addr_of!(self.zoo_doo_recycling_amount).cast_mut());
 
-        get_f(CHARACTERISTICS_SECTION_RVA, C_MIN_ADULT_ADMISSION_PRICE_KEY_RVA, &raw mut self.admission_price_min);
-        get_f(CHARACTERISTICS_SECTION_RVA, C_MAX_ADULT_ADMISSION_PRICE_KEY_RVA, &raw mut self.admission_price_max);
+        get_f(CHARACTERISTICS_SECTION_RVA, C_MIN_ADULT_ADMISSION_PRICE_KEY_RVA, ::core::ptr::addr_of!(self.admission_price_min).cast_mut());
+        get_f(CHARACTERISTICS_SECTION_RVA, C_MAX_ADULT_ADMISSION_PRICE_KEY_RVA, ::core::ptr::addr_of!(self.admission_price_max).cast_mut());
         if self.admission_price_max < self.admission_price_min {
-            mem::swap(&mut self.admission_price_min, &mut self.admission_price_max);
+            let (new_min, new_max) = (self.admission_price_max, self.admission_price_min);
+            write_live!(self, admission_price_min, new_min);
+            write_live!(self, admission_price_max, new_max);
         }
 
         let seed_price = self.admission_price;
@@ -1057,20 +1067,20 @@ impl ZooStatus {
     /// no config-driven tail, unlike `init`. No dedicated live test: the zero-loop logic is the same as
     /// [`Self::init`]'s (which does have one), and [`Self::calculate_sums`] has its own dedicated live
     /// test.
-    pub fn reset_finance_info(&mut self) {
+    pub fn reset_finance_info(&self) {
         self.zero_history_regions();
-        self.current_month_index = 1;
-        self.current_year_index = 0;
+        write_live!(self, current_month_index, 1);
+        write_live!(self, current_year_index, 0);
         self.calculate_sums();
     }
 
     /// The three history-array zero-loops shared verbatim by [`Self::init`] and
     /// [`Self::reset_finance_info`] (`ZooStatus_init.asm:105-135` / `ZooStatus_resetFinanceInfo.asm`
     /// are byte-identical over this span).
-    pub(crate) fn zero_history_regions(&mut self) {
-        self.monthly_history = [[0.0; 12]; 31];
-        self.yearly_history = [[0.0; 20]; 31];
-        self.flat_totals = [0.0; 31];
+    pub(crate) fn zero_history_regions(&self) {
+        write_live!(self, monthly_history, [[0.0; 12]; 31]);
+        write_live!(self, yearly_history, [[0.0; 20]; 31]);
+        write_live!(self, flat_totals, [0.0; 31]);
     }
 
     /// Shared write pattern for the 14 "simple accumulator" methods below (Stage 3 of the
@@ -1093,8 +1103,8 @@ impl ZooStatus {
     // The eight args mirror the six raw byte-offset literals `amount`/`shared_sign` are applied to
     // (see above) - a params struct would obscure the 1:1 correspondence with the `.asm` addressing.
     #[allow(clippy::too_many_arguments)]
-    fn accumulate(&mut self, monthly_own: u32, monthly_shared: u32, yearly_own: u32, yearly_shared: u32, flat_own: u32, flat_shared: u32, amount: f32, shared_sign: f32) {
-        let base = self as *mut Self as u32;
+    fn accumulate(&self, monthly_own: u32, monthly_shared: u32, yearly_own: u32, yearly_shared: u32, flat_own: u32, flat_shared: u32, amount: f32, shared_sign: f32) {
+        let base = self as *const Self as u32;
         let month_offset = self.current_month_index as u32 * 4;
         let year_offset = self.current_year_index as u32 * 4;
 
@@ -1113,19 +1123,19 @@ impl ZooStatus {
     /// `ZooStatus::spendConstruction` (`0x004d9250`). Per `ZooStatus_spendConstruction.asm` (read in
     /// full, quoted in the plan): monthly `0x1e0`(own)/`0x3f0`(shared), yearly `0x814`/`0xb84`, flat
     /// `0x10e0`/`0x110c`.
-    pub fn spend_construction(&mut self, amount: f32) {
+    pub fn spend_construction(&self, amount: f32) {
         self.accumulate(0x1e0, 0x3f0, 0x814, 0xb84, 0x10e0, 0x110c, amount, -1.0);
     }
 
     /// `ZooStatus::spendBuildingUpkeep` (`0x0049bd80`). Monthly `0x690`/`0x3f0`, yearly `0xfe4`/`0xb84`,
     /// flat `0x1144`/`0x110c`.
-    pub fn spend_building_upkeep(&mut self, amount: f32) {
+    pub fn spend_building_upkeep(&self, amount: f32) {
         self.accumulate(0x690, 0x3f0, 0xfe4, 0xb84, 0x1144, 0x110c, amount, -1.0);
     }
 
     /// `ZooStatus::spendGuideWages` (`0x0048bd8b`). Monthly `0x390`/`0x3f0`, yearly `0xae4`/`0xb84`, flat
     /// `0x1104`/`0x110c`.
-    pub fn spend_guide_wages(&mut self, amount: f32) {
+    pub fn spend_guide_wages(&self, amount: f32) {
         self.accumulate(0x390, 0x3f0, 0xae4, 0xb84, 0x1104, 0x110c, amount, -1.0);
     }
 
@@ -1140,7 +1150,7 @@ impl ZooStatus {
     /// `SPEND_KEEPER_WAGES_0` constant is gone, replaced by `BUY_ANIMAL` at the same address). No other
     /// call site needed touching - Stage 3's own accumulator group has no `ZTGameMgr` call-through site
     /// for this method.
-    pub fn buy_animal(&mut self, amount: f32) {
+    pub fn buy_animal(&self, amount: f32) {
         self.accumulate(0x1b0, 0x3f0, 0x7c4, 0xb84, 0x10dc, 0x110c, amount, -1.0);
     }
 
@@ -1151,7 +1161,7 @@ impl ZooStatus {
     /// yearly `0x774`, flat `0x10d8`), shared slot `-= amount` (the same `spend*`-family shared triple,
     /// monthly/yearly/flat `0x3f0`/`0xb84`/`0x110c`). Called from `ZTGoalHealAnimal::complete`
     /// (`0x00470261`, still a vanilla call-through - `ZTGoal*` isn't reimplemented).
-    pub fn heal_animal(&mut self, amount: f32) {
+    pub fn heal_animal(&self, amount: f32) {
         self.accumulate(0x180, 0x3f0, 0x774, 0xb84, 0x10d8, 0x110c, amount, -1.0);
     }
 
@@ -1170,7 +1180,7 @@ impl ZooStatus {
     /// it's ever `0`). This port reproduces vanilla's raw addressing exactly, matching every other
     /// accumulator method in this file (`Self::accumulate`'s own raw byte offsets, not the named array
     /// fields), rather than "fixing" what isn't a divergence from real vanilla.
-    pub fn purchase_food(&mut self, amount: f32) {
+    pub fn purchase_food(&self, amount: f32) {
         self.accumulate(0x150, 0x3f0, 0x724, 0xb84, 0x10d4, 0x110c, amount, -1.0);
     }
 
@@ -1181,7 +1191,7 @@ impl ZooStatus {
     /// own monthly `0x240`, yearly `0x8b4`, flat `0x10e8`; shared monthly/yearly/flat
     /// `0x3f0`/`0xb84`/`0x110c`. Called from `fCreateGuest`, which stays a vanilla call-through (see
     /// [`Self::update`]'s doc comment) - this method itself has no native caller yet, only its own detour.
-    pub fn increase_admissions_income(&mut self, amount: f32) {
+    pub fn increase_admissions_income(&self, amount: f32) {
         self.accumulate(0x240, 0x3f0, 0x8b4, 0xb84, 0x10e8, 0x110c, amount, 1.0);
     }
 
@@ -1194,9 +1204,9 @@ impl ZooStatus {
     /// `spend*`/`refund*`-family sign pattern nor the plain "income" pattern. Same shape as
     /// [`Self::change_endowment_members`]'s own hand-rolled write loop, for the same reason (doesn't fit
     /// [`Self::accumulate`]'s six-slot signature).
-    pub fn increase_admissions(&mut self, count: i32) {
+    pub fn increase_admissions(&self, count: i32) {
         let amount = count as f32;
-        let base = self as *mut Self as u32;
+        let base = self as *const Self as u32;
         let month_offset = self.current_month_index as u32 * 4;
         let year_offset = self.current_year_index as u32 * 4;
 
@@ -1247,25 +1257,25 @@ impl ZooStatus {
 
     /// `ZooStatus::spendKeeperWages_1` (`0x005ad038`). Monthly `0x360`/`0x3f0`, yearly `0xa94`/`0xb84`,
     /// flat `0x1100`/`0x110c`.
-    pub fn spend_keeper_wages_1(&mut self, amount: f32) {
+    pub fn spend_keeper_wages_1(&self, amount: f32) {
         self.accumulate(0x360, 0x3f0, 0xa94, 0xb84, 0x1100, 0x110c, amount, -1.0);
     }
 
     /// `ZooStatus::spendMaintWages` (`0x00483d34`). Monthly `0x3c0`/`0x3f0`, yearly `0xb34`/`0xb84`, flat
     /// `0x1108`/`0x110c`.
-    pub fn spend_maint_wages(&mut self, amount: f32) {
+    pub fn spend_maint_wages(&self, amount: f32) {
         self.accumulate(0x3c0, 0x3f0, 0xb34, 0xb84, 0x1108, 0x110c, amount, -1.0);
     }
 
     /// `ZooStatus::spendMarketing` (`0x0041f368`). Monthly `0x6c0`/`0x3f0`, yearly `0x1034`/`0xb84`, flat
     /// `0x1148`/`0x110c`.
-    pub fn spend_marketing(&mut self, amount: f32) {
+    pub fn spend_marketing(&self, amount: f32) {
         self.accumulate(0x6c0, 0x3f0, 0x1034, 0xb84, 0x1148, 0x110c, amount, -1.0);
     }
 
     /// `ZooStatus::spendResearch` (`0x0041f3f3`). Monthly `0x4e0`/`0x3f0`, yearly `0xd14`/`0xb84`, flat
     /// `0x1120`/`0x110c`.
-    pub fn spend_research(&mut self, amount: f32) {
+    pub fn spend_research(&self, amount: f32) {
         self.accumulate(0x4e0, 0x3f0, 0xd14, 0xb84, 0x1120, 0x110c, amount, -1.0);
     }
 
@@ -1273,37 +1283,37 @@ impl ZooStatus {
     /// `0x10fc`/`0x110c` - unlike the `spend*` group, the shared slot is also *added to* here (a refund
     /// reverses a prior spend, but vanilla adds rather than double-subtracting - see the plan's own note
     /// on this).
-    pub fn refund_animal_cost(&mut self, amount: f32) {
+    pub fn refund_animal_cost(&self, amount: f32) {
         self.accumulate(0x330, 0x3f0, 0xa44, 0xb84, 0x10fc, 0x110c, amount, 1.0);
     }
 
     /// `ZooStatus::refundConstruction` (`0x004f9329`). Monthly `0x300`/`0x3f0`, yearly `0x9f4`/`0xb84`,
     /// flat `0x10f8`/`0x110c`.
-    pub fn refund_construction(&mut self, amount: f32) {
+    pub fn refund_construction(&self, amount: f32) {
         self.accumulate(0x300, 0x3f0, 0x9f4, 0xb84, 0x10f8, 0x110c, amount, 1.0);
     }
 
     /// `ZooStatus::increaseDonations` (`0x0042ebbe`). Monthly `0x2d0`/`0x3f0`, yearly `0x9a4`/`0xb84`,
     /// flat `0x10f4`/`0x110c`.
-    pub fn increase_donations(&mut self, amount: f32) {
+    pub fn increase_donations(&self, amount: f32) {
         self.accumulate(0x2d0, 0x3f0, 0x9a4, 0xb84, 0x10f4, 0x110c, amount, 1.0);
     }
 
     /// `ZooStatus::increaseEndowment` (`0x0048442b`). Monthly `0x510`/`0x3f0`, yearly `0xd64`/`0xb84`,
     /// flat `0x1124`/`0x110c`.
-    pub fn increase_endowment(&mut self, amount: f32) {
+    pub fn increase_endowment(&self, amount: f32) {
         self.accumulate(0x510, 0x3f0, 0xd64, 0xb84, 0x1124, 0x110c, amount, 1.0);
     }
 
     /// `ZooStatus::increaseShowAdmission` (`0x005a9718`). Monthly `0x6f0`/`0x3f0`, yearly `0x1084`/`0xb84`,
     /// flat `0x114c`/`0x110c`.
-    pub fn increase_show_admission(&mut self, amount: f32) {
+    pub fn increase_show_admission(&self, amount: f32) {
         self.accumulate(0x6f0, 0x3f0, 0x1084, 0xb84, 0x114c, 0x110c, amount, 1.0);
     }
 
     /// `ZooStatus::buyPeopleFood` (`0x0042df22`). Monthly `0x270`/`0x3f0`, yearly `0x904`/`0xb84`, flat
     /// `0x10ec`/`0x110c`.
-    pub fn buy_people_food(&mut self, amount: f32) {
+    pub fn buy_people_food(&self, amount: f32) {
         self.accumulate(0x270, 0x3f0, 0x904, 0xb84, 0x10ec, 0x110c, amount, 1.0);
     }
 
@@ -1323,9 +1333,9 @@ impl ZooStatus {
     /// `0x5a0` differ by `0x30`, the monthly row stride; `0xdb4`/`0xe04`/`0xe54` differ by `0x50`, the
     /// yearly row stride; `0x1128`/`0x112c`/`0x1130` differ by `4`, adjacent flat slots) - internally
     /// consistent confirmation that these are three distinct rows/slots, not a typo in either source.
-    pub fn change_endowment_members(&mut self, delta: i32) {
+    pub fn change_endowment_members(&self, delta: i32) {
         let amount = delta as f32;
-        let base = self as *mut Self as u32;
+        let base = self as *const Self as u32;
         let month_offset = self.current_month_index as u32 * 4;
         let year_offset = self.current_year_index as u32 * 4;
 
@@ -1376,10 +1386,10 @@ impl ZooStatus {
     /// vanilla's own real body, which reads `GLOBAL_ZTGameMgr` directly rather than deriving it from
     /// `this` - `ZooStatus` has no back-pointer to its enclosing `ZTGameMgr`, and vanilla doesn't need one
     /// here either).
-    pub fn animal_escaped(&mut self) {
+    pub fn animal_escaped(&self) {
         let date = globals().ztgamemgr().get_date();
-        self.last_animal_escape_timestamp_low = date as u32;
-        self.last_animal_escape_timestamp_high = (date >> 32) as u32;
+        write_live!(self, last_animal_escape_timestamp_low, date as u32);
+        write_live!(self, last_animal_escape_timestamp_high, (date >> 32) as u32);
     }
 
     /// Reimplementation of `ZooStatus::admissionMessage` (`0x00429d68`), Stage 4. Per
@@ -1450,8 +1460,8 @@ impl ZooStatus {
     /// `GLOBAL_ZTHabitatMgr`/`GLOBAL_ZTMarketingMgr`/the live escaped-animal list and calls real vanilla
     /// [`F_CHANCE`]/[`F_CREATE_GUEST`]), but the actual decision logic this stage's own re-derivation
     /// pass exists to get right can be, and is, covered directly.
-    pub fn newguest_checks(&mut self) {
-        self.newguest_check_elapsed = 0;
+    pub fn newguest_checks(&self) {
+        write_live!(self, newguest_check_elapsed, 0);
 
         let habitat_mgr = globals().zthabitatmgr();
         let mut occupied_habitats = 0i32;
@@ -1476,7 +1486,7 @@ impl ZooStatus {
         let boundary_2: f32 = get_from_memory(base + raw_globals::PRICE_TIER_BOUNDARY_2_RVA);
         let boundary_3: f32 = get_from_memory(base + raw_globals::PRICE_TIER_BOUNDARY_3_RVA);
 
-        self.field_0x48 = Self::price_tier(price, [boundary_0, boundary_1, boundary_2, boundary_3]);
+        write_live!(self, field_0x48, Self::price_tier(price, [boundary_0, boundary_1, boundary_2, boundary_3]));
 
         let mut attendance = self.zoo_rating_current;
         if let Some(marketing) = globals().ztmarketingmgr().marketing()
@@ -1502,7 +1512,7 @@ impl ZooStatus {
         if !chance {
             return;
         }
-        unsafe { F_CREATE_GUEST.original()(self as *mut Self as *const u32) };
+        unsafe { F_CREATE_GUEST.original()(self as *const Self as *const u32) };
         if show_message {
             self.admission_message(0x2721 as *const u32, 0);
         }
@@ -1584,8 +1594,8 @@ impl ZooStatus {
     /// toward zero). Every message dispatch goes through native [`f_zoo_message`] (see
     /// [`Self::admission_message`]'s doc comment for why this no longer needs to call through to real
     /// vanilla `fZooMessage`).
-    pub fn message_checks(&mut self) {
-        self.message_check_elapsed = 0;
+    pub fn message_checks(&self) {
+        write_live!(self, message_check_elapsed, 0);
 
         let zoo_message = |id: u32, priority: u32| f_zoo_message(id as *const u32, priority, 0, 0);
 
@@ -1666,8 +1676,8 @@ impl ZooStatus {
     ///    type-correction reasoning above.
     /// 5. Writes the final clamped rating into its monthly/yearly/flat history slots (`0x450`/`0xc24`/
     ///    `0x1114` - matching the plan's own pre-recorded offsets for this write).
-    pub fn rating_checks(&mut self) {
-        self.rating_check_elapsed = 0;
+    pub fn rating_checks(&self) {
+        write_live!(self, rating_check_elapsed, 0);
         self.calculate_sums();
 
         let mut rating: i32 = 0;
@@ -1710,11 +1720,11 @@ impl ZooStatus {
         let escape_decay_clamped = if escape_decay < 1 { 0 } else { escape_decay };
         rating -= escape_decay_clamped;
 
-        self.zoo_rating_current = rating.clamp(0, 100);
+        write_live!(self, zoo_rating_current, rating.clamp(0, 100));
 
         let month_offset = self.current_month_index as u32 * 4;
         let year_offset = self.current_year_index as u32 * 4;
-        let base_ptr = self as *mut Self as u32;
+        let base_ptr = self as *const Self as u32;
         save_to_memory(base_ptr + 0x450 + month_offset, self.zoo_rating_current as f32);
         save_to_memory(base_ptr + 0xc24 + year_offset, self.zoo_rating_current as f32);
         save_to_memory(base_ptr + 0x1114, self.zoo_rating_current as f32);
@@ -1768,8 +1778,8 @@ impl ZooStatus {
     /// `ZOOSTATUS_CHECKS`'s own doc comment) - the same "keep a real UI-dialog condition false" discipline
     /// applies here. `ZOOSTATUS_F_GRANT_DONATION_NO_OP` (`reimplementation_tests/mod.rs`) does cover the
     /// silent `AlreadyPastBound` branch live, since it never reaches a message call.
-    pub fn f_grant_donation(&mut self) {
-        self.donation_count_this_period += 1.0;
+    pub fn f_grant_donation(&self) {
+        write_live!(self, donation_count_this_period, self.donation_count_this_period + 1.0);
         let bound = self.donation_count_bound;
 
         match donation_outcome(self.donation_count_this_period, bound) {
@@ -1789,14 +1799,11 @@ impl ZooStatus {
                 let amount_f = amount as f32;
 
                 let ztgamemgr_ptr = globals().ztgamemgr_ptr();
-                let global_zoostatus_ptr = (ztgamemgr_ptr as u32 + 0x10) as *mut ZooStatus;
-                // `self` is normally the global's own `ZooStatus`; reuse it rather than creating a second
-                // `&mut` to the same object.
-                if std::ptr::eq(global_zoostatus_ptr, self) {
-                    self.increase_donations(amount_f);
-                } else {
-                    unsafe { (*global_zoostatus_ptr).increase_donations(amount_f) };
-                }
+                let global_zoostatus_ptr = (ztgamemgr_ptr as u32 + 0x10) as *const ZooStatus;
+                // `self` is normally the global's own `ZooStatus`, but a plain call through the global
+                // pointer is safe either way now that `increase_donations` takes `&self` - no `&mut` to
+                // worry about aliasing with `self` itself.
+                unsafe { (*global_zoostatus_ptr).increase_donations(amount_f) };
                 unsafe { (*ztgamemgr_ptr).add_cash(amount_f) };
 
                 let template = load_localized_string(0x3a9a);
@@ -1816,9 +1823,9 @@ impl ZooStatus {
     /// the two bounds" - written here as the explicit min-then-max form (not Rust's `.clamp()`, which
     /// panics if `min > max`) since this method's own callers can't guarantee that invariant the way
     /// `.clamp()`'s contract requires.
-    pub fn set_adult_admission_price(&mut self, price: f32) {
+    pub fn set_adult_admission_price(&self, price: f32) {
         let clamped_high = if price < self.admission_price_max { price } else { self.admission_price_max };
-        self.admission_price = if clamped_high <= self.admission_price_min { self.admission_price_min } else { clamped_high };
+        write_live!(self, admission_price, if clamped_high <= self.admission_price_min { self.admission_price_min } else { clamped_high });
     }
 
     /// Reimplementation of `ZooStatus::showPrices` (per `generated.rs`'s `SHOW_PRICES` entry), Stage 5.
@@ -1989,25 +1996,25 @@ impl ZooStatus {
     /// assertions that can never be reached by a well-formed `ZTResearchMgr` (the vector-length reads and
     /// the loop bounds they guard are derived from the exact same vector, so they can never actually
     /// disagree); Rust's own iterator-based walk here has no equivalent failure mode to begin with.
-    pub fn calculate_sums(&mut self) {
-        self.num_animals = 0;
-        self.animal_condition_counter_1 = 0;
-        self.num_tired_guests = 0;
-        self.num_hungry_guests = 0;
-        self.num_thirst_guests = 0;
-        self.num_guests_restroom_need = 0;
-        self.guest_condition_counter_1 = 0;
-        self.guest_condition_counter_2 = 0;
-        self.guest_tile_count = 0;
+    pub fn calculate_sums(&self) {
+        write_live!(self, num_animals, 0);
+        write_live!(self, animal_condition_counter_1, 0);
+        write_live!(self, num_tired_guests, 0);
+        write_live!(self, num_hungry_guests, 0);
+        write_live!(self, num_thirst_guests, 0);
+        write_live!(self, num_guests_restroom_need, 0);
+        write_live!(self, guest_condition_counter_1, 0);
+        write_live!(self, guest_condition_counter_2, 0);
+        write_live!(self, guest_tile_count, 0);
 
-        let base_ptr = self as *mut Self as u32;
+        let base_ptr = self as *const Self as u32;
         let month_offset = self.current_month_index as u32 * 4;
         let year_offset = self.current_year_index as u32 * 4;
         save_to_memory(base_ptr + 0x600 + month_offset, 0.0f32);
 
-        self.field_0x4c = globals().ztgamemgr().cash() as i32;
-        self.field_0x58 = 0;
-        self.non_blank_tile_fraction = 0.0;
+        write_live!(self, field_0x4c, globals().ztgamemgr().cash() as i32);
+        write_live!(self, field_0x58, 0);
+        write_live!(self, non_blank_tile_fraction, 0.0);
 
         let base = get_module_base("zoo.exe") as u32;
         let need_threshold: i32 = get_from_memory(base + raw_globals::GUEST_NEED_THRESHOLD_RVA);
@@ -2025,76 +2032,76 @@ impl ZooStatus {
             }
 
             if entity_type_matches(entity_ptr, raw_globals::GUEST_TYPE_CHECK_RVA) {
-                self.guest_tile_count += 1;
+                write_live!(self, guest_tile_count, self.guest_tile_count + 1);
                 let slot = base_ptr + 0x600 + month_offset;
                 save_to_memory(slot, get_from_memory::<f32>(slot) + 1.0);
 
                 let hunger: i32 = get_from_memory(entity_ptr + 0x2b0);
                 if hunger > need_threshold {
-                    self.num_hungry_guests += 1;
+                    write_live!(self, num_hungry_guests, self.num_hungry_guests + 1);
                 }
                 let thirst: i32 = get_from_memory(entity_ptr + 0x2b8);
                 if thirst > need_threshold {
-                    self.num_thirst_guests += 1;
+                    write_live!(self, num_thirst_guests, self.num_thirst_guests + 1);
                 }
                 let restroom: i32 = get_from_memory(entity_ptr + 0x2c8);
                 if restroom > need_threshold {
-                    self.num_guests_restroom_need += 1;
+                    write_live!(self, num_guests_restroom_need, self.num_guests_restroom_need + 1);
                 }
                 let tired: i32 = get_from_memory(entity_ptr + 0x2c0);
                 if tired > need_threshold {
-                    self.num_tired_guests += 1;
+                    write_live!(self, num_tired_guests, self.num_tired_guests + 1);
                 }
 
                 let flag: u8 = get_from_memory(entity_ptr + 0x33c);
                 if flag != 0 {
-                    self.guest_condition_counter_1 += 1;
+                    write_live!(self, guest_condition_counter_1, self.guest_condition_counter_1 + 1);
                 }
                 let sub_object: u32 = get_from_memory(entity_ptr + 0x26c);
                 let sub_flag: i32 = get_from_memory(sub_object + 0x10);
                 if sub_flag != 0 {
-                    self.guest_condition_counter_2 += 1;
+                    write_live!(self, guest_condition_counter_2, self.guest_condition_counter_2 + 1);
                 }
 
                 let score: i32 = get_from_memory(entity_ptr + 0x2a8);
                 guest_score_sum += score;
             } else if entity_type_matches(entity_ptr, raw_globals::ANIMAL_TYPE_CHECK_RVA) {
-                self.num_animals += 1;
+                write_live!(self, num_animals, self.num_animals + 1);
                 let score: i32 = get_from_memory(entity_ptr + 0x2a8);
                 animal_score_sum += score;
                 let flag: u8 = get_from_memory(entity_ptr + 0x3a7);
                 if flag != 0 {
-                    self.animal_condition_counter_1 += 1;
+                    write_live!(self, animal_condition_counter_1, self.animal_condition_counter_1 + 1);
                 }
 
                 let type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
                 if type_ptr != 0 {
                     let vtable: u32 = get_from_memory(type_ptr);
                     let get_avg = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> f32>(get_from_memory::<u32>(vtable + 0xbc)) };
-                    self.field_0x4c += get_avg(type_ptr) as i32;
+                    write_live!(self, field_0x4c, self.field_0x4c + get_avg(type_ptr) as i32);
                 }
             } else if entity_type_matches(entity_ptr, raw_globals::BUILDING_TYPE_CHECK_RVA) {
                 let type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
                 if type_ptr != 0 {
                     let vtable: u32 = get_from_memory(type_ptr);
                     let get_purchase_cost = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> f32>(get_from_memory::<u32>(vtable + 0xa4)) };
-                    self.field_0x4c += get_purchase_cost(type_ptr) as i32;
+                    write_live!(self, field_0x4c, self.field_0x4c + get_purchase_cost(type_ptr) as i32);
                 }
 
                 let entity_vtable: u32 = get_from_memory(entity_ptr);
                 let get_category_value = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, i32) -> i32>(get_from_memory::<u32>(entity_vtable + 0x11c)) };
                 for category_id in 0x251fi32..=0x2522 {
-                    self.non_blank_tile_fraction += get_category_value(entity_ptr, category_id) as f32;
+                    write_live!(self, non_blank_tile_fraction, self.non_blank_tile_fraction + get_category_value(entity_ptr, category_id) as f32);
                 }
             }
         }
 
-        self.animal_rating_metric = if self.num_animals > 0 { animal_score_sum / self.num_animals as i32 } else { 0 };
+        write_live!(self, animal_rating_metric, if self.num_animals > 0 { animal_score_sum / self.num_animals as i32 } else { 0 });
         save_to_memory(base_ptr + 0x480 + month_offset, self.animal_rating_metric as f32);
         save_to_memory(base_ptr + 0xc74 + year_offset, self.animal_rating_metric as f32);
         save_to_memory(base_ptr + 0x1118, self.animal_rating_metric as f32);
 
-        self.guest_rating_metric = if self.guest_tile_count > 0 { guest_score_sum / self.guest_tile_count } else { 0 };
+        write_live!(self, guest_rating_metric, if self.guest_tile_count > 0 { guest_score_sum / self.guest_tile_count } else { 0 });
         save_to_memory(base_ptr + 0x4b0 + month_offset, self.guest_rating_metric as f32);
         save_to_memory(base_ptr + 0xcc4 + year_offset, self.guest_rating_metric as f32);
         save_to_memory(base_ptr + 0x111c, self.guest_rating_metric as f32);
@@ -2116,10 +2123,10 @@ impl ZooStatus {
         let total_tiles = world.map_x_size * world.map_y_size;
         let non_blank = total_tiles.saturating_sub(blank_tiles);
         if non_blank != 0 {
-            self.non_blank_tile_fraction /= non_blank as f32;
+            write_live!(self, non_blank_tile_fraction, self.non_blank_tile_fraction / non_blank as f32);
         }
 
-        self.num_species = globals().zthabitatmgr().get_num_species() as u16;
+        write_live!(self, num_species, globals().zthabitatmgr().get_num_species() as u16);
         save_to_memory(base_ptr + 0x420 + month_offset, self.field_0x4c as f32);
         save_to_memory(base_ptr + 0xbd4 + year_offset, self.field_0x4c as f32);
         save_to_memory(base_ptr + 0x1110, self.field_0x4c as f32);
@@ -2136,7 +2143,7 @@ impl ZooStatus {
                 }
             }
         }
-        self.research_completion_percent = if total != 0 { completed * 100 / total } else { 100 };
+        write_live!(self, research_completion_percent, if total != 0 { completed * 100 / total } else { 100 });
     }
 
     /// Reimplementation of `ZooStatus::update` (per `generated.rs`'s `UPDATE` entry), Stage 4. Per
@@ -2184,19 +2191,19 @@ impl ZooStatus {
     /// real, un-detoured address against this live, vanilla-layout-compatible struct is always safe (same
     /// call-through convention as `override`/`save`/`load`'s migration paths elsewhere in this module) -
     /// this is a documented, deliberate deferral, not an oversight.
-    pub fn update(&mut self, delta: i32) {
-        let this_ptr = self as *mut Self as *const u32;
+    pub fn update(&self, delta: i32) {
+        let this_ptr = self as *const Self as *const u32;
 
-        self.rating_check_elapsed += delta;
+        write_live!(self, rating_check_elapsed, self.rating_check_elapsed + delta);
         let rating_pending = self.rating_check_elapsed > self.rating_check_interval || self.finance_check_pending;
 
-        self.message_check_elapsed += delta;
+        write_live!(self, message_check_elapsed, self.message_check_elapsed + delta);
         let message_pending = self.message_check_elapsed > self.message_check_interval;
 
-        self.newguest_check_elapsed += delta;
+        write_live!(self, newguest_check_elapsed, self.newguest_check_elapsed + delta);
         let newguest_pending = self.newguest_check_elapsed > self.newguest_check_interval;
 
-        unsafe { &mut *globals().ztmegatilemgr_ptr() }.update(delta as u32);
+        unsafe { &*globals().ztmegatilemgr_ptr() }.update(delta as u32);
 
         if rating_pending {
             self.rating_checks();
@@ -2349,41 +2356,41 @@ impl ZooStatus {
     /// own accumulator pointer walk *past* `yearly_history[14]`'s real bounds into adjacent struct
     /// memory, which this port cannot safely reproduce without genuine unsafe out-of-bounds writes for
     /// an edge case no real save is expected to hit (year counts only ever grew *to* 20, never past it).
-    pub fn load(&mut self, file: *const u32, version: u32) -> u32 {
+    pub fn load(&self, file: *const u32, version: u32) -> u32 {
         if version <= 0xc {
             return self.load_tail(version, file, true);
         }
 
-        let mut ok = read_bytes(&mut self.rating_check_elapsed, file);
-        ok &= read_bytes(&mut self.message_check_elapsed, file);
-        ok &= read_bytes(&mut self.newguest_check_elapsed, file);
+        let mut ok = read_bytes_at(::core::ptr::addr_of!(self.rating_check_elapsed).cast_mut(), file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.message_check_elapsed).cast_mut(), file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.newguest_check_elapsed).cast_mut(), file);
 
         if version < 0x17 {
             let mut raw: i32 = 0;
             ok &= read_bytes(&mut raw, file);
-            self.finance_check_pending = raw > 360_000;
+            write_live!(self, finance_check_pending, raw > 360_000);
         } else {
-            ok &= read_bytes(&mut self.finance_check_pending, file);
+            ok &= read_bytes_at(::core::ptr::addr_of!(self.finance_check_pending).cast_mut(), file);
         }
 
-        ok &= read_bytes(&mut self.zoo_rating_current, file);
-        ok &= read_bytes(&mut self.field_0x48, file);
-        ok &= read_bytes(&mut self.field_0x50, file);
-        ok &= read_bytes(&mut self.field_0x54, file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.zoo_rating_current).cast_mut(), file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.field_0x48).cast_mut(), file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.field_0x50).cast_mut(), file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.field_0x54).cast_mut(), file);
 
         if version < 0x18 {
             let mut discard: i32 = 0;
             ok &= read_bytes(&mut discard, file);
         }
 
-        ok &= read_bytes(&mut self.donation_count_this_period, file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.donation_count_this_period).cast_mut(), file);
 
         if version < 0x17 {
             return self.load_tail(version, file, ok);
         }
 
-        ok &= read_bytes(&mut self.current_month_index, file);
-        ok &= read_bytes(&mut self.current_year_index, file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.current_month_index).cast_mut(), file);
+        ok &= read_bytes_at(::core::ptr::addr_of!(self.current_year_index).cast_mut(), file);
 
         let mut category_count: i32 = 0;
         let mut year_count: i32 = 0;
@@ -2414,18 +2421,18 @@ impl ZooStatus {
             let category_count = category_count as usize;
             let year_count = year_count as usize;
 
-            for row in &mut self.monthly_history[..category_count] {
-                for month in row.iter_mut() {
-                    ok &= read_bytes(month, file);
+            for category in 0..category_count {
+                for month in 0..12 {
+                    ok &= read_bytes_at(::core::ptr::addr_of!(self.monthly_history[category][month]).cast_mut(), file);
                 }
             }
-            for row in &mut self.yearly_history[..category_count] {
-                for year in &mut row[..year_count] {
-                    ok &= read_bytes(year, file);
+            for category in 0..category_count {
+                for year in 0..year_count {
+                    ok &= read_bytes_at(::core::ptr::addr_of!(self.yearly_history[category][year]).cast_mut(), file);
                 }
             }
-            for slot in &mut self.flat_totals[..category_count] {
-                ok &= read_bytes(slot, file);
+            for category in 0..category_count {
+                ok &= read_bytes_at(::core::ptr::addr_of!(self.flat_totals[category]).cast_mut(), file);
             }
 
             // Vanilla zero-fills every remaining category/year row when an older/foreign save wrote
@@ -2433,14 +2440,14 @@ impl ZooStatus {
             // real behavior, not a migration guess. Never exercised by this port's own round-trip
             // (`save` always writes `31`/`20`), kept for a save written by some other build with a
             // shorter region.
-            for row in &mut self.monthly_history[category_count..] {
-                *row = [0.0; 12];
+            for category in category_count..self.monthly_history.len() {
+                unsafe { write_live_ptr(::core::ptr::addr_of!(self.monthly_history[category]), [0.0; 12]) };
             }
-            for row in &mut self.yearly_history[category_count..] {
-                *row = [0.0; 20];
+            for category in category_count..self.yearly_history.len() {
+                unsafe { write_live_ptr(::core::ptr::addr_of!(self.yearly_history[category]), [0.0; 20]) };
             }
-            for slot in &mut self.flat_totals[category_count..] {
-                *slot = 0.0;
+            for category in category_count..self.flat_totals.len() {
+                unsafe { write_live_ptr(::core::ptr::addr_of!(self.flat_totals[category]), 0.0) };
             }
         }
 
@@ -2457,7 +2464,7 @@ impl ZooStatus {
     /// (discarded if out of bounds) to keep the file cursor aligned with vanilla's own read count, and
     /// every row from `category_count` up to `31` is zero-filled afterward exactly like the `>= 0x47`
     /// path's own tail loop (`ZooStatus_load.c`'s shared tail `do`/`while`, `.asm` label `.1599a3`).
-    fn load_history_compat(&mut self, file: *const u32, category_count: i32, year_count: i32) -> bool {
+    fn load_history_compat(&self, file: *const u32, category_count: i32, year_count: i32) -> bool {
         let mut ok = true;
 
         for category in 0..category_count.max(0) {
@@ -2465,7 +2472,7 @@ impl ZooStatus {
                 let mut raw: f32 = 0.0;
                 ok &= read_bytes(&mut raw, file);
                 if (category as usize) < 31 {
-                    self.monthly_history[category as usize][month] = raw;
+                    unsafe { write_live_ptr(::core::ptr::addr_of!(self.monthly_history[category as usize][month]), raw) };
                 }
             }
         }
@@ -2474,7 +2481,7 @@ impl ZooStatus {
                 let mut raw: f32 = 0.0;
                 ok &= read_bytes(&mut raw, file);
                 if (category as usize) < 31 && (year as usize) < 20 {
-                    self.yearly_history[category as usize][year as usize] = raw;
+                    unsafe { write_live_ptr(::core::ptr::addr_of!(self.yearly_history[category as usize][year as usize]), raw) };
                 }
             }
         }
@@ -2482,19 +2489,19 @@ impl ZooStatus {
             let mut raw: f32 = 0.0;
             ok &= read_bytes(&mut raw, file);
             if (category as usize) < 31 {
-                self.flat_totals[category as usize] = raw;
+                unsafe { write_live_ptr(::core::ptr::addr_of!(self.flat_totals[category as usize]), raw) };
             }
         }
 
         let filled = category_count.clamp(0, 31) as usize;
-        for row in &mut self.monthly_history[filled..] {
-            *row = [0.0; 12];
+        for category in filled..self.monthly_history.len() {
+            unsafe { write_live_ptr(::core::ptr::addr_of!(self.monthly_history[category]), [0.0; 12]) };
         }
-        for row in &mut self.yearly_history[filled..] {
-            *row = [0.0; 20];
+        for category in filled..self.yearly_history.len() {
+            unsafe { write_live_ptr(::core::ptr::addr_of!(self.yearly_history[category]), [0.0; 20]) };
         }
-        for slot in &mut self.flat_totals[filled..] {
-            *slot = 0.0;
+        for category in filled..self.flat_totals.len() {
+            unsafe { write_live_ptr(::core::ptr::addr_of!(self.flat_totals[category]), 0.0) };
         }
 
         ok
@@ -2508,7 +2515,7 @@ impl ZooStatus {
     /// real vanilla saves from this era could exceed either), and, for `version < 0x19` only, also folds
     /// into the shared row-14 accumulator per [`Self::legacy_band`]'s verdict for that slot's position.
     /// No zero-fill tail - see [`Self::load`]'s own doc comment for why none is needed here.
-    fn load_history_legacy_migration(&mut self, file: *const u32, version: u32, category_count: i32, year_count: i32) -> bool {
+    fn load_history_legacy_migration(&self, file: *const u32, version: u32, category_count: i32, year_count: i32) -> bool {
         let mut ok = true;
 
         for category in 0..category_count.max(0) {
@@ -2517,11 +2524,11 @@ impl ZooStatus {
                 let mut raw: i32 = 0;
                 ok &= read_bytes(&mut raw, file);
                 if (category as usize) < 31 {
-                    self.monthly_history[category as usize][month] = raw as f32;
+                    unsafe { write_live_ptr(::core::ptr::addr_of!(self.monthly_history[category as usize][month]), raw as f32) };
                 }
                 if version < 0x19 && let Some(add) = Self::legacy_band(row_base, 0x79, 0xd9, 0xf1, 0x91, 0xcd) {
-                    let target = &mut self.monthly_history[14][month];
-                    *target = if add { *target + raw as f32 } else { *target - raw as f32 };
+                    let current = self.monthly_history[14][month];
+                    unsafe { write_live_ptr(::core::ptr::addr_of!(self.monthly_history[14][month]), if add { current + raw as f32 } else { current - raw as f32 }) };
                 }
             }
         }
@@ -2531,11 +2538,11 @@ impl ZooStatus {
                 let mut raw: i32 = 0;
                 ok &= read_bytes(&mut raw, file);
                 if (category as usize) < 31 && year < 20 {
-                    self.yearly_history[category as usize][year] = raw as f32;
+                    unsafe { write_live_ptr(::core::ptr::addr_of!(self.yearly_history[category as usize][year]), raw as f32) };
                 }
                 if version < 0x19 && year < 20 && let Some(add) = Self::legacy_band(row_base, 0x205, 0x2a5, 0x2cd, 0x22d, 0x291) {
-                    let target = &mut self.yearly_history[14][year];
-                    *target = if add { *target + raw as f32 } else { *target - raw as f32 };
+                    let current = self.yearly_history[14][year];
+                    unsafe { write_live_ptr(::core::ptr::addr_of!(self.yearly_history[14][year]), if add { current + raw as f32 } else { current - raw as f32 }) };
                 }
             }
         }
@@ -2543,11 +2550,11 @@ impl ZooStatus {
             let mut raw: i32 = 0;
             ok &= read_bytes(&mut raw, file);
             if (category as usize) < 31 {
-                self.flat_totals[category as usize] = raw as f32;
+                unsafe { write_live_ptr(::core::ptr::addr_of!(self.flat_totals[category as usize]), raw as f32) };
             }
             if version < 0x19 && let Some(add) = Self::legacy_band(category, 3, 0xb, 0xd, 5, 0xa) {
-                let target = &mut self.flat_totals[14];
-                *target = if add { *target + raw as f32 } else { *target - raw as f32 };
+                let current = self.flat_totals[14];
+                unsafe { write_live_ptr(::core::ptr::addr_of!(self.flat_totals[14]), if add { current + raw as f32 } else { current - raw as f32 }) };
             }
         }
 
@@ -2580,22 +2587,22 @@ impl ZooStatus {
     /// `_high` read from file and the accumulated `ok` returned, or for `version < 0x47`, those two
     /// fields re-seeded from [`GET_OLD_DATE`] and an **immediate** return - vanilla's own `version < 0x47`
     /// branch returns right after the seed with no further read, which this mirrors exactly.
-    fn load_tail(&mut self, version: u32, file: *const u32, mut ok: bool) -> u32 {
+    fn load_tail(&self, version: u32, file: *const u32, mut ok: bool) -> u32 {
         if version < 0x27 {
-            self.admission_price = 49.0;
+            write_live!(self, admission_price, 49.0);
         } else {
-            ok &= read_bytes(&mut self.admission_price, file);
+            ok &= read_bytes_at(::core::ptr::addr_of!(self.admission_price).cast_mut(), file);
         }
 
         if version < 0x47 {
             let old_date = unsafe { GET_OLD_DATE.original()() } as u64;
-            self.last_animal_escape_timestamp_low = old_date as u32;
-            self.last_animal_escape_timestamp_high = (old_date >> 32) as u32;
+            write_live!(self, last_animal_escape_timestamp_low, old_date as u32);
+            write_live!(self, last_animal_escape_timestamp_high, (old_date >> 32) as u32);
             return ok as u32;
         }
 
         ok &= unsafe {
-            DEALLOCATE.hooked()(&mut self.last_animal_escape_timestamp_low as *mut u32 as *const u32, 8, 1, file as *const u8) == 1
+            DEALLOCATE.hooked()(::core::ptr::addr_of!(self.last_animal_escape_timestamp_low).cast_mut() as *const u32, 8, 1, file as *const u8) == 1
         };
 
         ok as u32

@@ -1,6 +1,6 @@
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, mut_from_memory, ref_from_memory},
+    util::{get_from_memory, ref_from_memory},
 };
 
 #[allow(clippy::module_inception)]
@@ -270,22 +270,22 @@ mod thought_mutator_detours {
 
         #[detour(ADD_THOUGHT)]
         unsafe extern "thiscall" fn add_thought(this: *const u32, string_id: u32, thinker_ptr: *const u32, object_ptr: *const u32, habitat_ptr: *const u32) {
-            unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.add_thought(string_id, thinker_ptr as u32, object_ptr as u32, habitat_ptr as u32);
+            unsafe { ref_from_memory::<ZTThoughtMgr>(this) }.add_thought(string_id, thinker_ptr as u32, object_ptr as u32, habitat_ptr as u32);
         }
 
         #[detour(REMOVE_THOUGHTS_BY_THINKER)]
         unsafe extern "thiscall" fn remove_thoughts_by_thinker(this: *const u32, thinker_ptr: *const u32) {
-            unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.remove_thoughts_by_thinker(thinker_ptr as u32);
+            unsafe { ref_from_memory::<ZTThoughtMgr>(this) }.remove_thoughts_by_thinker(thinker_ptr as u32);
         }
 
         #[detour(REMOVE_THOUGHTS_BY_OBJECT)]
         unsafe extern "thiscall" fn remove_thoughts_by_object(this: *const u32, object_ptr: *const u32) {
-            unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.remove_thoughts_by_object(object_ptr as u32);
+            unsafe { ref_from_memory::<ZTThoughtMgr>(this) }.remove_thoughts_by_object(object_ptr as u32);
         }
 
         #[detour(REMOVE_THOUGHTS_BY_HABITAT)]
         unsafe extern "thiscall" fn remove_thoughts_by_habitat(this: *const u32, habitat_ptr: *const i32, force: i8) {
-            unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.remove_thoughts_by_habitat(habitat_ptr as u32, force != 0);
+            unsafe { ref_from_memory::<ZTThoughtMgr>(this) }.remove_thoughts_by_habitat(habitat_ptr as u32, force != 0);
         }
     }
 
@@ -318,12 +318,12 @@ mod thought_save_detours {
 
         #[detour(LOAD)]
         unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> bool {
-            unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.load(file, version)
+            unsafe { ref_from_memory::<ZTThoughtMgr>(this) }.load(file, version)
         }
 
         #[detour(POPULATE_THOUGHTS)]
         unsafe extern "thiscall" fn populate_thoughts(this: *const u32) {
-            unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.populate_thoughts();
+            unsafe { ref_from_memory::<ZTThoughtMgr>(this) }.populate_thoughts();
         }
     }
 
@@ -356,7 +356,7 @@ mod thought_dtor_detour {
 
         #[detour(ZTTHOUGHTMGR_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztthoughtmgr_dtor(this: *const u32, _flags: u8) -> *const u32 {
-            unsafe { mut_from_memory::<ZTThoughtMgr>(this) }.clear();
+            unsafe { ref_from_memory::<ZTThoughtMgr>(this) }.clear();
             this
         }
     }

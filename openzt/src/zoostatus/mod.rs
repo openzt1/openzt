@@ -14,7 +14,7 @@ use openzt_detour_macro::detour_mod;
 use tracing::error;
 use crate::{
     lua_fn,
-    util::{mut_from_memory, ref_from_memory},
+    util::ref_from_memory,
 };
 
 /// Stage 8 (extended by Stage 10) of the implementation plan: real detours for 36 of `zoostatus`'s 39
@@ -38,92 +38,92 @@ mod zoostatus_detours {
 
     #[detour(INIT)]
     unsafe extern "thiscall" fn init(this: *const u32, config: *const c_void) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.init(config);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.init(config);
     }
 
     #[detour(OVERRIDE)]
     unsafe extern "thiscall" fn override_config(this: *const u32, config: *const u32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.override_config(config as *const c_void);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.override_config(config as *const c_void);
     }
 
     #[detour(RESET_FINANCE_INFO)]
     unsafe extern "thiscall" fn reset_finance_info(this: *const u32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.reset_finance_info();
+        unsafe { ref_from_memory::<ZooStatus>(this) }.reset_finance_info();
     }
 
     #[detour(SPEND_CONSTRUCTION)]
     unsafe extern "thiscall" fn spend_construction(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.spend_construction(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.spend_construction(amount);
     }
 
     #[detour(SPEND_BUILDING_UPKEEP)]
     unsafe extern "thiscall" fn spend_building_upkeep(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.spend_building_upkeep(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.spend_building_upkeep(amount);
     }
 
     #[detour(SPEND_GUIDE_WAGES)]
     unsafe extern "thiscall" fn spend_guide_wages(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.spend_guide_wages(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.spend_guide_wages(amount);
     }
 
     #[detour(BUY_ANIMAL)]
     unsafe extern "thiscall" fn buy_animal(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.buy_animal(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.buy_animal(amount);
     }
 
     #[detour(SPEND_KEEPER_WAGES)]
     unsafe extern "thiscall" fn spend_keeper_wages_1(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.spend_keeper_wages_1(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.spend_keeper_wages_1(amount);
     }
 
     #[detour(SPEND_MAINT_WAGES)]
     unsafe extern "thiscall" fn spend_maint_wages(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.spend_maint_wages(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.spend_maint_wages(amount);
     }
 
     #[detour(SPEND_MARKETING)]
     unsafe extern "thiscall" fn spend_marketing(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.spend_marketing(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.spend_marketing(amount);
     }
 
     #[detour(SPEND_RESEARCH)]
     unsafe extern "thiscall" fn spend_research(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.spend_research(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.spend_research(amount);
     }
 
     #[detour(REFUND_ANIMAL_COST)]
     unsafe extern "thiscall" fn refund_animal_cost(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.refund_animal_cost(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.refund_animal_cost(amount);
     }
 
     #[detour(REFUND_CONSTRUCTION)]
     unsafe extern "thiscall" fn refund_construction(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.refund_construction(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.refund_construction(amount);
     }
 
     #[detour(INCREASE_DONATIONS)]
     unsafe extern "thiscall" fn increase_donations(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.increase_donations(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.increase_donations(amount);
     }
 
     #[detour(INCREASE_ENDOWMENT)]
     unsafe extern "thiscall" fn increase_endowment(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.increase_endowment(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.increase_endowment(amount);
     }
 
     #[detour(INCREASE_SHOW_ADMISSION)]
     unsafe extern "thiscall" fn increase_show_admission(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.increase_show_admission(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.increase_show_admission(amount);
     }
 
     #[detour(BUY_PEOPLE_FOOD)]
     unsafe extern "thiscall" fn buy_people_food(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.buy_people_food(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.buy_people_food(amount);
     }
 
     #[detour(CHANGE_ENDOWMENT_MEMBERS)]
     unsafe extern "thiscall" fn change_endowment_members(this: *const u32, delta: i32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.change_endowment_members(delta);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.change_endowment_members(delta);
     }
 
     /// `fastcall`/single-`this`-register (per the plan's "Method inventory" table), declared `i32` in
@@ -131,7 +131,7 @@ mod zoostatus_detours {
     /// detours, see [`ZooStatus::animal_escaped`]'s own doc comment.
     #[detour(ANIMAL_ESCAPED)]
     unsafe extern "fastcall" fn animal_escaped(this: i32) {
-        unsafe { mut_from_memory::<ZooStatus>(this as *const u32) }.animal_escaped();
+        unsafe { ref_from_memory::<ZooStatus>(this as *const u32) }.animal_escaped();
     }
 
     #[detour(ADMISSION_MESSAGE)]
@@ -141,22 +141,22 @@ mod zoostatus_detours {
 
     #[detour(NEWGUEST_CHECKS)]
     unsafe extern "thiscall" fn newguest_checks(this: *const u32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.newguest_checks();
+        unsafe { ref_from_memory::<ZooStatus>(this) }.newguest_checks();
     }
 
     #[detour(MESSAGE_CHECKS)]
     unsafe extern "thiscall" fn message_checks(this: *const u32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.message_checks();
+        unsafe { ref_from_memory::<ZooStatus>(this) }.message_checks();
     }
 
     #[detour(RATING_CHECKS)]
     unsafe extern "thiscall" fn rating_checks(this: *const u32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.rating_checks();
+        unsafe { ref_from_memory::<ZooStatus>(this) }.rating_checks();
     }
 
     #[detour(F_GRANT_DONATION)]
     unsafe extern "thiscall" fn f_grant_donation(this: *const u32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.f_grant_donation();
+        unsafe { ref_from_memory::<ZooStatus>(this) }.f_grant_donation();
     }
 
     /// A this-less free-standing helper (per the plan's "Method inventory" table) - routes onto
@@ -168,7 +168,7 @@ mod zoostatus_detours {
 
     #[detour(SET_ADULT_ADMISSION_PRICE)]
     unsafe extern "thiscall" fn set_adult_admission_price(this: *const u32, price: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.set_adult_admission_price(price);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.set_adult_admission_price(price);
     }
 
     /// `ZooStatus_showPrices.asm` (read in full) never touches the incoming `this`/ECX past its
@@ -188,12 +188,12 @@ mod zoostatus_detours {
 
     #[detour(CALCULATE_SUMS)]
     unsafe extern "thiscall" fn calculate_sums(this: *const u32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.calculate_sums();
+        unsafe { ref_from_memory::<ZooStatus>(this) }.calculate_sums();
     }
 
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const u32, delta: i32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.update(delta);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.update(delta);
     }
 
     #[detour(SAVE)]
@@ -205,27 +205,27 @@ mod zoostatus_detours {
     /// `ztgamemgr.rs`'s own `load`'s file-handle type) - cast only, same handle either way.
     #[detour(LOAD)]
     unsafe extern "thiscall" fn load(this: *const u32, file: *const u8, version: u32) -> bool {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.load(file as *const u32, version) != 0
+        unsafe { ref_from_memory::<ZooStatus>(this) }.load(file as *const u32, version) != 0
     }
 
     #[detour(HEAL_ANIMAL)]
     unsafe extern "thiscall" fn heal_animal(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.heal_animal(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.heal_animal(amount);
     }
 
     #[detour(PURCHASE_FOOD)]
     unsafe extern "thiscall" fn purchase_food(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.purchase_food(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.purchase_food(amount);
     }
 
     #[detour(INCREASE_ADMISSIONS_INCOME)]
     unsafe extern "thiscall" fn increase_admissions_income(this: *const u32, amount: f32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.increase_admissions_income(amount);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.increase_admissions_income(amount);
     }
 
     #[detour(INCREASE_ADMISSIONS)]
     unsafe extern "thiscall" fn increase_admissions(this: *const u32, count: i32) {
-        unsafe { mut_from_memory::<ZooStatus>(this) }.increase_admissions(count);
+        unsafe { ref_from_memory::<ZooStatus>(this) }.increase_admissions(count);
     }
 
     #[detour(GET_STATUS)]

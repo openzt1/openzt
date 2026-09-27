@@ -1,5 +1,5 @@
 use crate::globals::get_module_base;
-use crate::util::mut_from_memory;
+use crate::util::ref_from_memory;
 use openzt_detour::generated::ztshowmgr::{
     ENTER_NEW_MONTH, GET_SCRIPT_ID, GET_SHOW_INFO, INIT_SHOW_PARAMS, IS_DOING_SHOW, IS_SHOW_SCRIPT_DONE, LOAD, REGISTER_SHOW, SAVE,
     UNREGISTER_SHOW, UPDATE,
@@ -16,17 +16,17 @@ mod detours {
 
     #[detour(INIT_SHOW_PARAMS)]
     unsafe extern "thiscall" fn init_show_params_detour(this: *const u32) -> u32 {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).init_show_params() }
+        unsafe { ref_from_memory::<ZTShowMgr>(this).init_show_params() }
     }
 
     #[detour(REGISTER_SHOW)]
     unsafe extern "thiscall" fn register_show_detour(this: *const u32, show: *const u32, force: bool) -> bool {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).register_show(show, force) != 0 }
+        unsafe { ref_from_memory::<ZTShowMgr>(this).register_show(show, force) != 0 }
     }
 
     #[detour(UNREGISTER_SHOW)]
     unsafe extern "thiscall" fn unregister_show_detour(this: *const u32, id: u16, show: *const u32, clear: bool) -> bool {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).unregister_show(id, show, clear) != 0 }
+        unsafe { ref_from_memory::<ZTShowMgr>(this).unregister_show(id, show, clear) != 0 }
     }
 
     #[detour(GET_SHOW_INFO)]
@@ -51,12 +51,12 @@ mod detours {
 
     #[detour(SAVE)]
     unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const i8) -> bool {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).save(file) != 0 }
+        unsafe { ref_from_memory::<ZTShowMgr>(this).save(file) != 0 }
     }
 
     #[detour(LOAD)]
     unsafe extern "thiscall" fn load_detour(this: *const u32, file: *const u32, version: u32) -> bool {
-        unsafe { mut_from_memory::<ZTShowMgr>(this).load(file, version) != 0 }
+        unsafe { ref_from_memory::<ZTShowMgr>(this).load(file, version) != 0 }
     }
 
     #[detour(IS_DOING_SHOW)]
@@ -116,7 +116,7 @@ mod detours {
 
 pub fn init() {
     let counter_addr = (get_module_base("zoo.exe") as u32 + SHOW_ID_COUNTER_RVA) as *const u16;
-    SHOW_STORE.lock().unwrap().show_id_counter = unsafe { *counter_addr };
+    lock_show_store().show_id_counter = unsafe { *counter_addr };
     if let Err(e) = unsafe { detours::init_detours() } {
         error!("Failed to initialise ztshowmgr detours: {e:?}");
     }
@@ -156,11 +156,11 @@ pub(crate) mod live_support {
     }
 
     pub(crate) fn show_id_counter() -> u16 {
-        SHOW_STORE.lock().unwrap().show_id_counter
+        lock_show_store().show_id_counter
     }
 
     pub(crate) fn set_show_id_counter(value: u16) {
-        SHOW_STORE.lock().unwrap().show_id_counter = value;
+        lock_show_store().show_id_counter = value;
     }
 
     pub(crate) fn call_real_save(this: *const u32, file: *const i8) -> bool {

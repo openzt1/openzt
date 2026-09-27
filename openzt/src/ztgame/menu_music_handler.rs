@@ -42,8 +42,9 @@ use tracing::error;
 
 use crate::{
     globals::get_module_base,
-    util::{get_from_memory, mut_from_memory, save_to_memory},
+    util::{get_from_memory, ref_from_memory, save_to_memory},
     vanilla_string::VanillaString,
+    write_live,
 };
 
 /// `GLOBAL_DX8SndMgr`'s RVA - a raw pointer-typed global (one dereference gives the live `DX8SndMgr*`
@@ -86,16 +87,16 @@ impl MenuMusicHandler {
     /// `BFIniFile::read("UI", "noMenuMusic", 0)` call - built from two temporary, real-vanilla-constructed
     /// `std::string`s ([`VanillaString`]), exactly matching vanilla's own stack-string construction, torn
     /// down again before returning.
-    pub fn construct(&mut self) {
-        self.sound_ptr = 0;
-        self.fading = 0;
-        self.fade_counter = 0;
-        self.warmup_ticks = 0;
+    pub fn construct(&self) {
+        write_live!(self, sound_ptr, 0);
+        write_live!(self, fading, 0);
+        write_live!(self, fade_counter, 0);
+        write_live!(self, warmup_ticks, 0);
 
         let section = VanillaString::new("UI");
         let key = VanillaString::new("noMenuMusic");
         let result = unsafe { READ.original()(section.as_ptr(), key.as_ptr(), 0) };
-        self.ini_menu_music_disabled = (result == 1) as u8;
+        write_live!(self, ini_menu_music_disabled, (result == 1) as u8);
     }
 
     /// Reimplementation of `ZTGameMgr::MenuMusicHandler::init`, per `MenuMusicHandler_init.c`/`.asm`.
@@ -109,7 +110,7 @@ impl MenuMusicHandler {
     /// `ini_menu_music_disabled` is set, this function returns early with `sound_ptr` still pointing at
     /// the just-released (and potentially now-dangling) `SNDSound`, exactly matching vanilla's own control
     /// flow. Not fixed here - this port preserves vanilla behavior verbatim, bugs included.
-    pub fn init(&mut self, filename: *const i8, attenuation: i32) -> bool {
+    pub fn init(&self, filename: *const i8, attenuation: i32) -> bool {
         if self.sound_ptr != 0 && unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } {
             unsafe { STOP.original()(self.sound_ptr as *const u32) };
             if self.sound_ptr != 0 {
@@ -131,12 +132,12 @@ impl MenuMusicHandler {
             0
         };
 
-        self.sound_ptr = new_sound;
+        write_live!(self, sound_ptr, new_sound);
         if new_sound == 0 {
             return false;
         }
-        self.fade_counter = 0;
-        self.fading = 0;
+        write_live!(self, fade_counter, 0);
+        write_live!(self, fading, 0);
 
         let dx8sndmgr_ptr: u32 = get_from_memory(get_module_base("zoo.exe") as u32 + GLOBAL_DX8SNDMGR_RVA);
         let success = unsafe { DX8SNDMGR_ATTEMPT.original()(dx8sndmgr_ptr as *const u32, new_sound as *const u32, filename) };
@@ -156,7 +157,7 @@ impl MenuMusicHandler {
     /// a `0` through [`SET_FADE_ATTENUATION`] (`+0x4c`) and [`SET_VOLUME`] (`+0x40`).
     ///
     /// `VALID`'s raw return is still masked to the low byte - it remains a raw `u32` in `generated.rs`.
-    pub fn start_play(&mut self) {
+    pub fn start_play(&self) {
         if self.ini_menu_music_disabled != 0 || self.sound_ptr == 0 {
             return;
         }
@@ -164,8 +165,8 @@ impl MenuMusicHandler {
         if (unsafe { VALID.original()(sound) } & 0xff) != 0 && !unsafe { IS_PLAYING.original()(sound) } {
             unsafe { PLAY_LOOPED_1.original()(sound) };
         }
-        self.fading = 0;
-        self.fade_counter = 0;
+        write_live!(self, fading, 0);
+        write_live!(self, fade_counter, 0);
         unsafe { SET_FADE_ATTENUATION.original()(sound, 0) };
         unsafe { SET_VOLUME.original()(sound, 0) };
     }
@@ -174,14 +175,14 @@ impl MenuMusicHandler {
     /// `MenuMusicHandler_startFade.c`/`.asm`. Arms the fade (`fading = 1`, `fade_counter = 0`) - but only
     /// when not already fading, `sound_ptr` is non-null, and the sound reports currently playing
     /// ([`IS_PLAYING`], `+0x50`); otherwise a complete no-op.
-    pub fn start_fade(&mut self) {
+    pub fn start_fade(&self) {
         if self.fading != 0 || self.sound_ptr == 0 {
             return;
         }
         let sound = self.sound_ptr as *const u32;
         if unsafe { IS_PLAYING.original()(sound) } {
-            self.fading = 1;
-            self.fade_counter = 0;
+            write_live!(self, fading, 1);
+            write_live!(self, fade_counter, 0);
         }
     }
 
@@ -206,35 +207,36 @@ impl MenuMusicHandler {
     /// That final gate is unreachable live in the test battery without genuinely playing audio (see
     /// `MENUMUSICHANDLER_UPDATE`'s doc comment), but is the same [`SNDSOUND_DESTRUCTOR`] release shape
     /// [`init`]/[`destruct`] already exercise for real.
-    pub fn update(&mut self, delta: u32) {
+    pub fn update(&self, delta: u32) {
         if self.fading == 0 || self.sound_ptr == 0 {
             return;
         }
         if self.warmup_ticks < 5 {
-            self.warmup_ticks += 1;
+            write_live!(self, warmup_ticks, self.warmup_ticks + 1);
             return;
         }
         if delta >= 2000 {
             return;
         }
 
-        self.fade_counter += fade_increment(delta);
-        if self.fade_counter > 3000 {
+        let fade_counter = self.fade_counter + fade_increment(delta);
+        write_live!(self, fade_counter, fade_counter);
+        if fade_counter > 3000 {
             let sound = self.sound_ptr as *const u32;
             if unsafe { IS_PLAYING.original()(sound) } {
-                self.fading = 0;
-                self.fade_counter = 0;
+                write_live!(self, fading, 0);
+                write_live!(self, fade_counter, 0);
                 unsafe { STOP.original()(sound) };
                 if self.sound_ptr != 0 {
                     unsafe { SNDSOUND_DESTRUCTOR.original()(sound, 1) };
                 }
-                self.sound_ptr = 0;
+                write_live!(self, sound_ptr, 0);
             }
             return;
         }
 
         let sound = self.sound_ptr as *const u32;
-        unsafe { SET_FADE_ATTENUATION.original()(sound, self.fade_counter) };
+        unsafe { SET_FADE_ATTENUATION.original()(sound, fade_counter) };
         unsafe { SET_VOLUME.original()(sound, 0) };
     }
 
@@ -245,7 +247,7 @@ impl MenuMusicHandler {
     /// `release(1)`, and the same redundant `sound_ptr` re-check before the release as [`init`]/[`update`]
     /// render it. Leaves `sound_ptr` itself untouched, matching vanilla - the caller frees the block
     /// right after (in `~ZTGameMgr`'s tail, via `operator_delete`).
-    pub fn destruct(&mut self) {
+    pub fn destruct(&self) {
         if self.sound_ptr != 0 {
             if unsafe { IS_PLAYING.original()(self.sound_ptr as *const u32) } {
                 unsafe { STOP.original()(self.sound_ptr as *const u32) };
@@ -301,28 +303,28 @@ mod menu_music_handler_detours {
 
     #[detour(CONSTRUCTOR)]
     unsafe extern "fastcall" fn constructor(this: *const u32) -> *const u32 {
-        unsafe { mut_from_memory::<MenuMusicHandler>(this) }.construct();
+        unsafe { ref_from_memory::<MenuMusicHandler>(this) }.construct();
         this
     }
 
     #[detour(INIT)]
     unsafe extern "thiscall" fn init(this: *const u32, filename: u32, attenuation: i32) -> u32 {
-        unsafe { mut_from_memory::<MenuMusicHandler>(this) }.init(filename as *const i8, attenuation) as u32
+        unsafe { ref_from_memory::<MenuMusicHandler>(this) }.init(filename as *const i8, attenuation) as u32
     }
 
     #[detour(START_PLAY)]
     unsafe extern "thiscall" fn start_play(this: *const u32) {
-        unsafe { mut_from_memory::<MenuMusicHandler>(this) }.start_play();
+        unsafe { ref_from_memory::<MenuMusicHandler>(this) }.start_play();
     }
 
     #[detour(START_FADE)]
     unsafe extern "fastcall" fn start_fade(this: *const u32) {
-        unsafe { mut_from_memory::<MenuMusicHandler>(this) }.start_fade();
+        unsafe { ref_from_memory::<MenuMusicHandler>(this) }.start_fade();
     }
 
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const u32, delta: u32) {
-        unsafe { mut_from_memory::<MenuMusicHandler>(this) }.update(delta);
+        unsafe { ref_from_memory::<MenuMusicHandler>(this) }.update(delta);
     }
 
     /// Live-test access to the real vanilla bodies. Once

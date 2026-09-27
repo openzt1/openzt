@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use openzt_detour::generated::ztsoundscape::{CONSTRUCTOR, INIT, UPDATE};
 use openzt_detour_macro::detour_mod;
 use tracing::error;
-use crate::util::mut_from_memory;
+use crate::util::ref_from_memory;
 
 pub mod snd_slot;
 #[allow(clippy::module_inception)]
@@ -28,7 +28,7 @@ mod soundscape_detours {
 
     #[detour(CONSTRUCTOR)]
     unsafe extern "thiscall" fn constructor(this: *const c_void) -> *const u32 {
-        unsafe { mut_from_memory::<ZTSoundscape>(this) }.construct();
+        unsafe { ref_from_memory::<ZTSoundscape>(this) }.construct();
         this as *const u32
     }
 
@@ -40,7 +40,7 @@ mod soundscape_detours {
         crowd_config_name: *const u8,
         world_config_name: *const u8,
     ) {
-        unsafe { mut_from_memory::<ZTSoundscape>(this) }.init(
+        unsafe { ref_from_memory::<ZTSoundscape>(this) }.init(
             crowd_ambients_name as *const u8,
             world_ambients_name as *const u8,
             crowd_config_name,
@@ -50,7 +50,7 @@ mod soundscape_detours {
 
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const c_void, delta: i32) {
-        unsafe { mut_from_memory::<ZTSoundscape>(this) }.update(delta);
+        unsafe { ref_from_memory::<ZTSoundscape>(this) }.update(delta);
     }
 
     /// Live-test access to the real vanilla bodies.

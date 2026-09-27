@@ -104,7 +104,7 @@ use tracing::error;
 
 use crate::{
     globals::get_module_base,
-    util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory},
+    util::{get_from_memory, ref_from_memory, save_to_memory},
     ztshowscriptstate::{RVA_SCRIPT_STATE_VTABLE, ZTShowScriptState},
 };
 
@@ -429,7 +429,7 @@ pub fn show_state_load(this: u32, file: *const u32, version: u32) -> bool {
             save_to_memory(value, vtable_addr);
 
             let loaded =
-                unsafe { mut_from_memory::<ZTShowScriptState>(value as *const u32) }.load(file, version);
+                unsafe { ref_from_memory::<ZTShowScriptState>(value as *const u32) }.load(file, version);
             ok &= loaded;
             if !ok {
                 return false;

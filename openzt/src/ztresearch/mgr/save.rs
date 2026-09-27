@@ -8,7 +8,7 @@ use openzt_detour_macro::detour_mod;
 use tracing::{error, warn};
 
 use crate::bfconfigfile::BFConfigFile;
-use crate::util::{get_from_memory, mut_from_memory, ref_from_memory, ZTArray, ZTBufferString};
+use crate::util::{get_from_memory, ref_from_memory, ZTArray, ZTBufferString};
 use super::super::models::{ZTResearchBranch, ZTResearchCategory, ZTResearchFundingLevel, ZTResearchProgram};
 use super::ztresearchmgr::{global_ztgamemgr_ptr, ZTResearchMgr};
 
@@ -275,7 +275,8 @@ mod detours {
     use tracing::{error, warn};
 
     use super::{stream_io, *};
-    use crate::util::{mut_from_memory, ref_from_memory};
+    use crate::util::ref_from_memory;
+    use crate::write_live;
 
     #[detour(SAVE)]
     unsafe extern "thiscall" fn save(this: *const u32, file: *const u32) -> bool {
@@ -291,13 +292,13 @@ mod detours {
 
     #[detour(LOAD)]
     unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> bool {
-        let mgr = unsafe { mut_from_memory::<ZTResearchMgr>(this) };
+        let mgr = unsafe { ref_from_memory::<ZTResearchMgr>(this) };
 
-        for branch in mgr.branches_mut() {
-            branch.current_funding_level = 0;
-            for category in branch.categories_mut() {
+        for branch in mgr.branches() {
+            write_live!(branch, current_funding_level, 0);
+            for category in branch.categories() {
                 category.set_enabled(true);
-                for program in category.programs_mut() {
+                for program in category.programs() {
                     program.reset();
                 }
             }
@@ -328,9 +329,9 @@ mod detours {
                             read_ok = false;
                             break;
                         };
-                        if let Some(branch) = mgr.get_branch_mut(id) {
+                        if let Some(branch) = mgr.get_branch(id) {
                             let count = branch.funding_level_count() as u32;
-                            branch.current_funding_level = if (value as u32) < count { value } else { 0 };
+                            write_live!(branch, current_funding_level, if (value as u32) < count { value } else { 0 });
                         }
                     }
                     1 => {
@@ -338,7 +339,7 @@ mod detours {
                             read_ok = false;
                             break;
                         };
-                        if let Some(category) = mgr.get_category_mut(id) {
+                        if let Some(category) = mgr.get_category(id) {
                             category.set_enabled(value != 0);
                         }
                     }
@@ -347,8 +348,8 @@ mod detours {
                             read_ok = false;
                             break;
                         };
-                        if let Some(program) = mgr.get_program_mut(id) {
-                            program.current_progress = f32::from_bits(value as u32);
+                        if let Some(program) = mgr.get_program(id) {
+                            write_live!(program, current_progress, f32::from_bits(value as u32));
                         }
                     }
                     _ => unreachable!("kind already range-checked above"),
@@ -361,12 +362,12 @@ mod detours {
             return false;
         }
 
-        for program in mgr.branches_mut().flat_map(|b| b.categories_mut()).flat_map(|c| c.programs_mut()) {
+        for program in mgr.branches().flat_map(|b| b.categories()).flat_map(|c| c.programs()) {
             if program.is_complete() {
                 program.on_completion();
             }
         }
-        for branch in mgr.branches_mut() {
+        for branch in mgr.branches() {
             branch.pick_random_program();
         }
 

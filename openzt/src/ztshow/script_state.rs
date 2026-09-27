@@ -47,7 +47,8 @@ use tracing::error;
 
 use crate::{
     globals::get_module_base,
-    util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory},
+    util::{get_from_memory, ref_from_memory, save_to_memory},
+    write_live,
     ztshowstate::{link_new_state_node, plan_state_node_insert, StateNodeInsertPlan},
 };
 
@@ -93,8 +94,11 @@ fn write_bytes_to_file<T>(value: &T, file: *const i8) -> bool {
 /// `fread`-shaped primitive despite its misleading decompiler-given name - see
 /// [`write_bytes_to_file`]'s doc comment for the full `.hooked()`/`io_redirect` reasoning, which
 /// applies identically here).
-fn read_bytes<T>(value: &mut T, file: *const u32) -> bool {
-    unsafe { DEALLOCATE.hooked()(value as *mut T as *const u32, mem::size_of::<T>() as u32, 1, file as *const u8) == 1 }
+/// Reads straight into a place inside a live `ZTShowScriptState`. `self` is `&self` (see the module's
+/// `!Freeze`/`LiveMemory` discipline), so a field there is reached via `addr_of!(self.field).cast_mut()`,
+/// never a `&mut` reference.
+fn read_bytes_at<T>(ptr: *mut T, file: *const u32) -> bool {
+    unsafe { DEALLOCATE.hooked()(ptr as *const u32, mem::size_of::<T>() as u32, 1, file as *const u8) == 1 }
 }
 
 impl ZTShowScriptState {
@@ -103,16 +107,16 @@ impl ZTShowScriptState {
     /// sentinel and zeroes everything else except the vtable pointer and the never-read `+0x6` padding
     /// byte pair - matching vanilla's own field list exactly (note `+0x13` is reset here but **not** by
     /// `set_next_item`; only `init` touches it).
-    pub fn init(&mut self) -> u32 {
-        self.trick_index = 0xffff;
-        self.script_id = 0;
-        self.key = 0;
-        self.flag_a = 0;
-        self.skip_scoring = 0;
-        self.flag_c = 0;
-        self.flag_d = 0;
-        self.trick_done = 0;
-        self.flag_f = 0;
+    pub fn init(&self) -> u32 {
+        write_live!(self, trick_index, 0xffff);
+        write_live!(self, script_id, 0);
+        write_live!(self, key, 0);
+        write_live!(self, flag_a, 0);
+        write_live!(self, skip_scoring, 0);
+        write_live!(self, flag_c, 0);
+        write_live!(self, flag_d, 0);
+        write_live!(self, trick_done, 0);
+        write_live!(self, flag_f, 0);
         1
     }
 
@@ -122,20 +126,20 @@ impl ZTShowScriptState {
     /// guard around the entire body). The nine field reads then run unconditionally in offset order and
     /// are ANDed - vanilla reads all nine even after an earlier one failed, so there is deliberately no
     /// early return.
-    pub fn load(&mut self, file: *const u32, version: u32) -> bool {
+    pub fn load(&self, file: *const u32, version: u32) -> bool {
         if version <= 0x60 {
             return true;
         }
 
-        let mut ok = read_bytes(&mut self.script_id, file);
-        ok &= read_bytes(&mut self.key, file);
-        ok &= read_bytes(&mut self.trick_index, file);
-        ok &= read_bytes(&mut self.flag_a, file);
-        ok &= read_bytes(&mut self.skip_scoring, file);
-        ok &= read_bytes(&mut self.flag_c, file);
-        ok &= read_bytes(&mut self.flag_d, file);
-        ok &= read_bytes(&mut self.trick_done, file);
-        ok &= read_bytes(&mut self.flag_f, file);
+        let mut ok = read_bytes_at(std::ptr::addr_of!(self.script_id).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.key).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.trick_index).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.flag_a).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.skip_scoring).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.flag_c).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.flag_d).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.trick_done).cast_mut(), file);
+        ok &= read_bytes_at(std::ptr::addr_of!(self.flag_f).cast_mut(), file);
         ok
     }
 
@@ -168,20 +172,20 @@ impl ZTShowScriptState {
     /// - `index == 0xffff` ("assign first item"): store `0`, clear the same five flags, return `0`.
     ///
     /// `+0x13` is untouched on every path - only `init` resets it.
-    pub fn set_next_item(&mut self, index: u16) -> u32 {
+    pub fn set_next_item(&self, index: u16) -> u32 {
         let n = self.get_num_items();
         if n < 1 {
             return 6;
         }
         if index != 0xffff {
             if (index as i32) < n {
-                self.trick_index = index.wrapping_add(1);
+                write_live!(self, trick_index, index.wrapping_add(1));
                 self.clear_trick_flags();
                 return 0;
             }
             return 7;
         }
-        self.trick_index = 0;
+        write_live!(self, trick_index, 0);
         self.clear_trick_flags();
         0
     }
@@ -189,19 +193,19 @@ impl ZTShowScriptState {
     /// Reimplementation of `ZTShowScriptState::setNextItem()` (`0x005a67d0`), per
     /// `ZTShowScriptState_setNextItem_1.c`/`.asm` - a one-line forward to [`Self::set_next_item`] with
     /// the current `trick_index`.
-    pub fn set_next_item_current(&mut self) {
+    pub fn set_next_item_current(&self) {
         let current = self.trick_index;
         self.set_next_item(current);
     }
 
     /// Clears the five flags every successful `setNextItem` resets (`+0xe`-`+0x12`) - `setNextItem`'s
     /// own flag-block, factored out of [`Self::set_next_item`]'s two clearing paths.
-    fn clear_trick_flags(&mut self) {
-        self.flag_a = 0;
-        self.skip_scoring = 0;
-        self.flag_c = 0;
-        self.flag_d = 0;
-        self.trick_done = 0;
+    fn clear_trick_flags(&self) {
+        write_live!(self, flag_a, 0);
+        write_live!(self, skip_scoring, 0);
+        write_live!(self, flag_c, 0);
+        write_live!(self, flag_d, 0);
+        write_live!(self, trick_done, 0);
     }
 
     /// Reimplementation of `ZTShowScriptState::getNumItems` (`0x005a218f`), per
@@ -255,12 +259,12 @@ mod detours {
 
     #[detour(INIT)]
     unsafe extern "thiscall" fn init_detour(this: *const u32) -> u32 {
-        unsafe { mut_from_memory::<ZTShowScriptState>(this) }.init()
+        unsafe { ref_from_memory::<ZTShowScriptState>(this) }.init()
     }
 
     #[detour(LOAD)]
     unsafe extern "thiscall" fn load_detour(this: *const u32, file: *const u32, version: u32) -> bool {
-        unsafe { mut_from_memory::<ZTShowScriptState>(this) }.load(file, version)
+        unsafe { ref_from_memory::<ZTShowScriptState>(this) }.load(file, version)
     }
 
     #[detour(SAVE)]
@@ -270,12 +274,12 @@ mod detours {
 
     #[detour(SET_NEXT_ITEM_0)]
     unsafe extern "thiscall" fn set_next_item_detour(this: *const u32, index: u16) -> u32 {
-        unsafe { mut_from_memory::<ZTShowScriptState>(this) }.set_next_item(index)
+        unsafe { ref_from_memory::<ZTShowScriptState>(this) }.set_next_item(index)
     }
 
     #[detour(SET_NEXT_ITEM_1)]
     unsafe extern "thiscall" fn set_next_item_current_detour(this: *const u32) {
-        unsafe { mut_from_memory::<ZTShowScriptState>(this) }.set_next_item_current();
+        unsafe { ref_from_memory::<ZTShowScriptState>(this) }.set_next_item_current();
     }
 
     #[detour(GET_NUM_ITEMS)]

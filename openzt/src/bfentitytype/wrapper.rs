@@ -12,7 +12,7 @@ use super::scenery::{ZTBuildingType, ZTRubbleType, ZTSceneryType};
 use super::staff::{ZTHelicopterType, ZTGuideType, ZTKeeperType, ZTMaintType, ZTStaffType};
 use super::units::{BFUnitType, ZTAnimalType, ZTGuestType, ZTUnitType};
 use crate::expansions::is_member;
-use crate::util::{get_from_memory, get_string_from_memory, map_from_memory};
+use crate::util::{get_from_memory, get_string_from_memory, ref_from_memory};
 
 // This returns a dynamic trait object, which lets us call the methods of the entity type without knowing the exact type
 pub(crate) fn get_bfentitytype(address: u32) -> Result<Box<dyn EntityType>, String> {
@@ -44,33 +44,35 @@ pub(crate) fn get_bfentitytype(address: u32) -> Result<Box<dyn EntityType>, Stri
     Ok(entity)
 }
 
-pub(crate) fn map_bfentitytype(address: u32) -> Result<&'static mut dyn EntityType, String> {
+pub(crate) fn map_bfentitytype(address: u32) -> Result<&'static dyn EntityType, String> {
     // create a copied instance of the entity type
     info!("Mapping entity type at address {:#x}", address);
     let entity_type_vtable: u32 = get_from_memory(address);
     info!("Entity type vtable: {:#x}", entity_type_vtable);
-    let entity: &mut dyn EntityType = match ZTEntityTypeClass::from(entity_type_vtable) {
-        ZTEntityTypeClass::Animal => map_from_memory::<ZTAnimalType>(address),
-        ZTEntityTypeClass::Ambient => map_from_memory::<ZTAmbientType>(address),
-        ZTEntityTypeClass::Guest => map_from_memory::<ZTGuestType>(address),
-        ZTEntityTypeClass::Fence => map_from_memory::<ZTFenceType>(address),
-        ZTEntityTypeClass::TourGuide => map_from_memory::<ZTGuideType>(address),
-        ZTEntityTypeClass::Building => map_from_memory::<ZTBuildingType>(address),
-        ZTEntityTypeClass::Scenery => map_from_memory::<ZTSceneryType>(address),
-        ZTEntityTypeClass::Food => map_from_memory::<ZTFoodType>(address),
-        ZTEntityTypeClass::TankFilter => map_from_memory::<ZTTankFilterType>(address),
-        ZTEntityTypeClass::Path => map_from_memory::<ZTPathType>(address),
-        ZTEntityTypeClass::Rubble => map_from_memory::<ZTRubbleType>(address),
-        ZTEntityTypeClass::TankWall => map_from_memory::<ZTTankWallType>(address),
-        ZTEntityTypeClass::Keeper => map_from_memory::<ZTKeeperType>(address),
-        ZTEntityTypeClass::MaintenanceWorker => map_from_memory::<ZTMaintType>(address),
-        ZTEntityTypeClass::Drt => map_from_memory::<ZTHelicopterType>(address),
-        ZTEntityTypeClass::BFOverlay => map_from_memory::<BFOverlayType>(address),
-        ZTEntityTypeClass::BFUnit => map_from_memory::<BFUnitType>(address),
-        ZTEntityTypeClass::ZTUnit => map_from_memory::<ZTUnitType>(address),
-        ZTEntityTypeClass::Staff => map_from_memory::<ZTStaffType>(address),
-        ZTEntityTypeClass::BFEntity => map_from_memory::<BFEntityType>(address),
-        ZTEntityTypeClass::Unknown => return Err("Unknown entity type".to_string()),
+    let entity: &dyn EntityType = unsafe {
+        match ZTEntityTypeClass::from(entity_type_vtable) {
+            ZTEntityTypeClass::Animal => ref_from_memory::<ZTAnimalType>(address),
+            ZTEntityTypeClass::Ambient => ref_from_memory::<ZTAmbientType>(address),
+            ZTEntityTypeClass::Guest => ref_from_memory::<ZTGuestType>(address),
+            ZTEntityTypeClass::Fence => ref_from_memory::<ZTFenceType>(address),
+            ZTEntityTypeClass::TourGuide => ref_from_memory::<ZTGuideType>(address),
+            ZTEntityTypeClass::Building => ref_from_memory::<ZTBuildingType>(address),
+            ZTEntityTypeClass::Scenery => ref_from_memory::<ZTSceneryType>(address),
+            ZTEntityTypeClass::Food => ref_from_memory::<ZTFoodType>(address),
+            ZTEntityTypeClass::TankFilter => ref_from_memory::<ZTTankFilterType>(address),
+            ZTEntityTypeClass::Path => ref_from_memory::<ZTPathType>(address),
+            ZTEntityTypeClass::Rubble => ref_from_memory::<ZTRubbleType>(address),
+            ZTEntityTypeClass::TankWall => ref_from_memory::<ZTTankWallType>(address),
+            ZTEntityTypeClass::Keeper => ref_from_memory::<ZTKeeperType>(address),
+            ZTEntityTypeClass::MaintenanceWorker => ref_from_memory::<ZTMaintType>(address),
+            ZTEntityTypeClass::Drt => ref_from_memory::<ZTHelicopterType>(address),
+            ZTEntityTypeClass::BFOverlay => ref_from_memory::<BFOverlayType>(address),
+            ZTEntityTypeClass::BFUnit => ref_from_memory::<BFUnitType>(address),
+            ZTEntityTypeClass::ZTUnit => ref_from_memory::<ZTUnitType>(address),
+            ZTEntityTypeClass::Staff => ref_from_memory::<ZTStaffType>(address),
+            ZTEntityTypeClass::BFEntity => ref_from_memory::<BFEntityType>(address),
+            ZTEntityTypeClass::Unknown => return Err("Unknown entity type".to_string()),
+        }
     };
     Ok(entity)
 }

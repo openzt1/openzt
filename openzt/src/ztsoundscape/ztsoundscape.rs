@@ -1,6 +1,7 @@
 use crate::ambients::Ambients;
 use crate::globals::{get_module_base, globals};
-use crate::util::{get_from_memory, ref_from_memory, save_to_memory};
+use crate::util::{get_from_memory, ref_from_memory, save_to_memory, write_live_ptr};
+use crate::write_live;
 use openzt_detour::generated::bfconfigfile::{ATTEMPT_0, GET_INT, GET_STRING_1, RELEASE};
 use openzt_detour::generated::bfsndmgr::GET_SCREEN_CENTER;
 use openzt_detour::generated::sndsound::{
@@ -189,12 +190,12 @@ impl ZTSoundscape {
     /// uninitialized exactly like vanilla (`operator_new` doesn't zero - `init` writes everything the
     /// rest of the class reads), and the ctor's post-assignment `if inner != 0` release idiom is a dead
     /// no-op at construction time (`inner` was just written `0`) and is not reproduced.
-    pub fn construct(&mut self) {
-        self.crowd_snd_a = SndSlot { vtable: SNDSOUND_VTABLE, inner: 0 };
-        self.crowd_snd_b = SndSlot { vtable: SNDSOUND_VTABLE, inner: 0 };
-        self.world_snd = SndSlot { vtable: SNDSOUND_VTABLE, inner: 0 };
-        self.crowd_ambients = 0;
-        self.world_ambients = 0;
+    pub fn construct(&self) {
+        write_live!(self, crowd_snd_a, SndSlot { vtable: SNDSOUND_VTABLE, inner: 0 });
+        write_live!(self, crowd_snd_b, SndSlot { vtable: SNDSOUND_VTABLE, inner: 0 });
+        write_live!(self, world_snd, SndSlot { vtable: SNDSOUND_VTABLE, inner: 0 });
+        write_live!(self, crowd_ambients, 0);
+        write_live!(self, world_ambients, 0);
     }
 
     /// One `(crowd_filename[index]`, `crowd_atten[index])` config lookup, shared by all four crowd
@@ -205,19 +206,14 @@ impl ZTSoundscape {
     /// former are cross-allocator-critical and stay inline in [`ZTSoundscape::init`]; the latter
     /// writes two different fields, so the helper's shape doesn't fit - and the asymmetry is the
     /// point).
-    fn get_crowd_config_pair(&mut self, config: *const u32, section: u32, index: usize, key: u32, atten_key: u32) {
-        let got = unsafe {
-            GET_STRING_1.original()(
-                config,
-                section as *const u32,
-                key as *const u32,
-                &raw mut self.crowd_filename[index] as *const u32,
-            )
-        };
+    fn get_crowd_config_pair(&self, config: *const u32, section: u32, index: usize, key: u32, atten_key: u32) {
+        let filename_ptr = core::ptr::addr_of!(self.crowd_filename[index]).cast_mut();
+        let atten_ptr = core::ptr::addr_of!(self.crowd_atten[index]).cast_mut();
+        let got = unsafe { GET_STRING_1.original()(config, section as *const u32, key as *const u32, filename_ptr as *const u32) };
         if got {
-            self.crowd_atten[index] = DEFAULT_CROWD_ATTEN;
+            unsafe { write_live_ptr(atten_ptr, DEFAULT_CROWD_ATTEN) };
             unsafe {
-                GET_INT.original()(config, section, atten_key, &raw mut self.crowd_atten[index] as *const u32);
+                GET_INT.original()(config, section, atten_key, atten_ptr as *const u32);
             }
         }
     }
@@ -227,7 +223,7 @@ impl ZTSoundscape {
     /// calls. Vanilla is void; the four arguments are exactly what `ztgamemgr.rs`'s `start` gets from
     /// its four `BFScenarioMgr` getters (`*const u8`), passed through uncasted.
     pub fn init(
-        &mut self,
+        &self,
         crowd_ambients_name: *const u8,
         world_ambients_name: *const u8,
         crowd_config_name: *const u8,
@@ -237,58 +233,63 @@ impl ZTSoundscape {
         let crowd_config = (base + CROWD_CONFIG_INSTANCE_RVA) as *const u32;
         let world_config = (base + WORLD_CONFIG_INSTANCE_RVA) as *const u32;
 
-        unsafe {
-            let crowd_block = OPERATOR_NEW.original()(0x18);
-            self.crowd_ambients = if crowd_block.is_null() {
-                0
-            } else {
-                let mut ctor_data = [0u32; 3];
-                (*(crowd_block as *mut Ambients)).construct(crowd_ambients_name, ctor_data.as_mut_ptr() as *const i32);
-                crowd_block as u32
-            };
+        let crowd_block = unsafe { OPERATOR_NEW.original()(0x18) };
+        let crowd_ambients = if crowd_block.is_null() {
+            0
+        } else {
+            let mut ctor_data = [0u32; 3];
+            unsafe { (*(crowd_block as *mut Ambients)).construct(crowd_ambients_name, ctor_data.as_mut_ptr() as *const i32) };
+            crowd_block as u32
+        };
+        write_live!(self, crowd_ambients, crowd_ambients);
 
-            let world_block = OPERATOR_NEW.original()(0x18);
-            self.world_ambients = if world_block.is_null() {
-                0
-            } else {
-                let mut ctor_data = [0u32; 3];
-                (*(world_block as *mut Ambients)).construct(world_ambients_name, ctor_data.as_mut_ptr() as *const i32);
-                world_block as u32
-            };
+        let world_block = unsafe { OPERATOR_NEW.original()(0x18) };
+        let world_ambients = if world_block.is_null() {
+            0
+        } else {
+            let mut ctor_data = [0u32; 3];
+            unsafe { (*(world_block as *mut Ambients)).construct(world_ambients_name, ctor_data.as_mut_ptr() as *const i32) };
+            world_block as u32
+        };
+        write_live!(self, world_ambients, world_ambients);
 
-            // Defaults, in vanilla's write order.
-            self.world_name = 0;
-            for (slot, &rva) in self.crowd_filename.iter_mut().zip(DEFAULT_CROWD_FILENAME_RVAS.iter()) {
-                *slot = base + rva;
+        // Defaults, in vanilla's write order.
+        write_live!(self, world_name, 0);
+        for (index, &rva) in DEFAULT_CROWD_FILENAME_RVAS.iter().enumerate() {
+            unsafe { write_live_ptr(core::ptr::addr_of!(self.crowd_filename[index]).cast_mut(), base + rva) };
+        }
+        write_live!(self, crowd_atten, [DEFAULT_CROWD_ATTEN; 4]);
+
+        // Crowd config: unconditional release, then attempt gates all four key pairs.
+        unsafe { RELEASE.original()(crowd_config) };
+        if unsafe { ATTEMPT_0.original()(crowd_config, crowd_config_name as *const i8) } {
+            let section = base + CROWD_SECTION_RVA;
+            for (index, &(key, atten_key)) in CROWD_KEY_RVAS.iter().enumerate() {
+                self.get_crowd_config_pair(crowd_config, section, index, base + key, base + atten_key);
             }
-            self.crowd_atten = [DEFAULT_CROWD_ATTEN; 4];
+        }
 
-            // Crowd config: unconditional release, then attempt gates all four key pairs.
-            RELEASE.original()(crowd_config);
-            if ATTEMPT_0.original()(crowd_config, crowd_config_name as *const i8) {
-                let section = base + CROWD_SECTION_RVA;
-                for (index, &(key, atten_key)) in CROWD_KEY_RVAS.iter().enumerate() {
-                    self.get_crowd_config_pair(crowd_config, section, index, base + key, base + atten_key);
-                }
-            }
-
-            // World config: same shape; the name lookup writes world_name, and only on success does
-            // the atten lookup run (behind a plain-0 default, per this method's doc comment).
-            RELEASE.original()(world_config);
-            if ATTEMPT_0.original()(world_config, world_config_name as *const i8) {
-                let section = base + WORLD_SECTION_RVA;
-                if GET_STRING_1.original()(
+        // World config: same shape; the name lookup writes world_name, and only on success does
+        // the atten lookup run (behind a plain-0 default, per this method's doc comment).
+        unsafe { RELEASE.original()(world_config) };
+        if unsafe { ATTEMPT_0.original()(world_config, world_config_name as *const i8) } {
+            let section = base + WORLD_SECTION_RVA;
+            let got_name = unsafe {
+                GET_STRING_1.original()(
                     world_config,
                     section as *const u32,
                     (base + WORLD_NAME_KEY_RVA) as *const u32,
-                    &raw mut self.world_name as *const u32,
-                ) {
-                    self.world_atten = 0;
+                    core::ptr::addr_of!(self.world_name).cast_mut() as *const u32,
+                )
+            };
+            if got_name {
+                write_live!(self, world_atten, 0);
+                unsafe {
                     GET_INT.original()(
                         world_config,
                         section,
                         base + WORLD_ATTEN_KEY_RVA,
-                        &raw mut self.world_atten as *const u32,
+                        core::ptr::addr_of!(self.world_atten).cast_mut() as *const u32,
                     );
                 }
             }
@@ -308,14 +309,14 @@ impl ZTSoundscape {
         }
 
         // Tail, in vanilla's write order.
-        self.current_track = -1;
-        self.fade = 0;
-        self.fading = 0;
-        self.next_slot_is_b = 0;
+        write_live!(self, current_track, -1);
+        write_live!(self, fade, 0);
+        write_live!(self, fading, 0);
+        write_live!(self, next_slot_is_b, 0);
     }
 
     /// Reimplementation of `ZTSoundscape::update` (`0x004352dd`), per `ZTSoundscape_update.asm`.
-    pub fn update(&mut self, delta: i32) {
+    pub fn update(&self, delta: i32) {
         let base = get_module_base("zoo.exe") as u32;
 
         // Step 1: guests - raw dword at the live manager + 0x54.
@@ -355,7 +356,7 @@ impl ZTSoundscape {
             let c1: f32 = get_from_memory(base + DAT_0063542C_RVA);
             let c2: f32 = get_from_memory(base + DAT_00635428_RVA);
             let c3: f32 = get_from_memory(base + DAT_00635490_RVA);
-            self.fade = advance_fade(self.fade, self.fade_step_in, delta);
+            write_live!(self, fade, advance_fade(self.fade, self.fade_step_in, delta));
 
             let slot_a = &self.crowd_snd_a as *const SndSlot as *const u32;
             let slot_b = &self.crowd_snd_b as *const SndSlot as *const u32;
@@ -368,19 +369,23 @@ impl ZTSoundscape {
                     SNDSOUND_SET_FADE_ATTENUATION.original()(slot_b, fade_atten_b(self.fade, c1, c2, c3));
                     SNDSOUND_SET_VOLUME.original()(slot_b, 0);
                 }
-                if self.fade == 0 {
-                    if (SNDSOUND_VALID.original()(slot_b) & 0xff) != 0 {
+            }
+            if self.fade == 0 {
+                if (unsafe { SNDSOUND_VALID.original()(slot_b) } & 0xff) != 0 {
+                    unsafe {
                         SNDSOUND_STOP.original()(slot_b);
                         SNDSOUND_RELEASE.original()(slot_b);
                     }
-                    self.fading = 0;
-                } else if self.fade == 10000 {
-                    if (SNDSOUND_VALID.original()(slot_a) & 0xff) != 0 {
+                }
+                write_live!(self, fading, 0);
+            } else if self.fade == 10000 {
+                if (unsafe { SNDSOUND_VALID.original()(slot_a) } & 0xff) != 0 {
+                    unsafe {
                         SNDSOUND_STOP.original()(slot_a);
                         SNDSOUND_RELEASE.original()(slot_a);
                     }
-                    self.fading = 0;
                 }
+                write_live!(self, fading, 0);
             }
         }
 
@@ -402,17 +407,17 @@ impl ZTSoundscape {
                     SNDSOUND_PLAY_LOOPED_1.original()(slot);
                 }
                 let old = self.next_slot_is_b;
-                self.fading = 1;
-                self.fade_step_in = old;
-                self.fade = if old != 0 { 0 } else { 10000 };
-                self.next_slot_is_b = (old == 0) as u8;
+                write_live!(self, fading, 1);
+                write_live!(self, fade_step_in, old);
+                write_live!(self, fade, if old != 0 { 0 } else { 10000 });
+                write_live!(self, next_slot_is_b, (old == 0) as u8);
             }
-            self.current_track = target as i32;
+            write_live!(self, current_track, target as i32);
         }
     }
 
     /// Reimplementation of `ZTSoundscape::~ZTSoundscape` (`0x005003e2`), per `ZTSoundscape_~ZTSoundscape.asm`.
-    pub fn destruct(&mut self) {
+    pub fn destruct(&self) {
         // Pass 1: valid→release.
         for slot in [
             &self.world_snd as *const SndSlot as *const u32,
@@ -443,8 +448,8 @@ impl ZTSoundscape {
         }
 
         // Pass 3: per-slot swapdown.
-        destruct_slot(&mut self.world_snd);
-        destruct_slot(&mut self.crowd_snd_b);
-        destruct_slot(&mut self.crowd_snd_a);
+        destruct_slot(core::ptr::addr_of!(self.world_snd));
+        destruct_slot(core::ptr::addr_of!(self.crowd_snd_b));
+        destruct_slot(core::ptr::addr_of!(self.crowd_snd_a));
     }
 }

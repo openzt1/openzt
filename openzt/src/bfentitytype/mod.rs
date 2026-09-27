@@ -24,7 +24,8 @@ use tracing::info;
 
 use crate::command_console::CommandError;
 use crate::lua_fn;
-use crate::util::map_from_memory;
+use crate::util::ref_from_memory;
+use crate::write_live;
 use crate::ztui::get_selected_entity_type_address;
 use crate::ztworldmgr;
 
@@ -73,11 +74,11 @@ pub fn command_make_sel(args: Vec<&str>) -> Result<String, CommandError> {
         if entity_type_ptr == 0 {
             return Err(Into::into("Entity type not found"));
         }
-        let entity_type = map_from_memory::<ZTSceneryType>(entity_type_ptr);
+        let entity_type = unsafe { ref_from_memory::<ZTSceneryType>(entity_type_ptr) };
         if entity_type.selectable {
             return Ok(format!("Entity type {} is already selectable", entity_type.bfentitytype.get_type_name()));
         }
-        entity_type.selectable = true;
+        write_live!(entity_type, selectable, true);
         Ok(format!("Entity type {} is now selectable", entity_type.bfentitytype.get_type_name()))
     }
 }

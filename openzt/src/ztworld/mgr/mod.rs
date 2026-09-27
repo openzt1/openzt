@@ -9,7 +9,7 @@ use crate::command_console::CommandError;
 use crate::geom::IVec3;
 use crate::globals::globals;
 use crate::lua_fn;
-use crate::util::{get_from_memory, map_from_memory, ref_from_memory};
+use crate::util::{get_from_memory, ref_from_memory};
 use crate::ztmapview::BFTile;
 use crate::ztworld::entity::{read_zt_entity_from_memory, BFEntity, ZTAnimal, ZTEntityClass, ZTEntityWithPtr, ZTEntityTypeWithPtr, ZTUnit};
 
@@ -685,7 +685,7 @@ pub fn get_entity_type_by_id(id: u32) -> u32 {
         let array_entry = entity_type_array_start + i * 0x4;
         let entity_type_ptr = get_from_memory::<u32>(array_entry);
         info!("Checking entity type at {:#x}", entity_type_ptr);
-        let entity_type = map_from_memory::<ZTSceneryType>(entity_type_ptr);
+        let entity_type = unsafe { ref_from_memory::<ZTSceneryType>(entity_type_ptr) };
         info!("Entity type name id: {}", entity_type.name_id);
         if entity_type.name_id == id {
             info!("Found entity type {}", entity_type.bfentitytype.get_type_name());

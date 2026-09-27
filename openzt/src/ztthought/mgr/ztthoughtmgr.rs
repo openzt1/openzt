@@ -52,7 +52,7 @@ impl ZTThoughtMgr {
 
     /// Inserts `thought` at the front of the list (matching `addThought`'s own insertion point -
     /// most-recent-first), then trims from the back until the list is at most `max_thoughts` long.
-    pub fn insert_front(&mut self, thought: ZTThought) {
+    pub fn insert_front(&self, thought: ZTThought) {
         let mut stores = THOUGHT_STORES.lock().unwrap();
         let store = stores.entry(self.store_key()).or_default();
         store.push_front(thought);
@@ -63,7 +63,7 @@ impl ZTThoughtMgr {
 
     /// Removes every thought matching `predicate`. Shared removal primitive for
     /// `removeThoughtsBy{Thinker,Habitat,Object}`.
-    pub fn remove_where(&mut self, predicate: impl Fn(&ZTThought) -> bool) {
+    pub fn remove_where(&self, predicate: impl Fn(&ZTThought) -> bool) {
         if let Some(store) = THOUGHT_STORES.lock().unwrap().get_mut(&self.store_key()) {
             store.retain(|t| !predicate(t));
         }
@@ -91,23 +91,23 @@ impl ZTThoughtMgr {
     }
 
     /// Uses `insert_front`, which already trims to `max_thoughts` after every insert.
-    pub fn add_thought(&mut self, string_id: u32, thinker_ptr: u32, object_ptr: u32, habitat_ptr: u32) {
+    pub fn add_thought(&self, string_id: u32, thinker_ptr: u32, object_ptr: u32, habitat_ptr: u32) {
         let habitat_arg = if object_ptr != 0 { resolve_object_own_habitat_ptr(object_ptr).unwrap_or(habitat_ptr) } else { habitat_ptr };
         self.insert_front(ZTThought::new(string_id, thinker_ptr, object_ptr, habitat_arg));
     }
 
     /// Matches on `thinker_ptr`.
-    pub fn remove_thoughts_by_thinker(&mut self, thinker_ptr: u32) {
+    pub fn remove_thoughts_by_thinker(&self, thinker_ptr: u32) {
         self.remove_where(|t| t.thinker_ptr() == thinker_ptr);
     }
 
     /// Matches on `object_ptr`.
-    pub fn remove_thoughts_by_object(&mut self, object_ptr: u32) {
+    pub fn remove_thoughts_by_object(&self, object_ptr: u32) {
         self.remove_where(|t| t.object_ptr() == object_ptr);
     }
 
     /// Removes thoughts for `habitat_ptr`.
-    pub fn remove_thoughts_by_habitat(&mut self, habitat_ptr: u32, force: bool) {
+    pub fn remove_thoughts_by_habitat(&self, habitat_ptr: u32, force: bool) {
         if let Some(store) = THOUGHT_STORES.lock().unwrap().get_mut(&self.store_key()) {
             store.retain_mut(|t| {
                 if t.habitat_ptr != habitat_ptr {
@@ -133,7 +133,7 @@ impl ZTThoughtMgr {
     }
 
     /// Reads a leading dword count, then loads each record.
-    pub fn load(&mut self, file: *const u32, version: u32) -> bool {
+    pub fn load(&self, file: *const u32, version: u32) -> bool {
         let Some(count) = read_dword(file) else {
             return false;
         };
@@ -160,7 +160,7 @@ impl ZTThoughtMgr {
     }
 
     /// Calls `ZTThought::populate` on every thought in the list.
-    pub fn populate_thoughts(&mut self) {
+    pub fn populate_thoughts(&self) {
         if let Some(store) = THOUGHT_STORES.lock().unwrap().get_mut(&self.store_key()) {
             for thought in store.iter_mut() {
                 thought.populate();
@@ -169,7 +169,7 @@ impl ZTThoughtMgr {
     }
 
     /// Clears the store for this instance.
-    pub fn clear(&mut self) {
+    pub fn clear(&self) {
         if let Some(store) = THOUGHT_STORES.lock().unwrap().get_mut(&self.store_key()) {
             store.clear();
         }

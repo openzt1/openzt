@@ -305,12 +305,6 @@ impl std::ops::Deref for BFUnit {
     }
 }
 
-impl std::ops::DerefMut for BFUnit {
-    fn deref_mut(&mut self) -> &mut BFEntity {
-        &mut self.base
-    }
-}
-
 #[derive(Debug, Getters)]
 #[get = "pub"]
 #[repr(C)]
@@ -352,12 +346,6 @@ impl std::ops::Deref for ZTUnit {
     type Target = BFUnit;
     fn deref(&self) -> &BFUnit {
         &self.base
-    }
-}
-
-impl std::ops::DerefMut for ZTUnit {
-    fn deref_mut(&mut self) -> &mut BFUnit {
-        &mut self.base
     }
 }
 
@@ -425,12 +413,6 @@ impl std::ops::Deref for ZTAnimal {
     type Target = ZTUnit;
     fn deref(&self) -> &ZTUnit {
         &self.base
-    }
-}
-
-impl std::ops::DerefMut for ZTAnimal {
-    fn deref_mut(&mut self) -> &mut ZTUnit {
-        &mut self.base
     }
 }
 

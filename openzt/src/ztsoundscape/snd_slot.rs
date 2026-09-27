@@ -1,4 +1,4 @@
-use crate::util::get_from_memory;
+use crate::util::{get_from_memory, write_live_ptr};
 
 /// `SNDSound`'s real vtable VA (`private/docs/vtables/SNDSound.md`), written into each of the three
 /// embedded `SNDSound` slots by [`ZTSoundscape::construct`], mirroring vanilla's own ctor writes. A raw
@@ -37,15 +37,17 @@ const _: () = assert!(std::mem::size_of::<SndSlot>() == 0x8);
 /// live-vtable call-through shape as `ztguest.rs`'s `entity_category_id`), then the slot's vtable
 /// lands on [`SNDSOUNDBASE_VTABLE`] - `SNDSound`'s base class, the terminal state the destructor
 /// leaves every embedded slot in.
-pub fn destruct_slot(slot: &mut SndSlot) {
-    if slot.inner != 0 {
-        let inner = slot.inner;
+pub fn destruct_slot(slot: *const SndSlot) {
+    let inner_ptr = unsafe { core::ptr::addr_of!((*slot).inner) };
+    let vtable_ptr = unsafe { core::ptr::addr_of!((*slot).vtable) };
+    let inner: u32 = get_from_memory(inner_ptr);
+    if inner != 0 {
         let deleting_dtor: unsafe extern "thiscall" fn(*const u32, u32) =
             unsafe { std::mem::transmute(get_from_memory::<u32>(get_from_memory::<u32>(inner))) };
         unsafe { deleting_dtor(inner as *const u32, 1) };
-        slot.inner = 0;
+        unsafe { write_live_ptr(inner_ptr, 0) };
     }
-    slot.vtable = SNDSOUNDBASE_VTABLE;
+    unsafe { write_live_ptr(vtable_ptr, SNDSOUNDBASE_VTABLE) };
 }
 
 /// `update` step 6's fade-scalar advance for one tick: promotes a `0` delta to `1` for this advance

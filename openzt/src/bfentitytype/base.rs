@@ -8,7 +8,7 @@ use crate::ztui::get_selected_entity_type_address;
 
 pub trait EntityType: FieldAccessorAsStringTrait {
     // allows setting the configuration of the entity type
-    fn set_config(&mut self, config: &str, value: &str) -> Result<String, CommandError> {
+    fn set_config(&self, config: &str, value: &str) -> Result<String, CommandError> {
         if !self.is_field(config) {
             return Err(CommandError::new(format!("Invalid field name: {}", config)));
         }

@@ -103,6 +103,8 @@ REM ============================================================
 :build
 CALL :audit_detour_reentry
 IF !errorlevel! NEQ 0 exit /b !errorlevel!
+CALL :audit_live_memory_mut
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
 
 REM Set manifest path and DLL name
 IF DEFINED TEST_FLAG (
@@ -195,6 +197,28 @@ IF NOT DEFINED GIT_BASH (
     SET GIT_BASH=bash
 )
 "!GIT_BASH!" "%~dp0openzt\scripts\check-detour-reentry.sh"
+exit /b !errorlevel!
+
+REM ============================================================
+REM Live-Memory-Mut Audit
+REM ============================================================
+REM Fails if production code calls mut_from_memory::<T> for any T carrying a LiveMemory marker - see
+REM openzt/scripts/check-live-memory-mut.sh's own header comment, and
+REM openzt/plans/live-memory-mut-self-removal-plan.md for the full miscompile story this guards against.
+
+:audit_live_memory_mut
+SET GIT_BASH=
+IF EXIST "%ProgramFiles%\Git\bin\bash.exe" SET GIT_BASH=%ProgramFiles%\Git\bin\bash.exe
+IF NOT DEFINED GIT_BASH IF EXIST "%ProgramFiles(x86)%\Git\bin\bash.exe" SET GIT_BASH=%ProgramFiles(x86)%\Git\bin\bash.exe
+IF NOT DEFINED GIT_BASH (
+    where bash >nul 2>nul
+    IF !errorlevel! NEQ 0 (
+        echo Warning: bash not found - skipping live-memory-mut audit ^(install Git for Windows or add its bin\ to PATH^)
+        exit /b 0
+    )
+    SET GIT_BASH=bash
+)
+"!GIT_BASH!" "%~dp0openzt\scripts\check-live-memory-mut.sh"
 exit /b !errorlevel!
 
 REM ============================================================
@@ -301,6 +325,8 @@ GOTO crash_capture_args_loop
 :run_crash_capture
 CALL :audit_detour_reentry
 IF !errorlevel! NEQ 0 exit /b !errorlevel!
+CALL :audit_live_memory_mut
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
 
 echo Building openzttest.dll (release) for crash capture...
 cargo build --manifest-path openzt-test-dll/Cargo.toml --lib --target=i686-pc-windows-msvc --release
@@ -396,6 +422,8 @@ GOTO debug_play_args_loop
 
 :run_debug_play
 CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+CALL :audit_live_memory_mut
 IF !errorlevel! NEQ 0 exit /b !errorlevel!
 
 SET BUILD_TYPE=debug
@@ -536,6 +564,8 @@ GOTO check_args_loop
 
 :run_check
 CALL :audit_detour_reentry
+IF !errorlevel! NEQ 0 exit /b !errorlevel!
+CALL :audit_live_memory_mut
 IF !errorlevel! NEQ 0 exit /b !errorlevel!
 
 echo Running cargo check on !CHECK_MANIFEST!...

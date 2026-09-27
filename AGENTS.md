@@ -787,17 +787,24 @@ directly or by re-entering one of our detours on the same object. Rust's default
 allow for that, and `[profile.dev]` is `opt-level = 3`, so both batteries run code the optimizer is
 allowed to break.
 
-- Every new vanilla-layout `#[repr(C)]` struct reached through `ref_from_memory`/`mut_from_memory`/
-  `globals()` ends with `pub _live: crate::util::LiveMemory` (a trailing ZST, so `size_of` asserts are
-  unchanged). This makes the struct `!Freeze`, so `&T` is no longer emitted as noalias+readonly. A struct
-  that embeds a marked base (e.g. `ZTTankExhibit` embeds `ZTHabitat`) inherits it. Add `#[getset(skip)]`/
-  `#[skip_field]` when the struct derives `Getters`/`FieldAccessorAsString`. Plain value snapshots that
-  are only ever copied out with `get_from_memory` (e.g. `BFTile`) don't need it.
+- Every new vanilla-layout `#[repr(C)]` struct reached through `ref_from_memory`/`globals()` ends with
+  `pub _live: crate::util::LiveMemory` (a trailing ZST, so `size_of` asserts are unchanged). This makes the
+  struct `!Freeze`, so `&T` is no longer emitted as noalias+readonly. A struct that embeds a marked base
+  (e.g. `ZTTankExhibit` embeds `ZTHabitat`) inherits it. Add `#[getset(skip)]`/`#[skip_field]` when the
+  struct derives `Getters`/`FieldAccessorAsString`. Plain value snapshots that are only ever copied out
+  with `get_from_memory` (e.g. `BFTile`) don't need it.
 - A method that recurses into neighbours, or calls vanilla code that can re-enter a detour on the same
-  object, takes `&self` and writes fields volatilely (`save_to_memory(self_addr + offset_of!(Self, f), v)`,
-  or a `write_field` helper like `ZTHabitat`/`ZTGameMgr` have). Never create a `&mut` to an object that
-  may already be borrowed up the stack. This includes a sub-object embedded in a borrowed parent, such as
-  `ZooStatus` inside `ZTGameMgr`.
+  object, takes `&self` and writes fields volatilely through the `write_live!(self, field, value)` macro
+  (`util.rs`) - it type-checks `value` against `field`'s real type via `addr_of!`, so there's no `T` for a
+  caller to get wrong the way a generic `write_field::<T>` helper once allowed. Use `write_live_ptr` for an
+  indexed/array-element write, or an out-pointer a vanilla call writes through, that `write_live!`'s
+  `$field:ident` can't express directly. Never create a `&mut` to an object that may already be borrowed up
+  the stack. This includes a sub-object embedded in a borrowed parent, such as `ZooStatus` inside
+  `ZTGameMgr`. As of `plans/live-memory-mut-self-removal-plan.md`'s Stage 0-7 pass, no production code takes
+  `&mut self` over live game memory or calls `mut_from_memory` on a `LiveMemory`-marked type - only
+  `#[cfg(test)]` fixtures and the `reimplementation_tests`/`live_support` harness still do, and
+  `openzt/scripts/check-live-memory-mut.sh` (wired into `openzt.bat build`/`check`/`crash-capture`/
+  `debug-play`, alongside the detour-reentry audit) fails the build if that regresses.
 - When recursing, write the flag before the recursive call (see `ZTHabitat::set_dirty_characteristics`),
   so the store can't be sunk past it.
 

@@ -32,11 +32,11 @@ pub(crate) mod research_force_research_reimplementation {
         use openzt_detour::generated::ztresearchmgr::FORCE_RESEARCH;
 
         use super::ZTResearchMgr;
-        use crate::util::mut_from_memory;
+        use crate::util::ref_from_memory;
 
         #[detour(FORCE_RESEARCH)]
         unsafe extern "thiscall" fn force_research(this: *const u32, continue_program: bool) {
-            let mgr = unsafe { mut_from_memory::<ZTResearchMgr>(this) };
+            let mgr = unsafe { ref_from_memory::<ZTResearchMgr>(this) };
             mgr.force_research(continue_program);
         }
     }
@@ -59,17 +59,17 @@ pub(crate) mod research_program_completion_reimplementation {
         use openzt_detour::generated::ztresearchprogram::{ON_COMPLETION, RESET};
 
         use super::ZTResearchProgram;
-        use crate::util::mut_from_memory;
+        use crate::util::ref_from_memory;
 
         #[detour(ON_COMPLETION)]
         unsafe extern "thiscall" fn on_completion(this: *const u32) -> bool {
-            let program = unsafe { mut_from_memory::<ZTResearchProgram>(this) };
+            let program = unsafe { ref_from_memory::<ZTResearchProgram>(this) };
             program.on_completion() != 0
         }
 
         #[detour(RESET)]
         unsafe extern "thiscall" fn reset(this: *const u32) -> bool {
-            let program = unsafe { mut_from_memory::<ZTResearchProgram>(this) };
+            let program = unsafe { ref_from_memory::<ZTResearchProgram>(this) };
             program.reset() != 0
         }
     }
@@ -92,11 +92,11 @@ pub(crate) mod research_update_reimplementation {
         use openzt_detour::generated::ztresearchmgr::UPDATE;
 
         use super::ZTResearchMgr;
-        use crate::util::mut_from_memory;
+        use crate::util::ref_from_memory;
 
         #[detour(UPDATE)]
         unsafe extern "thiscall" fn update(this: *const u32, delta_ticks: u32) -> i32 {
-            let mgr = unsafe { mut_from_memory::<ZTResearchMgr>(this) };
+            let mgr = unsafe { ref_from_memory::<ZTResearchMgr>(this) };
             mgr.update(delta_ticks);
             0
         }

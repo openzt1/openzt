@@ -4952,6 +4952,8 @@ pub mod zttankexhibit {
     pub const SET_WATER_PURITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0049340d, function_type: PhantomData};
     pub const IS_RIGHT_SALINITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x004936df, function_type: PhantomData};
     pub const UPDATE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x0049625f, function_type: PhantomData};
+    pub const REMOVE_DEAD_SPARKLES: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32)> = FunctionDef{address: 0x004962fb, function_type: PhantomData};
+    pub const ADD_RANDOM_SPARKLE: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x00496382, function_type: PhantomData};
     pub const GET_LADDER_BASE_INSIDE_POS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32)> = FunctionDef{address: 0x0049b1cc, function_type: PhantomData};
     pub const CLEAN_WATER_AMOUNT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0049bd60, function_type: PhantomData};
     pub const REMOVE_OWNED_TRANSIENTS: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00505099, function_type: PhantomData};

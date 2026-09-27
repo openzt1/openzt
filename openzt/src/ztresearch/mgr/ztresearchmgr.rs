@@ -3,7 +3,8 @@ use std::fmt;
 use openzt_detour::generated::{standalone, ztresearchmgr};
 
 use crate::globals::get_module_base;
-use crate::util::{get_from_memory, mut_from_memory, ref_from_memory, ZTArray};
+use crate::util::{get_from_memory, ref_from_memory, ZTArray};
+use crate::write_live;
 use crate::ztresearch::models::{ZTResearchBranch, ZTResearchCategory, ZTResearchEffectKind, ZTResearchProgram};
 
 /// The global research manager, one per game. Confirmed size `0x18` bytes (`openzt-detour/src/structs.rs`).
@@ -136,8 +137,8 @@ impl ZTResearchMgr {
     /// accumulator before comparing `ZTResearchMgr::update` against the reimplementation - see
     /// `predict_update`.
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn set_elapsed_ticks(&mut self, value: u32) {
-        self.elapsed_ticks = value;
+    pub(crate) fn set_elapsed_ticks(&self, value: u32) {
+        write_live!(self, elapsed_ticks, value);
     }
 
     pub fn branch_count(&self) -> usize {
@@ -148,16 +149,8 @@ impl ZTResearchMgr {
         unsafe { ref_from_memory(self.branch_array.get_ptr(index)) }
     }
 
-    pub fn branch_mut(&self, index: usize) -> &'static mut ZTResearchBranch {
-        unsafe { mut_from_memory(self.branch_array.get_ptr(index)) }
-    }
-
     pub fn branches(&self) -> impl Iterator<Item = &'static ZTResearchBranch> + '_ {
         (0..self.branch_count()).map(move |i| self.branch(i))
-    }
-
-    pub fn branches_mut(&self) -> impl Iterator<Item = &'static mut ZTResearchBranch> + '_ {
-        (0..self.branch_count()).map(move |i| self.branch_mut(i))
     }
 
     /// Reimplementation of `OOAnalyzer::ZTResearchMgr::getBranch`.
@@ -178,30 +171,12 @@ impl ZTResearchMgr {
             .find(|program| program.id == id)
     }
 
-    /// Mutable counterpart to `get_branch`, used by `research_save_reimplementation`'s `load` detour to apply a saved `current_funding_level` to the matching branch.
-    pub(crate) fn get_branch_mut(&self, id: i32) -> Option<&'static mut ZTResearchBranch> {
-        self.branches_mut().find(|branch| branch.id == id)
-    }
-
-    /// Mutable counterpart to `get_category`, used by `research_save_reimplementation`'s `load` detour to apply a saved `enabled` flag to the matching category.
-    pub(crate) fn get_category_mut(&self, id: i32) -> Option<&'static mut ZTResearchCategory> {
-        self.branches_mut().flat_map(|branch| branch.categories_mut()).find(|category| category.id == id)
-    }
-
-    /// Mutable counterpart to `get_program`, used by `research_save_reimplementation`'s `load` detour to apply a saved `current_progress` to the matching program.
-    pub(crate) fn get_program_mut(&self, id: i32) -> Option<&'static mut ZTResearchProgram> {
-        self.branches_mut()
-            .flat_map(|branch| branch.categories_mut())
-            .flat_map(|category| category.programs_mut())
-            .find(|program| program.id == id)
-    }
-
     /// Reimplementation of `OOAnalyzer::ZTResearchMgr::setEffectDiscount`: applies a percentage
     /// discount to the `target_cost` of every program whose effect kind matches `kind`.
     pub fn set_effect_discount(&self, kind: ZTResearchEffectKind, discount_pct: i32) {
-        for program in self.branches_mut().flat_map(|b| b.categories_mut()).flat_map(|c| c.programs_mut()) {
+        for program in self.branches().flat_map(|b| b.categories()).flat_map(|c| c.programs()) {
             if program.effect_kind_raw == kind as i32 {
-                program.target_cost = (100 - discount_pct) as f32 * program.target_cost * 0.01;
+                write_live!(program, target_cost, (100 - discount_pct) as f32 * program.target_cost * 0.01);
             }
         }
     }
@@ -211,11 +186,11 @@ impl ZTResearchMgr {
     /// `elapsed_ticks` resets to `0` and every branch is advanced by the elapsed day count via
     /// `ZTResearchBranch::update` - still a call into the original implementation (see its own doc
     /// comment), same as everywhere else in this file that isn't independently reimplemented.
-    pub fn update(&mut self, delta_ticks: u32) {
+    pub fn update(&self, delta_ticks: u32) {
         let (new_elapsed_ticks, days) = predict_update(self.elapsed_ticks, delta_ticks);
-        self.elapsed_ticks = new_elapsed_ticks;
+        write_live!(self, elapsed_ticks, new_elapsed_ticks);
         if days > 0 {
-            for branch in self.branches_mut() {
+            for branch in self.branches() {
                 branch.update(days);
             }
         }
@@ -253,8 +228,8 @@ impl ZTResearchMgr {
     /// deliberately re-enters that hook, exactly like a vanilla caller would; under the
     /// `vanilla-research-save` feature no detour is installed and the address still holds genuine
     /// vanilla code.
-    pub fn load(&mut self, file: *const u32, version: u32) -> bool {
-        unsafe { ztresearchmgr::LOAD.hooked()((self as *mut Self) as *const u32, file, version) }
+    pub fn load(&self, file: *const u32, version: u32) -> bool {
+        unsafe { ztresearchmgr::LOAD.hooked()((self as *const Self) as *const u32, file, version) }
     }
 
     /// Reimplementation of `ZTResearchMgr::forceResearch` (the class-level half of the "research
@@ -269,13 +244,13 @@ impl ZTResearchMgr {
     /// the actual in-game cheat button, this does *not* refresh the world/UI afterward - use the free
     /// function `force_research_cheat()` for that (it calls the vanilla standalone cheat function with
     /// `continue_program` hardcoded to `false`, matching what the button does, plus the refresh).
-    pub fn force_research(&mut self, continue_program: bool) {
-        for branch in self.branches_mut() {
-            for category in branch.categories_mut() {
-                for program in category.programs_mut() {
+    pub fn force_research(&self, continue_program: bool) {
+        for branch in self.branches() {
+            for category in branch.categories() {
+                for program in category.programs() {
                     program.on_completion();
                     if continue_program {
-                        program.current_progress = program.target_cost;
+                        write_live!(program, current_progress, program.target_cost);
                     }
                 }
             }

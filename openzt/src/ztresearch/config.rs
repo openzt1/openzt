@@ -434,7 +434,8 @@ pub(crate) mod research_config_reimplementation {
 
         fn apply_branch(mgr: &mut ZTResearchMgr, reimpl: &ReimplementedBranch) {
             let id = reimpl.name_id;
-            let found: Option<*mut ZTResearchBranch> = mgr.branches_mut().find(|b| b.id() == id).map(|b| b as *mut ZTResearchBranch);
+            let found: Option<*mut ZTResearchBranch> =
+                mgr.branches().find(|b| b.id() == id).map(|b| b as *const ZTResearchBranch as *mut ZTResearchBranch);
             let ptr: *mut ZTResearchBranch = match found {
                 Some(existing) => existing,
                 None => {
