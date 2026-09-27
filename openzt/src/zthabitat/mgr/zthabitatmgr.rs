@@ -15,7 +15,7 @@ use openzt_detour::generated::{
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
-            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, RESIZE as ZTHABITAT_RESIZE, SET_NAME as ZTHABITAT_SET_NAME,
+            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{AFTER_ENTITY_CHANGE, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
@@ -418,12 +418,12 @@ impl ZTHabitatMgr {
     /// Ports `ZTHabitatMgr::createHabitat` (`ZTHabitatMgr_createHabitat.c`/`.asm`) as an orchestrator:
     /// constructs the new exhibit and reproduces the real branching exactly, but calls through to real
     /// vanilla (`.original()`) for every step this pass doesn't separately reimplement -
-    /// `doTankCheck`/`nameHabitat`/`ZTHabitat::setName`/`ZTHabitat::resize`, the two
+    /// `doTankCheck`/`nameHabitat`/`ZTHabitat::setName`, the two
     /// constructors, and (tank-only) `findBetterGatesForNeighbors`/`ZTTankExhibit::updateTankInfo`/
     /// `removeIllegalEntities`/`fill`. [`Self::add_habitat`], [`Self::decrement_habitat_num`],
     /// (tank-only) [`Self::snap_tank_walls_inward`],
-    /// and the four steps that already have their own genuine ports elsewhere in this file
-    /// ([`ZTHabitat::set_dirty_characteristics`], [`Self::place_gate`], [`Self::update_amphibious_neighbors`],
+    /// and the five steps that already have their own genuine ports elsewhere in this file
+    /// ([`ZTHabitat::resize`], [`ZTHabitat::set_dirty_characteristics`], [`Self::place_gate`], [`Self::update_amphibious_neighbors`],
     /// [`Self::do_show_check`]) are called directly rather than through `.original()`: each of those
     /// addresses is separately detoured (`#[detour(...)]`) elsewhere in this file, and `FunctionDef::original()`
     /// re-enters that *same* detour in a release build (it's only a raw address cast there - see
@@ -529,7 +529,7 @@ impl ZTHabitatMgr {
         // path constantly with a null receiver. Skipping the call when there's no resize target is
         // also the semantically sensible behavior (nothing to resize).
         if resize_target_ptr != 0 {
-            unsafe { ZTHABITAT_RESIZE.original()(resize_target_ptr as *const u32, resize_tile_ptr as i32) };
+            unsafe { ref_from_memory::<ZTHabitat>(resize_target_ptr) }.resize(resize_tile_ptr);
             unsafe { ref_from_memory::<ZTHabitat>(resize_target_ptr) }.set_dirty_characteristics();
         }
         self.place_gate(habitat_ptr, seed_tile_ptr, resize_tile_ptr, gate_tile_ptr);
@@ -1018,7 +1018,7 @@ impl ZTHabitatMgr {
         name_buf[1] = name_buf_begin + name_len;
         name_buf[2] = name_buf_begin + name_len + 1;
 
-        unsafe { ZTHABITAT_RESIZE.original()(old_habitat_ptr as *const u32, tile_ptr as i32) };
+        unsafe { ref_from_memory::<ZTHabitat>(old_habitat_ptr) }.resize(tile_ptr);
         unsafe { ref_from_memory::<ZTHabitat>(old_habitat_ptr) }.set_dirty_characteristics();
 
         let tile = get_from_memory::<BFTile>(tile_ptr);
@@ -1064,8 +1064,8 @@ impl ZTHabitatMgr {
             self.place_gate(new_habitat_ptr, neighbour_ptr, tile_ptr, tile_ptr);
             (old_habitat_ptr, new_habitat_ptr)
         } else {
-            unsafe { ZTHABITAT_RESIZE.original()(old_habitat_ptr as *const u32, neighbour_ptr as i32) };
-            unsafe { ZTHABITAT_RESIZE.original()(new_habitat_ptr as *const u32, tile_ptr as i32) };
+            unsafe { ref_from_memory::<ZTHabitat>(old_habitat_ptr) }.resize(neighbour_ptr);
+            unsafe { ref_from_memory::<ZTHabitat>(new_habitat_ptr) }.resize(tile_ptr);
             self.place_gate(new_habitat_ptr, tile_ptr, neighbour_ptr, tile_ptr);
             (new_habitat_ptr, old_habitat_ptr)
         };
@@ -1229,7 +1229,7 @@ impl ZTHabitatMgr {
                 unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(absorbed_ptr as *const u32, 0, false) };
             }
             unsafe { REMOVE_HABITAT_0.original()(mgr_ptr, absorbed_ptr as *const i32) };
-            unsafe { ZTHABITAT_RESIZE.original()(survivor_ptr as *const u32, resize_tile_ptr as i32) };
+            unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.resize(resize_tile_ptr);
             unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.set_dirty_characteristics();
             if gate_fence_to_move != 0 {
                 self.replace_gate();

@@ -383,6 +383,12 @@ pub(super) mod detour_zoo_main {
             // corrupting that save's own path/viewing-area state for later tests. Detoured (byte-for-byte
             // reproducing real vanilla's own call graph adds no new risk over baseline) and covered by
             // `DETOURS_ENABLED`.
+            // ZTHABITAT_RESIZE is deliberately NOT exercised by a live test - it's destructive on its own
+            // main path (re-tears the habitat's tile ownership down and can destroy the habitat outright
+            // via `ZTHabitatMgr::removeHabitat` on the empty-owned-tile path), the same "no synthetic-safe
+            // input" class as `fence_placed`/`morph_exhibit`. Detoured (its port composes the already
+            // live-verified `add/removeHabitatTiles`/`create_edge_pairs`/`recalculate_viewing_areas` ports
+            // plus two real-vanilla call-throughs) and covered by `DETOURS_ENABLED`.
             // ZTHABITAT_TRIGGER_DEATH_ARRIVED is deliberately NOT registered - see
             // `ZTHabitat::trigger_death_arrived`'s own doc comment: its `species_key == 0` branch marks every
             // animal in the habitat with an unidentified "death arrived" flag with no known reader, so the

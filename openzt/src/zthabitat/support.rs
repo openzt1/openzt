@@ -986,6 +986,18 @@ pub unsafe fn call_vtable_slot_with_ptr(entity_ptr: u32, slot_offset: u32, arg: 
     f(entity_ptr, arg);
 }
 
+/// Calls a 2-arg (pointer, pointer) thiscall vtable slot - `ZTHabitat_resize.asm`'s own `+0x38`
+/// `addHabitatTiles(seed_tile, this)` dispatch (`PUSH this; PUSH tile; CALL [vtable+0x38]`), the twin of
+/// the `+0x3c` no-arg `removeHabitatTiles` call right before it. Kept a real dispatch (rather than a
+/// fixed-address call-through) because `ZTTankExhibit` overrides both slots - see
+/// [`crate::zthabitat::habitat::ZTHabitat::resize`].
+pub unsafe fn call_vtable_slot_with_ptr_ptr(entity_ptr: u32, slot_offset: u32, arg1: u32, arg2: u32) {
+    let vtable = get_from_memory::<u32>(entity_ptr);
+    let target = get_from_memory::<u32>(vtable + slot_offset);
+    let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32)>(target) };
+    f(entity_ptr, arg1, arg2);
+}
+
 /// Same shape as [`call_vtable_slot_with_ptr`], but for a slot returning a bool result -
 /// `ZTHabitat_getNearestDirtPile.asm`'s own `keeper_ptr` vtable `+0x324` dispatch (`this=keeper_ptr`, one
 /// pointer stack arg = the candidate entity) - an unidentified per-keeper entity-target filter.

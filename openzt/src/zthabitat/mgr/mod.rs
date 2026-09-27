@@ -211,6 +211,15 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.add_habitat_tiles(seed_tile as u32)
     }
 
+    /// `ZTHabitat::resize` is fully ported (see its own doc comment), but on its main path mutates real
+    /// habitat/tile state and can destroy the habitat outright (`ZTHabitatMgr::removeHabitat` on the
+    /// empty-owned-tile path) - same "no synthetic-safe input" class as `fence_placed`/`create_habitat`
+    /// above. Enabled for manual/interactive live verification, not covered by an automated live test.
+    #[detour(RESIZE)]
+    unsafe extern "thiscall" fn resize(this: *const u32, tile_ptr: i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.resize(tile_ptr as u32)
+    }
+
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const u32, elapsed: u32) {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.update(elapsed)

@@ -12,11 +12,12 @@ use openzt_detour::generated::{
         ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING},
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            GET_EVENTS, NEEDS_SERVICE,
+            CREATE_VIEWING_AREAS, GET_EVENTS, NEEDS_SERVICE,
             RECALCULATE_CHARACTERISTICS,
             REVISE_SPECIES_LIST, SEND_EVENT,
             UPDATE_PORTALS,
         },
+        zthabitatmgr::REMOVE_HABITAT_0,
         ztkeeper::CLEANS_UP,
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
@@ -3967,6 +3968,54 @@ impl ZTHabitat {
         }
     }
 
+    /// `ZTHabitat_resize.asm`'s own default-tile chase for a null argument: [`Self::owned_tiles_ptr`]'s
+    /// sentinel own `next`, then that node's `BFTile*` payload - identical arithmetic to [`Self::save`]'s
+    /// seed-tile read, including its lack of a guard for an empty list (a habitat being resized always
+    /// has one; real vanilla would read the sentinel's stale payload slot otherwise).
+    fn default_resize_tile_ptr(&self) -> u32 {
+        let head_node: u32 = get_from_memory(self.owned_tiles_ptr);
+        get_from_memory(head_node + 0x8)
+    }
+
+    /// Ports `ZTHabitat::resize` (`ZTHabitat_resize.c`/`.asm`, `generated.rs`'s `RESIZE`): tears the
+    /// habitat's tile ownership down and rebuilds it around `tile_ptr`, then refreshes every derived
+    /// structure. `removeHabitatTiles`/`addHabitatTiles` are called through the receiver's own **vtable**
+    /// (`+0x3c` no-arg, then `+0x38` with `(tile_ptr, this)` - confirmed at the `.asm` level), so a
+    /// `ZTTankExhibit` receiver reaches the tank's own overrides (`0x00487ae3`/`0x00487b19`) rather than
+    /// the base ports, exactly as real vanilla's dispatch does; the same dispatch on a base habitat
+    /// reaches this codebase's own detoured ports. `createEdgePairs`/`recalculateViewingAreas` are direct
+    /// calls to the already-ported [`Self::create_edge_pairs`]/[`Self::recalculate_viewing_areas`];
+    /// `createViewingAreas` stays a real-vanilla call-through (still un-ported - see `pad2a1`'s field doc
+    /// comment). Sets [`Self::characteristics_dirty`] unconditionally (the `.asm`'s own bare
+    /// `MOV byte ptr [ESI+0x2d], 1` - not the guarded neighbor walk [`Self::set_dirty_characteristics`]
+    /// does). Finally, when the rebuilt owned-tile list is empty, destroys the habitat outright via
+    /// `ZTHabitatMgr::removeHabitat` (`REMOVE_HABITAT_0`, un-ported, on the `GLOBAL_ZTHabitatMgr` global) -
+    /// so this method is destructive on its own main path, the same "no synthetic-safe live input" class
+    /// as [`ZTHabitatMgr::morph_exhibit`].
+    ///
+    /// Two corrections to the stage plan's own decompile sketch, confirmed against the live Ghidra
+    /// decompile of `0x0044b900` and corroborated by the macOS `ZTHabitat_resize.c` (whose list is a
+    /// count field at `+0x44` rather than a walked sentinel - same "no owned tiles left" predicate):
+    /// the null-argument default is the **first owned tile** (not a subhabitat-tree value), and the
+    /// `removeHabitat` gate is the **owned-tile list** being empty (not the amphibious-neighbor set).
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::create_edge_pairs`].
+    pub fn resize(&self, tile_ptr: u32) {
+        let self_addr = self as *const Self as u32;
+        let tile_ptr = if tile_ptr == 0 { self.default_resize_tile_ptr() } else { tile_ptr };
+        unsafe { call_vtable_slot_noargs(self_addr, 0x3c) };
+        unsafe { call_vtable_slot_with_ptr_ptr(self_addr, 0x38, tile_ptr, self_addr) };
+        self.create_edge_pairs();
+        unsafe { CREATE_VIEWING_AREAS.original()(self_addr as *const u32) };
+        self.recalculate_viewing_areas();
+        write_live!(self, characteristics_dirty, 1u8);
+        if self.get_size(false) == 0 {
+            let mgr = globals().zthabitatmgr_ptr();
+            unsafe { REMOVE_HABITAT_0.original()(mgr as *const u32, self_addr as *const i32) };
+        }
+    }
+
     /// Ports `ZTHabitat::addViewingArea` (`ZTHabitat_addViewingArea.c`/`.asm`, `generated.rs`'s
     /// `ADD_VIEWING_AREA`): appends `va_ptr` to [`Self::viewing_areas_begin`]/`_end`, doubling the backing
     /// buffer (minimum `1`) through real vanilla's own `PoolAlloc::allocate` when full, freeing the old
@@ -4558,6 +4607,21 @@ mod tests {
         let habitat = fixture_habitat_with_tiles_and_neighbors(&[1, 2, 3, 4, 5, 6, 7, 8, 9], &[b]);
         assert_eq!(habitat.get_size(false), 9);
         assert_eq!(habitat.get_size(true), 16);
+    }
+
+    /// `ZTHabitat_resize.asm`'s null-argument default: the owned-tile sentinel's own `next` node's
+    /// payload - `leak_tile_list` splices at the front, so of two tiles the second ends up first.
+    #[test]
+    fn resize_default_tile_is_first_owned_tile() {
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[0x1000, 0x2000], &[]);
+        assert_eq!(habitat.default_resize_tile_ptr(), 0x2000);
+    }
+
+    /// A single-tile habitat's default is that tile.
+    #[test]
+    fn resize_default_tile_single_tile_habitat() {
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[0x1000], &[]);
+        assert_eq!(habitat.default_resize_tile_ptr(), 0x1000);
     }
 
     /// `ZTHabitat_isTank.c`/`.asm` - the base virtual is a constant `false` regardless of `self`.
