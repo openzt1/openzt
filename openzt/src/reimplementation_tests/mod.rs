@@ -46,6 +46,12 @@ mod tests;
 #[cfg(target_os = "windows")]
 mod io_redirect;
 
+/// Redirects `zttankwall::SET_IS_OPEN_PORTAL` into an in-memory call record instead of letting it run
+/// for real - lets `battery`'s live `ZTHabitat::updatePortals` comparison call the real `.original()`
+/// path without flipping a real fence's open/close state or firing its sound.
+#[cfg(target_os = "windows")]
+pub(crate) mod portal_dispatch_recorder;
+
 pub fn init() {
     #[cfg(target_os = "windows")]
     {
@@ -62,6 +68,7 @@ pub fn init() {
         }
 
         io_redirect::init();
+        portal_dispatch_recorder::init();
 
         // Installs `resource_manager::init()`'s hooks so `LAZY_RESOURCE_MAP` is populated before
         // `detour_zoo_main`'s battery runs, letting `ZTMARKETINGMGR_LOAD_CONFIGURATIONS`'s

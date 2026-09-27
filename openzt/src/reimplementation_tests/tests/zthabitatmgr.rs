@@ -18,6 +18,7 @@ use tracing::error;
 use crate::globals::{get_module_base, globals};
 use crate::reimplementation_tests::harness::write_success_line;
 use crate::reimplementation_tests::io_redirect;
+use crate::reimplementation_tests::portal_dispatch_recorder;
 use crate::util::{get_from_memory, low_byte_bool, mut_from_memory, ref_from_memory, save_to_memory};
 use crate::zthabitat::support::{call_vtable_slot_ptr_ptr_ptr_u32_ret_bool, call_vtable_slot_with_ptr_ret_bool};
 use crate::ztmapview::BFTile;
@@ -632,6 +633,73 @@ pub(crate) fn run_habitat_get_show_portal_matches_real_live_test(failure_log: &m
     }
 }
 
+/// Compares real vanilla `ZTHabitat::updatePortals` (`generated.rs`'s `UPDATE_PORTALS`, `0x0043578f`)
+/// against the reimplementation's [`ZTHabitat::portal_dispatch_plan`] over every live tank-show
+/// habitat. Real `updatePortals`'s only observable effect is one `+0x13c` vtable dispatch per
+/// show-neighbor pair reaching `ZTTankWall::setIsOpenPortal` - `portal_dispatch_recorder` intercepts
+/// that address for the duration of the real call and records `(fence_ptr, is_open, play_sound)`
+/// instead of letting it run (which would flip real fence state and fire a sound), so the two sides
+/// can be diffed without mutating anything. The real pole goes through
+/// `hooks_zthabitatmgr::update_portals_real` (the `UPDATE_PORTALS_DETOUR.call()` release-safe
+/// trampoline), never `.original()` directly, since `UPDATE_PORTALS` is itself detoured in this build.
+/// Sequences are compared in walk order (not sorted) - this also proves `portal_dispatch_plan`'s walk
+/// visits neighbors in the same order real vanilla's `show_neighbors_head` descent does, after
+/// dropping any reimpl-only entries whose fence target is a plain `ZTFence` (`NULLSUB` slot - the
+/// recorder can never see those fire, so they carry no observable disagreement). Coverage counters
+/// (tank-show habitats, dispatches recorded) are logged so a save with no show tanks is visibly
+/// comparison-only.
+pub(crate) fn run_habitat_update_portals_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_UPDATE_PORTALS_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut tank_show_habitats = 0u32;
+    let mut total_dispatches = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        if !habitat.is_tank() || !habitat.is_show_tank() {
+            continue;
+        }
+        tank_show_habitats += 1;
+
+        portal_dispatch_recorder::begin_capture();
+        hooks_zthabitatmgr::update_portals_real(habitat_ptr as *const u32);
+        let recorded = portal_dispatch_recorder::end_capture();
+
+        let recorded_fences: std::collections::HashSet<u32> = recorded.iter().map(|(fence, _, _)| *fence).collect();
+        let expected: Vec<(u32, bool, bool)> = habitat
+            .portal_dispatch_plan()
+            .into_iter()
+            .map(|d| (d.fence_ptr, d.is_open, d.play_sound))
+            .filter(|(fence, _, _)| recorded_fences.contains(fence))
+            .collect();
+
+        total_dispatches += recorded.len() as u32;
+        if recorded != expected {
+            failures.push(format!("habitat {:#010x}: real dispatches {:?} != reimpl plan {:?}", habitat_ptr, recorded, expected));
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(failure_log, &format!("{} (tank-show habitats: {}, dispatches: {})", test_name, tank_show_habitats, total_dispatches));
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Compares `addToBuildingList` (`ZTHabitat_addToBuildingList.c`/`.asm`) against the reimplementation
 /// over every live habitat's own owned-tile list: each side merges the *same* real habitat's occupants
 /// into its own fresh, empty "other" building-list buffer (`other_ptr = out_vector_ptr - 0x78`, so the
@@ -938,6 +1006,308 @@ pub(crate) fn run_tankexhibit_is_right_salinity_matches_real_live_test(failure_l
 
     if failures.is_empty() {
         write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// The `+0x184`-onward scalars `ZTTankExhibit::update`'s tick reads and writes, snapshotted/restored
+/// through raw memory at the offsets the struct's own `offset_of!` asserts pin (same raw-offset
+/// convention as the `+0x68` exhibit-number counter test - the fields are private to `tank_exhibit.rs`,
+/// so there is nothing to `offset_of!` at this use site). Deliberately excludes every pointer field:
+/// real vanilla may realloc a sparkle vector or free dead sparkle entities inside
+/// `removeDeadSparkles`/`addRandomSparkle`, and restoring pre-mutation pointers afterward would
+/// resurrect dangling references - whatever vanilla does to the vectors during a pole persists.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct TankUpdateScalars {
+    water_level: u32,
+    current_water_type: i32,
+    pending_water_type: i32,
+    is_filled: u8,
+    water_purity: i32,
+    water_purity_timer: i32,
+    sparkle_spawn_timer: i32,
+}
+
+const TANK_WATER_LEVEL_OFFSET: u32 = 0x188;
+const TANK_CURRENT_WATER_TYPE_OFFSET: u32 = 0x18c;
+const TANK_PENDING_WATER_TYPE_OFFSET: u32 = 0x190;
+const TANK_IS_FILLED_OFFSET: u32 = 0x198;
+const TANK_WATER_PURITY_OFFSET: u32 = 0x1a8;
+const TANK_WATER_PURITY_TIMER_OFFSET: u32 = 0x1ac;
+const TANK_SPARKLE_ENTITIES_BEGIN_OFFSET: u32 = 0x1c4;
+const TANK_SPARKLE_ENTITIES_END_OFFSET: u32 = 0x1c8;
+const TANK_SPARKLE_ENTITY_IDS_BEGIN_OFFSET: u32 = 0x1d0;
+const TANK_SPARKLE_ENTITY_IDS_END_OFFSET: u32 = 0x1d4;
+const TANK_SPARKLE_SPAWN_TIMER_OFFSET: u32 = 0x1e4;
+
+/// The water-purity settings globals (`DAT_006390b0` murky / `DAT_006390a4` clean thresholds,
+/// `DAT_0063af04` purity-timer reload, `DAT_006390b8` sparkle-spawn numerator) the forced-expiry phases
+/// below pin expectations against, plus the rise-target delta (`DAT_006390ac`). Re-declared per the
+/// repo's no-shared-consts precedent (see this file's own `GAME_RNG_RVA`); resting values are context
+/// only - all are read live.
+const ZTTANKEXHIBIT_MURKY_THRESHOLD_RVA: u32 = 0x006390b0 - 0x400000;
+const ZTTANKEXHIBIT_CLEAN_THRESHOLD_RVA: u32 = 0x006390a4 - 0x400000;
+const ZTTANKEXHIBIT_PURITY_TIMER_RELOAD_RVA: u32 = 0x0063af04 - 0x400000;
+const ZTTANKEXHIBIT_SPARKLE_NUMERATOR_RVA: u32 = 0x006390b8 - 0x400000;
+const ZTTANKEXHIBIT_RISE_TARGET_DELTA_RVA: u32 = 0x006390ac - 0x400000;
+
+impl TankUpdateScalars {
+    fn read(tank_ptr: u32) -> Self {
+        Self {
+            water_level: get_from_memory(tank_ptr + TANK_WATER_LEVEL_OFFSET),
+            current_water_type: get_from_memory(tank_ptr + TANK_CURRENT_WATER_TYPE_OFFSET),
+            pending_water_type: get_from_memory(tank_ptr + TANK_PENDING_WATER_TYPE_OFFSET),
+            is_filled: get_from_memory(tank_ptr + TANK_IS_FILLED_OFFSET),
+            water_purity: get_from_memory(tank_ptr + TANK_WATER_PURITY_OFFSET),
+            water_purity_timer: get_from_memory(tank_ptr + TANK_WATER_PURITY_TIMER_OFFSET),
+            sparkle_spawn_timer: get_from_memory(tank_ptr + TANK_SPARKLE_SPAWN_TIMER_OFFSET),
+        }
+    }
+
+    /// Writes all seven scalars back - both the restore between poles and the per-phase pinning base.
+    fn save_to(&self, tank_ptr: u32) {
+        save_to_memory(tank_ptr + TANK_WATER_LEVEL_OFFSET, self.water_level);
+        save_to_memory(tank_ptr + TANK_CURRENT_WATER_TYPE_OFFSET, self.current_water_type);
+        save_to_memory(tank_ptr + TANK_PENDING_WATER_TYPE_OFFSET, self.pending_water_type);
+        save_to_memory(tank_ptr + TANK_IS_FILLED_OFFSET, self.is_filled != 0);
+        save_to_memory(tank_ptr + TANK_WATER_PURITY_OFFSET, self.water_purity);
+        save_to_memory(tank_ptr + TANK_WATER_PURITY_TIMER_OFFSET, self.water_purity_timer);
+        save_to_memory(tank_ptr + TANK_SPARKLE_SPAWN_TIMER_OFFSET, self.sparkle_spawn_timer);
+    }
+}
+
+/// Runs one pole of the tank-update comparison: restores `snapshot`, applies `pin` on top of it, runs
+/// `ticks` x `update(16)` (real vanilla through the release-safe `update_real` trampoline, or the
+/// reimplementation directly), capturing all seven scalars after each tick, then restores `snapshot`
+/// again so the next pole (or phase) starts from an identical state.
+fn run_tank_update_pole(
+    tank_ptr: u32,
+    snapshot: &TankUpdateScalars,
+    ticks: usize,
+    real: bool,
+    pin: impl Fn(u32),
+) -> Vec<TankUpdateScalars> {
+    snapshot.save_to(tank_ptr);
+    pin(tank_ptr);
+    let mut results = Vec::new();
+    for _ in 0..ticks {
+        if real {
+            detours::update_real(tank_ptr as *const u32, 16);
+        } else {
+            unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) }.update(16);
+        }
+        results.push(TankUpdateScalars::read(tank_ptr));
+    }
+    snapshot.save_to(tank_ptr);
+    results
+}
+
+fn compare_tank_update_poles(phase: &str, real: &[TankUpdateScalars], reimpl: &[TankUpdateScalars]) -> Vec<String> {
+    real.iter()
+        .zip(reimpl.iter())
+        .enumerate()
+        .filter(|(_, (r, p))| r != p)
+        .map(|(tick, (r, p))| format!("{phase} tick {}: real={r:?}, reimpl={p:?}", tick + 1))
+        .collect()
+}
+
+/// Compares `ZTTankExhibit::update`'s port against real vanilla over every tank in the live, loaded
+/// zoo, in three phases per tank (the real pole always runs after the reimplementation pole, from a
+/// re-pinned identical scalar state; only the seven scalars are compared/restored - see
+/// [`TankUpdateScalars`] for why the pointer fields are never saved):
+///
+/// - **Phase A (natural state)**: only tanks whose state stays static-safe across a 3-tick burst (no
+///   sparkle present, `sparkle_spawn_timer > 48`, the purity countdown inert for 3 x 16, and - for a
+///   draining tank with a different pending water type - too much water left to reach the drain-to-zero
+///   transition within 3 ticks, keeping the heavy `updateAdjustmentCosts`+`fill` path out of the
+///   battery entirely). Skipped tanks are logged in the count summary, not failed.
+/// - **Phase B (forced purity expiry)**: pins the tank filled at its rise target with mid purity
+///   (`murky + (clean - murky) / 2`, thresholds read live - a value real `setWaterPurity` crosses no
+///   ripple/OA/UI threshold at) and `water_purity_timer = 1`, so one tick forces the real
+///   `setWaterPurity` call-through. Asserts purity drops by exactly one and the timer reloads from
+///   `DAT_0063af04` on both poles. Skipped when the live clean-murky gap is degenerate (< 4).
+/// - **Phase C (forced sparkle expiry)**: same pinning with the purity timer parked at its reload and
+///   `sparkle_spawn_timer = 1`, so one tick forces the real `addRandomSparkle` call-through - which
+///   early-returns at its own `water_purity >= clean` gate at mid purity, so no entity is ever spawned
+///   under test - and the timer reloads from `DAT_006390b8 / owned_tile_count`. Skipped when the
+///   thresholds are degenerate or the tank owns no tiles (vanilla's `DIV` would fault).
+///
+/// Sparkle-vector lengths are asserted only for tanks whose vectors were empty at snapshot (they cannot
+/// shrink, and a spawn would mean the purity gate failed to hold); non-empty vectors are left alone.
+/// The drain-completion transition (`updateAdjustmentCosts` + `fill`, heavy real world mutation) is not
+/// forced anywhere - same "no synthetic-safe input" disposition as `RESIZE`.
+pub(crate) fn run_tankexhibit_update_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_UPDATE_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    let base = get_module_base("zoo.exe") as u32;
+    let murky: i32 = get_from_memory(base + ZTTANKEXHIBIT_MURKY_THRESHOLD_RVA);
+    let clean: i32 = get_from_memory(base + ZTTANKEXHIBIT_CLEAN_THRESHOLD_RVA);
+    let purity_reload: i32 = get_from_memory(base + ZTTANKEXHIBIT_PURITY_TIMER_RELOAD_RVA);
+    let sparkle_numerator: u32 = get_from_memory(base + ZTTANKEXHIBIT_SPARKLE_NUMERATOR_RVA);
+    let rise_delta: i32 = get_from_memory(base + ZTTANKEXHIBIT_RISE_TARGET_DELTA_RVA);
+    let mid_purity = murky + (clean - murky) / 2;
+    let thresholds_degenerate = clean - murky < 4;
+
+    let mut tank_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        if unsafe { ref_from_memory::<ZTHabitat>(ptr) }.is_tank() {
+            tank_ptrs.push(ptr);
+        }
+    }
+    if tank_ptrs.is_empty() {
+        failures.push("no tank exhibits found in the loaded save".to_string());
+    }
+
+    let mut phase_a_runs = 0usize;
+    let mut phase_b_runs = 0usize;
+    let mut phase_c_runs = 0usize;
+
+    for &tank_ptr in &tank_ptrs {
+        let snapshot = TankUpdateScalars::read(tank_ptr);
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) };
+        let owned_tile_count = walk_tile_list(*tank.owned_tiles_ptr()).count() as u32;
+        let sparkles_present = get_from_memory::<u32>(tank_ptr + TANK_SPARKLE_ENTITIES_BEGIN_OFFSET)
+            != get_from_memory::<u32>(tank_ptr + TANK_SPARKLE_ENTITIES_END_OFFSET);
+        let rise_target = (*tank.tank_height()) as i32 + rise_delta;
+        let forced_phases_usable = !thresholds_degenerate && rise_target > 0;
+
+        // Phase A: natural state, 3 ticks per pole.
+        let purity_would_fire =
+            snapshot.water_level as i32 > 0 && snapshot.water_purity > 0 && snapshot.water_purity_timer <= 48;
+        let transition_reachable = snapshot.is_filled == 0
+            && snapshot.water_level as i32 > 0
+            && snapshot.current_water_type != snapshot.pending_water_type
+            && snapshot.water_level as i32 <= 3;
+        if snapshot.sparkle_spawn_timer > 48 && !sparkles_present && !purity_would_fire && !transition_reachable {
+            let reimpl = run_tank_update_pole(tank_ptr, &snapshot, 3, false, |_| {});
+            let real = run_tank_update_pole(tank_ptr, &snapshot, 3, true, |_| {});
+            for msg in compare_tank_update_poles("phase A", &real, &reimpl) {
+                failures.push(format!("tank {tank_ptr:#010x}: {msg}"));
+            }
+            phase_a_runs += 1;
+        }
+
+        // Phases B/C pin the tank filled at its rise target (rise branch inert, purity gate satisfied).
+        if forced_phases_usable {
+            let pin_filled_at_target = |ptr: u32| {
+                save_to_memory(ptr + TANK_IS_FILLED_OFFSET, true);
+                save_to_memory(ptr + TANK_WATER_LEVEL_OFFSET, rise_target as u32);
+                save_to_memory(ptr + TANK_WATER_PURITY_OFFSET, mid_purity);
+            };
+
+            // Phase B: purity countdown forced to expire on the first tick.
+            let pin_purity_expiry = |ptr: u32| {
+                pin_filled_at_target(ptr);
+                save_to_memory(ptr + TANK_WATER_PURITY_TIMER_OFFSET, 1i32);
+                save_to_memory(ptr + TANK_SPARKLE_SPAWN_TIMER_OFFSET, 48i32);
+            };
+            let reimpl = run_tank_update_pole(tank_ptr, &snapshot, 1, false, pin_purity_expiry);
+            let real = run_tank_update_pole(tank_ptr, &snapshot, 1, true, pin_purity_expiry);
+            for msg in compare_tank_update_poles("phase B", &real, &reimpl) {
+                failures.push(format!("tank {tank_ptr:#010x}: {msg}"));
+            }
+            for (label, results) in [("reimpl", &reimpl), ("real", &real)] {
+                if results[0].water_purity != mid_purity - 1 {
+                    failures.push(format!(
+                        "tank {tank_ptr:#010x}: phase B {label}: expected purity {} after one expiry tick, got {}",
+                        mid_purity - 1,
+                        results[0].water_purity
+                    ));
+                }
+                if results[0].water_purity_timer != purity_reload {
+                    failures.push(format!(
+                        "tank {tank_ptr:#010x}: phase B {label}: expected purity timer reload {}, got {}",
+                        purity_reload, results[0].water_purity_timer
+                    ));
+                }
+            }
+            phase_b_runs += 1;
+
+            // Phase C: sparkle countdown forced to expire on the first tick (mid purity keeps real
+            // `addRandomSparkle`'s own gate closed, so no entity is ever spawned under test). Skipped
+            // for a tile-less tank - real vanilla's own `DIV` would fault there, so the port's 0
+            // reload has no vanilla pole to diff against.
+            if owned_tile_count > 0 {
+                let expected_sparkle_reload = sparkle_numerator.checked_div(owned_tile_count).unwrap_or(0) as i32;
+                let pin_sparkle_expiry = |ptr: u32| {
+                    pin_filled_at_target(ptr);
+                    save_to_memory(ptr + TANK_WATER_PURITY_TIMER_OFFSET, purity_reload);
+                    save_to_memory(ptr + TANK_SPARKLE_SPAWN_TIMER_OFFSET, 1i32);
+                };
+                let reimpl = run_tank_update_pole(tank_ptr, &snapshot, 1, false, pin_sparkle_expiry);
+                let real = run_tank_update_pole(tank_ptr, &snapshot, 1, true, pin_sparkle_expiry);
+                for msg in compare_tank_update_poles("phase C", &real, &reimpl) {
+                    failures.push(format!("tank {tank_ptr:#010x}: {msg}"));
+                }
+                for (label, results) in [("reimpl", &reimpl), ("real", &real)] {
+                    if results[0].sparkle_spawn_timer != expected_sparkle_reload {
+                        failures.push(format!(
+                            "tank {tank_ptr:#010x}: phase C {label}: expected sparkle timer reload {expected_sparkle_reload}, got {}",
+                            results[0].sparkle_spawn_timer
+                        ));
+                    }
+                    if results[0].water_purity != mid_purity {
+                        failures.push(format!(
+                            "tank {tank_ptr:#010x}: phase C {label}: purity moved to {} with the countdown parked",
+                            results[0].water_purity
+                        ));
+                    }
+                }
+                phase_c_runs += 1;
+            }
+        }
+
+        // A snapshot-empty sparkle vector must still be empty: shrinking is impossible with nothing in
+        // it, and any growth means a real spawn fired despite the mid-purity pinning above.
+        if !sparkles_present {
+            let entities_grew = get_from_memory::<u32>(tank_ptr + TANK_SPARKLE_ENTITIES_BEGIN_OFFSET)
+                != get_from_memory::<u32>(tank_ptr + TANK_SPARKLE_ENTITIES_END_OFFSET);
+            let ids_grew = get_from_memory::<u32>(tank_ptr + TANK_SPARKLE_ENTITY_IDS_BEGIN_OFFSET)
+                != get_from_memory::<u32>(tank_ptr + TANK_SPARKLE_ENTITY_IDS_END_OFFSET);
+            if entities_grew || ids_grew {
+                failures.push(format!(
+                    "tank {tank_ptr:#010x}: sparkle vector grew from empty (entities grew: {entities_grew}, ids grew: {ids_grew}) - a spawn fired under test"
+                ));
+            }
+        }
+
+        // Leave the tank exactly as found (scalar-wise).
+        snapshot.save_to(tank_ptr);
+    }
+
+    if failures.is_empty() && phase_a_runs == 0 && phase_b_runs == 0 && phase_c_runs == 0 && !tank_ptrs.is_empty() {
+        failures.push(format!(
+            "every one of the {} tank(s) was skipped in every phase - nothing compared",
+            tank_ptrs.len()
+        ));
+    }
+
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (tanks: {}, phase A runs: {}, purity-expiry runs: {}, sparkle-expiry runs: {})",
+                test_name,
+                tank_ptrs.len(),
+                phase_a_runs,
+                phase_b_runs,
+                phase_c_runs
+            ),
+        );
         false
     } else {
         for msg in &failures {

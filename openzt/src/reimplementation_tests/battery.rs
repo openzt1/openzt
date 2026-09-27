@@ -233,6 +233,7 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_add_habitat_tiles_roundtrip_live_test,
             },
             RegisteredTest { name: "ZTHABITAT_UPDATE_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_update_smoke_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_UPDATE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_tankexhibit_update_matches_real_live_test },
             RegisteredTest { name: "ZTHABITAT_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_habitat_save_matches_real_live_test },
             RegisteredTest { name: "ZTHABITATMGR_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_save_matches_real_live_test },
             RegisteredTest { name: "ZTHABITATMGR_ADD_HABITAT_ROUNDTRIP_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_add_habitat_roundtrip_live_test },
@@ -699,6 +700,10 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_GET_SHOW_PORTAL_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_show_portal_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_UPDATE_PORTALS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_update_portals_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_ADD_TO_BUILDING_LIST_MATCHES_REAL_LIVE",

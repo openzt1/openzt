@@ -15,7 +15,6 @@ use openzt_detour::generated::{
             CREATE_VIEWING_AREAS, GET_EVENTS, NEEDS_SERVICE,
             RECALCULATE_CHARACTERISTICS,
             REVISE_SPECIES_LIST, SEND_EVENT,
-            UPDATE_PORTALS,
         },
         zthabitatmgr::REMOVE_HABITAT_0,
         ztkeeper::CLEANS_UP,
@@ -196,6 +195,16 @@ fn keeper_food_distance_squared(reference_tile: u32, candidate_tile: u32) -> i32
     let dx = get_from_memory::<i32>(reference_tile + 0x34).wrapping_sub(get_from_memory::<i32>(candidate_tile + 0x34));
     let dy = get_from_memory::<i32>(reference_tile + 0x38).wrapping_sub(get_from_memory::<i32>(candidate_tile + 0x38));
     dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+}
+
+/// One `+0x13c` portal-fence vtable dispatch `ZTHabitat::updatePortals` performs per
+/// show-neighbor pair, in walk order. Split out from [`ZTHabitat::update_portals`] so the live
+/// comparison test can diff the full dispatch sequence against real vanilla without either
+/// pole touching fence state.
+pub(crate) struct PortalDispatch {
+    pub fence_ptr: u32,
+    pub is_open: bool,
+    pub play_sound: bool,
 }
 
 impl ZTHabitat {
@@ -3774,17 +3783,20 @@ impl ZTHabitat {
     /// still-un-ported real vanilla `reviseSpeciesList`/`recalculateCharacteristics` once its own
     /// threshold trips, the same dirty-flag/timer shape [`Self::get_attractiveness`] already relies on
     /// for `characteristics_dirty` - ticks every viewing area's own ambient state
-    /// (`viewing_areas_begin`/`viewing_areas_end`), then calls through to the still-un-ported real
-    /// vanilla `updatePortals` and finally this object's own, already-ported [`Self::listen`].
+    /// (`viewing_areas_begin`/`viewing_areas_end`), then calls this object's own ported
+    /// [`Self::update_portals`] and finally its already-ported [`Self::listen`].
     ///
-    /// `updatePortals` is a plain, non-virtual helper (not one of `ZTHabitat`'s 17 vtable slots) -
-    /// deliberately left un-ported and called via `.original()`: its own body is an `isTank`-gated
-    /// portal-list check this port doesn't need to understand to reproduce `update` itself.
+    /// `updatePortals` is a plain, non-virtual helper (not one of `ZTHabitat`'s 17 vtable slots),
+    /// called directly as a same-file sibling rather than through `.original()`/`.hooked()` - its own
+    /// address (`generated.rs`'s `UPDATE_PORTALS`) is itself detoured (see
+    /// [`Self::update_portals`]'s own doc comment), so `.original()` here would re-enter that detour
+    /// in release builds.
     ///
-    /// `ZTTankExhibit` overrides this vtable slot with its own, separate address (`0x0049625f`, out of
-    /// scope for this pass per `zthabitatmgr-implementation-plan.md`) - detouring only the base
-    /// `ZTHabitat::update` address never intercepts a real tank's own tick, the same base-only-override
-    /// pattern [`Self::is_right_salinity`] already relies on.
+    /// `ZTTankExhibit` overrides this vtable slot with its own, separate address (`0x0049625f`) running
+    /// the tank's water-level fill/drain tick after delegating back into this base port via
+    /// `self.habitat.update(elapsed)` (`tank_exhibit.rs`, `generated.rs`'s `zttankexhibit::UPDATE`) -
+    /// detouring only the base `ZTHabitat::update` address never intercepts a real tank's own tick, the
+    /// same base-only-override pattern [`Self::is_right_salinity`] already relies on.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as
     /// [`Self::get_attractiveness`] - `self`'s own address is passed straight into every real vanilla
@@ -3830,8 +3842,77 @@ impl ZTHabitat {
             viewing_area_entry += 4;
         }
 
-        unsafe { UPDATE_PORTALS.original()(self as *const Self as *const u32) };
+        self.update_portals();
         self.listen();
+    }
+
+    /// Ports `ZTHabitat::updatePortals` (`generated.rs`'s `UPDATE_PORTALS`, `0x0043578f`, confirmed
+    /// against `private/resources/decompiles/ZTHabitat_updatePortals.c`/`.asm` and the macOS
+    /// `ZTHabitat_updatePortals.c`, which agree exactly): builds the plan of every `+0x13c`
+    /// portal-fence vtable dispatch a per-tick call would perform, without performing any of them.
+    ///
+    /// **Gate**: real vanilla dispatches vtable `+0x20` (`isTank`) then reads `this+0x4` - the port
+    /// uses the already-established vtable-identity [`Self::is_tank`] check plus [`Self::is_show_tank`]
+    /// (`zt_show_info_ptr != 0`), matching the macOS decompile's own combined-gate name `isShowTank`.
+    /// Both poles of `is_tank`'s underlying vtable slots are constant-return stubs shared by ~150
+    /// other classes' own predicates (never detoured), and the gate's equivalence is pinned live by
+    /// `ZTHABITAT_IS_TANK_LIVE` and the multi-reimpl census leg.
+    ///
+    /// **Walk**: [`walk_neighbor_tree`] over [`Self::show_neighbors_head`] - the Windows `.c` render
+    /// mislabels this field `zoo_entrance_y` (the same OOAnalyzer artifact the field's own doc comment
+    /// documents); trust the `.asm`-confirmed `+0x14` offset already established there.
+    ///
+    /// **Per neighbor pair**: `has_portal` is [`Self::has_portal_animal`]`(self, neighbor)`, or - only
+    /// if that's false - `has_portal_animal(neighbor, self)` (short-circuit, exactly this order).
+    /// `portal_a = self.get_show_portal(neighbor)`; if non-null, a dispatch entry is pushed for it with
+    /// `play_sound = true`. `portal_b = neighbor.get_show_portal(self)`; if non-null, a dispatch entry
+    /// is pushed for it with `play_sound = (portal_a == 0)` - the sound only plays on the second leg
+    /// when the first leg found no portal, so the effect fires once per pair, not twice.
+    ///
+    /// **Dispatch**: a genuine vtable `+0x13c` dispatch on the returned `ZTFence*`
+    /// ([`call_vtable_slot_with_u8_u8`]), never a fixed address - `ZTTankWall` overrides that slot
+    /// with `ZTTankWall::setIsOpenPortal` (`0x0059ea94`) while the base `ZTFence` slot is a `NULLSUB`
+    /// (`0x00401115`); a fixed-address call would skip the override the same way the tank-water-level
+    /// vtable-dispatch bug did. Building the full plan before dispatching anything is
+    /// behavior-identical to vanilla's interleaved order here: each dispatch only mutates its own
+    /// target fence's portal-open/animation state, which none of the four per-pair reads above
+    /// consult.
+    ///
+    /// Live-memory note: this only reads `self` and each `walk_neighbor_tree` neighbor through
+    /// `&self` methods - no writes, no `&mut`.
+    pub(crate) fn portal_dispatch_plan(&self) -> Vec<PortalDispatch> {
+        let mut plan = Vec::new();
+        if !self.is_tank() || !self.is_show_tank() {
+            return plan;
+        }
+        let self_ptr = self as *const Self as u32;
+        for node in walk_neighbor_tree(self.show_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+            let mut has_portal = self.has_portal_animal(neighbor_ptr);
+            if !has_portal {
+                has_portal = neighbor.has_portal_animal(self_ptr);
+            }
+            let portal_a = self.get_show_portal(neighbor_ptr);
+            if portal_a != 0 {
+                plan.push(PortalDispatch { fence_ptr: portal_a, is_open: has_portal, play_sound: true });
+            }
+            let portal_b = neighbor.get_show_portal(self_ptr);
+            if portal_b != 0 {
+                plan.push(PortalDispatch { fence_ptr: portal_b, is_open: has_portal, play_sound: portal_a == 0 });
+            }
+        }
+        plan
+    }
+
+    /// Executes [`Self::portal_dispatch_plan`]'s dispatch sequence for real. Detoured directly (see
+    /// `hooks_zthabitatmgr::update_portals`) rather than left un-ported and called via `.original()` -
+    /// once hooked, `.original()`/`.hooked()` on this same address would re-enter the detour in
+    /// release builds (a raw address cast there, not routed through any trampoline).
+    pub fn update_portals(&self) {
+        for dispatch in self.portal_dispatch_plan() {
+            unsafe { call_vtable_slot_with_u8_u8(dispatch.fence_ptr, 0x13c, dispatch.is_open as u8, dispatch.play_sound as u8) };
+        }
     }
 
     /// Ports `ZTHabitat::save` (vtable `+0x1c`, `ZTHabitat_save.c`/`.asm`, confirmed identical on both
@@ -4380,7 +4461,7 @@ mod tests {
     use std::mem::{self, offset_of};
 
     use super::ZTHabitat;
-    use crate::util::save_to_memory;
+    use crate::util::{ref_from_memory, save_to_memory};
     use crate::zthabitat::tank_exhibit::ZTTankExhibit;
 
     /// Host-safe fixture: `mem::zeroed()` is valid for every field of both structs (raw ints,
@@ -4778,6 +4859,131 @@ mod tests {
         let second = leak_tank_neighbor_with_portal(0x2000, 0x9000_0000);
         let habitat = fixture_habitat_with_tiles_and_neighbors(&[], &[first, second]);
         assert_eq!(habitat.get_show_portal(0x2000), 0x9000_0000);
+    }
+
+    /// A leaked, fully-addressable [`ZTHabitat`] for [`ZTHabitat::portal_dispatch_plan`] fixtures: tank
+    /// vtable + non-null `zt_show_info_ptr` (satisfies the `is_tank() && is_show_tank()` gate), an
+    /// empty `all_animals` vector, and a valid-but-empty `show_portal_map_head` (same reasoning as
+    /// [`fixture_tank_habitat_with_portal_map`] - a null head would make `get_show_portal`'s descent
+    /// read address `0x4` in the host process for any pair [`set_portal_map_entry`] doesn't cover).
+    /// Leaked (not stack-built) because `portal_dispatch_plan` passes `self`'s own address into each
+    /// neighbor's reciprocal `has_portal_animal`/`get_show_portal` call, which must resolve to a real,
+    /// dereferenceable block.
+    fn leak_tank_show_habitat() -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; std::mem::size_of::<ZTHabitat>()].into_boxed_slice());
+        let habitat_ptr = block.as_ptr() as u32;
+        save_to_memory(habitat_ptr, ZTHabitat::TANK_VTABLE_PTR);
+        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, zt_show_info_ptr) as u32, 0xdead_0000u32);
+        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_portal_map_head) as u32, leak_map_node(0, 0, 0, 0, 0));
+        habitat_ptr
+    }
+
+    /// Overwrites `habitat_ptr`'s `show_neighbors_head` so
+    /// [`walk_neighbor_tree`](crate::zthabitat::support::walk_neighbor_tree) visits exactly `neighbors`.
+    fn set_show_neighbors(habitat_ptr: u32, neighbors: &[u32]) {
+        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_neighbors_head) as u32, leak_neighbor_set(neighbors));
+    }
+
+    /// Overwrites `habitat_ptr`'s `show_portal_map_head` (set to a valid empty map by
+    /// [`leak_tank_show_habitat`]) with a map holding every `(key, value)` in `entries`, built as a
+    /// right-leaning vine over keys sorted ascending - the lower-bound descent
+    /// [`ZTHabitat::get_show_portal`] performs only depends on real BST ordering, and a sorted right
+    /// vine (every left child null) satisfies that for arbitrary runtime key values (leaked-block
+    /// addresses, whose relative order isn't known up front) without needing a real balanced tree -
+    /// same trick as [`leak_neighbor_set`]'s own right vine.
+    fn set_portal_map_entries(habitat_ptr: u32, entries: &[(u32, u32)]) {
+        let mut sorted = entries.to_vec();
+        sorted.sort_by_key(|(key, _)| *key);
+        let head = leak_map_node(0, 0, 0, 0, 0);
+        let mut root = head;
+        let mut prev = head;
+        for (key, value) in sorted {
+            let node = leak_map_node(prev, 0, 0, key, value);
+            save_to_memory(prev + 0xc, node); // prev._Right = node
+            if root == head {
+                root = node;
+            }
+            prev = node;
+        }
+        save_to_memory(head + 0x4, root); // head._Parent = root
+        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_portal_map_head) as u32, head);
+    }
+
+    /// Single-entry convenience wrapper over [`set_portal_map_entries`].
+    fn set_portal_map_entry(habitat_ptr: u32, other_ptr: u32, fence_ptr: u32) {
+        set_portal_map_entries(habitat_ptr, &[(other_ptr, fence_ptr)]);
+    }
+
+    /// Non-tank habitats never build a plan, regardless of any neighbor/portal-map state.
+    #[test]
+    fn portal_dispatch_plan_non_tank_is_empty() {
+        assert!(fixture_habitat(0).portal_dispatch_plan().is_empty());
+    }
+
+    /// A tank habitat with no attached `ZTShowInfo` (`zt_show_info_ptr == 0`) fails the `is_show_tank`
+    /// half of the gate even though `is_tank()` passes.
+    #[test]
+    fn portal_dispatch_plan_tank_without_show_info_is_empty() {
+        let habitat = fixture_habitat(ZTHabitat::TANK_VTABLE_PTR);
+        assert_eq!(habitat.zt_show_info_ptr, 0);
+        assert!(habitat.portal_dispatch_plan().is_empty());
+    }
+
+    /// Both legs found: the first leg (`self -> neighbor`) always plays its sound; the second
+    /// (`neighbor -> self`) does not, since the first already found a portal.
+    #[test]
+    fn portal_dispatch_plan_both_legs_found_second_leg_silent() {
+        let self_ptr = leak_tank_show_habitat();
+        let neighbor_ptr = leak_tank_show_habitat();
+        set_show_neighbors(self_ptr, &[neighbor_ptr]);
+        set_portal_map_entry(self_ptr, neighbor_ptr, 0x7000_0001);
+        set_portal_map_entry(neighbor_ptr, self_ptr, 0x7000_0002);
+
+        let plan = unsafe { ref_from_memory::<ZTHabitat>(self_ptr) }.portal_dispatch_plan();
+        assert_eq!(plan.len(), 2);
+        assert_eq!((plan[0].fence_ptr, plan[0].play_sound), (0x7000_0001, true));
+        assert_eq!((plan[1].fence_ptr, plan[1].play_sound), (0x7000_0002, false));
+        assert!(!plan[0].is_open && !plan[1].is_open); // both animal vectors empty
+    }
+
+    /// The first leg missing (`get_show_portal` returns 0, no entry pushed) makes the second leg the
+    /// sound-playing "primary" - `portal_a == 0` at the point the second leg is built.
+    #[test]
+    fn portal_dispatch_plan_second_leg_plays_sound_when_first_leg_missing() {
+        let self_ptr = leak_tank_show_habitat();
+        let neighbor_ptr = leak_tank_show_habitat();
+        set_show_neighbors(self_ptr, &[neighbor_ptr]);
+        set_portal_map_entry(neighbor_ptr, self_ptr, 0x7000_0002);
+
+        let plan = unsafe { ref_from_memory::<ZTHabitat>(self_ptr) }.portal_dispatch_plan();
+        assert_eq!(plan.len(), 1);
+        assert_eq!((plan[0].fence_ptr, plan[0].play_sound), (0x7000_0002, true));
+    }
+
+    /// Neither leg finds a portal: an empty plan, not two zero-fence entries - `get_show_portal == 0`
+    /// must skip the push entirely on both sides.
+    #[test]
+    fn portal_dispatch_plan_no_portal_either_leg_is_empty() {
+        let self_ptr = leak_tank_show_habitat();
+        let neighbor_ptr = leak_tank_show_habitat();
+        set_show_neighbors(self_ptr, &[neighbor_ptr]);
+
+        let plan = unsafe { ref_from_memory::<ZTHabitat>(self_ptr) }.portal_dispatch_plan();
+        assert!(plan.is_empty());
+    }
+
+    /// Two neighbors: entries appear in `walk_neighbor_tree` order, one pair's worth per neighbor.
+    #[test]
+    fn portal_dispatch_plan_multiple_neighbors_preserve_walk_order() {
+        let self_ptr = leak_tank_show_habitat();
+        let neighbor_a = leak_tank_show_habitat();
+        let neighbor_b = leak_tank_show_habitat();
+        set_show_neighbors(self_ptr, &[neighbor_a, neighbor_b]);
+        set_portal_map_entries(self_ptr, &[(neighbor_a, 0xa000_0001), (neighbor_b, 0xb000_0001)]);
+
+        let plan = unsafe { ref_from_memory::<ZTHabitat>(self_ptr) }.portal_dispatch_plan();
+        let fences: Vec<u32> = plan.iter().map(|d| d.fence_ptr).collect();
+        assert_eq!(fences, vec![0xa000_0001, 0xb000_0001]);
     }
 
     /// `ZTHabitat_resize.asm`'s null-argument default: the owned-tile sentinel's own `next` node's

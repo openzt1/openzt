@@ -3896,7 +3896,8 @@ impl ZTHabitatMgr {
     ///
     /// Must be a real virtual dispatch, not a flat call through the base `ZTHabitat::update`'s own fixed
     /// address (`.hooked()`/`.original()` alike): `ZTTankExhibit` overrides this slot with its own,
-    /// separate address (`0x0049625f`) that runs the tank's water-level fill/drain tick
+    /// separate address (`0x0049625f`, now holding the ported `ZTTankExhibit::update` override via the
+    /// `tank_exhibit` detour) that runs the tank's water-level fill/drain tick
     /// (`ZTTankExhibit_update.c`) after delegating back into the base implementation - calling the base
     /// address directly for every habitat, tank or not, skips that override entirely and silently starves
     /// every tank's water level of its per-tick rise/fall (confirmed live regression: newly created and

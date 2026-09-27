@@ -632,6 +632,57 @@ For features not covered by integration tests:
 3. Test console commands if applicable
 4. Check for game crashes or memory issues
 
+## Orchestrator (multi-stage plan automation)
+
+`openzt/scripts/orchestrator` (`openzt-orchestrator` CLI, Python) works through an
+`openzt/plans/*-implementation-plan.md`/`*-plan.md` doc one stage at a time, tracking state in
+`openzt/plans/.orchestrator/<plan-slug>/state.toml`. See that directory's own `README.md` for the
+full command reference (`bootstrap`/`run`/`status`/`resume`/`unlock`/`doctor`) - this section covers
+only the one operation a human doing a stage's work by hand (rather than letting the orchestrator
+spawn its own agent session for it) needs: **finalizing that stage as done**.
+
+Setup once per clone (already done if `.venv` exists next to `orchestrator.toml`):
+```bash
+cd openzt/scripts/orchestrator
+py -m venv .venv
+.venv\Scripts\activate
+pip install -e .[dev]
+```
+
+Check a plan's stage statuses first:
+```bash
+openzt-orchestrator status <plan-slug>
+```
+
+To mark a stage `done` after resolving it by hand (a stage sitting in `fallout_plan`,
+`fallout_execution`, or `fallout_verify` - e.g. a prior orchestrator-spawned agent session hit a
+fallout and a human finished the work in an ordinary session instead, as this repo's own stage 7/8
+handovers document):
+```bash
+openzt-orchestrator resume <plan-slug> --stage <id> --as done --no-commit \
+  --summary "..." --self-verification "..."
+```
+
+**Always pass `--no-commit` when finalizing hand-done work this way.** Without it, the commit step
+stages *every* currently-changed path in the working tree - all tracked diffs plus every untracked
+file, via an explicit exclusion list (only the orchestrator's own state dir and the master plan doc
+are excluded), not a narrow "just this stage's files" scope. Any unrelated WIP sitting in the tree
+(a leftover research doc, another in-progress edit) gets silently swept into that stage's commit and
+push. `--no-commit` still marks the stage `done` for real (re-verifies via the plan's
+`verify_commands`, appends the master-doc success entry) but leaves the changes uncommitted, so
+`git status` can be reviewed and the commit built by hand - excluding anything that doesn't belong -
+before it goes anywhere. Only skip `--no-commit` when the working tree is known-clean apart from
+this stage's own edits.
+
+`--summary`/`--self-verification` (describing the human's own work and how it was verified) are
+**required** for a `fallout_plan`/`fallout_execution` stage - the agent session never reached
+`mark_stage_complete`, so nothing was recorded automatically; the command refuses without them. Both
+are optional for `fallout_verify` (which already carries the agent's own recorded summary from before
+verify failed) and only override it if passed.
+
+If `resume --as done`'s re-verify still fails, it produces a fresh verify-fallout handover instead of
+marking the stage done - the summary/self-verification text doesn't bypass real verification.
+
 ## Reimplementation Pattern
 
 This section documents how a vanilla `ZT*Mgr`/`BF*Mgr` class gets fully reimplemented in Rust (see

@@ -64,7 +64,7 @@ pub mod hooks_zthabitatmgr {
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
             GET_SIZE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
-            GET_NEAREST_DIRT_PILE, GET_SHOW_PORTAL, HAS_PORTAL_ANIMAL, IS_SHOW_NEIGHBOR, NEEDS_SHOW_KEEPER,
+            GET_NEAREST_DIRT_PILE, GET_SHOW_PORTAL, HAS_PORTAL_ANIMAL, IS_SHOW_NEIGHBOR, NEEDS_SHOW_KEEPER, UPDATE_PORTALS,
             ADD_TO_BUILDING_LIST, ADDITIONAL_SCENERY_SUITABILITY_CHANGE,
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
@@ -591,6 +591,18 @@ pub mod hooks_zthabitatmgr {
     #[detour(GET_SHOW_PORTAL)]
     unsafe extern "thiscall" fn get_show_portal(this: *const u32, other: *const u32) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_show_portal(other as u32) as i32
+    }
+
+    #[detour(UPDATE_PORTALS)]
+    unsafe extern "thiscall" fn update_portals(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.update_portals()
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test, same as
+    /// [`get_show_portal_real`].
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn update_portals_real(this: *const u32) {
+        unsafe { UPDATE_PORTALS_DETOUR.call(this) }
     }
 
     /// Ports `ZTHabitat::getTilesCopy` - the out-param is a real `list<uint>` that `0x004f3a31`'s own
