@@ -15,7 +15,7 @@ use openzt_detour::generated::{
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
-            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, GET_SIZE, RESIZE as ZTHABITAT_RESIZE, SET_DETERIORATION as ZTHABITAT_SET_DETERIORATION, SET_NAME as ZTHABITAT_SET_NAME,
+            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, GET_SIZE, RESIZE as ZTHABITAT_RESIZE, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{
             AFTER_ENTITY_CHANGE, CHECK_EXHIBIT_MORPH, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND,
@@ -3662,7 +3662,7 @@ impl ZTHabitatMgr {
 
     /// Ports `ZTHabitatMgr::recalculateDeterioration` (`ZTHabitatMgr_recalculateDeterioration.c`/`.asm`):
     /// resets [`Self::unknown_flag_0x6c`] and every real habitat's own deterioration to `0`
-    /// (`ZTHabitat::setDeterioration.original()`), then for every fence in the live `GLOBAL_ZTWorldMgr`'s
+    /// ([`ZTHabitat::set_deterioration`]), then for every fence in the live `GLOBAL_ZTWorldMgr`'s
     /// own entity array that's a genuine fence-family member ([`RVA_FENCE_TYPE_CHECK_ARG`]) and
     /// [`ZTFence::isWorthFixing`], recomputes a deterioration level (`2` if the fence's own `+0x164` field
     /// is set, else `1`) and applies it to the habitat owning the fence's own tile (when it isn't the
@@ -3674,7 +3674,7 @@ impl ZTHabitatMgr {
         for i in 0..self.exhibit_array.len() {
             let habitat_ptr = self.exhibit_array.get_ptr(i);
             if habitat_ptr != 0 {
-                unsafe { ZTHABITAT_SET_DETERIORATION.original()(habitat_ptr as *const u32, 0) };
+                unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.set_deterioration(0);
             }
         }
 
@@ -3718,10 +3718,10 @@ impl ZTHabitatMgr {
             }
 
             if near_habitat_ptr != 0 {
-                unsafe { ZTHABITAT_SET_DETERIORATION.original()(near_habitat_ptr as *const u32, level) };
+                unsafe { ref_from_memory::<ZTHabitat>(near_habitat_ptr) }.set_deterioration(level);
             }
             if far_habitat_ptr != 0 {
-                unsafe { ZTHABITAT_SET_DETERIORATION.original()(far_habitat_ptr as *const u32, level) };
+                unsafe { ref_from_memory::<ZTHabitat>(far_habitat_ptr) }.set_deterioration(level);
             }
         }
     }

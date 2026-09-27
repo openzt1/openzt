@@ -873,6 +873,101 @@ pub(crate) fn run_habitat_set_is_show_exhibit_roundtrip_live_test(failure_log: &
     }
 }
 
+/// `ZTHabitat::setDeterioration`'s own 3-way clamp expectation, straight from the `.c`/`.asm`:
+/// `0` forces `0`, `1` applies only when the current value isn't already `2` (never lowers a `2`
+/// to a `1`), `2` always forces `2`, any other level is a no-op - and the return is always the
+/// resulting field value (real vanilla's full-`EAX` `dword` return).
+fn expected_deterioration(current: u32, level: u32) -> u32 {
+    match level {
+        0 => 0,
+        1 => {
+            if current != 2 {
+                1
+            } else {
+                2
+            }
+        }
+        2 => 2,
+        _ => current,
+    }
+}
+
+/// Compares the reimplemented `ZTHabitat::set_deterioration` against real vanilla (via the
+/// release-safe `_real` helper - `.original()` on the now-detoured address would re-enter the
+/// detour in release) over every real habitat in the live zoo's `exhibit_array`, for every
+/// `(pinned_current, level)` combination in `0..=2` squared plus the no-op arm (`3`/`u32::MAX`).
+/// Each cell pins the field to a known current value first (restored to its original value
+/// afterward), then asserts both the return value and the live field equal the expectation after
+/// each pole - the `current == 2, level == 1` cell is the one that actually exercises the
+/// never-lowers rule against real vanilla. A fresh-save zoo pins its own deterioration levels, so
+/// this never relies on live values being nonzero.
+pub(crate) fn run_habitat_set_deterioration_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_SET_DETERIORATION_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    let deterioration_offset = std::mem::offset_of!(ZTHabitat, deterioration) as u32;
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let field_addr = ptr + deterioration_offset;
+        let original: u32 = get_from_memory(field_addr);
+
+        // (current in 0..=2) x (level in 0..=2), plus the no-op arm at pinned current 2.
+        let mut cells: Vec<(u32, u32)> = Vec::new();
+        for current in 0..=2u32 {
+            for level in 0..=2u32 {
+                cells.push((current, level));
+            }
+        }
+        cells.push((2, 3));
+        cells.push((2, u32::MAX));
+
+        for (pinned_current, level) in cells {
+            let expected = expected_deterioration(pinned_current, level);
+
+            save_to_memory(field_addr, pinned_current);
+            let reimpl_returned = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.set_deterioration(level);
+            let reimpl_field: u32 = get_from_memory(field_addr);
+
+            save_to_memory(field_addr, pinned_current);
+            let real_returned = hooks_zthabitatmgr::set_deterioration_real(ptr as *const u32, level);
+            let real_field: u32 = get_from_memory(field_addr);
+
+            if reimpl_returned != expected || reimpl_field != expected {
+                failures.push(format!(
+                    "habitat {} ({:#010x}): reimpl current {pinned_current} level {level}: expected {expected}, returned {reimpl_returned}, field {reimpl_field}",
+                    i, ptr
+                ));
+            }
+            if real_returned != expected || real_field != expected {
+                failures.push(format!(
+                    "habitat {} ({:#010x}): real current {pinned_current} level {level}: expected {expected}, returned {real_returned}, field {real_field}",
+                    i, ptr
+                ));
+            }
+        }
+
+        save_to_memory(field_addr, original);
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Cross-checks [`crate::zthabitatmgr::walk_tile_list`]'s own node count against real vanilla
 /// `ZTHabitat::getSize(false)` (still un-ported, called via `.original()`) for every real habitat in
 /// the live zoo - both walk the exact same `owned_tiles_ptr` sentinel list, so any offset/layout error

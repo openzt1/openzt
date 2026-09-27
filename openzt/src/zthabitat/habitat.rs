@@ -2938,6 +2938,23 @@ impl ZTHabitat {
         }
     }
 
+    /// Ports `ZTHabitat::setDeterioration` (`ZTHabitat_setDeterioration.c`/`.asm`): a 3-way clamp on
+    /// [`Self::deterioration`] - `0` forces `0`, `1` only applies when the current value is not already
+    /// `2` (never lowers a `2` to a `1`), `2` always forces `2`, any other level is a no-op. Returns the
+    /// resulting level (real vanilla's own full-`EAX` `dword` return, `.asm`-confirmed).
+    pub fn set_deterioration(&self, level: u32) -> u32 {
+        if level == 0 {
+            write_live!(self, deterioration, 0u32);
+        } else if level == 1 {
+            if self.deterioration != 2 {
+                write_live!(self, deterioration, 1u32);
+            }
+        } else if level == 2 {
+            write_live!(self, deterioration, 2u32);
+        }
+        self.deterioration
+    }
+
     /// Ports `ZTHabitat::triggerKeeperArrived` (`ZTHabitat_triggerKeeperArrived.c`/`.asm`): recalculates
     /// via the still-deferred real vanilla `recalculateCharacteristics` when `characteristics_dirty` is
     /// set (the same call-through shape every other dirty-gated method here uses), then inlines
@@ -4452,6 +4469,64 @@ mod tests {
         let habitat = fixture_habitat_with_building_list(&[]);
         assert!(!habitat.has_bldg(0x1000));
         assert!(!habitat.has_bldg(0));
+    }
+
+    /// Zeroed [`ZTHabitat`] with [`ZTHabitat::deterioration`] preseeded - a plain field write on
+    /// the owned stack local, same shape [`fixture_habitat`]'s own `vtable` write uses (the port's
+    /// `write_live!` reads/writes the very same address).
+    fn fixture_habitat_with_deterioration(current: u32) -> ZTHabitat {
+        let mut habitat = fixture_habitat(0);
+        habitat.deterioration = current;
+        habitat
+    }
+
+    /// Level `0` forces the field to `0` from any current level, returning the resulting value
+    /// (vanilla returns the full `EAX` `dword`, `.asm`-confirmed).
+    #[test]
+    fn set_deterioration_zero_forces_zero() {
+        for current in [0u32, 1, 2] {
+            let habitat = fixture_habitat_with_deterioration(current);
+            assert_eq!(habitat.set_deterioration(0), 0, "current {current}");
+            assert_eq!(habitat.deterioration, 0, "current {current}");
+        }
+    }
+
+    /// Level `1` applies only when the current value isn't already `2` - vanilla never lowers a
+    /// `2` to a `1` (the `.c`'s `mbr_0x134 != 2` guard).
+    #[test]
+    fn set_deterioration_one_never_lowers_two() {
+        let habitat = fixture_habitat_with_deterioration(2);
+        assert_eq!(habitat.set_deterioration(1), 2);
+        assert_eq!(habitat.deterioration, 2);
+
+        for current in [0u32, 1] {
+            let habitat = fixture_habitat_with_deterioration(current);
+            assert_eq!(habitat.set_deterioration(1), 1, "current {current}");
+            assert_eq!(habitat.deterioration, 1, "current {current}");
+        }
+    }
+
+    /// Level `2` always forces `2`.
+    #[test]
+    fn set_deterioration_two_forces_two() {
+        for current in [0u32, 1, 2] {
+            let habitat = fixture_habitat_with_deterioration(current);
+            assert_eq!(habitat.set_deterioration(2), 2, "current {current}");
+            assert_eq!(habitat.deterioration, 2, "current {current}");
+        }
+    }
+
+    /// Any level other than `0`/`1`/`2` (full 32-bit compares in the `.asm`, so `3` and
+    /// `u32::MAX` both fall through) is a no-op - field and return both stay at the current value.
+    #[test]
+    fn set_deterioration_other_levels_are_no_op() {
+        for level in [3u32, u32::MAX] {
+            for current in [0u32, 1, 2] {
+                let habitat = fixture_habitat_with_deterioration(current);
+                assert_eq!(habitat.set_deterioration(level), current, "current {current} level {level}");
+                assert_eq!(habitat.deterioration, current, "current {current} level {level}");
+            }
+        }
     }
 }
 

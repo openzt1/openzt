@@ -415,6 +415,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_zthabitatmgr_recalculate_deterioration_smoke_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_SET_DETERIORATION_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_set_deterioration_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITATMGR_MARK_ZOO_EXTERIOR_SMOKE_LIVE",
                 run: tests::zthabitatmgr::run_zthabitatmgr_mark_zoo_exterior_smoke_live_test,
             },

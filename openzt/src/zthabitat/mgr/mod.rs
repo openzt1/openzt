@@ -624,6 +624,18 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.set_time_last_serviced(time, propagate)
     }
 
+    #[detour(SET_DETERIORATION)]
+    unsafe extern "thiscall" fn set_deterioration(this: *const u32, level: u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.set_deterioration(level)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn set_deterioration_real(this: *const u32, level: u32) -> u32 {
+        unsafe { SET_DETERIORATION_DETOUR.call(this, level) }
+    }
+
     #[detour(TRIGGER_KEEPER_ARRIVED)]
     unsafe extern "thiscall" fn trigger_keeper_arrived(this: *const u32, keeper: *const u32, scheduled: bool) {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.trigger_keeper_arrived(keeper as u32, scheduled)
