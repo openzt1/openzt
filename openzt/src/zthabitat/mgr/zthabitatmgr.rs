@@ -15,7 +15,7 @@ use openzt_detour::generated::{
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
-            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, GET_SHOW_PORTAL, SET_NAME as ZTHABITAT_SET_NAME,
+            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{AFTER_ENTITY_CHANGE, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
@@ -3072,7 +3072,7 @@ impl ZTHabitatMgr {
             unsafe { call_vtable_slot_with_ptr(fence_b, 0x138, 0) };
         }
 
-        let existing_portal = unsafe { GET_SHOW_PORTAL.original()(habitat_a_ptr as *const u32, habitat_b_ptr as *const u32) };
+        let existing_portal = habitat_a.get_show_portal(habitat_b_ptr);
         if existing_portal == 0 {
             let added = unsafe { ADD_SHOW_PORTAL.original()(habitat_a_ptr as *const u32, tile_a_ptr as *const u32, tile_b_ptr as *const u32) };
             if added != 0 {

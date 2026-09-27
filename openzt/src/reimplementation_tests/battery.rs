@@ -697,6 +697,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_is_show_neighbor_matches_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_GET_SHOW_PORTAL_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_show_portal_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_ADD_TO_BUILDING_LIST_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_add_to_building_list_matches_real_live_test,
             },

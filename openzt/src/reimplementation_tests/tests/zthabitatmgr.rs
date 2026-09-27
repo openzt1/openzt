@@ -538,6 +538,100 @@ pub(crate) fn run_habitat_is_show_neighbor_matches_real_live_test(failure_log: &
     }
 }
 
+/// Compares `getShowPortal` (`generated.rs`'s `GET_SHOW_PORTAL`, `0x0059e0a9`) for every (habitat,
+/// other) pair over the live zoo's own habitats, plus a null `other`, covering both the tank
+/// (map-descent) and non-tank (amphibious-neighbor recursion) branches on either side of the pair.
+/// For tank habitats, additionally cross-checks against an independent oracle - a
+/// [`walk_neighbor_tree`] linear scan of the same `show_portal_map_head` tree the port
+/// binary-searches, reading each node's `+0x10` key / `+0x14` value pair directly - so a descent bug
+/// cannot agree with itself. Real vanilla is a pure read (see [`ZTHabitat::get_show_portal`]'s own
+/// doc comment for why the plan's original find-or-insert sketch was wrong), so this never mutates
+/// habitat state. Coverage counters (habitats, comparisons, non-empty portal maps, non-null hits)
+/// are logged so a save with no show tanks is visibly comparison-only.
+pub(crate) fn run_habitat_get_show_portal_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_SHOW_PORTAL_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut habitat_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr != 0 {
+            habitat_ptrs.push(ptr);
+        }
+    }
+    if habitat_ptrs.is_empty() {
+        let msg = "no live habitats found".to_string();
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        return true;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut populated_maps = 0u32;
+    let mut non_null_hits = 0u32;
+    let mut comparisons = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let is_tank = habitat.is_tank();
+        let map_entries: Vec<(u32, u32)> = if is_tank {
+            walk_neighbor_tree(*habitat.show_portal_map_head())
+                .map(|node| (get_from_memory::<u32>(node + 0x10), get_from_memory::<u32>(node + 0x14)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !map_entries.is_empty() {
+            populated_maps += 1;
+        }
+        for &other_ptr in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+            let real = hooks_zthabitatmgr::get_show_portal_real(habitat_ptr as *const u32, other_ptr as *const u32) as u32;
+            let reimpl = habitat.get_show_portal(other_ptr);
+            comparisons += 1;
+            if real != reimpl {
+                failures.push(format!(
+                    "habitat {:#010x}, other {:#010x}: real={:#010x}, reimpl={:#010x}",
+                    habitat_ptr, other_ptr, real, reimpl
+                ));
+            }
+            if is_tank {
+                let oracle = map_entries.iter().find(|(key, _)| *key == other_ptr).map(|(_, value)| *value).unwrap_or(0);
+                if oracle != real {
+                    failures.push(format!(
+                        "habitat {:#010x}, other {:#010x}: real={:#010x} != map-walk oracle {:#010x}",
+                        habitat_ptr, other_ptr, real, oracle
+                    ));
+                }
+            }
+            if real != 0 {
+                non_null_hits += 1;
+            }
+        }
+    }
+    if failures.is_empty() {
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (habitats: {}, comparisons: {}, non-empty portal maps: {}, non-null hits: {})",
+                test_name,
+                habitat_ptrs.len(),
+                comparisons,
+                populated_maps,
+                non_null_hits
+            ),
+        );
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Compares `addToBuildingList` (`ZTHabitat_addToBuildingList.c`/`.asm`) against the reimplementation
 /// over every live habitat's own owned-tile list: each side merges the *same* real habitat's occupants
 /// into its own fresh, empty "other" building-list buffer (`other_ptr = out_vector_ptr - 0x78`, so the

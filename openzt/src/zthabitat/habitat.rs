@@ -58,7 +58,9 @@ pub struct ZTHabitat {
     pub amphibious_neighbors_head: u32, // 0x008 // MSVC `std::set<ZTHabitat*>` head/sentinel node pointer for the amphibious-neighbor set - confirmed red-black-tree node layout (`+0x0`=color/isnil, `+0x4`=parent, `+0x8`=left, `+0xc`=right, `+0x10`=value) via `ZTHabitat_hiliteAmphibiousNeighbors.c`'s own in-order walk (see `walk_neighbor_tree`) and `addAmphibiousNeighbor`'s own STL insert helper (both left un-ported - see `Self::hilite_amphibious_neighbors`'s own doc comment). `ZTHabitat_getSize.c` independently walks this exact same field with identical node arithmetic (see `Self::get_size`) - this corrects `zthabitatmgr-implementation-plan.md`'s own earlier step 6h note (which speculated this was an unrelated nested-sub-habitat tree).
     pub pad1a_a1: [u8; 0x8],          // ----------------------- padding: 8 bytes
     pub show_neighbors_head: u32,    // 0x014 // Same shape as `amphibious_neighbors_head`, for the show-neighbor set (`ZTHabitat_hiliteShowNeighbors.c`/`addShowNeighbor`/`clearShowNeighbors`). The C decompiles mislabel this field `zoo_entrance_y` (an OOAnalyzer type-propagation artifact bleeding in a `ZTHabitatMgr`-shaped name) - trust the `.asm`-confirmed `+0x14` offset, named here for what it actually is.
-    pub pad1a_a2: [u8; 0xd],          // ----------------------- padding: 13 bytes
+    pub pad1a_a2a: [u8; 0x8],         // ----------------------- padding: 8 bytes
+    pub show_portal_map_head: u32,   // 0x020 // MSVC `std::map<ZTHabitat*, ZTFence*>` head/sentinel node pointer for the per-neighbor show-portal cache - same red-black-tree node layout as `amphibious_neighbors_head` (`+0x0`=color/isnil, `+0x4`=parent, `+0x8`=left, `+0xc`=right, `+0x10`=key, `+0x14`=value), confirmed via `ZTHabitat_getShowPortal.asm`/`.c` (`0x0059e0a9`, this file's `Self::get_show_portal`) reading `&this->field_0x20` as the tree object and passing it directly to `AI_cls_0x404fd6::find`/`msvc_std::tree24::insert`, and independently corroborated by the macOS `ZTHabitat_getShowPortal.c`/`_addShowPortal.c`/`_removeShowPortal.c` decompiles' own `map<P9ZTHabitat,P7ZTFence>`-typed tree at the equivalent field - the plan's original sketch called this a `ZTShowInfo*`-valued cache, but every real accessor stores/returns a `ZTFence*` (the tile-boundary fence entity acting as the show portal), not a `ZTShowInfo*`. Populated by `addShowPortal`/`removeShowPortal` (both left un-ported, real vanilla calls only) - see `Self::get_show_portal`'s own doc comment for why this is a pure read.
+    pub pad1a_a2b: [u8; 0x1],         // ----------------------- padding: 1 byte
     pub neighbor_dirty: u8,          // 0x025 // Set to 1 by `ZTHabitatMgr::habitatTileChanged`/`sceneryEntityChange` on every cached neighbor-habitat pointer found in a changed tile's own grid-cell row (see `ZTHabitatMgr::habitat_tile_changed`), and by `ZTHabitat::recreateOAs`/`ZTHabitatMgr::pathRemoved` (`Self::recreate_oas`/`ZTHabitatMgr::path_removed`). No reader identified in this pass - real consumer not yet found in the decompile corpus.
     pub pad1a_b: [u8; 0x6],          // ----------------------- padding: 6 bytes
     pub unknown_flag_0x2c: u8,       // 0x02c // Gates ZTThought::ZTThought's acceptance of a passed-in habitat pointer (see ztthoughtmgr.rs); ZTHabitat::recalculateCharacteristics also early-returns when this is set. Meaning not otherwise confirmed.
@@ -139,6 +141,7 @@ pub struct ZTHabitat {
 // non-tank habitat (`get_from_memory::<ZTHabitat>`) over-read past its true 0x178-byte allocation.
 const _: () = assert!(std::mem::size_of::<ZTHabitat>() == 0x178);
 const _: () = assert!(std::mem::offset_of!(ZTHabitat, deterioration) == 0x134);
+const _: () = assert!(std::mem::offset_of!(ZTHabitat, show_portal_map_head) == 0x020);
 
 /// The shared per-tile gate every keeper-food walker applies ([`Self::get_num_keeper_food_tiles`],
 /// [`Self::get_smallest_keeper_food`], [`Self::get_nearest_keeper_food`], [`Self::get_random_keeper_food`]):
@@ -3507,6 +3510,65 @@ impl ZTHabitat {
         candidate != head && get_from_memory::<u32>(candidate + 0x10) <= neighbor_ptr
     }
 
+    /// Ports `ZTHabitat::getShowPortal` (`generated.rs`'s `GET_SHOW_PORTAL`, `0x0059e0a9`, confirmed
+    /// against `private/resources/decompiles/ZTHabitat_getShowPortal.c`/`.asm` and independently
+    /// corroborated by the macOS `ZTHabitat_getShowPortal.c`).
+    ///
+    /// **Tank branch** (`self.is_tank()` true, real vanilla's `virt_meth_0x4016d1_32` vtable dispatch):
+    /// a lower_bound descent of [`Self::show_portal_map_head`], same shape as [`Self::is_show_neighbor`]'s
+    /// descent but over the two-word `(ZTHabitat*, ZTFence*)` pair value at each node - `+0x10` is the
+    /// key, `+0x14` the value. **This is a pure read, despite the plan's original sketch calling it a
+    /// mutating find-or-insert**: the `.asm` only reaches `msvc_std::tree24::insert` (`0x005ab33a`'s
+    /// fallthrough continuation) from inside the branch already gated on the manual descent finding an
+    /// existing match (`aiStack_1c[0] != head && key < candidate->key` both false) - i.e. the insert path
+    /// is only ever entered when the key is already present, so it always re-finds the same node instead
+    /// of actually inserting a new one. The macOS `_getShowPortal.c`/`_addShowPortal.c`/`_removeShowPortal.c`
+    /// trio confirms the same shape independently: `getShowPortal`'s own `find_or_insert` call is likewise
+    /// only reached inside its own "already found" branch, while `addShowPortal` (which really does insert
+    /// new entries) calls `find_or_insert` unconditionally at its tail. A miss falls straight through to
+    /// `return 0` with no insertion. Never calls `.original()` - this is a same-file sibling read.
+    ///
+    /// **Non-tank branch**: recurses over every amphibious neighbor ([`walk_neighbor_tree`] over
+    /// [`Self::amphibious_neighbors_head`]), short-circuiting on the first nonzero result - the real
+    /// body's own `this->field_0xc != 0` guard is that set's `_Mysize` (confirmed via `.asm`: the generic
+    /// `_Tree::insert` helper increments `handle+4` on every real insert), a pure optimization to skip an
+    /// empty walk that [`walk_neighbor_tree`] already answers identically (an empty tree yields nothing),
+    /// so it isn't separately modeled here.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`]; each neighbor visited must also be live (true for every
+    /// `walk_neighbor_tree` entry, which reads real `ZTHabitat*` pointers directly out of the tree).
+    pub fn get_show_portal(&self, other_ptr: u32) -> u32 {
+        if self.is_tank() {
+            let head = self.show_portal_map_head;
+            let mut candidate = head;
+            let mut node: u32 = get_from_memory(head + 0x4); // head->_Parent = root
+            while node != 0 {
+                if get_from_memory::<u32>(node + 0x10) < other_ptr {
+                    node = get_from_memory(node + 0xc); // _Right
+                } else {
+                    candidate = node;
+                    node = get_from_memory(node + 0x8); // _Left
+                }
+            }
+            if candidate != head && get_from_memory::<u32>(candidate + 0x10) <= other_ptr {
+                get_from_memory(candidate + 0x14)
+            } else {
+                0
+            }
+        } else {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+                let result = neighbor.get_show_portal(other_ptr);
+                if result != 0 {
+                    return result;
+                }
+            }
+            0
+        }
+    }
+
     /// Ports `ZTHabitat::resetUnitAI` (vtable slot, `ZTHabitat_resetUnitAI.c`/`.asm`): for every owned
     /// tile, walks that tile's own occupant list (`BFTile::unit_list_ptr`, `+0x0` - the exact same
     /// [`TileListNode`] shape/pool as `owned_tiles_ptr`, one level more nested, confirmed directly
@@ -4490,6 +4552,71 @@ mod tests {
         assert!(!habitat.is_show_neighbor(0));
     }
 
+    /// Leaks a zeroed 24-byte MSVC map-node-shaped block and writes `parent`/`left`/`right`/`key`/
+    /// `value` into the `+0x4`/`+0x8`/`+0xc`/`+0x10`/`+0x14` slots [`ZTHabitat::get_show_portal`]'s
+    /// tank-branch descent reads, returning the block's address - the same layout as
+    /// [`leak_tree_node`] with one extra trailing `value` word for the map's `ZTFence*` payload.
+    fn leak_map_node(parent: u32, left: u32, right: u32, key: u32, value: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x18].into_boxed_slice());
+        let node_ptr = block.as_ptr() as u32;
+        save_to_memory(node_ptr + 0x4, parent);
+        save_to_memory(node_ptr + 0x8, left);
+        save_to_memory(node_ptr + 0xc, right);
+        save_to_memory(node_ptr + 0x10, key);
+        save_to_memory(node_ptr + 0x14, value);
+        node_ptr
+    }
+
+    /// A tank-vtable [`ZTHabitat`] whose `show_portal_map_head` points at a leaked head node whose
+    /// `_Parent` (`+0x4`) holds `root` - same reasoning as [`fixture_habitat_with_show_tree`], plus
+    /// the tank vtable so [`ZTHabitat::is_tank`] routes `get_show_portal` into the map descent.
+    fn fixture_tank_habitat_with_portal_map(root: u32) -> ZTHabitat {
+        let mut habitat = fixture_habitat(ZTHabitat::TANK_VTABLE_PTR);
+        habitat.show_portal_map_head = leak_map_node(0, 0, 0, 0, 0);
+        save_to_memory(habitat.show_portal_map_head + 0x4, root);
+        habitat
+    }
+
+    /// An empty portal map leaves the candidate at the head, so `get_show_portal` returns `0` for
+    /// every key without ever reaching `msvc_std_tree24::insert` - the pure-read shape documented on
+    /// [`ZTHabitat::get_show_portal`] itself.
+    #[test]
+    fn empty_portal_map_returns_zero() {
+        let habitat = fixture_tank_habitat_with_portal_map(0);
+        assert_eq!(habitat.get_show_portal(0x0063_2100), 0);
+        assert_eq!(habitat.get_show_portal(0), 0);
+    }
+
+    /// One-entry map: an exact key hit returns the stored `ZTFence*` value; a key below or above
+    /// the stored key both miss (below fails the `<=` confirmation, above descends right to null
+    /// and never leaves the head), same descent shape as [`show_neighbor_hit_and_miss_single_node`].
+    #[test]
+    fn portal_map_hit_and_miss_single_node() {
+        let node = leak_map_node(0, 0, 0, 0x2000, 0x9000_0000);
+        let habitat = fixture_tank_habitat_with_portal_map(node);
+        assert_eq!(habitat.get_show_portal(0x2000), 0x9000_0000);
+        assert_eq!(habitat.get_show_portal(0x1000), 0);
+        assert_eq!(habitat.get_show_portal(0x3000), 0);
+    }
+
+    /// Three-node BST: hits resolve from either subtree and the root to their own distinct values;
+    /// a key falling between two nodes survives the descent but fails the confirmation compare.
+    #[test]
+    fn portal_map_multi_node_descent() {
+        let left = leak_map_node(0, 0, 0, 0x1000, 0xa000_0001);
+        let right = leak_map_node(0, 0, 0, 0x3000, 0xa000_0003);
+        let root = leak_map_node(0, left, right, 0x2000, 0xa000_0002);
+        save_to_memory(left + 0x4, root);
+        save_to_memory(right + 0x4, root);
+        let habitat = fixture_tank_habitat_with_portal_map(root);
+
+        assert_eq!(habitat.get_show_portal(0x1000), 0xa000_0001);
+        assert_eq!(habitat.get_show_portal(0x2000), 0xa000_0002);
+        assert_eq!(habitat.get_show_portal(0x3000), 0xa000_0003);
+        assert_eq!(habitat.get_show_portal(0x2500), 0);
+        assert_eq!(habitat.get_show_portal(0x4000), 0);
+    }
+
     /// Leaks a zeroed 16-byte [`TileListNode`](crate::zthabitat::support::TileListNode)-shaped block
     /// with `next`/`payload` written at the `+0x0`/`+0x8` slots
     /// [`walk_tile_list`](crate::zthabitat::support::walk_tile_list) and [`ZTHabitat::get_size`] read,
@@ -4607,6 +4734,50 @@ mod tests {
         let habitat = fixture_habitat_with_tiles_and_neighbors(&[1, 2, 3, 4, 5, 6, 7, 8, 9], &[b]);
         assert_eq!(habitat.get_size(false), 9);
         assert_eq!(habitat.get_size(true), 16);
+    }
+
+    /// A leaked tank-vtable [`ZTHabitat`]-shaped block whose `show_portal_map_head` holds a
+    /// one-entry map keyed by `key` returning `value` - a recursion target for
+    /// [`ZTHabitat::get_show_portal`]'s non-tank branch, which recurses into each amphibious
+    /// neighbor's own `get_show_portal` rather than reading the map directly.
+    fn leak_tank_neighbor_with_portal(key: u32, value: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; std::mem::size_of::<ZTHabitat>()].into_boxed_slice());
+        let habitat_ptr = block.as_ptr() as u32;
+        save_to_memory(habitat_ptr, ZTHabitat::TANK_VTABLE_PTR);
+        let head = leak_map_node(0, 0, 0, 0, 0);
+        let root = leak_map_node(0, 0, 0, key, value);
+        save_to_memory(head + 0x4, root); // head._Parent = root
+        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_portal_map_head) as u32, head);
+        habitat_ptr
+    }
+
+    /// An empty amphibious-neighbor set never recurses, so the non-tank branch returns `0` for any
+    /// key - matching the real body's own `field_0xc != 0` guard without needing to model that
+    /// field separately (see [`ZTHabitat::get_show_portal`]'s own doc comment).
+    #[test]
+    fn get_show_portal_non_tank_empty_neighbors_returns_zero() {
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[], &[]);
+        assert_eq!(habitat.get_show_portal(0x2000), 0);
+    }
+
+    /// A single amphibious neighbor's own portal-map hit is returned as-is through the recursive
+    /// call; a miss on that same neighbor still returns `0`.
+    #[test]
+    fn get_show_portal_non_tank_single_neighbor_recurses() {
+        let neighbor = leak_tank_neighbor_with_portal(0x2000, 0x9000_0000);
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[], &[neighbor]);
+        assert_eq!(habitat.get_show_portal(0x2000), 0x9000_0000);
+        assert_eq!(habitat.get_show_portal(0x3000), 0);
+    }
+
+    /// Two neighbors, only the second holding a hit: the walk must continue past the first
+    /// neighbor's own miss (`0`) rather than stopping there.
+    #[test]
+    fn get_show_portal_non_tank_finds_hit_past_earlier_miss() {
+        let first = leak_tank_neighbor_with_portal(0x5000, 0xb000_0000);
+        let second = leak_tank_neighbor_with_portal(0x2000, 0x9000_0000);
+        let habitat = fixture_habitat_with_tiles_and_neighbors(&[], &[first, second]);
+        assert_eq!(habitat.get_show_portal(0x2000), 0x9000_0000);
     }
 
     /// `ZTHabitat_resize.asm`'s null-argument default: the owned-tile sentinel's own `next` node's
