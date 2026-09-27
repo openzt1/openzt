@@ -202,6 +202,7 @@ pub(super) mod detour_zoo_main {
             // `characteristics_dirty` side effect (see their own doc comments), so running them
             // first settles that flag before any other test reads the same live habitats.
             RegisteredTest { name: "ZTHABITATMGR_DETOURS_ENABLED", run: tests::zthabitatmgr::run_zthabitatmgr_detours_enabled_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_DETOURS_ENABLED", run: tests::zthabitatmgr::run_tankexhibit_detours_enabled_test },
             RegisteredTest { name: "ZTHABITATMGR_GET_HABITAT_PTR_LIVE", run: tests::zthabitatmgr::run_habitat_get_habitat_ptr_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_ATTRACTIVENESS_LIVE", run: tests::zthabitatmgr::run_habitat_get_attractiveness_live_test },
             RegisteredTest { name: "ZTHABITAT_HAS_KEEPER_ASSIGNED_LIVE", run: tests::zthabitatmgr::run_habitat_has_keeper_assigned_live_test },
@@ -211,6 +212,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTHABITAT_GET_POPULARITY_LIVE", run: tests::zthabitatmgr::run_habitat_get_popularity_live_test },
             RegisteredTest { name: "ZTHABITAT_DO_TANK_CHECK_LIVE", run: tests::zthabitatmgr::run_habitat_do_tank_check_live_test },
             RegisteredTest { name: "ZTHABITAT_IS_RIGHT_SALINITY_LIVE", run: tests::zthabitatmgr::run_habitat_is_right_salinity_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_IS_RIGHT_SALINITY_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_tankexhibit_is_right_salinity_matches_real_live_test },
             RegisteredTest { name: "ZTHABITAT_LISTEN_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_listen_smoke_live_test },
             RegisteredTest {
                 name: "ZTHABITAT_SET_IS_SHOW_EXHIBIT_ROUNDTRIP_LIVE",

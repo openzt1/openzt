@@ -11,4 +11,5 @@ pub use tank_exhibit::*;
 
 pub fn init() {
     mgr::init();
+    tank_exhibit::init();
 }

@@ -1,4 +1,8 @@
 use getset::Getters;
+use openzt_detour::generated::{bfcategory::GET_VALUE, zttankexhibit::IS_RIGHT_SALINITY};
+use openzt_detour_macro::detour_mod;
+use tracing::error;
+
 use super::habitat::ZTHabitat;
 use crate::util::LiveMemory;
 
@@ -43,7 +47,7 @@ pub struct ZTTankExhibit {
     fresh_water_sparkle_vtable_cache: u32, // 0x1e0 // Inferred: same shape as `salt_water_sparkle_vtable_cache`, for the "frshwav"-named entity type used when `addRandomSparkle`'s freshwater branch (`current_water_type == 0`) spawns instead.
     sparkle_spawn_timer: i32, // 0x1e4 // Inferred: ticks down by `elapsed` each `update()` call; on reaching `< 0`, `update` calls `addRandomSparkle` and reloads this from `DAT_006390b8 / owned_tile_count`.
     #[getset(skip)]
-    pub _live: LiveMemory, // trailing ZST - see LiveMemory's own docs; required once this struct gets real methods that read live game memory through &self (isRightSalinity/update).
+    pub _live: LiveMemory, // trailing ZST - see LiveMemory's own docs; required by this struct's real methods reading live game memory through &self (is_right_salinity now; update still pending).
 }
 
 const _: () = assert!(std::mem::size_of::<ZTTankExhibit>() == 0x1e8);
@@ -62,5 +66,117 @@ impl std::ops::Deref for ZTTankExhibit {
     type Target = ZTHabitat;
     fn deref(&self) -> &ZTHabitat {
         &self.habitat
+    }
+}
+
+/// `ZTAnimalType`'s embedded water-suitability category map head, at `animal_type + 0x2d8`
+/// (`LEA ESI,[EAX+0x2d8]` in `ZTTankExhibit_isRightSalinity.asm`; the macOS build's own copy of the
+/// function reads the equivalent `+0x2a8`). Kept a raw offset with a doc comment rather than a named
+/// `ZTAnimalType` field, same precedent as the sibling `+0x2cc` site in
+/// [`ZTHabitat::additional_scenery_suitability_change`]: it sits inside that struct's `pad11` region
+/// (`openzt/src/bfentitytype/units.rs`) and is a *different* category map from `+0x2cc`'s.
+const ANIMAL_TYPE_WATER_SUITABILITY_MAP_OFFSET: u32 = 0x2d8;
+
+/// The two water-suitability category ids `isRightSalinity` compares (`PUSH 0xa` then `PUSH 0x9` at the
+/// call sites). Raw ids only - no decompile names them, and which of them "means" fresh vs salt water is
+/// unconfirmed either way, so don't guess.
+const SALINITY_CATEGORY_10: i32 = 10;
+const SALINITY_CATEGORY_9: i32 = 9;
+
+impl ZTTankExhibit {
+    /// Ports `ZTTankExhibit::isRightSalinity` (vtable `+0x28`, `ZTTankExhibit_isRightSalinity.c`/`.asm`,
+    /// `generated.rs`'s `zttankexhibit::IS_RIGHT_SALINITY`) - the tank-specific override of the base
+    /// [`ZTHabitat::is_right_salinity`] constant-`true` stub. Looks the animal type's two
+    /// water-suitability category values up (real vanilla `BFCategory::getValue` - a pure map walk that
+    /// answers `0` on a missing key, detoured nowhere, so `.original()` is a plain vanilla call in every
+    /// build profile) and answers `category9 <= category10` (signed - real vanilla's `SETGE`), inverted
+    /// when `current_water_type == 0` (the same freshwater discriminant `addRandomSparkle`'s freshwater
+    /// branch reads). `animal_type_ptr` is the bare `ZTAnimalType*` (the `+0x128` inner-class pointer
+    /// every other entity-type consumer here passes).
+    pub fn is_right_salinity(&self, animal_type_ptr: u32) -> bool {
+        let category_map = animal_type_ptr + ANIMAL_TYPE_WATER_SUITABILITY_MAP_OFFSET;
+        let category_10 = unsafe { GET_VALUE.original()(category_map as *const u32, SALINITY_CATEGORY_10) };
+        let category_9 = unsafe { GET_VALUE.original()(category_map as *const u32, SALINITY_CATEGORY_9) };
+        Self::salinity_result(category_10, category_9, self.current_water_type)
+    }
+
+    /// [`Self::is_right_salinity`]'s comparison tail, split out so the (water type x comparison
+    /// direction) combinations stay host-safe unit-testable - the `getValue` lookups themselves are real
+    /// vanilla calls and are covered by the live comparison test instead.
+    fn salinity_result(category_10: i32, category_9: i32, current_water_type: i32) -> bool {
+        let suitable = category_9 <= category_10;
+        if current_water_type == 0 { !suitable } else { suitable }
+    }
+}
+
+/// `ZTTankExhibit::isRightSalinity`'s own fixed address (`0x004936df`) is referenced exactly once in the
+/// whole binary - the `+0x28` slot of the tank vtable itself (`0x006312e4`; no direct callers, no other
+/// vtable shares it) - so this flat detour intercepts only real tank exhibits. Non-tank dispatch reaches
+/// the already-detoured base stub instead (see [`ZTHabitat::is_right_salinity`]).
+#[detour_mod]
+pub mod detours {
+    use super::*;
+    use crate::util::ref_from_memory;
+
+    #[detour(IS_RIGHT_SALINITY)]
+    unsafe extern "thiscall" fn is_right_salinity(this: *const u32, animal_type: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTTankExhibit>(this) }.is_right_salinity(animal_type as u32)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see `ztawardmgr`'s
+    /// `call_real` doc comments for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn is_right_salinity_real(this: *const u32, animal_type: *const u32) -> bool {
+        unsafe { IS_RIGHT_SALINITY_DETOUR.call(this, animal_type) }
+    }
+}
+
+pub fn init() {
+    if let Err(e) = unsafe { detours::init_detours() } {
+        error!("Failed to initialise ZTTankExhibit detours: {e:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonfresh_water_passes_when_category9_within_category10() {
+        assert!(ZTTankExhibit::salinity_result(7, 5, 1));
+    }
+
+    #[test]
+    fn nonfresh_water_fails_when_category9_exceeds_category10() {
+        assert!(!ZTTankExhibit::salinity_result(5, 7, 1));
+    }
+
+    #[test]
+    fn fresh_water_inverts_a_passing_comparison() {
+        assert!(!ZTTankExhibit::salinity_result(7, 5, 0));
+    }
+
+    #[test]
+    fn fresh_water_inverts_a_failing_comparison() {
+        assert!(ZTTankExhibit::salinity_result(5, 7, 0));
+    }
+
+    #[test]
+    fn equal_values_count_as_within() {
+        assert!(ZTTankExhibit::salinity_result(6, 6, 1));
+        assert!(!ZTTankExhibit::salinity_result(6, 6, 0));
+    }
+
+    #[test]
+    fn comparison_is_signed_not_unsigned() {
+        // Real vanilla compares with `SETGE`: category_10 = -1 loses to category_9 = 1 signed, but
+        // would win a raw u32 comparison.
+        assert!(!ZTTankExhibit::salinity_result(-1, 1, 1));
+    }
+
+    #[test]
+    fn any_nonzero_water_type_skips_the_inversion() {
+        assert!(ZTTankExhibit::salinity_result(7, 5, -3));
+        assert!(ZTTankExhibit::salinity_result(7, 5, 2));
     }
 }

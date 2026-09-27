@@ -3321,11 +3321,11 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::isRightSalinity` (vtable `+0x28`) base default. A plain `ZTHabitat` has no
-    /// water/salinity concept at all (only `ZTTankExhibit` does - see that class's own override,
-    /// `zttankexhibit::IS_RIGHT_SALINITY`, left un-ported); the base implementation is a constant `true`.
-    /// That slot's address (`0x00446995`, `generated.rs`'s `bfentity::VF_RETURN1_1`) is a shared
-    /// `return true` stub other vtables also point at, so its detour runs for those classes too - this
-    /// port never reads `self`, which keeps that harmless.
+    /// water/salinity concept at all (only `ZTTankExhibit` does - see [`ZTTankExhibit::is_right_salinity`],
+    /// that class's own override of this same slot at a separate address); the base implementation is a
+    /// constant `true`. That slot's address (`0x00446995`, `generated.rs`'s `bfentity::VF_RETURN1_1`) is a
+    /// shared `return true` stub other vtables also point at, so its detour runs for those classes too -
+    /// this port never reads `self`, which keeps that harmless.
     pub fn is_right_salinity(&self, _animal_type: *const u32) -> bool {
         true
     }

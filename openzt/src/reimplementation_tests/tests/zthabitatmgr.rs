@@ -26,9 +26,10 @@ use crate::ztshow::{call_entity_vtable_noargs, call_entity_vtable_u32_noargs, RV
 use crate::ztshowinfo::needs_keeper;
 use crate::zthabitatmgr::{
     animal_food_target, call_bfunit_tile_cost_vtable_slot, call_vtable_slot_noargs_ret_bool, entity_name_bytes, free_event_vector_buffer,
-    hooks_zthabitatmgr, map_int_habitatsuitability_find_or_insert, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr,
+    hooks_zthabitatmgr, map_int_habitatsuitability_find_or_insert, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr, ZTTankExhibit,
     MAX_PATH_COST_RVA, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
 };
+use crate::zthabitatmgr::tank_exhibit::detours;
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
 /// `zthabitatmgr::init()`, and this asserts all of its detours actually report enabled. Without
@@ -738,10 +739,10 @@ pub(crate) fn run_habitat_additional_scenery_suitability_change_matches_real_liv
 }
 
 /// Compares real `ZTHabitat::isRightSalinity`'s base-class default against the reimplemented constant
-/// `true`, over every non-tank habitat in the live, loaded zoo (`ZTTankExhibit`'s own override sits at a
-/// different address and is out of scope - see `zthabitatmgr.rs`'s own `is_right_salinity` doc comment).
-/// Passes a null `ZTAnimalType*`, matching the reimplementation's own disregard for the argument -
-/// safe only because the base default is confirmed to never dereference it.
+/// `true`, over every non-tank habitat in the live, loaded zoo (`ZTTankExhibit`'s own override is
+/// compared separately by `ZTTANKEXHIBIT_IS_RIGHT_SALINITY_MATCHES_REAL_LIVE` below). Passes a null
+/// `ZTAnimalType*`, matching the reimplementation's own disregard for the argument - safe only because
+/// the base default is confirmed to never dereference it.
 pub(crate) fn run_habitat_is_right_salinity_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTHABITAT_IS_RIGHT_SALINITY_LIVE";
     let habitat_mgr = globals().zthabitatmgr();
@@ -772,7 +773,88 @@ pub(crate) fn run_habitat_is_right_salinity_live_test(failure_log: &mut Option<s
     fail_flag
 }
 
-/// Smoke test only - `ZTHabitat::listen` has no return value and mutates real vanilla's own small-object
+/// `ZTTANKEXHIBIT_DETOURS_ENABLED` - wiring check for `tank_exhibit::detours` (see
+/// [`run_zthabitatmgr_detours_enabled_test`]): `zthabitat::init()` installs the tank exhibit class's
+/// own detours alongside the manager/habitat ones, and this asserts they actually report enabled.
+pub(crate) fn run_tankexhibit_detours_enabled_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_DETOURS_ENABLED";
+    let disabled: Vec<&'static str> = detours::status().into_iter().filter(|(_, enabled)| !enabled).map(|(name, _)| name).collect();
+    if disabled.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        let msg = format!("detours not enabled: {disabled:?}");
+        error!("{}: {}", test_name, msg);
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, msg).as_bytes());
+        }
+        true
+    }
+}
+
+/// Compares `ZTTankExhibit::isRightSalinity`'s port against real vanilla over every (tank habitat,
+/// animal type present in the loaded save) pair - the same cross-product shape
+/// `run_habitat_add_baby_born_bonus_live_test` uses for its type enumeration, with the tank set
+/// replacing the habitat set. The "real" pole goes through the release-safe
+/// `tank_exhibit::detours::is_right_salinity_real` trampoline rather than `.original()` (the address is
+/// detoured, so a release `.original()` would re-enter the Rust detour and compare the port against
+/// itself); the reimplementation pole calls the ported method directly. Both sides are pure reads, so
+/// nothing needs restoring. Fails on an empty tank set or an empty animal-type set so the cross-product
+/// can never pass vacuously.
+pub(crate) fn run_tankexhibit_is_right_salinity_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_IS_RIGHT_SALINITY_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    let mut tank_ptrs: Vec<u32> = Vec::new();
+    // Union of the zoo's real `ZTAnimalType` pointers, in habitat order.
+    let mut type_ptrs: Vec<u32> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        if habitat.is_tank() {
+            tank_ptrs.push(ptr);
+        }
+        for animal_ptr in habitat.get_all_animals(false) {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            if animal_type_ptr != 0 && !type_ptrs.contains(&animal_type_ptr) {
+                type_ptrs.push(animal_type_ptr);
+            }
+        }
+    }
+    if tank_ptrs.is_empty() {
+        failures.push("no tank exhibits found in the loaded save".to_string());
+    }
+    if type_ptrs.is_empty() {
+        failures.push("no animal types found in the loaded save".to_string());
+    }
+
+    for &tank_ptr in &tank_ptrs {
+        for &type_ptr in &type_ptrs {
+            let real = detours::is_right_salinity_real(tank_ptr as *const u32, type_ptr as *const u32);
+            let reimpl = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) }.is_right_salinity(type_ptr);
+            if real != reimpl {
+                failures.push(format!("mismatch at tank {tank_ptr:#010x} x animal type {type_ptr:#010x}: real={real:?}, reimpl={reimpl:?}"));
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, test_name);
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
 /// freelist as a side effect (see `zthabitatmgr.rs`'s own `free_event_vector_buffer` doc comment), so
 /// there's no separate "real" pole to diff against without double-draining the same live event list
 /// (itself a hazard). Calls the reimplementation - which itself calls through to real vanilla
