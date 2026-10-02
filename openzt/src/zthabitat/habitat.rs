@@ -2,22 +2,30 @@ use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour::generated::{
         bfaimgr::CHECK_PATH as BFAIMGR_CHECK_PATH,
         bfcategory::GET_VALUE as BFCATEGORY_GET_VALUE,
-        bfentity::GET_TILE as BFENTITY_GET_TILE,bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION},
+        bfentity::{GET_GRID_POS as BFENTITY_GET_GRID_POS, GET_TILE as BFENTITY_GET_TILE},bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION},
         bftile::{
             IS_IN_ZOO as BFTILE_IS_IN_ZOO, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         },
         msvc_std_listuint::INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE,
+        msvc_std_tree36::{CLEAR as MSVC_TREE36_CLEAR, OPERATOR_INDEX as MSVC_TREE36_OPERATOR_INDEX},
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
-        ztanimal::{CAN_SERVICE, IS_HUNGRY_AND_FOODLESS, IS_SICKLY, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING},
+        ztanimal::{
+            CAN_SERVICE, IS_HUNGRY as ZTANIMAL_IS_HUNGRY, IS_HUNGRY_AND_FOODLESS, IS_SICKLY,
+            IS_UNHAPPY_FOR_REPRODUCTION as ZTANIMAL_IS_UNHAPPY_FOR_REPRODUCTION, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING,
+        },
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            CREATE_VIEWING_AREAS, GET_EVENTS, NEEDS_SERVICE,
-            RECALCULATE_CHARACTERISTICS,
+            ADD_FOUND_SPECIES, ADD_SHOW_UNIT, CREATE_VIEWING_AREAS, GET_CLOSE_OUTSIDE_TILE, GET_EVENTS, GET_SURROUNDING_ANIMALS,
+            NEEDS_SERVICE,
             REVISE_SPECIES_LIST, SEND_EVENT,
         },
         zthabitatmgr::REMOVE_HABITAT_0,
         ztkeeper::CLEANS_UP,
+        ztapp::GET_WORLD_MGR as ZTAPP_GET_WORLD_MGR,
+        ztspecies::IS_SPECIAL_DUMMY_SPECIES,
+        ztstaff::IS_HABITAT_ASSIGNED as ZTSTAFF_IS_HABITAT_ASSIGNED,
+        ztworldmgr::GET_STAFF_LIST as ZTWORLDMGR_GET_STAFF_LIST,
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
         ztui_showpanel::SET_EXHIBIT,
@@ -30,23 +38,24 @@ use openzt_detour::generated::{
         },
     };
 use getset::Getters;
-use std::{fmt, mem::offset_of};
+use std::{collections::HashMap, fmt, mem::offset_of};
 
 use crate::{
     ambients::Ambients,
     globals::{get_module_base, globals},
-    util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory, ZTBufferString, ZTString},
-    vanilla_vector::VanillaEventVector,
+    util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory, write_live_ptr, ZTBufferString, ZTString},
+    vanilla_vector::{VanillaEventVector, VanillaVector},
     write_live,
     zoostatus::ZooStatus,
     ztmapview::BFTile,
     ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG},
-    ztshow::{call_entity_vtable_noargs, call_entity_vtable_u32_noargs, RVA_ANIMAL_TYPE_CHECK},
+    ztshow::{call_entity_vtable_noargs, call_entity_vtable_u32_noargs, type_check, RVA_ANIMAL_TYPE_CHECK},
     ztshowinfo,
     ztworldmgr::Direction,
 };
 use super::mgr::zthabitatmgr::ZTHabitatMgr;
 use super::support::*;
+use super::tank_exhibit::ZTTankExhibit;
 
 #[derive(Debug, Getters)]
 #[repr(C)]
@@ -64,8 +73,9 @@ pub struct ZTHabitat {
     pub pad1a_b: [u8; 0x6],          // ----------------------- padding: 6 bytes
     pub unknown_flag_0x2c: u8,       // 0x02c // Gates ZTThought::ZTThought's acceptance of a passed-in habitat pointer (see ztthoughtmgr.rs); ZTHabitat::recalculateCharacteristics also early-returns when this is set. Meaning not otherwise confirmed.
     pub characteristics_dirty: u8,   // 0x02d // Gates the lazy `recalculateCharacteristics` call in getAttractiveness/hasKeeperAssigned (see ZTHabitat_getAttractiveness.c/ZTHabitat_hasKeeperAssigned.c) - distinct from unknown_flag_0x2c above.
-    pub pad1b_a: [u8; 0x2],          // ----------------------- padding: 2 bytes
-    pub unknown_flag_0x30: u8,       // 0x030 // Set to `1` by `ZTHabitatMgr::fenceRemoved` (`Self::fence_removed`) on either side of a removed fence whenever that side's own `unknown_flag_0x2c` is clear (i.e. it's a real, non-"world" habitat) - a third distinct flag alongside `unknown_flag_0x2c`/`characteristics_dirty`, never cleared or read anywhere in this pass's own scope, so its real meaning/consumer is unconfirmed.
+    pub reentrancy_guard: u8,        // 0x02e // ZTHabitat::recalculateCharacteristics's own reentrancy guard: set to 1 on entry, cleared to 0 on every exit path. See `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 5 note on why this matters - the ten per-factor suitability getters phase 4 calls through to each independently re-check `characteristics_dirty` and could otherwise recurse back into this function via another call path.
+    pub show_unit_scan_pending: u8,  // 0x02f // One-shot gate for recalculateCharacteristics's phase-2 per-tile `addShowUnit` scan - checked (and implicitly consumed) alongside a per-animal `initStatusVars` vtable check, cleared unconditionally at the end of the function.
+    pub unknown_flag_0x30: u8,       // 0x030 // Set to `1` by `ZTHabitatMgr::fenceRemoved` (`Self::fence_removed`) on either side of a removed fence whenever that side's own `unknown_flag_0x2c` is clear (i.e. it's a real, non-"world" habitat) - a third distinct flag alongside `unknown_flag_0x2c`/`characteristics_dirty`, never cleared or read anywhere in this pass's own scope, so its real meaning/consumer is unconfirmed. `ZTHabitat::recalculateCharacteristics` is a second, independent writer of this same field - its own "characteristics changed" output flag, set (in [`Self::recalc_phase_3`]) when `species_found_count` changes across the function's species-propagation phase, and separately when `num_animals` changes across phases 1-3 (which also, if the new `num_animals` is `0`, triggers `sendMaintWorkerCleanupEvents` unless a save is loading, and zeroes `unknown_nt_time`).
     pub species_list_dirty: u8,      // 0x031 // Gates the lazy `reviseSpeciesList` call in update() once species_list_timer crosses its threshold - same dirty-flag/timer shape as characteristics_dirty/characteristics_timer, cleared by real vanilla reviseSpeciesList's own (still un-ported) body as a side effect.
     pub pad1b_b: [u8; 0x2],          // ----------------------- padding: 2 bytes
     pub viewing_areas_begin: u32,    // 0x034 // Begin pointer of the real vanilla std::vector<ZTViewingArea*> update() walks to tick each entry's own ambient state.
@@ -94,9 +104,9 @@ pub struct ZTHabitat {
     pub entrance_rotation: u32,      // 0x090
     pub num_animals: i32,            // 0x094 // ZTHabitat::getNumAnimals's own cached direct-occupant count (`.asm`-confirmed `MOV EAX,[EDI+0x94]`) - zeroed and re-tallied by recalculateCharacteristics's own animal census (one increment per owned-tile occupant passing the ZTAnimal cast and getTile match, per ZTHabitat_recalculateCharacteristics.c), so a dirty-flags recalculate refreshes it along with the other cached tallies.
     pub num_angry_animals: i32,      // 0x098 // ZTHabitat::getNumAngryAnimals's cached angry-animal count (`.asm`-confirmed `MOV %EBX,[EDI+0x98]`) - zeroed and re-tallied by recalculateCharacteristics's own animal census (one increment per animal whose `+0x3aa` flag byte is set, per ZTHabitat_recalculateCharacteristics.c). See Self::get_num_angry_animals.
-    pub pad3a_a: [u8; 0x4],          // ----------------------- padding: 4 bytes (0x09c - recalculateCharacteristics's census increments it once per animal ZTAnimal::isUnhappyForReproduction reports true for, but no reader appears anywhere in the corpus yet)
+    pub unhappy_for_reproduction_count: i32, // 0x09c // recalculateCharacteristics's own owned-tile census tally: one increment per animal `ZTAnimal::isUnhappyForReproduction` reports true for. No reader found anywhere in the corpus yet.
     pub num_sick_animals: i32,       // 0x0a0 // ZTHabitat::getNumSickAnimals's cached sick-animal count - zeroed and re-tallied by the same recalculateCharacteristics census pass (one increment per animal whose `+0x3a7` flag byte is set). See Self::get_num_sick_animals.
-    pub pad3a_b: [u8; 0x4],          // ----------------------- padding: 4 bytes (0x0a4 - recalculateCharacteristics's census increments it once per animal ZTAnimal::isHungry reports true for, but no reader appears anywhere in the corpus yet)
+    pub hungry_count: i32,           // 0x0a4 // recalculateCharacteristics's own owned-tile census tally: one increment per animal `ZTAnimal::isHungry` reports true for. No reader found anywhere in the corpus yet.
     pub keeper_food_category_amounts: [i32; 16], // 0x0a8 // Per-category cached "amount of keeper food left out" tally (`ZTHabitat_getAmountKeeperFood.c`'s own `&this->field_0xa8 + category * 4`), recomputed by recalculateCharacteristics when characteristics_dirty is set - same `18-factor per-tile suitability` recalculation `zthabitatmgr-implementation-plan.md`'s step 6m documents as this function's own writer. See Self::get_amount_keeper_food.
     pub avg_animal_happiness: i32,   // 0x0e8 // ZTHabitat::getAvgAnimalHappiness's cached average animal happiness (`.asm`-confirmed `MOV %EAX,[ESI+0xe8]`) - zeroed (when num_animals is 0) or set to sum-of-happiness/num_animals by recalculateCharacteristics's own animal census (one `animal+0x2a8` happiness read per animal - `ZTHabitat_recalculateCharacteristics.asm`'s `MOV %EDX,[ECX+0x2a8]` - accumulated into per-species suitability records and totalled before the divide, per ZTHabitat_recalculateCharacteristics.c). See Self::get_avg_animal_happiness.
     pub time_last_serviced: u32,     // 0x0ec // ZTHabitat::setTimeLastServiced's own written field (`this->mbr_0xec`, `.asm`-confirmed) - a timestamp, presumably compared against ZTScenarioTimer to gate keeper-service scheduling, though no reader was found anywhere in this pass's own scope (see Self::set_time_last_serviced).
@@ -113,21 +123,21 @@ pub struct ZTHabitat {
     pub unknown_u32_3: u32,          // 0x118
     pub unknown_u32_4: u32,          // 0x11c
     pub created_timestamp: FileTime, // 0x120
-    pub unknown_nt_time: FileTime,   // 0x128
-    pub pad5a: [u8; 0x1],            // ----------------------- padding: 1 byte
+    pub unknown_nt_time: FileTime,   // 0x128 // Zeroed by `ZTHabitat::recalculateCharacteristics` ([`Self::recalc_phase_3`]) whenever `num_animals` changes to `0` across the census - real vanilla writes both raw dwords of this field directly (`this->mbr_0x128 = 0; this->mbr_0x12c = 0;`), not through any named setter. No reader found in this pass's own scope.
+    pub unknown_flag_0x130: u8,      // 0x130 // Zeroed unconditionally by recalculateCharacteristics's own reset block, right before `species_found_count`. No reader found anywhere in the corpus; real meaning unconfirmed.
     pub has_keeper_assigned_raw: u8, // 0x131 // ZTHabitat::hasKeeperAssigned's cached result, recomputed by recalculateCharacteristics when characteristics_dirty is set.
     pub is_being_serviced_raw: u8,   // 0x132 // ZTHabitat::isBeingServiced's cached result (`this->mbr_0x132`), recomputed by recalculateCharacteristics when characteristics_dirty is set - same shape as has_keeper_assigned_raw. See Self::is_being_serviced.
     pub pad5b1b: [u8; 0x1],          // ----------------------- padding: 1 byte (0x133)
     pub deterioration: u32,          // 0x134 // Fence-deterioration level (`0` none, `1` minor, `2` major) - `ZTHabitat::setDeterioration` writes it and never lowers a `2` to a `1` (`ZTHabitat_setDeterioration.c`).
-    pub pad5b1c: [u8; 0x4],          // ----------------------- padding: 4 bytes (0x138-0x13c, not yet reverse-engineered)
-    pub surrounding_species_begin: u32, // 0x13c // Begin pointer of the real vanilla std::vector<catalog-entry*> ZTHabitat::getSurroundingSpecies exposes (`&this->field_0x13c`, `.asm`-confirmed `LEA EAX,[ESI+0x13c]`), same characteristics_dirty-gated lazy-recalculate shape as species_list_begin/end. Populated by the still-un-ported ZTHabitat::constructSurroundingSpeciesList (unions this habitat's own amphibious/show neighbors' species lists - see zthabitatmgr-implementation-plan.md's step 6f notes), called internally by recalculateCharacteristics.
+    pub species_found_count: u32,    // 0x138 // ZTHabitat::recalculateCharacteristics's own species-found counter: snapshotted before/after its recursive `addFoundSpecies` propagation over the show/amphibious neighbor sets, the before/after delta sets `unknown_flag_0x30` ("characteristics changed").
+    pub surrounding_species_begin: u32, // 0x13c // Begin pointer of the real vanilla std::vector<catalog-entry*> ZTHabitat::getSurroundingSpecies exposes (`&this->field_0x13c`, `.asm`-confirmed `LEA EAX,[ESI+0x13c]`), same characteristics_dirty-gated lazy-recalculate shape as species_list_begin/end. Populated by ZTHabitat::constructSurroundingSpeciesList (Self::construct_surrounding_species_list): unions this habitat's own species_list with its amphibious neighbors' (gated on !is_tank() and each entry's own vtable+0xcc predicate) and show neighbors' (ungated) species lists, called internally by recalculateCharacteristics.
     pub surrounding_species_end: u32,   // 0x140
     pub pad5b2: [u8; 0x10],          // ----------------------- padding: 16 bytes (0x144-0x154: cap_end of the vector above at 0x144, then a msvc_std::map<int, ZTHabitatSuitabilityRecord> tree handle (node pointer + count) at 0x148/0x14c - ZTHabitat's own per-species suitability-scoring cache, keyed by ZTAnimalType::species and holding a 112-byte scoring record (elevation range, neighbor-habitat-tile count, per-scenery/building BFCategory scores, tank water-level min/max, ~15 sub-factors), whole-tree-replaced at the end of every recalculateCharacteristics pass (see ZTHabitat::speciesSuitabilityCache_alloc/_clear/_dtor and cls_0x40143b-disambiguation-handover.md). ZTHabitatSuitabilityRecord's own internal field layout is not yet reverse-engineered.)
     pub exhibit_name: ZTBufferString, // 0x154 // 3-pointer (start/end/buffer_end) buffer string - ZTHabitat::ZTHabitat zero-inits all of field_0x154/0x158/0x15c before allocating, and field_0x160 is a distinct, separately-referenced pointer (ZTHabitat::playShowStartSound etc.) right after it. Was previously mis-typed as the 2-pointer ZTBoundedString, which shifted every field below 4 bytes early.
     pub start_sound_ptr: u32,        // 0x160 // Real vanilla SNDSound* for the configured `[sounds] startSound`, built/acquired by set_is_show_exhibit and torn down by set_is_not_show_exhibit.
     pub end_sound_ptr: u32,          // 0x164 // Real vanilla SNDSound* for the configured `[sounds] endSound` - see start_sound_ptr.
     pub tank_walk_visited_marker: u8, // 0x168 // Scratch cycle-detection flag shared by `getOutermostTank`/`getNeedyNestedTank`'s own gate-chain/boundary-pair walks (`ZTHabitat_getOutermostTank.c`/`.asm`, `ZTHabitat_getNeedyNestedTank.c`/`.asm`): set to `1` on entry, checked before recursing into a candidate neighbour to stop a cycle. Real meaning outside these two calls unconfirmed; part of the ctor's own 0x168-0x178 zero-init range (see pad6's own note).
-    pub pad6: [u8; 0xf],             // ----------------------- padding: 15 bytes (0x169-0x178: the real head is a msvc_std::tree36 sentinel at +0x16c the ctor zero-inits and ~ZTHabitat tears down via tree36::clear/_Erase, not yet individually reverse-engineered)
+    pub pad6: [u8; 0xf],             // ----------------------- padding: 15 bytes (0x169-0x178: the real head is a msvc_std::tree36 sentinel at +0x16c the ctor zero-inits and ~ZTHabitat tears down via tree36::clear/_Erase - `ZTHabitat::checkEscapability`'s own per-species escapability cache, keyed by `entity_type_ptr` with a `{bool can_escape; ...; u32 close_outside_tile_ptr at +8}` value; [`Self::check_escapability`] addresses it directly (`self_addr + 0x16c`) via `MSVC_TREE36_CLEAR`/`MSVC_TREE36_OPERATOR_INDEX` rather than naming sub-fields here, since real vanilla's own tree functions own its internal layout)
     #[getset(skip)]
     pub _live: crate::util::LiveMemory,
 }
@@ -141,6 +151,313 @@ pub struct ZTHabitat {
 const _: () = assert!(std::mem::size_of::<ZTHabitat>() == 0x178);
 const _: () = assert!(std::mem::offset_of!(ZTHabitat, deterioration) == 0x134);
 const _: () = assert!(std::mem::offset_of!(ZTHabitat, show_portal_map_head) == 0x020);
+const _: () = assert!(std::mem::offset_of!(ZTHabitat, reentrancy_guard) == 0x02e);
+const _: () = assert!(std::mem::offset_of!(ZTHabitat, show_unit_scan_pending) == 0x02f);
+const _: () = assert!(std::mem::offset_of!(ZTHabitat, unhappy_for_reproduction_count) == 0x09c);
+const _: () = assert!(std::mem::offset_of!(ZTHabitat, hungry_count) == 0x0a4);
+const _: () = assert!(std::mem::offset_of!(ZTHabitat, unknown_flag_0x130) == 0x130);
+const _: () = assert!(std::mem::offset_of!(ZTHabitat, species_found_count) == 0x138);
+
+/// One entry of `ZTHabitat::speciesSuitabilityCache` (`field_0x148`/`_0x14c`) - a per-species
+/// suitability-scoring record `ZTHabitat::recalculateCharacteristics` builds in a function-local scratch
+/// tree (phase 4) and whole-tree-replaces into the persistent, vanilla-layout cache (phase 6). Layout
+/// confirmed field-by-field against the live Ghidra project - see
+/// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s "`ZTHabitatSuitabilityRecord`'s
+/// 112-byte layout" table for the full evidence per field. Must stay vanilla-layout-compatible: the ten
+/// per-factor suitability getters (`getTerrainSuitability`, `getTankDepthSuitability`, etc.) are
+/// themselves still un-ported, real-vanilla call-throughs that dereference the persistent cache's own
+/// tree nodes directly, so a Rust-only cache would silently break every one of them the moment
+/// `recalculateCharacteristics` is detoured.
+///
+/// Field types/names/offsets confirmed directly against the live Ghidra project's own
+/// `/auto_structs/ZTHabitatSuitabilityRecord` definition (`mcp__ghidra__types` `get`), not inferred from
+/// the `.c` decompile's own rendering - several fields the decompile's arithmetic made look
+/// float-shaped (`raw_percent_a`, `raw_building_count`) are real `int`s per Ghidra's own struct, fed by
+/// `BFCategory::getValue`'s `i32` return. The record's own default constructor
+/// (`ZTHabitatSuitabilityRecord::ZTHabitatSuitabilityRecord`, decompiled live) zero-inits every field
+/// unconditionally, including `tank_depth_score`/`tank_or_visibility_score`/`tank_score_baseline` - the
+/// per-species `100.0` resets of those fields are separate, later writes in phase 6, not part of
+/// construction.
+///
+/// `unk_0x28`/`unk_0x2c`/`unk_0x40`/`unk_0x44` are Ghidra's own `undefined4` (raw, unresolved
+/// dwords) - ported as `u32` per this codebase's established "unresolved field" convention rather than
+/// guessing a real type.
+///
+/// **Stage 5 correction** (`setAnimalConditions`, `0x00447164`): this same struct is also OOAnalyzer's
+/// own `ZTSpeciesAttribs` (identical `0x70`-byte size, identical field types/offsets everywhere checked,
+/// just a second, independently-run identification pass over the same real vanilla type), confirmed live
+/// via `mcp__ghidra__types get "ZTSpeciesAttribs"`. That pass recovered REAL field names for two spans
+/// this pass had only guessed at:
+/// - `0x48`/`0x4c` are not terrain-category overrides - they're `saltWaterTileAdjustment`/
+///   `freshWaterTileAdjustment` (confirmed by `setAnimalConditions`'s own disassembly: category indices
+///   9/10 of its per-category loop substitute these two fields in place of the normal tile-count array,
+///   and the loop's percentage denominator is `occurrence_count + freshWaterTileAdjustment +
+///   saltWaterTileAdjustment` - a population count, not a category-override sum).
+/// - `flag_pack`'s 22 bytes are 22 individually-named `bool`s, not an opaque array - real field order
+///   below (this pass's own guessed order, restated in the Stage 5 plan text, was wrong).
+#[derive(Debug, Getters)]
+#[repr(C)]
+#[get = "pub"]
+pub struct ZTHabitatSuitabilityRecord {
+    pub occurrence_count: i32,          // 0x00 // Matching-species population count across owned tiles + neighbors.
+    pub sum_unk_2a8: i32,               // 0x04 // Accumulated `animal+0x2a8`-sourced sum; real meaning gated on identifying `cls_0x62fa44` (unrelated, separate task).
+    pub sum_unk_2b8: i32,               // 0x08 // Same shape as sum_unk_2a8, `animal+0x2b8`.
+    pub terrain_type_score: f32,        // 0x0c // 18-category tile-tally score, `[0,100]` clamped.
+    pub scenery_category_score: f32,    // 0x10 // Per-neighbor-entity accumulated, population-normalized, clamped.
+    pub raw_percent_a: i32,             // 0x14
+    pub score_percent_a: f32,           // 0x18 // vs. species-config threshold at `+0x34c`.
+    pub raw_building_count: i32,        // 0x1c
+    pub score_building_count: f32,      // 0x20 // vs. config `+0x350`.
+    pub score_percent_c: f32,           // 0x24 // vs. config `+0x358`; raw numerator is scratch-only, not persisted.
+    pub unk_0x28: u32,                  // 0x28 // Zero-init only - see struct doc comment.
+    pub unk_0x2c: u32,                  // 0x2c // Zero-init only - see struct doc comment.
+    pub score_d: f32,                   // 0x30 // Gated by its own "count >= 3" flag pair.
+    pub score_e: f32,                   // 0x34 // Gated by its own "count >= 3" flag pair.
+    pub sum_category_tally: f32,        // 0x38 // Summed `BFCategory::getValue` over a per-species state list.
+    pub tank_depth_score: f32,          // 0x3c // Reset to 100.0 per species, then overwritten with the tank depth-fit score (`100.0 - min(30, deviation) * 20`) when the habitat is a tank whose species has a min != max water depth. Real vanilla's `FSTP [ESI]` through a `[ESP+0x34] = record+0x3c` pointer local; no reader identified.
+    pub unk_0x40: u32,                  // 0x40 // Zero references anywhere in this function.
+    pub unk_0x44: u32,                  // 0x44 // Zero references anywhere in this function.
+    pub salt_water_tile_adjustment: i32,  // 0x48 // `setAnimalConditions`'s own category-9/10 substitute count and denominator term - real Ghidra name `saltWaterTileAdjustment` (`ZTSpeciesAttribs`).
+    pub fresh_water_tile_adjustment: i32, // 0x4c // Same shape as `salt_water_tile_adjustment` - real Ghidra name `freshWaterTileAdjustment`.
+    pub tank_or_visibility_score: f32,  // 0x50 // Tank: the tank's raw water purity (`+0x1a8`) as a float. Non-tank: `100.0 - purity_debt/tank_neighbor_size * 100.0` (guest-visibility percentage), else the `100.0` default. Also `setAnimalConditions`'s own "guest visibility" threshold (`< 50.0`/`< 25.0`) for its two tail condition bits.
+    pub tank_score_baseline: f32,       // 0x54 // `100.0` if the habitat's vtable `+0x28` predicate (taking the species type) is true, else `-100.0`.
+    // 0x58-0x6d: 22 individually-named `bool`s (real Ghidra field order/names, `ZTSpeciesAttribs`) -
+    // `setAnimalConditions`'s own direct inputs, translated 1:1 into the animal's low/critical condition
+    // flag word (`animal+0x260+0x38/0x3c` low, `+0x40/0x44` critical).
+    pub need_rocks: bool,               // 0x58
+    pub too_many_rocks: bool,           // 0x59
+    pub need_foliage: bool,             // 0x5a
+    pub too_much_foliage: bool,         // 0x5b
+    pub need_elevation: bool,           // 0x5c
+    pub too_much_elevation: bool,       // 0x5d
+    pub need_space: bool,               // 0x5e
+    pub need_more_shelter: bool,        // 0x5f
+    pub too_crowded: bool,              // 0x60
+    pub need_toys: bool,                // 0x61
+    pub tank_too_shallow: bool,         // 0x62
+    pub tank_too_deep: bool,            // 0x63
+    pub bad_tank_salinity: bool,        // 0x64 // Not read by `setAnimalConditions` - no consumer identified in this pass's own scope.
+    pub need_more_toys: bool,           // 0x65 // Not read by `setAnimalConditions` - no consumer identified in this pass's own scope.
+    pub bad_toy_suitability: bool,      // 0x66 // Not read by `setAnimalConditions` - no consumer identified in this pass's own scope.
+    pub critical_rocks: bool,           // 0x67
+    pub critical_foliage: bool,         // 0x68
+    pub critical_elevation: bool,       // 0x69
+    pub critical_shelter: bool,         // 0x6a
+    pub critical_toys: bool,            // 0x6b
+    pub critical_tank_depth: bool,      // 0x6c
+    pub critical_water: bool,           // 0x6d
+    pub pad_0x6e: [u8; 0x2],            // 0x6e-0x6f // Trailing alignment padding to the record's real 0x70-byte size (Ghidra's own `pad_0x6e`).
+    #[getset(skip)]
+    pub _live: crate::util::LiveMemory,
+}
+
+const _: () = assert!(std::mem::size_of::<ZTHabitatSuitabilityRecord>() == 0x70);
+const _: () = assert!(std::mem::offset_of!(ZTHabitatSuitabilityRecord, tank_depth_score) == 0x3c);
+const _: () = assert!(std::mem::offset_of!(ZTHabitatSuitabilityRecord, tank_score_baseline) == 0x54);
+const _: () = assert!(std::mem::offset_of!(ZTHabitatSuitabilityRecord, need_rocks) == 0x58);
+const _: () = assert!(std::mem::offset_of!(ZTHabitatSuitabilityRecord, critical_water) == 0x6d);
+const _: () = assert!(std::mem::offset_of!(ZTHabitatSuitabilityRecord, pad_0x6e) == 0x6e);
+
+/// Matches `ZTHabitatSuitabilityRecord::ZTHabitatSuitabilityRecord`'s real body (confirmed live via
+/// Ghidra decompile): every field zero-inited unconditionally, the 22 flag `bool`s and `pad_0x6e`
+/// included.
+impl Default for ZTHabitatSuitabilityRecord {
+    fn default() -> Self {
+        // SAFETY: every field is a plain integer/float/bool/byte-array type - all-zero bytes is a valid
+        // value for each (a zeroed `bool` is `false`).
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+/// [`ZTHabitat::recalc_phase_5`]'s output - the four locals real vanilla's own tank/water-level pass
+/// survives past this phase (confirmed via the `FUN_004469ba` tail-call continuation - see that
+/// method's own doc comment). A later stage porting phases 4/6 threads these straight through to that
+/// continuation unchanged.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct RecalcPhase5Summary {
+    pub tank_neighbor_total_size: i32,
+    pub freshwater_filled_size: i32,
+    pub saltwater_filled_size: i32,
+    pub weighted_purity_debt: f32,
+}
+
+/// `ZTAnimal::getHomeHabitat` (`0x004161da`), returning the habitat in `EAX`. `generated.rs`'s
+/// `ztanimal::GET_HOME_HABITAT` entry declares no return value; this calls the same address with the
+/// real `-> u32` shape.
+unsafe fn animal_home_habitat(animal_ptr: u32) -> u32 {
+    let home_habitat: extern "thiscall" fn(u32) -> u32 = unsafe { std::mem::transmute(0x004161da_u32) };
+    home_habitat(animal_ptr)
+}
+
+/// The two `ph_AdditionalConditionValues` bytes `setAnimalConditions` reads
+/// (`0x004451a6`-`0x004451f4`): `overlap_tally / owned_tile_total` compared against `0.05` and `0.1`
+/// (the `f32` constants at `0x00635540`/`0x0063553c`), in x87 double precision.
+fn overlap_condition_bits(overlap_tally: i32, owned_tile_total: i32) -> (bool, bool) {
+    let ratio = overlap_tally as f64 / owned_tile_total as f64;
+    (ratio > 0.05_f32 as f64, ratio > 0.1_f32 as f64)
+}
+
+/// Everything [`ZTHabitat::recalc_phase_6_species`] needs besides the record and species: the shared,
+/// per-call inputs of `recalculateCharacteristics`'s phase-6 loop.
+pub(crate) struct RecalcPhase6Inputs<'a> {
+    pub owned_tile_total: i32,
+    pub elevation_tally: i32,
+    pub histogram: &'a [i32; 18],
+    pub phase5: &'a RecalcPhase5Summary,
+    pub float_cache_a: u32,
+    pub float_cache_b: u32,
+    pub field_0x16c_values: &'a [i32],
+    pub field_0x170_clamped: &'a [i32],
+    /// The found-species list as it stood after the animal census, before phase 3's neighbor
+    /// propagation extended it (vanilla's `local_b6c` snapshot).
+    pub companion_species: &'a [u32],
+}
+
+/// Vanilla's `FUN_0044699a` (`0x0044699a`/`0x0044837b`): the water tile adjustment for one water category.
+/// `0` unless the species predicate holds and `category_value` is in `(0, 100)`; otherwise
+/// `clamp((owned - tiles) * category_value / (100 - category_value) - tiles, 0, cap)` (32-bit `IMUL`/`IDIV`).
+fn tile_count_adjustment(species_pred: bool, category_value: i32, tiles: i32, owned_tile_total: i32, cap: i32) -> i32 {
+    if !species_pred || category_value <= 0 || category_value == 100 {
+        return 0;
+    }
+    let scaled = owned_tile_total.wrapping_sub(tiles).wrapping_mul(category_value).wrapping_div(100 - category_value);
+    scaled.wrapping_sub(tiles).min(cap).max(0)
+}
+
+/// One iteration of the 18-category loop in [`ZTHabitat::recalc_phase_6_terrain_scores`]: the new running
+/// `terrain_type_score`. `tiles` is the raw histogram entry, `count` the same entry after the water
+/// adjustment, `weight` the species' category value.
+fn terrain_category_step(terrain: f32, weight: i32, tiles: i32, count: i32, denom: i32) -> f32 {
+    let weight32 = weight as f32;
+    if weight32 < 0.0 {
+        return if tiles > 0 { (weight32 as f64 + terrain as f64) as f32 } else { terrain };
+    }
+    let pct = (count as f64 * 100.0 / denom as f64) as f32;
+    let contribution = if weight32 < pct { weight32 } else { pct };
+    (contribution as f64 + terrain as f64) as f32
+}
+
+/// The `scenery_category_score` normalisation: divide by `max(1.0, owned * 0.025) * 100.0`, cap at
+/// `100.0`, multiply by `50.0` if still negative (`0x00445972`-`0x004459a5`: `1.0` is selected when the
+/// product compares below it). Every step is `f32`: the game runs the x87 at 24-bit precision, so the
+/// product, `factor * 100.0` and the quotient each round to single precision.
+fn normalise_scenery_score(scenery: f32, owned_tile_total: i32) -> f32 {
+    let product = owned_tile_total as f32 * 0.025_f32;
+    let factor = if product < 1.0 { 1.0 } else { product };
+    let normalised = scenery / (factor * 100.0_f32);
+    let capped = if normalised < 100.0 { normalised } else { 100.0 };
+    if capped < 0.0 { capped * 50.0 } else { capped }
+}
+
+/// One `raw * 100 / denom` metric of `recalculateCharacteristics`'s phase 6, scored against a species
+/// threshold: see [`percent_band`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PercentBand {
+    too_low: bool,
+    too_high: bool,
+    critical: bool,
+    score: f32,
+}
+
+/// Vanilla's x87 threshold-band scoring for `score_percent_a`/`score_building_count`. Intermediates are
+/// `f64` (MSVC's default 53-bit x87 precision) and rounded to `f32` only where vanilla stores to memory
+/// (`pct`, the clamped deviation product, the final score).
+///
+/// `pct = raw * 100 / denom`; `too_low` when `pct < threshold - 4` or `pct == 0 && threshold > 0` (the
+/// `0x0044703c`/`0x00447033` stubs), otherwise `too_high` when `threshold + 4 < pct`. `critical` when
+/// `|pct - threshold| > 8`. `score = min(100, 100 - 2 * (clamp(|pct - threshold|, 0, 50) * factor))`.
+/// A zero `denom` yields `inf`/`NaN` like vanilla's masked x87 division, but NaN's x87 compare flags are
+/// not modelled; `owned_tile_total >= 1` for any habitat with tiles.
+fn percent_band(raw: i32, denom: f64, threshold: i32, factor: f64) -> PercentBand {
+    let pct = (raw as f64 * 100.0 / denom) as f32;
+    let threshold = threshold as f64;
+    let pct64 = pct as f64;
+
+    let too_low = pct64 < threshold - 4.0 || (pct64 == 0.0 && threshold > 0.0);
+    let too_high = !too_low && threshold + 4.0 < pct64;
+
+    let deviation = (pct64 - threshold).abs();
+    let critical = deviation > 8.0;
+
+    let deviation32 = deviation as f32;
+    let clamped = if deviation >= 50.0 { 50.0 } else { deviation32 };
+    let clamped = if 0.0 < clamped { clamped } else { 0.0 };
+    let scaled = (clamped as f64 * factor) as f32;
+    let score = (100.0 - (scaled + scaled) as f64) as f32;
+    let score = if score < 100.0 { score } else { 100.0 };
+
+    PercentBand { too_low, too_high, critical, score }
+}
+
+/// `[ESP+0x68]` as `recalculateCharacteristics`'s phase-6 scoring loop reads it in the `score_d` `v > 6`
+/// term: the loop never writes it, and its last write before the loop is `0` (`0x004455ce`).
+const STALE_ESP_0X68: i32 = 0;
+
+/// The count-based penalty shared by `score_d` (shelter, `critical_offset = 3`) and `score_e` (toys,
+/// `critical_offset = 2`): `50 * count + 100` once `count > 2`, times `count - critical_offset` when the
+/// species' critical flag is set. Rounded to `f32` at vanilla's two `FSTP`s.
+fn count_penalty(count: i32, critical: bool, critical_offset: i32) -> f32 {
+    let base = if count > 2 { (count.wrapping_mul(50) as f64 + 100.0) as f32 } else { 0.0 };
+    if critical {
+        (count.wrapping_sub(critical_offset) as f64 * base as f64) as f32
+    } else {
+        base
+    }
+}
+
+/// `BFTile::getCornerHeight` (`0x0040f4f9`) for the four corners the elevation census samples: the
+/// tile's base elevation (`tile+0x3c`) adjusted by the two-bit corner fields packed in `tile+0x81`.
+fn tile_corner_height(tile_ptr: u32, corner: u32) -> i32 {
+    corner_height(get_from_memory(tile_ptr + 0x3c), get_from_memory(tile_ptr + 0x81), corner)
+}
+
+/// The pure part of [`tile_corner_height`]. Corner `1` uses bits 6-7, `3` bits 4-5, `5` bits 2-3, each minus
+/// the low two bits; any other corner (the census uses `7`) is the base elevation unchanged.
+fn corner_height(base: i32, packed: u8, corner: u32) -> i32 {
+    let low = (packed & 3) as i32;
+    match corner {
+        1 => base + (packed >> 6) as i32 - low,
+        3 => base + ((packed >> 4) & 3) as i32 - low,
+        5 => base + ((packed >> 2) & 3) as i32 - low,
+        _ => base,
+    }
+}
+
+/// `score_percent_c`'s band scoring, [`PercentBand`]-shaped: `pct = tally * 50 / (float)owned`, tolerance
+/// `10` around the threshold, critical beyond `20`, score `min(100, 100 - clamp(|pct - threshold|, 0, 50))`.
+fn elevation_band(elevation_tally: i32, owned_tile_total: i32, threshold: i32) -> PercentBand {
+    let pct = (elevation_tally as f64 * 50.0 / owned_tile_total as f32 as f64) as f32;
+    let pct64 = pct as f64;
+    let threshold = threshold as f64;
+
+    let too_low = threshold - 10.0 > pct64;
+    let too_high = !too_low && threshold + 10.0 < pct64;
+
+    let deviation = (pct64 - threshold).abs();
+    let critical = deviation > 20.0;
+
+    let deviation32 = deviation as f32;
+    let clamped = if deviation >= 50.0 { 50.0 } else { deviation32 };
+    let clamped = if 0.0 < clamped { clamped } else { 0.0 };
+    let score = (100.0 - clamped as f64) as f32;
+    let score = if score < 100.0 { score } else { 100.0 };
+
+    PercentBand { too_low, too_high, critical, score }
+}
+
+/// `min(100.0, 100.0 - penalty)`, the tail of `score_d`/`score_e`.
+fn clamped_score(penalty: f32) -> f32 {
+    let score = (100.0 - penalty as f64) as f32;
+    if score < 100.0 { score } else { 100.0 }
+}
+
+/// Sets a record flag byte to `1` when `condition` holds; vanilla's phase 6 only ever writes `1`, never
+/// `0`, to these bytes (the reset-to-clean block is the sole clearer).
+fn set_flag_if(addr: u32, condition: bool) {
+    if condition {
+        save_to_memory::<u8>(addr, 1);
+    }
+}
 
 /// The shared per-tile gate every keeper-food walker applies ([`Self::get_num_keeper_food_tiles`],
 /// [`Self::get_smallest_keeper_food`], [`Self::get_nearest_keeper_food`], [`Self::get_random_keeper_food`]):
@@ -601,8 +918,8 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::getAttractiveness` (`ZTHabitat_getAttractiveness.c`/macOS
-    /// `ZTHabitat_getAttractiveness.c`, same shape on both platforms): lazily recomputes via the real,
-    /// still-un-ported `recalculateCharacteristics` when `characteristics_dirty` is set, then returns the
+    /// `ZTHabitat_getAttractiveness.c`, same shape on both platforms): lazily recomputes via
+    /// [`Self::recalculate_characteristics`] when `characteristics_dirty` is set, then returns the
     /// cached field.
     ///
     /// **Must only be called on a live `ZTHabitat` reference** (one obtained via `ref_from_memory`/a real
@@ -613,7 +930,7 @@ impl ZTHabitat {
     /// documents for its `F_CREATE_GUEST` call-through.
     pub fn get_attractiveness(&self) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         self.attractiveness
     }
@@ -623,7 +940,7 @@ impl ZTHabitat {
     /// method's doc comment for the live-reference precondition this one shares.
     pub fn has_keeper_assigned(&self) -> bool {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         self.has_keeper_assigned_raw != 0
     }
@@ -640,7 +957,7 @@ impl ZTHabitat {
     /// vanilla, and the vector fields are re-read from live memory after it runs.
     pub fn species_list(&self) -> impl Iterator<Item = u32> {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let begin = self.species_list_begin;
         let end = self.species_list_end;
@@ -650,18 +967,18 @@ impl ZTHabitat {
     /// Ports `ZTHabitat::getSurroundingSpecies` (`ZTHabitat_getSurroundingSpecies.c`/`.asm`): same
     /// `characteristics_dirty`-gated lazy-recalculate shape as [`Self::species_list`], yielding raw
     /// catalog-entry pointers from `surrounding_species_begin`/`_end` (`&this->field_0x13c`,
-    /// `.asm`-confirmed `LEA EAX,[ESI+0x13c]`) instead. Populated by the still-un-ported
-    /// `ZTHabitat::constructSurroundingSpeciesList` (unions this habitat's own amphibious- and
-    /// show-neighbor sets' [`Self::species_list`]s - see `zthabitatmgr-implementation-plan.md`'s step 6f
-    /// notes for why that union-builder itself is left un-ported this pass), reached transitively through
-    /// the same `.original()` `recalculateCharacteristics` call-through below - no separate call-through
-    /// is needed here for that reason.
+    /// `.asm`-confirmed `LEA EAX,[ESI+0x13c]`) instead. Populated by
+    /// [`Self::construct_surrounding_species_list`] (`ZTHabitat::constructSurroundingSpeciesList` - unions
+    /// this habitat's own [`Self::species_list`] with its amphibious- and show-neighbor sets' own species
+    /// lists, see that method's own doc comment), reached transitively through the same `.original()`
+    /// `recalculateCharacteristics` call-through below - no separate call-through is needed here for that
+    /// reason.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as
     /// [`Self::species_list`].
     pub fn surrounding_species(&self) -> impl Iterator<Item = u32> {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let begin = self.surrounding_species_begin;
         let end = self.surrounding_species_end;
@@ -683,7 +1000,7 @@ impl ZTHabitat {
     /// real `ZTHabitat*` pointers directly out of the tree).
     pub fn get_num_animals(&self, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let mut total = self.num_animals;
         if include_neighbors {
@@ -785,7 +1102,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_species_animals(&self, species_id: i32, out_vector_ptr: u32) {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
@@ -821,7 +1138,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_adult_gender_species_animals(&self, gender_str_ptr: u32, species_id: i32, out_vector_ptr: u32) {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let gender_start: u32 = get_from_memory(gender_str_ptr);
         let gender_end: u32 = get_from_memory(gender_str_ptr + 4);
@@ -868,7 +1185,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_random_animal(&self) -> u32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let begin = self.all_animals_begin;
         let count = (self.all_animals_end - begin) >> 2;
@@ -1876,7 +2193,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::species_list`].
     pub fn get_all_animals(&self, sort: bool) -> impl Iterator<Item = u32> {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let begin = self.all_animals_begin;
         let end = self.all_animals_end;
@@ -1902,7 +2219,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_animals(&self) -> u32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         self as *const Self as u32 + 0x6c
     }
@@ -1923,7 +2240,7 @@ impl ZTHabitat {
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
     pub fn get_amount_keeper_food(&self, category: u32, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let entry_addr = (self as *const Self as u32)
             .wrapping_add(offset_of!(Self, keeper_food_category_amounts) as u32)
@@ -1954,7 +2271,7 @@ impl ZTHabitat {
     /// each neighbor visited must also be live.
     pub fn get_food_to_leave(&self, category: i32, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let mut total = 0i32;
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
@@ -2288,7 +2605,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_num_keepers(&self) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         self.num_keepers
     }
@@ -2300,7 +2617,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn is_being_serviced(&self) -> bool {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         self.is_being_serviced_raw != 0
     }
@@ -2331,23 +2648,30 @@ impl ZTHabitat {
     /// on exit once a loaded save's habitats reached this cleanup path, not just the stripped
     /// reimplementation-tests harness this was previously suspected to be confined to.
     pub fn send_maint_worker_cleanup_events(&self) {
-        if self.is_tank() {
-            return;
-        }
         let self_addr = self as *const Self as u32;
-        for node in walk_tile_list(self.owned_tiles_ptr) {
+        for tile_ptr in self.maint_worker_cleanup_tiles() {
+            unsafe { SEND_EVENT.original()(self_addr as *const u32, 0x2730, 0, 0x4d, tile_ptr, 0, 1) };
+        }
+    }
+
+    /// The tiles [`Self::send_maint_worker_cleanup_events`] sends one event for, in walk order: empty on a
+    /// tank habitat, otherwise every owned tile whose occupant is scenery with either type flag set. Lazy
+    /// so each send still happens between tile reads, as in real vanilla. Exposed so the live comparison
+    /// test can diff the plan against the sends it records from real vanilla.
+    pub fn maint_worker_cleanup_tiles(&self) -> impl Iterator<Item = u32> {
+        let tiles = if self.is_tank() { 0 } else { self.owned_tiles_ptr };
+        let walk: Box<dyn Iterator<Item = u32>> = if tiles == 0 { Box::new(std::iter::empty()) } else { Box::new(walk_tile_list(tiles)) };
+        walk.filter_map(|node| {
             let tile_ptr = get_from_memory::<TileListNode>(node).payload;
             let entity_ptr: u32 = get_from_memory(tile_ptr + 0x10);
             if entity_ptr == 0 || !unsafe { entity_type_matches(entity_ptr, RVA_SCENERY_TYPE_CHECK_ARG) } {
-                continue;
+                return None;
             }
             let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
             let flag_a: u32 = get_from_memory(entity_type_ptr + 0x11c);
             let flag_b: u8 = get_from_memory(entity_type_ptr + 0x12c);
-            if flag_a != 0 || flag_b != 0 {
-                unsafe { SEND_EVENT.original()(self_addr as *const u32, 0x2730, 0, 0x4d, tile_ptr, 0, 1) };
-            }
-        }
+            (flag_a != 0 || flag_b != 0).then_some(tile_ptr)
+        })
     }
 
     /// Ports `ZTHabitat::getNumHungryFoodlessAnimals` (`ZTHabitat_getNumHungryFoodlessAnimals.c`,
@@ -2362,7 +2686,7 @@ impl ZTHabitat {
     /// each neighbor visited must also be live.
     pub fn get_num_hungry_foodless_animals(&self, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let mut total = 0i32;
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
@@ -2397,7 +2721,7 @@ impl ZTHabitat {
     /// each neighbor visited must also be live.
     pub fn get_num_sickly_animals(&self, keeper_ptr: u32, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let mut total = 0i32;
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
@@ -2449,7 +2773,7 @@ impl ZTHabitat {
     /// `walk_neighbor_tree` entry).
     pub fn get_num_angry_animals(&self, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let mut total = self.num_angry_animals;
         if include_neighbors {
@@ -2468,7 +2792,7 @@ impl ZTHabitat {
     /// `include_neighbors` single-level-only recursion, and the live-reference precondition.
     pub fn get_num_sick_animals(&self, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         let mut total = self.num_sick_animals;
         if include_neighbors {
@@ -2490,7 +2814,7 @@ impl ZTHabitat {
     /// on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_avg_animal_happiness(&self) -> i32 {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         self.avg_animal_happiness
     }
@@ -2507,7 +2831,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_sickly_animals(&self, out_vector_ptr: u32) {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
@@ -2745,7 +3069,7 @@ impl ZTHabitat {
     /// `+0x170` dword positive, appends it onto `other_ptr`'s own building list (`other_ptr+0x78`/`+0x7c`,
     /// the same [`Self::has_bldg`]-style dedup scan, just parameterized over `other_ptr` instead of
     /// `self`; [`vector_push_pool_alloc4`] push onto `out_vector_ptr`) unless already present. Called once
-    /// per amphibious neighbor from the still-unported `ZTHabitat::recalculateCharacteristics`
+    /// per amphibious neighbor from [`Self::recalculate_characteristics`]
     /// (`neighbor.addToBuildingList(&target.building_list_begin, target)` - `self` here is the *neighbor*
     /// being merged from, not the merge target `other_ptr`).
     pub fn add_to_building_list(&self, out_vector_ptr: u32, other_ptr: u32) {
@@ -2838,6 +3162,1767 @@ impl ZTHabitat {
             }
             let current_score: f32 = get_from_memory(record_ptr + 0x10);
             save_to_memory::<f32>(record_ptr + 0x10, running_score as f32 + current_score);
+        }
+    }
+
+    /// Ports the setup + owned-tile animal/keeper census portion (phases 1-2) of
+    /// `ZTHabitat::recalculateCharacteristics` (`RECALCULATE_CHARACTERISTICS`, `0x00444827`) - see
+    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 2. Not yet called by
+    /// anything: real vanilla's own reentrancy guard ([`Self::reentrancy_guard`]) gates the *entire*
+    /// function body as one continuous block, not per-phase, so this method's caller (assembled in a
+    /// later stage once every phase is ported) owns setting/clearing that guard and constructing
+    /// `map_ptr` ([`init_suitability_scratch_tree`]) before calling this.
+    ///
+    /// `map_ptr` is the real vanilla-layout scratch `msvc_std::map<int, ZTHabitatSuitabilityRecord>`
+    /// this phase's own animal census both reads and extends (find-or-insert via
+    /// [`map_int_habitatsuitability_find_or_insert`], **not** a Rust-only structure - later phases keep
+    /// extending the same tree, and real vanilla's own per-factor suitability getters this function
+    /// eventually feeds are still un-ported, real-vanilla call-throughs that would silently break against
+    /// a Rust-only cache).
+    ///
+    /// `found_species_vec` is the real vanilla-layout `msvc_std::vector_pod<BFEntityType*>` scratch list
+    /// (real vanilla's own `in_stack_fffff3b8`/`_bc`/`_c0` stack local, `msvc_std::vector_pod<>::init`'d by
+    /// the caller before this call - a plain `VanillaVector::<u32>::rvo_target()` reproduces that
+    /// zero-init identically) of distinct `BFEntityType*` species-type pointers found so far. **Must stay
+    /// real vanilla-layout, not a Rust-owned `Vec`** - phase 3's own `addFoundSpecies` calls (still
+    /// un-ported, real vanilla) grow/read this exact vector through real vanilla's own `PoolAlloc`-backed
+    /// allocator (the same growth path [`vector_push_pool_alloc4`] already reimplements for this struct's
+    /// `all_animals` field); handing vanilla a `Box`/`Vec`-owned buffer it might then free through its own
+    /// allocator - or vice versa - is the cross-allocator hazard `AGENTS.md`'s Reimplementation Pattern
+    /// section warns about. New entries are appended via [`vector_push_pool_alloc4`], never
+    /// `Vec::push`. Phase 4 later consumes the fully-extended vector (after phase 3's neighbor-set
+    /// propagation) as its own outer loop.
+    ///
+    /// Returns `false` on real vanilla's own early-return path (`unknown_flag_0x2c` set - matching real
+    /// vanilla clearing the reentrancy guard and returning immediately without touching anything below
+    /// that check, including never constructing `found_species_vec` at all - real vanilla's own
+    /// `vector_pod<>::init` call sits after this check). Returns `true` otherwise, with
+    /// `found_species_vec` populated from this census's own owned-tile animals.
+    ///
+    /// Real body, per `ZTHabitat_recalculateCharacteristics.c`/`.asm` (verified directly against the live
+    /// Ghidra project - several statements in the `.c`'s own rendering turned out to be decompiler
+    /// artifacts, not real operations, noted below):
+    /// - Optional `reviseSpeciesList` call-through if `species_list_dirty` is set (real vanilla still
+    ///   un-ported).
+    /// - Clears `characteristics_dirty`; zeroes `num_animals`/`num_angry_animals`/
+    ///   `unhappy_for_reproduction_count`/`num_sick_animals`/`hungry_count`/`species_found_count`/
+    ///   `unknown_flag_0x130`; resets the `all_animals` vector to empty (`_end = _begin`, keeping its
+    ///   buffer); zeroes all 16 `keeper_food_category_amounts` slots; zeroes `is_being_serviced_raw`/
+    ///   `num_keepers`/`has_keeper_assigned_raw`/`attractiveness`.
+    /// - Each census animal adds its entity type's `+0x3b8` into `attractiveness` (`0x00446e13`-`0x00446e1b`).
+    /// - Early return if `unknown_flag_0x2c` is set: caller must clear [`Self::reentrancy_guard`] and stop
+    ///   (this method just returns `None`).
+    /// - Otherwise walks [`Self::owned_tiles_ptr`] ([`walk_tile_list`]); per owned tile, walks *that
+    ///   tile's own* occupant list (`BFTile::unit_list_ptr`, `get_from_memory::<u32>(tile_ptr)` as the
+    ///   sentinel - same [`walk_tile_list`]/[`TileListNode`] shape one level more nested, exactly
+    ///   [`reset_unit_ai_for_tile_occupants`]'s own pattern, confirmed directly against the real `.asm`'s
+    ///   register-for-register loop shape, not just the decompile). Per occupant:
+    ///   - `ZTAnimal`-castable ([`entity_type_matches`]/[`RVA_ANIMAL_TYPE_CHECK`]) whose own current tile
+    ///     ([`BFENTITY_GET_TILE`]) matches this owned tile: inctements `num_animals`; appends onto
+    ///     `all_animals` ([`vector_push_pool_alloc4`] on `&self.all_animals_begin`, the same
+    ///     established append idiom [`Self::add_to_building_list`] uses); increments
+    ///     `num_angry_animals`/`unhappy_for_reproduction_count`/`num_sick_animals`/`hungry_count` per
+    ///     their own established per-animal flag/call-through gates (`+0x3aa`/`ZTAnimal::
+    ///     isUnhappyForReproduction`/`+0x3a7`/`ZTAnimal::isHungry`, the last masked with
+    ///     [`low_byte_bool`] per its raw `u32` return); zeroes 3 scratch dwords at `animal+0x368..0x373`
+    ///     (real vanilla's own per-animal reset, meaning not otherwise identified); reads the animal's own
+    ///     species id (`entity_type+0x1ec`), stashes it into the shared global
+    ///     [`RVA_CURRENT_SPECIES_ID_STASH`], and scans `found_species_types` for a match via
+    ///     `ZTSpecies::isSpecialDummySpecies` (real vanilla repurposes this as a plain species-id equality
+    ///     check against that stashed global here, not a genuine dummy-species filter - see
+    ///     [`RVA_CURRENT_SPECIES_ID_STASH`]'s own doc comment) - appends the species-type pointer and
+    ///     increments `species_found_count` only on a genuinely new species; finds-or-inserts
+    ///     ([`map_int_habitatsuitability_find_or_insert`]) that species's own record in `map_ptr`,
+    ///     unconditionally incrementing its `occurrence_count` (record `+0x00`) and accumulating
+    ///     `animal+0x2a8`/`animal+0x2b8` into `sum_unk_2a8`/`sum_unk_2b8` (record `+0x04`/`+0x08`) - the
+    ///     `.c`'s own `local_a40.occurrence_count = iVar26` (writing the species id, not a count) right
+    ///     before this insert is a second decompiler artifact matching the `footprintY` one above (the
+    ///     record's real default constructor, live-decompiled, zero-inits every field unconditionally -
+    ///     see [`ZTHabitatSuitabilityRecord`]'s own `Default` impl - so a `+0x00 = species_id` write here
+    ///     would leave `occurrence_count` polluted with a huge, nonsensical value with no correcting write
+    ///     found anywhere in the corpus); finally, if `show_unit_scan_pending` is set and the animal's own
+    ///     vtable slot `+0x4` (`vtable `+0x228`, [`call_entity_vtable_noargs`]) returns true, calls
+    ///     `addShowUnit` (real vanilla, still un-ported).
+    ///   - `ZTKeeper`-castable ([`RVA_KEEPER_TYPE_CHECK_ARG`]) whose own `+0x170` subtype dword is `0x6e`
+    ///     (an already-established fact per [`Self::num_keepers`]'s own doc comment, re-confirmed here
+    ///     directly against the real `.asm`'s `CMP [EDI+0x170],0x6e`): increments `num_keepers`, sets
+    ///     `is_being_serviced_raw`.
+    ///
+    /// Then, once per owned tile (not per occupant): walks the tile's own 4 direct-entity slots
+    /// (`tile+0x4/0x8/0xc/0x10` - the same shape [`Self::add_to_building_list`]/
+    /// [`Self::additional_scenery_suitability_change`] already establish for this exact field group,
+    /// confirmed live via the real `.asm`'s explicit `PUSH CAST_ZTSceneryType`/`PUSH DAT_006386c0`
+    /// isCastClass tag arguments - the `.c`'s own zero-argument rendering of these two calls is a third
+    /// decompiler artifact), gated on both the `ZTSceneryType` and `ZTFood`
+    /// ([`RVA_SCENERY_TYPE_CHECK_ARG`]/[`RVA_ZTFOOD_TYPE_CHECK_ARG`]) casts passing (same shape as
+    /// [`keeper_food_category_matches`], just against a 4-slot array instead of the single `+0x10`
+    /// occupant): adds the item's own `+0x154` amount into `keeper_food_category_amounts[category]`
+    /// (`category` from the item's own type `+0x168`, per [`keeper_food_category_matches`]'s
+    /// established convention).
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`].
+    pub(crate) fn recalc_phase_1_2(&self, map_ptr: u32, found_species_vec: &mut VanillaVector<u32>) -> bool {
+        if self.species_list_dirty != 0 {
+            unsafe { REVISE_SPECIES_LIST.original()(self as *const Self as *const u32) };
+        }
+        write_live!(self, characteristics_dirty, 0u8);
+        write_live!(self, num_animals, 0i32);
+        write_live!(self, num_angry_animals, 0i32);
+        write_live!(self, unhappy_for_reproduction_count, 0i32);
+        write_live!(self, num_sick_animals, 0i32);
+        write_live!(self, hungry_count, 0i32);
+        write_live!(self, species_found_count, 0u32);
+        write_live!(self, unknown_flag_0x130, 0u8);
+        write_live!(self, all_animals_end, self.all_animals_begin);
+        for i in 0..16usize {
+            unsafe { write_live_ptr(std::ptr::addr_of!(self.keeper_food_category_amounts[i]), 0i32) };
+        }
+        write_live!(self, is_being_serviced_raw, 0u8);
+        write_live!(self, num_keepers, 0i32);
+        write_live!(self, has_keeper_assigned_raw, 0u8);
+        write_live!(self, attractiveness, 0i32);
+
+        if self.unknown_flag_0x2c != 0 {
+            write_live!(self, reentrancy_guard, 0u8);
+            return false;
+        }
+
+        let base = get_module_base("zoo.exe") as u32;
+
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+
+            let occupant_sentinel = get_from_memory::<u32>(tile_ptr);
+            for occ_node in walk_tile_list(occupant_sentinel) {
+                let occupant = get_from_memory::<TileListNode>(occ_node).payload;
+                if occupant == 0 {
+                    continue;
+                }
+
+                if unsafe { entity_type_matches(occupant, RVA_ANIMAL_TYPE_CHECK) } {
+                    let occupant_tile = unsafe { BFENTITY_GET_TILE.original()(occupant as *const u32) } as u32;
+                    if occupant_tile != tile_ptr {
+                        continue;
+                    }
+
+                    write_live!(self, num_animals, self.num_animals + 1);
+                    vector_push_pool_alloc4(std::ptr::addr_of!(self.all_animals_begin) as u32, occupant);
+
+                    if get_from_memory::<u8>(occupant + 0x3aa) != 0 {
+                        write_live!(self, num_angry_animals, self.num_angry_animals + 1);
+                    }
+                    if unsafe { ZTANIMAL_IS_UNHAPPY_FOR_REPRODUCTION.original()(occupant as *const u32) } {
+                        write_live!(self, unhappy_for_reproduction_count, self.unhappy_for_reproduction_count + 1);
+                    }
+                    if get_from_memory::<u8>(occupant + 0x3a7) != 0 {
+                        write_live!(self, num_sick_animals, self.num_sick_animals + 1);
+                    }
+                    if low_byte_bool(unsafe { ZTANIMAL_IS_HUNGRY.original()(occupant as *const u32) }) {
+                        write_live!(self, hungry_count, self.hungry_count + 1);
+                    }
+
+                    save_to_memory::<u32>(occupant + 0x368, 0);
+                    save_to_memory::<u32>(occupant + 0x36c, 0);
+                    save_to_memory::<u32>(occupant + 0x370, 0);
+
+                    let entity_type_ptr = get_from_memory::<u32>(occupant + 0x128);
+                    write_live!(self, attractiveness, self.attractiveness + get_from_memory::<i32>(entity_type_ptr + 0x3b8));
+                    let species_id = get_from_memory::<i32>(entity_type_ptr + 0x1ec);
+                    save_to_memory::<i32>(base + RVA_CURRENT_SPECIES_ID_STASH, species_id);
+                    let already_found = found_species_vec
+                        .as_slice()
+                        .iter()
+                        .any(|&candidate| unsafe { IS_SPECIAL_DUMMY_SPECIES.original()(candidate as i32) });
+                    if !already_found {
+                        vector_push_pool_alloc4(found_species_vec.as_ptr() as u32, entity_type_ptr);
+                        write_live!(self, species_found_count, self.species_found_count + 1);
+                    }
+
+                    let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, species_id);
+                    let occurrence_count: i32 = get_from_memory(record_ptr);
+                    save_to_memory(record_ptr, occurrence_count + 1);
+                    let sum_2a8: i32 = get_from_memory(record_ptr + 0x04);
+                    save_to_memory(record_ptr + 0x04, sum_2a8 + get_from_memory::<i32>(occupant + 0x2a8));
+                    let sum_2b8: i32 = get_from_memory(record_ptr + 0x08);
+                    save_to_memory(record_ptr + 0x08, sum_2b8 + get_from_memory::<i32>(occupant + 0x2b8));
+
+                    if self.show_unit_scan_pending != 0 && unsafe { call_entity_vtable_noargs(occupant, 0x228) } {
+                        unsafe { ADD_SHOW_UNIT.original()(self as *const Self as *const u32, occupant) };
+                    }
+                } else if unsafe { entity_type_matches(occupant, RVA_KEEPER_TYPE_CHECK_ARG) } {
+                    let subtype: u32 = get_from_memory(occupant + 0x170);
+                    if subtype == 0x6e {
+                        write_live!(self, num_keepers, self.num_keepers + 1);
+                        write_live!(self, is_being_serviced_raw, 1u8);
+                    }
+                }
+            }
+
+            for slot_offset in (0x4u32..=0x10).step_by(4) {
+                let slot_value: u32 = get_from_memory(tile_ptr + slot_offset);
+                if slot_value == 0
+                    || !unsafe { entity_type_matches(slot_value, RVA_SCENERY_TYPE_CHECK_ARG) }
+                    || !unsafe { entity_type_matches(slot_value, RVA_ZTFOOD_TYPE_CHECK_ARG) }
+                {
+                    continue;
+                }
+                let category = get_from_memory::<u32>(get_from_memory::<u32>(slot_value + 0x128) + 0x168) as usize;
+                let amount: i32 = get_from_memory(slot_value + 0x154);
+                let current: i32 = get_from_memory(std::ptr::addr_of!(self.keeper_food_category_amounts[category]) as u32);
+                unsafe { write_live_ptr(std::ptr::addr_of!(self.keeper_food_category_amounts[category]), current + amount) };
+            }
+        }
+
+        true
+    }
+
+    /// Ports the species-found propagation portion (phase 3) of `ZTHabitat::recalculateCharacteristics`
+    /// (`RECALCULATE_CHARACTERISTICS`, `0x00444827`) - see
+    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 3.
+    ///
+    /// `found_species_vec` is the same real vanilla-layout scratch vector [`Self::recalc_phase_1_2`]
+    /// populates and must have already been passed to that call this same `recalculateCharacteristics`
+    /// pass. `old_species_found_count`/`old_num_animals` are [`Self::species_found_count`]/
+    /// [`Self::num_animals`]'s values from **before** [`Self::recalc_phase_1_2`] zeroed and re-tallied
+    /// them (real vanilla's own `iVar31`/`iVar57` locals, snapshotted at the very top of the whole
+    /// function, before its own reset block) - the caller must capture both before calling
+    /// `recalc_phase_1_2`.
+    ///
+    /// Real body, per `ZTHabitat_recalculateCharacteristics.c`/`.asm`:
+    /// - Walks [`Self::amphibious_neighbors_head`] ([`walk_neighbor_tree`]); per amphibious neighbor,
+    ///   calls the still-un-ported real vanilla [`ADD_FOUND_SPECIES`] on that neighbor directly (its own
+    ///   owned-tile census, same shape [`Self::recalc_phase_1_2`]'s own per-animal loop performs), then
+    ///   walks *that neighbor's own* `show_neighbors_head` (node `+0x14` off the neighbor pointer) and
+    ///   calls `ADD_FOUND_SPECIES` on each of those too - two levels deep.
+    /// - Then walks this habitat's own [`Self::show_neighbors_head`] and calls `ADD_FOUND_SPECIES` on each
+    ///   direct show-neighbor.
+    /// - Never calls `ADD_FOUND_SPECIES` on `self` - this habitat's own species were already found by
+    ///   [`Self::recalc_phase_1_2`]'s own per-animal census.
+    /// - Not ported: real vanilla's own `local_b6c` scratch copy of `found_species_vec` taken right before
+    ///   this phase's own neighbor walk (`msvc_std::vector<int>::buy` + `copy4`) - confirmed via exhaustive
+    ///   grep that it is allocated and immediately torn down (`_Tidy`, at the very end of the whole
+    ///   function) without ever being read in between. A real, observable allocation/free with zero
+    ///   observable effect - safe to skip entirely.
+    /// - If `species_found_count` changed (`old_species_found_count` vs. the value after every
+    ///   `ADD_FOUND_SPECIES` call above), sets `unknown_flag_0x30` ("characteristics changed").
+    /// - Separately, if `num_animals` changed (`old_num_animals` vs. current), sets `unknown_flag_0x30`
+    ///   too; if the *new* `num_animals` is `0`, additionally: calls the already-ported
+    ///   [`Self::send_maint_worker_cleanup_events`] unless a save is currently loading (the same
+    ///   `loadInProgress` raw flag [`Self::reset_unit_ai`] reads, [`RVA_APP_INIT_SUCCESS_BASE`]`+0x441` -
+    ///   real vanilla calls `ZTUI::gameopts::loadInProgress()`, which is just an accessor for this same
+    ///   byte), then zeroes `unknown_nt_time` (real vanilla's own `this->mbr_0x128`/`mbr_0x12c` - the two
+    ///   dwords of this field's 8-byte `FileTime` span, confirmed via the struct's own offsets).
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`].
+    pub(crate) fn recalc_phase_3(&self, found_species_vec: &mut VanillaVector<u32>, old_species_found_count: u32, old_num_animals: i32) {
+        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            unsafe {
+                ADD_FOUND_SPECIES.original()(
+                    neighbor_ptr as *const u32,
+                    found_species_vec.as_ptr() as *const i32,
+                    std::ptr::addr_of!(self.species_found_count) as *const i32,
+                )
+            };
+
+            let neighbor_show_neighbors_head: u32 = get_from_memory(neighbor_ptr + 0x14);
+            for inner_node in walk_neighbor_tree(neighbor_show_neighbors_head) {
+                let inner_neighbor_ptr: u32 = get_from_memory(inner_node + 0x10);
+                unsafe {
+                    ADD_FOUND_SPECIES.original()(
+                        inner_neighbor_ptr as *const u32,
+                        found_species_vec.as_ptr() as *const i32,
+                        std::ptr::addr_of!(self.species_found_count) as *const i32,
+                    )
+                };
+            }
+        }
+
+        for node in walk_neighbor_tree(self.show_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            unsafe {
+                ADD_FOUND_SPECIES.original()(
+                    neighbor_ptr as *const u32,
+                    found_species_vec.as_ptr() as *const i32,
+                    std::ptr::addr_of!(self.species_found_count) as *const i32,
+                )
+            };
+        }
+
+        if old_species_found_count != self.species_found_count {
+            write_live!(self, unknown_flag_0x30, 1u8);
+        }
+
+        if old_num_animals != self.num_animals {
+            write_live!(self, unknown_flag_0x30, 1u8);
+            if self.num_animals == 0 {
+                let load_in_progress = get_from_memory::<u8>(get_module_base("zoo.exe") as u32 + RVA_APP_INIT_SUCCESS_BASE + 0x441) != 0;
+                if !load_in_progress {
+                    self.send_maint_worker_cleanup_events();
+                }
+                unsafe { write_live_ptr(std::ptr::addr_of!(self.unknown_nt_time) as *const u64, 0u64) };
+            }
+        }
+    }
+
+    /// Ports the nested/tank-habitat water-level pass (phase 5) of `ZTHabitat::
+    /// recalculateCharacteristics` (`RECALCULATE_CHARACTERISTICS`, `0x00444827`) - see
+    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 4. Not yet called by
+    /// anything - assembled into the full function alongside phases 1-3 (already ported) and 4/6 (not
+    /// yet ported) by a later stage.
+    ///
+    /// `map_ptr`/`found_species_vec` are the same real vanilla-layout scratch structures
+    /// [`Self::recalc_phase_1_2`] takes (real vanilla constructs both once at the top of the whole
+    /// function and threads them through every phase); this phase passes them straight through to
+    /// [`Self::additional_scenery_suitability_change`] unchanged, never touching either itself.
+    ///
+    /// Real body, per `ZTHabitat_recalculateCharacteristics.c`/`.asm`: walks every amphibious neighbor
+    /// ([`walk_neighbor_tree`] over [`Self::amphibious_neighbors_head`]). For each neighbor that
+    /// [`Self::is_tank`]:
+    /// - Adds the neighbor's own `get_size(false)` into `tank_neighbor_total_size`.
+    /// - When the neighbor `is_filled` (`+0x198`), adds that same size into `freshwater_filled_size` or
+    ///   `saltwater_filled_size` depending on the neighbor's own `current_water_type` (`+0x18c`, `0` =
+    ///   freshwater - the same discriminant [`ZTTankExhibit::is_right_salinity`]'s own doc comment
+    ///   establishes); left untouched (neither bucket) when not filled.
+    /// - Accumulates `(100.0 - water_purity) * size * 0.01` into a running `weighted_purity_debt`
+    ///   (real vanilla's literal `_DAT_00630d64`/`_DAT_00635418` constants - confirmed `100.0`/`0.01`
+    ///   against sibling decompiles sharing the same two globals, e.g.
+    ///   `ZTFoodType_changeCharacteristic.c`'s own percent-to-fraction conversion).
+    /// - If `self` itself is **not** a tank ([`Self::is_tank`]), calls the neighbor's own
+    ///   [`Self::additional_scenery_suitability_change`] with `found_species_vec`/`map_ptr`.
+    ///
+    /// Then, **unconditionally for every amphibious neighbor** (not gated on `is_tank()` - confirmed
+    /// directly against the real `.asm`'s branch structure, easy to misread from the `.c` rendering as
+    /// tank-only since it sits inside the same source line range), calls the neighbor's own
+    /// [`Self::add_to_building_list`] to merge its building list onto `self`'s own
+    /// ([`Self::building_list_begin`]) - `self` here is the merge target, the neighbor is `add_to_building_
+    /// list`'s own `&self`, matching that method's own doc comment.
+    ///
+    /// **Two of real vanilla's own locals computed inside the tank branch - a running min/max water
+    /// level across every tank neighbor - are never read again anywhere in the rest of the function.**
+    /// Confirmed by tracing both variables' real disassembly registers past this point: both are
+    /// unconditionally clobbered by unrelated phase-4 code within a handful of instructions, with no
+    /// intervening read on any path. Not ported - computing them would have no observable effect, the
+    /// same "real, computed, never consumed" shape this plan's own `ZTHabitatSuitabilityRecord` tally
+    /// already found for several of that struct's own dwords.
+    ///
+    /// `tank_neighbor_total_size`/`freshwater_filled_size`/`saltwater_filled_size`/`weighted_purity_debt`
+    /// genuinely do survive past this phase, unlike the min/max above - confirmed via a `FUN_004469ba`
+    /// call passing all four straight through, immediately after phase 4's own per-species scan. That
+    /// call is followed by an unconditional `return` in the `.c` rendering, but it is **not a real
+    /// return** - `FUN_004469ba` is a real, un-ported continuation of *this same function*, relocated
+    /// elsewhere in the binary by MSVC's hot/cold code-splitting and mislabeled as an independent
+    /// function by Ghidra/OOAnalyzer, the same artifact class this plan's own "Corrections made this
+    /// pass" item 1 already found for `FUN_00447033`/`FUN_0044703c`. A later stage porting phases 4/6
+    /// must thread this method's return value through to that continuation unchanged.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference; each neighbor visited must also be live
+    /// (true for every [`walk_neighbor_tree`] entry, which reads real `ZTHabitat*` pointers directly out
+    /// of the tree). Constructing a [`ZTTankExhibit`] reference over a neighbor is only safe once
+    /// [`Self::is_tank`] has confirmed it - matches that struct's own doc comment on why an unconfirmed
+    /// plain `ZTHabitat` pointer would over-read.
+    pub(crate) fn recalc_phase_5(&self, map_ptr: u32, found_species_vec: &mut VanillaVector<u32>) -> RecalcPhase5Summary {
+        let mut summary = RecalcPhase5Summary::default();
+
+        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+
+            if neighbor.is_tank() {
+                let tank = unsafe { ref_from_memory::<ZTTankExhibit>(neighbor_ptr) };
+                let size = neighbor.get_size(false);
+                summary.tank_neighbor_total_size += size;
+
+                if *tank.is_filled() {
+                    if *tank.current_water_type() == 0 {
+                        summary.freshwater_filled_size += size;
+                    } else {
+                        summary.saltwater_filled_size += size;
+                    }
+                }
+
+                summary.weighted_purity_debt += (100.0 - *tank.water_purity() as f32) * size as f32 * 0.01;
+
+                if !self.is_tank() {
+                    neighbor.additional_scenery_suitability_change(found_species_vec.as_ptr() as u32, map_ptr);
+                }
+            }
+
+            neighbor.add_to_building_list(std::ptr::addr_of!(self.building_list_begin) as u32, self as *const Self as u32);
+        }
+
+        summary
+    }
+
+    /// Ports the part of `ZTHabitat::recalculateCharacteristics`'s per-species scoring loop (real
+    /// vanilla's phase 6, the tail of `0x00444827`) that writes `score_percent_a` (`+0x18`),
+    /// `score_building_count` (`+0x20`), their six threshold flags, `tank_depth_score` (`+0x3c`),
+    /// `tank_or_visibility_score` (`+0x50`) and `tank_score_baseline` (`+0x54`). Every input was
+    /// verified against raw `[ESP+N]` disassembly, not Ghidra's call-site argument names (the `param_N`
+    /// list of the `FUN_004469ba` "call" drifts by a dword in places).
+    ///
+    /// `record_ptr` is the species' [`ZTHabitatSuitabilityRecord`] in the scratch tree, already carrying
+    /// phase 4's `raw_percent_a`/`raw_building_count` tallies. `owned_tile_total` is the owned-tile count
+    /// (`unaff_EBX`/`param_4` in the decompile). `phase5` is [`Self::recalc_phase_5`]'s summary.
+    ///
+    /// - The percentage denominator is `owned_tile_total`, plus `freshwater_filled_size +
+    ///   saltwater_filled_size` when the species' own vtable `+0xcc` predicate is true; the building-count
+    ///   metric divides by four times that.
+    /// - Each metric is `raw * 100 / denom` against a species threshold (`+0x34c` / `+0x350`), see
+    ///   [`percent_band`]. The `pct == 0 && threshold > 0` tail-jumps to `0x0044703c`/`0x00447033` are
+    ///   not calls: they are two-instruction stubs that set the "too low" flag and rejoin the main flow.
+    /// - `tank_score_baseline` is `100.0` when the habitat's vtable `+0x28` predicate (which takes the
+    ///   species type as a stack argument) is true, else `-100.0`.
+    /// - Tank habitat: `tank_or_visibility_score` is the raw water purity (`+0x1a8`); if the species'
+    ///   `+0x35c`/`+0x360` water-depth bounds differ, the depth deviation drives `tank_depth_score` and the
+    ///   `+0x62`/`+0x63`/`+0x6c` flags. Non-tank habitat: the guest-visibility fallback from the
+    ///   tank-neighbor purity debt.
+    ///
+    /// `sum_category_tally` (`+0x38`) is written by [`Self::recalc_phase_6_companion_tally`].
+    ///
+    /// Not covered here (still un-ported phase 6): `terrain_type_score`/`scenery_category_score`
+    /// normalisation, `score_percent_c` (depends on uninitialised stack), `score_d`/`score_e`, the
+    /// shelter/toy flags and the reset-to-clean block that later clears the flags written here.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, with `record_ptr`/`species_type_ptr` live.
+    pub(crate) fn recalc_phase_6_species_scores(&self, record_ptr: u32, species_type_ptr: u32, owned_tile_total: i32, phase5: &RecalcPhase5Summary) {
+        let species_filled_addend = if unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) } {
+            phase5.freshwater_filled_size.wrapping_add(phase5.saltwater_filled_size)
+        } else {
+            0
+        };
+        let denom = owned_tile_total.wrapping_add(species_filled_addend);
+
+        let percent_a = percent_band(
+            get_from_memory::<i32>(record_ptr + 0x14),
+            denom as f64,
+            get_from_memory::<i32>(species_type_ptr + 0x34c),
+            4.0,
+        );
+        save_to_memory::<f32>(record_ptr + 0x18, percent_a.score);
+        set_flag_if(record_ptr + 0x5a, percent_a.too_low);
+        set_flag_if(record_ptr + 0x5b, percent_a.too_high);
+        set_flag_if(record_ptr + 0x68, percent_a.critical);
+
+        let building_count = percent_band(
+            get_from_memory::<i32>(record_ptr + 0x1c),
+            denom as f64 * 4.0,
+            get_from_memory::<i32>(species_type_ptr + 0x350),
+            3.0,
+        );
+        save_to_memory::<f32>(record_ptr + 0x20, building_count.score);
+        set_flag_if(record_ptr + 0x58, building_count.too_low);
+        set_flag_if(record_ptr + 0x59, building_count.too_high);
+        set_flag_if(record_ptr + 0x67, building_count.critical);
+
+        self.recalc_phase_6_tank_visibility(record_ptr, species_type_ptr, phase5);
+    }
+
+    /// The `tank_depth_score`/`tank_or_visibility_score`/`tank_score_baseline` half of
+    /// [`Self::recalc_phase_6_species_scores`]; see that method for the formulas.
+    fn recalc_phase_6_tank_visibility(&self, record_ptr: u32, species_type_ptr: u32, phase5: &RecalcPhase5Summary) {
+        let self_addr = self as *const Self as u32;
+
+        save_to_memory::<f32>(record_ptr + 0x50, 100.0);
+        save_to_memory::<f32>(record_ptr + 0x3c, 100.0);
+
+        let baseline_positive = unsafe { call_vtable_slot_with_ptr_ret_bool(self_addr, 0x28, species_type_ptr) };
+        save_to_memory::<f32>(record_ptr + 0x54, if baseline_positive { 100.0 } else { -100.0 });
+
+        if !self.is_tank() {
+            if unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) } && phase5.tank_neighbor_total_size != 0 {
+                let debt_share = phase5.weighted_purity_debt as f64 / phase5.tank_neighbor_total_size as f64;
+                save_to_memory::<f32>(record_ptr + 0x50, (100.0 - debt_share * 100.0) as f32);
+            }
+            return;
+        }
+
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(self_addr) };
+        save_to_memory::<f32>(record_ptr + 0x50, *tank.water_purity() as f32);
+
+        let min_depth: i32 = get_from_memory(species_type_ptr + 0x35c);
+        let max_depth: i32 = get_from_memory(species_type_ptr + 0x360);
+        if min_depth == max_depth {
+            return;
+        }
+
+        let level = *tank.water_level() as i32;
+        let deviation = if level < min_depth {
+            set_flag_if(record_ptr + 0x62, true);
+            (level as f32 - min_depth as f32).abs()
+        } else if level > max_depth {
+            set_flag_if(record_ptr + 0x63, true);
+            (level as f32 - max_depth as f32).abs()
+        } else {
+            0.0
+        };
+
+        let scaled = deviation.min(30.0).max(0.0) * 20.0;
+        set_flag_if(record_ptr + 0x6c, scaled >= 50.0);
+        save_to_memory::<f32>(record_ptr + 0x3c, (100.0 - scaled).min(100.0));
+    }
+
+    /// Ports the terminal block of `ZTHabitat::recalculateCharacteristics` (`0x00445e62`-`0x00446039`),
+    /// everything after the per-species scoring loop. Checked against raw disassembly.
+    ///
+    /// 1. `species_suitability_cache` (`+0x148`) `= *map_ptr`, through vanilla's own `map::operator=`
+    ///    ([`assign_suitability_tree`]) so the copied nodes come from vanilla's allocator.
+    /// 2. Keeper walk: the first staff-list entry that casts to `ZTKeeper` and reports this habitat as
+    ///    assigned sets `has_keeper_assigned_raw` (`+0x131`, cleared at function entry) and stops the walk.
+    /// 3. Per surrounding animal (`animals`, the vector [`Self::recalc_surrounding_animal_building_scan`]
+    ///    returned) except those with `animal+0x395 != 0`, and, for a tank habitat, except animal-typed
+    ///    entities whose home habitat is another habitat: look up the species' record, and for an
+    ///    animal-typed entity in a tank habitat set `critical_water` (`+0x6d`) when *every* amphibious
+    ///    neighbor is also a tank; then [`Self::set_animal_conditions`] with the per-call
+    ///    `overlap_condition_bits`.
+    /// 4. [`Self::recalculate_viewing_areas`], [`Self::check_escapability`], then clear
+    ///    `show_unit_scan_pending` (`+0x2f`) and the reentrancy guard (`+0x2e`).
+    ///
+    /// The two extra condition bits are vanilla's `ph_AdditionalConditionValues` bytes `+4`/`+5`
+    /// (`[ESP+0x33]`/`[ESP+0x3b]`), which the census leaves as per-tile scratch and `0x004451a6`-`0x004451f4`
+    /// then overwrites with `overlap_tally / owned_tile_total > 0.05` and `> 0.1` - see
+    /// [`overlap_condition_bits`]. The struct's other three dwords are not read by
+    /// [`Self::set_animal_conditions`].
+    ///
+    /// Teardown of vanilla's scratch vectors and trees is the caller's job (Stage 8): every one of them is
+    /// a Rust-owned or explicitly-freed local here. The early-exit guard clears (`0x0044607a`) are also the
+    /// caller's.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference; `animals` entries must be live entities.
+    pub(crate) fn recalc_terminal_block(&self, map_ptr: u32, histogram: &[i32; 18], animals: &VanillaEventVector, overlap_tally: i32, owned_tile_total: i32) {
+        let self_addr = self as *const Self as u32;
+        assign_suitability_tree(self_addr + 0x148, map_ptr);
+
+        let world_mgr = unsafe { ZTAPP_GET_WORLD_MGR.original()() };
+        let staff_list = unsafe { ZTWORLDMGR_GET_STAFF_LIST.original()(world_mgr as *const u32) } as u32;
+        let staff_begin: u32 = get_from_memory(staff_list);
+        let staff_end: u32 = get_from_memory(staff_list + 4);
+        for addr in (staff_begin..staff_end).step_by(4) {
+            let staff_ptr: u32 = get_from_memory(addr);
+            let is_keeper = staff_ptr != 0 && unsafe { entity_type_matches(staff_ptr, RVA_KEEPER_TYPE_CHECK_ARG) };
+            if is_keeper && low_byte_bool(unsafe { ZTSTAFF_IS_HABITAT_ASSIGNED.original()(staff_ptr as *const u32, self_addr as *const u32) }) {
+                write_live!(self, has_keeper_assigned_raw, 1u8);
+                break;
+            }
+        }
+
+        let (extra_low_bit, extra_critical_bit) = overlap_condition_bits(overlap_tally, owned_tile_total);
+        let is_tank = self.is_tank();
+        for addr in (animals.begin..animals.end).step_by(4) {
+            let animal_ptr: u32 = get_from_memory(addr);
+            if get_from_memory::<u8>(animal_ptr + 0x395) != 0 {
+                continue;
+            }
+            let is_animal_type = unsafe { entity_type_matches(animal_ptr, RVA_ANIMAL_TYPE_CHECK) };
+            if is_tank && is_animal_type && unsafe { animal_home_habitat(animal_ptr) } != self_addr {
+                continue;
+            }
+
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, get_from_memory(animal_type_ptr + 0x1ec));
+
+            if is_animal_type && is_tank {
+                let has_neighbors = walk_neighbor_tree(self.amphibious_neighbors_head).next().is_some();
+                let all_neighbors_are_tanks = has_neighbors
+                    && walk_neighbor_tree(self.amphibious_neighbors_head).all(|node| {
+                        let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                        unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.is_tank()
+                    });
+                save_to_memory::<u8>(record_ptr + 0x6d, u8::from(all_neighbors_are_tanks));
+            }
+
+            self.set_animal_conditions(animal_ptr, record_ptr, histogram.as_ptr() as u32, owned_tile_total, extra_low_bit, extra_critical_bit);
+        }
+
+        self.recalculate_viewing_areas();
+        self.check_escapability();
+        write_live!(self, show_unit_scan_pending, 0u8);
+        write_live!(self, reentrancy_guard, 0u8);
+    }
+
+    /// `ZTHabitat::recalculateCharacteristics` (`0x00444827`): runs the ported phases in vanilla's own
+    /// order and owns the scratch state every phase shares.
+    ///
+    /// 1. Reentrancy guard; snapshot `species_found_count`/`num_animals`; [`Self::recalc_phase_1_2`]
+    ///    (returns early, guard cleared, when `unknown_flag_0x2c` is set).
+    /// 2. [`Self::recalc_phase_3`], [`Self::recalc_phase_4_terrain_census`] (also empties and refills the
+    ///    building list), the owned-tile count, [`Self::recalc_phase_5`].
+    /// 3. [`Self::build_building_type_scratch_arrays`], the two float caches,
+    ///    [`Self::recalc_surrounding_animal_building_scan`], [`Self::construct_surrounding_species_list`],
+    ///    [`Self::recalc_surrounding_species_flags`].
+    /// 4. [`Self::recalc_phase_6_species`] once per found species, then [`Self::recalc_terminal_block`]
+    ///    (persists the scratch tree, sets animal conditions, clears the guard).
+    /// 5. Teardown of the surrounding-animal vector, float caches, scratch tree and found-species vector.
+    ///
+    /// The snapshots are taken before `reviseSpeciesList` (inside phase 1-2) rather than after it as in
+    /// vanilla; that call rebuilds the species list and does not touch either counter.
+    pub(crate) fn recalculate_characteristics(&self) {
+        if self.reentrancy_guard != 0 {
+            return;
+        }
+        write_live!(self, reentrancy_guard, 1u8);
+        let old_species_found_count = self.species_found_count;
+        let old_num_animals = self.num_animals;
+
+        let mut map_header = [0u32; 4];
+        let map_ptr = map_header.as_mut_ptr() as u32;
+        init_suitability_scratch_tree(map_ptr);
+        let mut found_species = VanillaVector::<u32>::rvo_target();
+
+        if !self.recalc_phase_1_2(map_ptr, &mut found_species) {
+            destroy_suitability_scratch_tree(map_ptr);
+            return;
+        }
+        let companion_species = found_species.as_slice().to_vec();
+        self.recalc_phase_3(&mut found_species, old_species_found_count, old_num_animals);
+
+        let (histogram, overlap_tally, elevation_tally) = self.recalc_phase_4_terrain_census(found_species.as_ptr() as u32, map_ptr);
+        let owned_tile_total = walk_tile_list(self.owned_tiles_ptr).count() as i32;
+        let phase5 = self.recalc_phase_5(map_ptr, &mut found_species);
+
+        let (mut field_0x16c_values, mut field_0x170_clamped) = self.build_building_type_scratch_arrays();
+        let mut float_header_a = [0u32; 4];
+        let mut float_header_b = [0u32; 4];
+        let float_cache_a = float_header_a.as_mut_ptr() as u32;
+        let float_cache_b = float_header_b.as_mut_ptr() as u32;
+        init_float_scratch_tree(float_cache_a);
+        init_float_scratch_tree(float_cache_b);
+
+        let animals = self.recalc_surrounding_animal_building_scan(map_ptr, &mut field_0x16c_values, &mut field_0x170_clamped, float_cache_a, float_cache_b);
+        self.construct_surrounding_species_list();
+        self.recalc_surrounding_species_flags(map_ptr, float_cache_a, float_cache_b);
+
+        let inputs = RecalcPhase6Inputs {
+            owned_tile_total,
+            elevation_tally,
+            histogram: &histogram,
+            phase5: &phase5,
+            float_cache_a,
+            float_cache_b,
+            field_0x16c_values: &field_0x16c_values,
+            field_0x170_clamped: &field_0x170_clamped,
+            companion_species: &companion_species,
+        };
+        for &species_type_ptr in found_species.as_slice() {
+            let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, get_from_memory(species_type_ptr + 0x1ec));
+            self.recalc_phase_6_species(&inputs, record_ptr, species_type_ptr);
+        }
+
+        self.recalc_terminal_block(map_ptr, &histogram, &animals, overlap_tally, owned_tile_total);
+
+        free_event_vector_buffer(animals.begin, animals.cap_end.wrapping_sub(animals.begin));
+        clear_float_scratch_tree(float_cache_b);
+        clear_float_scratch_tree(float_cache_a);
+        destroy_suitability_scratch_tree(map_ptr);
+        destroy_found_species_vector(&found_species);
+    }
+
+    /// Ports the terrain/scenery half of `recalculateCharacteristics`'s per-species scoring loop
+    /// (`0x0044582d`-`0x004459ed`): `terrain_type_score` (`+0x0c`), the water tile adjustments
+    /// (`+0x48`/`+0x4c`) and the `scenery_category_score` (`+0x10`) normalisation. Checked against raw
+    /// disassembly.
+    ///
+    /// `histogram` is [`Self::recalc_phase_4_terrain_census`]'s 18-entry terrain tile tally.
+    ///
+    /// - **Tank habitat**: `terrain_type_score = 100.0` and the loop, `+0x48` and `+0x4c` are skipped
+    ///   (`0x00493bfe`); `+0x48`/`+0x4c` keep their zero-initialised value.
+    /// - **Otherwise**: `+0x4c = tile_count_adjustment(pred, getValue(cat, 9), histogram[9], owned_tile_total,
+    ///   freshwater_filled_size)` and `+0x48` likewise with category 10 and `saltwater_filled_size`
+    ///   (`cat = species_type+0x2d8`, `pred` = species vtable `+0xcc`). Then for each of the 18 categories,
+    ///   `w = getValue(cat, i)`: if `w < 0` and `histogram[i] > 0`, `terrain_type_score += w`; if `w >= 0`,
+    ///   `terrain_type_score += min(w, count * 100 / denom)`, with `count = histogram[i]` plus `+0x4c` for
+    ///   `i == 9` / `+0x48` for `i == 10`, and `denom = +0x4c + owned_tile_total + +0x48`.
+    /// - `terrain_type_score` is then capped at `100.0`.
+    /// - `scenery_category_score /= max(1.0, owned_tile_total * 0.025) * 100.0`, capped at `100.0`, and
+    ///   multiplied by `50.0` if still negative.
+    ///
+    /// A zero `denom` or `owned_tile_total` yields `inf`/`NaN` like vanilla's masked x87 division, without
+    /// modelling NaN's compare flags; every habitat that reaches this loop has owned tiles.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, with `record_ptr`/`species_type_ptr` live.
+    pub(crate) fn recalc_phase_6_terrain_scores(&self, record_ptr: u32, species_type_ptr: u32, owned_tile_total: i32, histogram: &[i32; 18], phase5: &RecalcPhase5Summary) {
+        if self.is_tank() {
+            save_to_memory::<f32>(record_ptr + 0xc, 100.0);
+        } else {
+            let category_ptr = species_type_ptr + 0x2d8;
+            let get_category_value = |index: i32| unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, index) };
+            let species_pred = unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) };
+
+            let fresh_adjustment = tile_count_adjustment(species_pred, get_category_value(9), histogram[9], owned_tile_total, phase5.freshwater_filled_size);
+            save_to_memory::<i32>(record_ptr + 0x4c, fresh_adjustment);
+            let salt_adjustment = tile_count_adjustment(species_pred, get_category_value(10), histogram[10], owned_tile_total, phase5.saltwater_filled_size);
+            save_to_memory::<i32>(record_ptr + 0x48, salt_adjustment);
+
+            let denom = fresh_adjustment.wrapping_add(owned_tile_total).wrapping_add(salt_adjustment);
+            let mut terrain: f32 = get_from_memory(record_ptr + 0xc);
+            for (index, &tiles) in histogram.iter().enumerate() {
+                let count = match index {
+                    9 => tiles.wrapping_add(fresh_adjustment),
+                    10 => tiles.wrapping_add(salt_adjustment),
+                    _ => tiles,
+                };
+                terrain = terrain_category_step(terrain, get_category_value(index as i32), tiles, count, denom);
+            }
+            save_to_memory::<f32>(record_ptr + 0xc, terrain);
+        }
+        let terrain: f32 = get_from_memory(record_ptr + 0xc);
+        save_to_memory::<f32>(record_ptr + 0xc, if terrain < 100.0 { terrain } else { 100.0 });
+
+        let scenery: f32 = get_from_memory(record_ptr + 0x10);
+        save_to_memory::<f32>(record_ptr + 0x10, normalise_scenery_score(scenery, owned_tile_total));
+    }
+
+    /// Ports `score_percent_c` (`+0x24`) and its flags (`0x00445bf3`-`0x00445cdb`): the elevation score.
+    /// `pct = elevation_tally * 50 / owned_tile_total` against the species threshold at `+0x358`:
+    /// `need_elevation` (`+0x5c`) when `pct < threshold - 10`, else `too_much_elevation` (`+0x5d`) when
+    /// `pct > threshold + 10`, `critical_elevation` (`+0x69`) when `|pct - threshold| > 20`, and
+    /// `score = min(100, 100 - clamp(|pct - threshold|, 0, 50))`. Ghidra's decompile shows this formula's
+    /// operands as uninitialised stack; the raw asm reads the elevation tally and `(float)owned_tile_total`
+    /// (`[ESP+0x2c]`, stored at `0x00445972`).
+    pub(crate) fn recalc_phase_6_elevation_score(&self, record_ptr: u32, species_type_ptr: u32, elevation_tally: i32, owned_tile_total: i32) {
+        let threshold: i32 = get_from_memory(species_type_ptr + 0x358);
+        let elevation = elevation_band(elevation_tally, owned_tile_total, threshold);
+        set_flag_if(record_ptr + 0x5c, elevation.too_low);
+        set_flag_if(record_ptr + 0x5d, elevation.too_high);
+        set_flag_if(record_ptr + 0x69, elevation.critical);
+        save_to_memory::<f32>(record_ptr + 0x24, elevation.score);
+    }
+
+    /// Ports the "reset to clean" block of `recalculateCharacteristics`'s per-species scoring loop
+    /// (`0x00493c0e`-`0x00493c57`): for a tank habitat with an empty amphibious-neighbor set (the
+    /// `std::set` size dword at habitat `+0x0c`, `[ESP+0x43]` in vanilla; the decompile's
+    /// `param_17._3_1_`) and a species whose vtable `+0xcc` predicate is true, clears the six percentage
+    /// flags plus `+0x5c`/`+0x5d`/`+0x69` and forces `score_percent_c` (`+0x24`) to `100.0`. Runs after
+    /// [`Self::recalc_phase_6_species_scores`], whose flags it clears.
+    pub(crate) fn recalc_phase_6_reset_tank_flags(&self, record_ptr: u32, species_type_ptr: u32) {
+        let neighbor_set_size: u32 = get_from_memory(self as *const Self as u32 + 0xc);
+        if !self.is_tank() || neighbor_set_size != 0 || !unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) } {
+            return;
+        }
+        for flag_offset in [0x5a, 0x5b, 0x68, 0x58, 0x59, 0x67, 0x5c, 0x5d, 0x69] {
+            save_to_memory::<u8>(record_ptr + flag_offset, 0);
+        }
+        save_to_memory::<f32>(record_ptr + 0x24, 100.0);
+    }
+
+    /// Runs one species' phase-6 scoring in vanilla's own order: terrain/scenery, the percentage and tank
+    /// scores, the elevation score, the tank reset block, then the shelter/toy scores.
+    pub(crate) fn recalc_phase_6_species(&self, inputs: &RecalcPhase6Inputs, record_ptr: u32, species_type_ptr: u32) {
+        self.recalc_phase_6_terrain_scores(record_ptr, species_type_ptr, inputs.owned_tile_total, inputs.histogram, inputs.phase5);
+        self.recalc_phase_6_species_scores(record_ptr, species_type_ptr, inputs.owned_tile_total, inputs.phase5);
+        self.recalc_phase_6_elevation_score(record_ptr, species_type_ptr, inputs.elevation_tally, inputs.owned_tile_total);
+        Self::recalc_phase_6_companion_tally(record_ptr, species_type_ptr, inputs.companion_species);
+        self.recalc_phase_6_reset_tank_flags(record_ptr, species_type_ptr);
+        self.recalc_phase_6_placement_scores(
+            record_ptr,
+            species_type_ptr,
+            inputs.float_cache_a,
+            inputs.float_cache_b,
+            inputs.field_0x16c_values,
+            inputs.field_0x170_clamped,
+        );
+    }
+
+    /// Ports the `sum_category_tally` (`+0x38`) walk (`.c` lines 1843-1863, vanilla node `+0x4c`): for every
+    /// species in `companion_species` other than `species_type_ptr`'s own id, adds
+    /// `getValue(cat, id) + getValue(cat, +0x1e8) + getValue(cat, +0x1e4)` to the record, with `cat` the
+    /// species' own category list (`+0x2c0`) and `id` the companion's `+0x1ec`.
+    /// `companion_species` is the found-species list as it stood before phase 3 extended it - vanilla
+    /// bulk-copies it (`copy4`) into a snapshot vector, which is why a watch on appends to that vector
+    /// never sees a write.
+    pub(crate) fn recalc_phase_6_companion_tally(record_ptr: u32, species_type_ptr: u32, companion_species: &[u32]) {
+        let category_ptr = species_type_ptr + 0x2c0;
+        let own_id: i32 = get_from_memory(species_type_ptr + 0x1ec);
+        for &companion in companion_species {
+            let companion_id: i32 = get_from_memory(companion + 0x1ec);
+            if companion_id == own_id {
+                continue;
+            }
+            let attrib2: i32 = get_from_memory(companion + 0x1e4);
+            let attrib1: i32 = get_from_memory(companion + 0x1e8);
+            let by_id = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, companion_id) };
+            let by_attrib1 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, attrib1) };
+            let by_attrib2 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, attrib2) };
+            let current: f32 = get_from_memory(record_ptr + 0x38);
+            save_to_memory::<f32>(record_ptr + 0x38, current + by_attrib2.wrapping_add(by_attrib1).wrapping_add(by_id) as f32);
+        }
+    }
+
+    /// Ports the shelter/toy half of `recalculateCharacteristics`'s per-species scoring loop: the two
+    /// building-match counts, the `+0x5f`/`+0x6a` and `+0x61`/`+0x6b` flags, and `score_d` (`+0x30`) /
+    /// `score_e` (`+0x34`). Everything was checked against raw disassembly (`0x004456fd`-`0x00445d9d` and
+    /// its relocated stubs); the decompile's `param_16`/`param_18`/`param_27` names drift here.
+    ///
+    /// `float_cache_a`/`float_cache_b` are the two `map<int, _>` scratch trees ([`init_float_scratch_tree`])
+    /// that [`Self::recalc_surrounding_species_flags`] reads as `f32`; this scoring loop reads the *same
+    /// bits as `i32` counts* (`CMP [node+0x14], 4`, `IMUL`, `FILD`). `field_0x16c_values`/`field_0x170_clamped`
+    /// are step (2)'s scratch arrays *after* [`Self::recalc_surrounding_animal_building_scan`] decremented them.
+    ///
+    /// - **Counts**: over the building list (`self.building_list_begin..end`, index-aligned with the scratch
+    ///   arrays), for entries whose `getValue(cat, type+0x10c) + getValue(cat, vtable+0x20(type)) >= 0`
+    ///   (`cat = species_type+0x2cc`): `shelter_count` += 1 when `type+0x16c != 0` equals the current
+    ///   `field_0x16c_values[i]`; `toy_count` += 1 when `type+0x170 != 0` equals `field_0x170_clamped[i]`.
+    ///   `toy_count` is forced to `0` for a show tank.
+    /// - **Shelter flags**: `shelter_count > 0` sets `+0x5f` (`need_more_shelter`), `> 3` sets `+0x6a`
+    ///   (`critical_shelter`). **Toy flags**: `toy_count > 1` sets `+0x61`, `> 2` sets `+0x6b`.
+    /// - **`score_d`** (`+0x30`) = `min(100, 100 - penalty)`. If `+0x5e` (`need_space`, set from
+    ///   `float_cache_a`) is set, `penalty` comes from `v = float_cache_a[key]`: `15 * v` for `4 <= v <= 6`,
+    ///   and for `v > 6` `(X * 5 - 30) * 20` where `X` is `[ESP+0x68]` - a stack slot the scoring loop
+    ///   never writes (its last write, `0x004455ce`, stores `0`), so `X = 0` and the term is `-600`,
+    ///   which clamps `score_d` to `100`. That reading is from writer enumeration, not a live capture; the
+    ///   Stage 8 live comparison test is what confirms it. The map path also sets `+0x6a` when `v > 7`.
+    ///   Otherwise, when `+0x5f` is set: `penalty = 50 * shelter_count + 100` if `shelter_count > 2` else `0`,
+    ///   then `* (shelter_count - 3)` when `+0x6a` is set; when `+0x5f` is clear the penalty is `0`.
+    /// - **`score_e`** (`+0x34`) is the same shape with `+0x60` (`too_crowded`, from `float_cache_b`), `+0x61`,
+    ///   `+0x6b`: map path `penalty = 15 * w` when `w = float_cache_b[key] > 3`; count path `(toy_count - 2)`
+    ///   for the critical multiplier.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, with `record_ptr`/`species_type_ptr` live.
+    pub(crate) fn recalc_phase_6_placement_scores(
+        &self,
+        record_ptr: u32,
+        species_type_ptr: u32,
+        float_cache_a: u32,
+        float_cache_b: u32,
+        field_0x16c_values: &[i32],
+        field_0x170_clamped: &[i32],
+    ) {
+        let key: i32 = get_from_memory(species_type_ptr + 0x1ec);
+        let (shelter_count, toy_count) = self.count_matching_buildings(species_type_ptr, field_0x16c_values, field_0x170_clamped);
+
+        if shelter_count > 0 {
+            set_flag_if(record_ptr + 0x5f, true);
+            set_flag_if(record_ptr + 0x6a, shelter_count > 3);
+        }
+        let penalty_d = if get_from_memory::<u8>(record_ptr + 0x5e) != 0 {
+            let v: i32 = get_from_memory(map_int_float_find_or_insert(float_cache_a, key));
+            let penalty = match v {
+                4..=6 => v.wrapping_mul(15) as f64,
+                7.. => STALE_ESP_0X68.wrapping_mul(5).wrapping_sub(30).wrapping_mul(20) as f64,
+                _ => 0.0,
+            };
+            set_flag_if(record_ptr + 0x6a, v > 7);
+            penalty as f32
+        } else if get_from_memory::<u8>(record_ptr + 0x5f) != 0 {
+            count_penalty(shelter_count, get_from_memory::<u8>(record_ptr + 0x6a) != 0, 3)
+        } else {
+            0.0
+        };
+        save_to_memory::<f32>(record_ptr + 0x30, clamped_score(penalty_d));
+
+        if toy_count > 1 {
+            set_flag_if(record_ptr + 0x61, true);
+            set_flag_if(record_ptr + 0x6b, toy_count > 2);
+        }
+        let penalty_e = if get_from_memory::<u8>(record_ptr + 0x60) != 0 {
+            let w: i32 = get_from_memory(map_int_float_find_or_insert(float_cache_b, key));
+            if w > 3 { w.wrapping_mul(15) as f32 } else { 0.0 }
+        } else if get_from_memory::<u8>(record_ptr + 0x61) != 0 {
+            count_penalty(toy_count, get_from_memory::<u8>(record_ptr + 0x6b) != 0, 2)
+        } else {
+            0.0
+        };
+        save_to_memory::<f32>(record_ptr + 0x34, clamped_score(penalty_e));
+    }
+
+    /// `(shelter_count, toy_count)` for [`Self::recalc_phase_6_placement_scores`]. The building list only
+    /// holds entries that passed the `ZTBuilding` cast at insertion (see
+    /// [`Self::build_building_type_scratch_arrays`]), so vanilla's null-type crash stub for a failed
+    /// re-check is skipped rather than reproduced.
+    fn count_matching_buildings(&self, species_type_ptr: u32, field_0x16c_values: &[i32], field_0x170_clamped: &[i32]) -> (i32, i32) {
+        let category_ptr = species_type_ptr + 0x2cc;
+        let mut shelter_count = 0;
+        let mut toy_count = 0;
+
+        for (index, addr) in (self.building_list_begin..self.building_list_end).step_by(4).enumerate() {
+            let entity_ptr: u32 = get_from_memory(addr);
+            if !unsafe { entity_type_matches(entity_ptr, RVA_BUILDING_TYPE_CHECK_ARG) } {
+                continue;
+            }
+            let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
+
+            let val1 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, get_from_memory(entity_type_ptr + 0x10c)) };
+            let arg2 = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) } as i32;
+            let val2 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg2) };
+            if val1.wrapping_add(val2) < 0 {
+                continue;
+            }
+
+            let shelter_key: i32 = get_from_memory(entity_type_ptr + 0x16c);
+            if shelter_key != 0 && field_0x16c_values.get(index) == Some(&shelter_key) {
+                shelter_count += 1;
+            }
+            let toy_key: i32 = get_from_memory(entity_type_ptr + 0x170);
+            if toy_key != 0 && field_0x170_clamped.get(index) == Some(&toy_key) {
+                toy_count += 1;
+            }
+        }
+
+        if self.is_show_tank() {
+            toy_count = 0;
+        }
+        (shelter_count, toy_count)
+    }
+
+    /// Ports `ZTHabitat::recalculateCharacteristics`'s own **second** `owned_tiles_ptr` walk (phase 4's
+    /// terrain-census pass, real lines ~834-1000 - distinct from [`Self::recalc_phase_1_2`]'s own earlier
+    /// animal/keeper census walk over the same list). See
+    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 7 for the full identification
+    /// trail this is built from, including a disassembly-confirmed correction (this doc comment's own
+    /// "Fourth follow-up pass" note) to that plan's own prior "mutually exclusive"/nesting-order framing.
+    ///
+    /// `species_vector_ptr` is the real vanilla `vector<ZTSpeciesType*>` begin/end pair this walk reads
+    /// fresh **once per owned tile** (not once for the whole call) - [`Self::recalc_phase_1_2`]'s own
+    /// `found_species_vec` out-param. `map_ptr` is the same function-local scratch
+    /// `map<int, ZTHabitatSuitabilityRecord>` tree [`Self::additional_scenery_suitability_change`] already
+    /// reads/writes, found-or-inserted per (tile, species) pair via
+    /// [`map_int_habitatsuitability_find_or_insert`] exactly like that function does (a real, cheap,
+    /// idempotent tree lookup - matching real vanilla's own redundant per-tile re-lookup rather than
+    /// caching the record pointer across tiles).
+    ///
+    /// Returns `(histogram, overlap_tally, elevation_tally)`:
+    /// - `histogram` is real vanilla's own `local_a88` - an 18-element per-habitat terrain-type tile-count
+    ///   histogram (`histogram[tile->terrain_type_byte] += 1`, counted only when the tile's own flag bit
+    ///   `0x0800_0000` is **clear** - a real vanilla-layout dword at `tile+0x80` this codebase's own
+    ///   [`crate::ztmapview::BFTile`] currently only exposes as four opaque bytes,
+    ///   `unknown_byte_1`..`_4`/`unknown_byte_1` at that same offset - read directly here as a raw dword
+    ///   rather than widening that struct for one caller). This is exactly [`Self::set_animal_conditions`]'s
+    ///   own `terrain_histogram_ptr` parameter. Computed once per tile, entirely independent of the species
+    ///   loop below (confirmed via disassembly: the histogram increment at `0x00444fd5`-`0x00444fed` sits
+    ///   *before* the per-species loop's own guard check at `0x0044500a`).
+    /// - `overlap_tally` is real vanilla's own `iVar31` - a per-owned-tile count, incremented once per tile
+    ///   when a single flag (`0x00445168`'s `TEST AL,AL`/`JNZ 0x004469dc`, real vanilla's own
+    ///   `[ESP+0x3b]`) ends up set after the species loop below finishes. That flag is reset once per tile
+    ///   (`0x00445001`, alongside `[ESP+0x33]`) and OR'd, once per occupant across *every* species and all
+    ///   4 slots for this tile, with `entity_type_ptr+0x11c > 0` (confirmed at `0x0044692d`-`0x0044693a`,
+    ///   `[ESP+0x3f]` in that deeper call frame - a consistent `+4` stack-offset delta from the `0x33`/`0x3b`
+    ///   reset instructions confirms these are the same physical slots viewed from a deeper point in the
+    ///   same tile iteration). This is exactly the previous pass's own `fVar24`/`puVar18` machinery's real
+    ///   input (`0x004451a6`-`0x004451f4`) - the ratio/threshold computation itself (`iVar31 as f32 /
+    ///   dVar45 as f32`) is still Stage 8's own job (`dVar45`, the total owned-tile count, isn't available
+    ///   here).
+    ///
+    /// **Fourth follow-up pass correction**: the plan doc's own "Third follow-up pass" text described the
+    /// tile-flag-gated `adv_ptr` contribution (below) and the 4-slot entity scan as mutually exclusive
+    /// (opposite values of the same bit) and implied a per-found-species *outer* loop wrapping a per-tile
+    /// *inner* walk. Both are wrong, corrected here via direct disassembly: the real nesting is tile
+    /// **outer** (single pass, matching the already-shipped histogram above) with the species loop
+    /// **inner** (walked fresh per tile); and the `adv_ptr` branch (`0x005c6632`-`0x005c667a`) ends with an
+    /// unconditional `JMP 0x00445088` **into** the entity-slot loop's own entry point, not around it - so
+    /// on a bit-set tile, the `adv_ptr` contribution is *additional* to the entity-slot scan, not an
+    /// alternative to it. The plan doc's own "Third follow-up pass" claim that `iVar31` is fed by `OR`ing
+    /// *two* flags (`entity_type_ptr+0x12c==0` alongside `+0x11c>0`) is also corrected above - only the
+    /// `+0x11c>0` flag reaches the real `iVar31` increment; `entity_type_ptr+0x12c`'s own accumulator
+    /// (`[ESP+0x33]`/`[ESP+0x37]`) is read nowhere this pass could find, and is left unread/unported here
+    /// pending a real consumer being identified (may simply be dead, matching this function's own
+    /// established "computed, never consumed" pattern elsewhere - e.g. [`Self::recalc_phase_5`]'s dead
+    /// per-tank min/max water-level locals - but not confirmed dead the way that precedent was).
+    ///
+    /// **Per-tile, per-species body** (`category_ptr = species_type_ptr + 0x2cc`, `record_ptr =`
+    /// [`map_int_habitatsuitability_find_or_insert`]`(map_ptr, species_type_ptr+0x1ec)`):
+    /// - If the tile's own `0x0800_0000` flag bit is set: `adv_ptr = get_from_memory(tile_ptr + 0x4c)` (a
+    ///   currently-unidentified polymorphic object - has its own vtable, dispatched at slot `0x20`; ruled
+    ///   out `ZTAdvTerrainType` as a name, that class has no vtable-dispatched methods of its own anywhere
+    ///   in the binary). `val_a = BFCategory::getValue(category_ptr, adv_ptr+0x10c)` (**unscaled**);
+    ///   `val_b = BFCategory::getValue(category_ptr, vtable-slot-0x20(adv_ptr))`, scaled via the
+    ///   `(x*100 + (x*100>>31 & 3))>>2` round-to-nearest-divide-by-4 bit trick (confirmed at
+    ///   `0x005c6654`-`0x005c6663`, the same trick this plan's own "Rounding note" already documents for
+    ///   phase 6); `record.scenery_category_score += val_a + val_b_scaled` (confirmed at
+    ///   `0x005c666c`-`0x005c6673`).
+    /// - Unconditionally, walk the tile's own 4 direct-occupant slots (`tile+0x4..+0x10`, same shape as
+    ///   [`Self::add_to_building_list`]/[`Self::additional_scenery_suitability_change`]). Per non-null
+    ///   occupant passing the `ZTSceneryType` cast gate ([`entity_type_matches`],
+    ///   [`RVA_SCENERY_TYPE_CHECK_ARG`]): `val1/val2 = BFCategory::getValue(category_ptr,
+    ///   entity_type_ptr+0x10c)`/`getValue(category_ptr, vtable-slot-0x20(entity_type_ptr))`;
+    ///   `divisor = get_from_memory(entity_ptr + 0x150)` (**entity, not entity_type**); `record.
+    ///   scenery_category_score += (val1+val2)*100/divisor` (plain truncating `IDIV`, added directly per
+    ///   occupant, unlike [`Self::additional_scenery_suitability_change`]'s own accumulate-then-add-once
+    ///   pattern - confirmed at `0x004468f6`-`0x00446911`; same zero-divisor deviation as that function
+    ///   applies here too). If also `ZTBuilding` ([`RVA_BUILDING_TYPE_CHECK_ARG`]) and
+    ///   `(entity_type_ptr+0x23e != 0 OR entity_type_ptr+0x170 > 0)` and `!self.has_bldg(entity_ptr)`:
+    ///   append `entity_ptr` into `self.building_list` ([`Self::has_bldg`]'s own push idiom, confirmed at
+    ///   `0x004480c4`-`0x0044810c`). If `val1+val2 >= 0`: bump `record.raw_building_count` (`+0x1c`) when
+    ///   `entity_type_ptr+0x12b != 0`, and OR `entity_type_ptr+0x12a != 0` into a per-species tile flag.
+    ///   After all 4 slots, if that flag is set: `record.raw_percent_a += 1` (`+0x14`, confirmed at
+    ///   `0x00446974`-`0x0044697b`).
+    ///
+    /// Also truncates [`Self::building_list_begin`]`..`[`Self::building_list_end`] back to empty (real
+    /// vanilla's own `vector_pod<>::erase(begin, begin, end)`, which keeps the buffer's allocated capacity;
+    /// `building_list_cap_end` is left untouched) right before this same walk re-populates it - a second
+    /// writer of that field alongside [`Self::add_to_building_list`].
+    ///
+    /// The third return value is the corner-elevation tally (real vanilla's `local_bf8`, the `[ESP+0xcc]`
+    /// slot): per owned tile the corner-height spread plus one per side shared with this habitat, see
+    /// [`Self::tile_elevation_contribution`]. It is not dead: it is `score_percent_c`'s numerator
+    /// ([`Self::recalc_phase_6_elevation_score`]).
+    ///
+    /// **Deviation from real vanilla**: real vanilla indexes `local_a88` with the tile's raw terrain-type
+    /// byte (`0..=255`) completely unchecked, into a stack array sized for exactly 18 real terrain types -
+    /// an out-of-range byte would silently corrupt adjacent stack memory rather than trap. No real-game
+    /// terrain type is known to reach that byte value in practice (the array's own size implies real
+    /// vanilla data never does either), but a Rust `panic` on out-of-bounds indexing would be strictly
+    /// worse (crashes the whole process) than vanilla's own silent corruption, so this port guards the
+    /// index and drops the tally on an out-of-range value instead of replicating the overflow.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`].
+    pub(crate) fn recalc_phase_4_terrain_census(&self, species_vector_ptr: u32, map_ptr: u32) -> ([i32; 18], i32, i32) {
+        write_live!(self, building_list_end, self.building_list_begin);
+
+        let species_begin: u32 = get_from_memory(species_vector_ptr);
+        let species_end: u32 = get_from_memory(species_vector_ptr + 4);
+
+        let mut histogram = [0i32; 18];
+        let mut overlap_tally: i32 = 0;
+        let mut elevation_tally: i32 = 0;
+
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+            let flags: u32 = get_from_memory(tile_ptr + 0x80);
+            if flags & 0x0800_0000 == 0 {
+                let terrain_type = (flags & 0xff) as usize;
+                if let Some(count) = histogram.get_mut(terrain_type) {
+                    *count += 1;
+                }
+            }
+
+            let mut tile_overlap_flag = false;
+            for species_addr in (species_begin..species_end).step_by(4) {
+                let species_type_ptr: u32 = get_from_memory(species_addr);
+                let key: i32 = get_from_memory(species_type_ptr + 0x1ec);
+                let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, key);
+                let category_ptr = species_type_ptr + 0x2cc;
+
+                if flags & 0x0800_0000 != 0 {
+                    let adv_ptr: u32 = get_from_memory(tile_ptr + 0x4c);
+                    let val_a = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, get_from_memory(adv_ptr + 0x10c)) };
+                    let raw_b = unsafe { call_entity_vtable_u32_noargs(adv_ptr, 0x20) } as i32;
+                    let val_b = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, raw_b) };
+                    let scaled = val_b.wrapping_mul(100);
+                    let val_b_scaled = scaled.wrapping_add((scaled >> 31) & 3) >> 2;
+                    let current: f32 = get_from_memory(record_ptr + 0x10);
+                    save_to_memory::<f32>(record_ptr + 0x10, current + (val_a.wrapping_add(val_b_scaled)) as f32);
+                }
+
+                let mut tile_or_flag = false;
+                for slot in (0x4u32..=0x10).step_by(4) {
+                    let entity_ptr: u32 = get_from_memory(tile_ptr + slot);
+                    if entity_ptr == 0 || !unsafe { entity_type_matches(entity_ptr, RVA_SCENERY_TYPE_CHECK_ARG) } {
+                        continue;
+                    }
+                    let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
+
+                    let arg1: i32 = get_from_memory(entity_type_ptr + 0x10c);
+                    let arg2 = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) } as i32;
+                    let val1 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg1) };
+                    let val2 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg2) };
+                    let divisor: i32 = get_from_memory(entity_ptr + 0x150);
+                    if divisor == 0 {
+                        tracing::warn!(
+                            "ZTHabitat::recalculateCharacteristics terrain census: entity {:#010x} has a zero +0x150 divisor, skipping its scenery contribution",
+                            entity_ptr
+                        );
+                    } else {
+                        let contribution = val1.wrapping_add(val2).wrapping_mul(100).wrapping_div(divisor);
+                        let current: f32 = get_from_memory(record_ptr + 0x10);
+                        save_to_memory::<f32>(record_ptr + 0x10, current + contribution as f32);
+                    }
+
+                    if unsafe { entity_type_matches(entity_ptr, RVA_BUILDING_TYPE_CHECK_ARG) } {
+                        let flag: u8 = get_from_memory(entity_type_ptr + 0x23e);
+                        let count: i32 = get_from_memory(entity_type_ptr + 0x170);
+                        if (flag != 0 || count > 0) && !self.has_bldg(entity_ptr) {
+                            vector_push_pool_alloc4(std::ptr::addr_of!(self.building_list_begin) as u32, entity_ptr);
+                        }
+                    }
+
+                    if val1.wrapping_add(val2) >= 0 {
+                        if get_from_memory::<u8>(entity_type_ptr + 0x12b) != 0 {
+                            save_to_memory::<i32>(record_ptr + 0x1c, get_from_memory::<i32>(record_ptr + 0x1c).wrapping_add(1));
+                        }
+                        tile_or_flag |= get_from_memory::<u8>(entity_type_ptr + 0x12a) != 0;
+                    }
+                    tile_overlap_flag |= get_from_memory::<i32>(entity_type_ptr + 0x11c) > 0;
+                }
+
+                if tile_or_flag {
+                    save_to_memory::<i32>(record_ptr + 0x14, get_from_memory::<i32>(record_ptr + 0x14).wrapping_add(1));
+                }
+            }
+
+            elevation_tally = elevation_tally.wrapping_add(self.tile_elevation_contribution(tile_ptr));
+
+            if tile_overlap_flag {
+                overlap_tally = overlap_tally.wrapping_add(1);
+            }
+        }
+
+        (histogram, overlap_tally, elevation_tally)
+    }
+
+    /// One owned tile's share of the census' corner-elevation tally (`0x004450fe`-`0x00445168`): the
+    /// spread `max - min` of the tile's four corner heights ([`tile_corner_height`] at corners `1`, `3`, `5`,
+    /// `7`), plus `1` for each of the tile's four sides (`tile+0x82` two-bit fields, values `2` and `3`)
+    /// whose neighbouring tile belongs to this same habitat. A side with no neighbouring tile counts as
+    /// another habitat's (`0x005acfbe` zeroes the compared pointer).
+    fn tile_elevation_contribution(&self, tile_ptr: u32) -> i32 {
+        let heights = [1, 3, 5, 7].map(|corner| tile_corner_height(tile_ptr, corner));
+        let spread = heights.iter().max().unwrap() - heights.iter().min().unwrap();
+
+        let side_bits: u8 = get_from_memory(tile_ptr + 0x82);
+        let world = globals().ztworldmgr();
+        let self_addr = self as *const Self as u32;
+        let shared_sides = [0u32, 2, 4, 6]
+            .into_iter()
+            .filter(|&side| (side_bits >> side) & 3 > 1)
+            .filter(|&side| {
+                let neighbour_ptr = get_neighbour_raw(&world, tile_ptr, side);
+                neighbour_ptr != 0
+                    && globals()
+                        .zthabitatmgr()
+                        .get_habitat_ptr(get_from_memory::<i32>(neighbour_ptr + 0x34), get_from_memory::<i32>(neighbour_ptr + 0x38))
+                        == self_addr
+            })
+            .count() as i32;
+        spread.wrapping_add(shared_sides)
+    }
+
+    /// Ports `ZTHabitat::recalculateCharacteristics`'s "at least five distinct passes" breakdown's own step
+    /// (2) (see `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 7, "Real,
+    /// previously-unknown complication" blockquote) - real vanilla's `local_c1c`/`local_c10` scratch
+    /// arrays, confirmed via direct disassembly at `0x0044523a`-`0x00448288` (real lines ~1056-1155,
+    /// right after [`Self::recalc_phase_5`]'s own body - that method's caller already performs the
+    /// `additionalScenerySuitabilityChange`/`addToBuildingList` calls this decompile region's own lines
+    /// ~1015-1055 make, so this method's real body starts clean at `self.building_list`'s entry count).
+    ///
+    /// One pass over [`Self::building_list_begin`]`..`[`Self::building_list_end`], producing two
+    /// same-length parallel arrays (real vanilla reserves both to the building list's own entry count up
+    /// front via `PoolAlloc::allocate`, confirmed at `0x00448155`/`0x004481ad` - ported here as plain
+    /// `Vec`s, matching this plan's own "STL/allocator note" that these two scratch arrays are safe,
+    /// genuinely transient `Box`-backed equivalents). Per building-list entry (`entity_ptr`,
+    /// `entity_type_ptr = get_from_memory(entity_ptr + 0x128)`):
+    /// - First array: `entity_type_ptr+0x16c` if `entity_type_ptr+0x23e != 0`, else `0` (confirmed at
+    ///   `0x00448207`-`0x00448217`).
+    /// - Second array: `entity_type_ptr+0x170`, clamped to `0` if `<= 0` (confirmed at
+    ///   `0x0044821b`-`0x0044822b`, real vanilla's own `count & ((count<1)-1)` bit trick) - read
+    ///   **unconditionally**, regardless of the `+0x23e` branch above (both paths converge at
+    ///   `0x00448217` before this read, confirmed via `0x0044828f`'s own `JMP 0x00448217`).
+    ///
+    /// **Deviation from real vanilla**: real vanilla re-checks `entity_type_ptr != 0 &&
+    /// isCastClass(entity_type_ptr, CAST_ZTBuilding)` per entry (`0x004481e3`-`0x004481ff`), falling back to
+    /// treating the entry as absent (both array values `0`) on failure - **and its own fallback path for
+    /// "isCastClass returned false" (`0x005acfd3`) clobbers `EAX` to `0` and jumps back into the
+    /// `entity_type_ptr+0x23e` read itself, i.e. real vanilla would dereference the near-null address
+    /// `0x23e` on that path**, not skip the read. This is never actually reachable: every entry in
+    /// [`Self::building_list_begin`] was itself gated on the identical `isCastClass(ZTBuilding)` check at
+    /// insertion time, by both writers ([`Self::add_to_building_list`],
+    /// [`Self::recalc_phase_4_terrain_census`]) - so a stored `entity_ptr` always has a non-null
+    /// `entity_type_ptr` that always passes the same cast check, making the re-check (and its near-null
+    /// fallback dereference) provably dead in practice. This port relies on that invariant and skips the
+    /// re-check entirely rather than translating a deliberately-unreachable raw address dereference into
+    /// Rust (which would require actually reading near-null memory to replicate byte-for-byte).
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`].
+    pub(crate) fn build_building_type_scratch_arrays(&self) -> (Vec<i32>, Vec<i32>) {
+        let mut field_0x16c_values = Vec::new();
+        let mut field_0x170_clamped = Vec::new();
+
+        for addr in (self.building_list_begin..self.building_list_end).step_by(4) {
+            let entity_ptr: u32 = get_from_memory(addr);
+            let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
+
+            let a: i32 = if get_from_memory::<u8>(entity_type_ptr + 0x23e) != 0 {
+                get_from_memory(entity_type_ptr + 0x16c)
+            } else {
+                0
+            };
+            let raw_b: i32 = get_from_memory(entity_type_ptr + 0x170);
+
+            field_0x16c_values.push(a);
+            field_0x170_clamped.push(raw_b.max(0));
+        }
+
+        (field_0x16c_values, field_0x170_clamped)
+    }
+
+    /// Ports step (4) of `ZTHabitat::recalculateCharacteristics`'s own "at least five distinct passes"
+    /// breakdown (see `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 7, "Real,
+    /// previously-unknown complication" blockquote) - confirmed via live Ghidra MCP disassembly at
+    /// `0x004452d7`-`0x004455b5` (real lines ~1158-1229 or so).
+    ///
+    /// `map_ptr` is the same function-local suitability scratch tree every other phase reads/writes.
+    /// `field_0x16c_values`/`field_0x170_clamped` are [`Self::build_building_type_scratch_arrays`]'s own
+    /// two returned arrays (step (2)) - **mutated in place here** (decremented), matching real vanilla's
+    /// own `local_c1c`/`local_c10` (confirmed real vanilla treats them as consumable per-tile-type
+    /// budgets, not static gates - see below).
+    ///
+    /// Calls `GET_SURROUNDING_ANIMALS(self)` (`generated.rs`'s `zthabitat::GET_SURROUNDING_ANIMALS`,
+    /// `0x00446436` - a plain call-through, nothing detours it) and, per surrounding animal
+    /// (`category_ptr = animal_type_ptr + 0x2cc`, `record_ptr =`
+    /// [`map_int_habitatsuitability_find_or_insert`]`(map_ptr, animal_type_ptr+0x1ec)`):
+    /// - Runs [`Self::scan_building_list_for_surrounding_animal`] against `field_0x16c_values`/
+    ///   `float_cache_a`, gated on `animal_type_ptr+0x3d2` (confirmed at `0x00445412`).
+    /// - Then, **unconditionally** (the `TEST CL,CL; JZ` at `0x00445451` only loops the *first* pass; both
+    ///   `0x0044545d` and the no-match tails `0x00447064`/`0x00446fac` fall into the second), runs it again
+    ///   against `field_0x170_clamped`/`float_cache_b`, gated on `animal_type_ptr+0x3d3` (`0x00445560`).
+    ///
+    /// **Both scratch-array flags are read off the *surrounding animal's* own `entity_type`, not the
+    /// building-list entity's** - confirmed at `0x00445315` (`[ESP+0x28]` is saved once per animal,
+    /// straight from `animal_ptr+0x128`, before either pass begins) and re-loaded at both gate sites.
+    ///
+    /// The two float caches ([`init_float_scratch_tree`]/[`map_int_float_find_or_insert`]) are written
+    /// here, as `i32` counts: a pass that reaches the end of the building list without a match bumps
+    /// `cache[species_id]` when its flag byte is set (`0x00447064`, `0x00446fac`). The `find`/
+    /// `ITERATOR_ASSIGN` calls elsewhere in the block are value-type-agnostic and hit `map_ptr`.
+    ///
+    /// Returns the `GET_SURROUNDING_ANIMALS` vector: vanilla builds it once here and walks the same
+    /// vector again in its terminal block ([`Self::recalc_terminal_block`]), freeing it only at the very
+    /// end. The caller owns it and must release it with [`free_event_vector_buffer`]
+    /// (`begin`, `cap_end - begin`) when the whole recalculation is done.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`].
+    pub(crate) fn recalc_surrounding_animal_building_scan(
+        &self,
+        map_ptr: u32,
+        field_0x16c_values: &mut [i32],
+        field_0x170_clamped: &mut [i32],
+        float_cache_a: u32,
+        float_cache_b: u32,
+    ) -> VanillaEventVector {
+        let mut animals = VanillaEventVector::rvo_target();
+        unsafe { GET_SURROUNDING_ANIMALS.original()(self as *const Self as *const u32, animals.as_ptr()) };
+
+        for addr in (animals.begin..animals.end).step_by(4) {
+            let animal_ptr: u32 = get_from_memory(addr);
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let category_ptr = animal_type_ptr + 0x2cc;
+            let key: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+            let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, key);
+
+            self.scan_building_list_for_surrounding_animal(record_ptr, category_ptr, animal_type_ptr, 0x3d2, field_0x16c_values, float_cache_a);
+            self.scan_building_list_for_surrounding_animal(record_ptr, category_ptr, animal_type_ptr, 0x3d3, field_0x170_clamped, float_cache_b);
+        }
+
+        animals
+    }
+
+    /// Shared body of [`Self::recalc_surrounding_animal_building_scan`]'s own two near-identical passes
+    /// over `self.building_list` (real vanilla repeats this whole sequence twice inline rather than
+    /// sharing it - see that method's own doc comment for why porting it once, parameterized on
+    /// `flag_offset`/`remaining_counts`, is still faithful). Per non-null occupant passing the
+    /// `ZTSceneryType` cast gate ([`entity_type_matches`], [`RVA_SCENERY_TYPE_CHECK_ARG`]):
+    /// `val1/val2 = BFCategory::getValue(category_ptr, entity_type_ptr+0x10c)`/`getValue(category_ptr,
+    /// vtable-slot-0x20(entity_type_ptr))`; `divisor = get_from_memory(entity_ptr + 0x150)`;
+    /// `record.scenery_category_score += (val1+val2)*100/divisor` (vanilla's `[node+0x24]`, plain truncating `IDIV`, added **unconditionally**
+    /// regardless of `val1+val2`'s sign - confirmed at `0x004453fc`-`0x00445409`, the sign test happens
+    /// strictly after the score is already added; same zero-divisor deviation as
+    /// [`Self::additional_scenery_suitability_change`] applies here too). Only if `val1+val2 >= 0` **and**
+    /// `animal_type_ptr+flag_offset != 0`: decrement `remaining_counts[index]` (by building-list position,
+    /// matching [`Self::build_building_type_scratch_arrays`]'s own iteration order) if it's currently
+    /// non-zero, returning `true` from this call if any entry was actually decremented.
+    fn scan_building_list_for_surrounding_animal(
+        &self,
+        record_ptr: u32,
+        category_ptr: u32,
+        animal_type_ptr: u32,
+        flag_offset: u32,
+        remaining_counts: &mut [i32],
+        float_cache: u32,
+    ) {
+        let mut matched = false;
+
+        for (index, addr) in (self.building_list_begin..self.building_list_end).step_by(4).enumerate() {
+            let entity_ptr: u32 = get_from_memory(addr);
+            if !unsafe { entity_type_matches(entity_ptr, RVA_SCENERY_TYPE_CHECK_ARG) } {
+                continue;
+            }
+            let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
+
+            let arg1: i32 = get_from_memory(entity_type_ptr + 0x10c);
+            let arg2 = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) } as i32;
+            let val1 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg1) };
+            let val2 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg2) };
+            let divisor: i32 = get_from_memory(entity_ptr + 0x150);
+            if divisor == 0 {
+                tracing::warn!(
+                    "ZTHabitat::recalculateCharacteristics surrounding-animal scan: entity {:#010x} has a zero +0x150 divisor, skipping its scenery contribution",
+                    entity_ptr
+                );
+            } else {
+                let contribution = val1.wrapping_add(val2).wrapping_mul(100).wrapping_div(divisor);
+                let current: f32 = get_from_memory(record_ptr + 0x10);
+                save_to_memory::<f32>(record_ptr + 0x10, current + contribution as f32);
+            }
+
+            if val1.wrapping_add(val2) >= 0
+                && get_from_memory::<u8>(animal_type_ptr + flag_offset) != 0
+                && let Some(slot) = remaining_counts.get_mut(index)
+                && *slot != 0
+            {
+                *slot -= 1;
+                matched = true;
+            }
+
+            if matched {
+                break;
+            }
+        }
+
+        if !matched && get_from_memory::<u8>(animal_type_ptr + flag_offset) != 0 {
+            let key: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+            let count_ptr = map_int_float_find_or_insert(float_cache, key);
+            save_to_memory::<i32>(count_ptr, get_from_memory::<i32>(count_ptr) + 1);
+        }
+    }
+
+    /// Ports step (5) of `ZTHabitat::recalculateCharacteristics`'s own "at least five distinct passes"
+    /// breakdown (see `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 7 blockquotes) -
+    /// `ZTHabitat::constructSurroundingSpeciesList` (`0x00446265`), confirmed via a full live Ghidra MCP
+    /// disassembly of the function.
+    ///
+    /// - Truncates [`Self::surrounding_species_begin`]`..`[`Self::surrounding_species_end`] back to empty
+    ///   (capacity untouched) - real vanilla's own opening block computes an element count as `end - end`
+    ///   (`.asm`-confirmed both operand reads are the same, unmodified `+0x140` value read twice), so its
+    ///   "grow" arm can never actually run; the only real effect of that block is its always-taken arm's
+    ///   `end = begin`.
+    /// - Appends every raw catalog-entry pointer in [`Self::species_list_begin`]`..`[`Self::species_list_end`]
+    ///   directly - no dedup, plain field reads (`.asm`-confirmed no call through `getSpeciesList` for
+    ///   `self`'s own list here, unlike the two neighbor walks below - `self` needs no lazy-recalculate
+    ///   re-check mid-`recalculateCharacteristics`).
+    /// - If `!self.is_tank()` (`self`'s own vtable `+0x20` dispatch, `0x00446307`-`0x0044630e`): walks
+    ///   [`Self::amphibious_neighbors_head`] ([`walk_neighbor_tree`]); per neighbor (node `+0x10`), calls
+    ///   through real vanilla `getSpeciesList` (`0x00410f26`, [`Self::species_list`]'s own callee, confirmed
+    ///   via 3 real `CALL 0x00410f26` sites in this loop) and, for each entry passing that entry's own
+    ///   vtable `+0xcc` predicate ([`call_entity_vtable_noargs`] - the same "species wants water"-shaped slot
+    ///   [`Self::scan_building_list_for_surrounding_animal`]'s sibling `FUN_0044699a` call site documents),
+    ///   appends it if not already present.
+    /// - Unconditionally walks [`Self::show_neighbors_head`] the same way, but with **no** `+0xcc` gate -
+    ///   every entry not already present gets appended.
+    ///
+    /// Both neighbor walks dedup by linear scan of the vector-so-far before appending
+    /// ([`vector_push_pool_alloc4`] - real vanilla's own `PoolAlloc`-backed doubling-growth shape,
+    /// `.asm`-confirmed identical at both call sites, including the `cap_end - begin` free-size math); the
+    /// initial self-species-list copy does not dedup at all (real vanilla never checks it against anything,
+    /// since the vector was just truncated to empty immediately before).
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`]; each neighbor visited via `walk_neighbor_tree` must also be live.
+    pub(crate) fn construct_surrounding_species_list(&self) {
+        write_live!(self, surrounding_species_end, self.surrounding_species_begin);
+
+        for addr in (self.species_list_begin..self.species_list_end).step_by(4) {
+            let species_ptr: u32 = get_from_memory(addr);
+            vector_push_pool_alloc4(std::ptr::addr_of!(self.surrounding_species_begin) as u32, species_ptr);
+        }
+
+        if !self.is_tank() {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+                for species_ptr in neighbor.species_list() {
+                    if !unsafe { call_entity_vtable_noargs(species_ptr, 0xcc) } {
+                        continue;
+                    }
+                    if !self.surrounding_species_contains(species_ptr) {
+                        vector_push_pool_alloc4(std::ptr::addr_of!(self.surrounding_species_begin) as u32, species_ptr);
+                    }
+                }
+            }
+        }
+
+        for node in walk_neighbor_tree(self.show_neighbors_head) {
+            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
+            for species_ptr in neighbor.species_list() {
+                if !self.surrounding_species_contains(species_ptr) {
+                    vector_push_pool_alloc4(std::ptr::addr_of!(self.surrounding_species_begin) as u32, species_ptr);
+                }
+            }
+        }
+    }
+
+    /// Membership test over [`Self::surrounding_species_begin`]/`_end`, same shape as [`Self::has_bldg`] -
+    /// used by [`Self::construct_surrounding_species_list`]'s own two neighbor-walk dedup checks.
+    fn surrounding_species_contains(&self, species_ptr: u32) -> bool {
+        (self.surrounding_species_begin..self.surrounding_species_end).step_by(4).any(|addr| get_from_memory::<u32>(addr) == species_ptr)
+    }
+
+    /// Ports the real first consumer of `local_c30`/`local_bc0` - `constructSurroundingSpeciesList`'s own
+    /// follow-up walk back in `recalculateCharacteristics`'s own body, immediately after the call
+    /// (`0x004455bb`-`0x004456e6`, confirmed via both a full decompile re-pull and cross-checked
+    /// disassembly of the loop setup/entry). Per entry in the now-populated `self.surrounding_species`
+    /// (keyed by `species_ptr+0x1ec`, the species id):
+    /// - Looks up `float_cache_a[key]` (real vanilla's own inlined lower-bound-then-insert-default-`0.0`
+    ///   dance - equivalent to [`map_int_float_find_or_insert`], which this port uses instead of
+    ///   hand-rolling the dance, same precedent as every other consumer of that helper) and, if `> 0.0`
+    ///   (`.asm`-confirmed `CMP dword,0; JG` on the value's raw bits - exactly equivalent to a positive-`f32`
+    ///   test for any non-NaN value), looks up `map_int_habitatsuitability_find_or_insert(map_ptr, key)`
+    ///   and sets its flag_pack byte at record `+0x5e` (node `+0x72` - the decompile's own `iVar31` there is
+    ///   untyped/plain-`int`, so its `+0x72` is unscaled byte arithmetic).
+    /// - Does the same against `float_cache_b`, setting a *different* flag_pack byte, record `+0x60` (node
+    ///   `+0x74` - confirmed via the decompile's own `(dword *)in_stack_fffff388 + 0x1d`, where the `+0x1d`
+    ///   scales by the pointer's `dword` element size before the final byte cast: `0x1d * 4 == 0x74`). Both
+    ///   land inside the struct's already-established `0x58`-`0x6d` flag_pack range once corrected for the
+    ///   record-vs-node `+0x14` offset this plan's own struct-layout table already documents.
+    ///
+    /// **Not yet ported**: real vanilla's `float_cache_a` branch (only) additionally accumulates
+    /// `float_cache_a[key]`'s own raw value into a running total (`puVar52` in the decompile) that gets
+    /// threaded as an argument into what this stage's own "scope correction" blockquote already confirmed
+    /// is decompiler sibling-call codegen, not a real function call (`FUN_004469ba`/etc. are
+    /// `recalculateCharacteristics`'s own body, reached by a real tail-`CALL`/`RET` pair). Its real
+    /// destination lies inside phase 6's own big per-species scoring loop, which starts immediately after
+    /// this walk and is entirely unexamined so far - left unported until that loop itself is traced.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as
+    /// [`Self::get_attractiveness`], after [`Self::construct_surrounding_species_list`] has already
+    /// populated `self.surrounding_species`.
+    pub(crate) fn recalc_surrounding_species_flags(&self, map_ptr: u32, float_cache_a: u32, float_cache_b: u32) {
+        for addr in (self.surrounding_species_begin..self.surrounding_species_end).step_by(4) {
+            let species_ptr: u32 = get_from_memory(addr);
+            let key: i32 = get_from_memory(species_ptr + 0x1ec);
+
+            let value_a: f32 = get_from_memory(map_int_float_find_or_insert(float_cache_a, key));
+            if value_a > 0.0 {
+                let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, key);
+                save_to_memory::<u8>(record_ptr + 0x5e, 1);
+            }
+
+            let value_b: f32 = get_from_memory(map_int_float_find_or_insert(float_cache_b, key));
+            if value_b > 0.0 {
+                let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, key);
+                save_to_memory::<u8>(record_ptr + 0x60, 1);
+            }
+        }
+    }
+
+    /// Ports `ZTHabitat::setAnimalConditions` (`SET_ANIMAL_CONDITIONS`, `0x00447164`) - see
+    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 5. Translates one
+    /// per-species [`ZTHabitatSuitabilityRecord`] (`record_ptr`) into `animal_ptr`'s own 128-bit
+    /// low/critical condition flag word (`animal+0x260+0x38/0x3c` = "low" bits, `animal+0x260+0x40/0x44`
+    /// = "critical" bits - a `ZTAnimal`-embedded field, not otherwise named in this pass's own scope).
+    ///
+    /// `terrain_histogram_ptr` is the real vanilla-layout `int[18]` per-habitat terrain-type tile-count
+    /// array real vanilla calls this with (`recalculateCharacteristics`'s own second owned-tile walk,
+    /// "local_a88" per the master plan's Stage 7 notes - not yet ported as of this stage). `extra_low_bit`/
+    /// `extra_critical_bit` are the two lone bytes (`+4`/`+5`) real vanilla's own 5th argument struct
+    /// (`ph_AdditionalConditionValues*`, Ghidra's own placeholder type with no real field layout) is
+    /// actually read for by this function - every other byte of that struct is unread here, so Stage 7's
+    /// own caller only needs to build these two bools, not the whole struct, to drive this port.
+    ///
+    /// Real body, confirmed directly against the live Ghidra project (decompile + full disassembly - this
+    /// function's own decompile is corrupted throughout in the same way `recalculateCharacteristics`'s is,
+    /// heavy `unaff_ESI`/`unaff_EDI`/`unaff_retaddr` register-tracking failure requiring a register-level
+    /// disassembly trace to resolve correctly):
+    /// - Every bit below is independently, unconditionally set-or-cleared from its own condition (real
+    ///   vanilla's own read-modify-write always both ANDs the bit off and conditionally ORs it back on) -
+    ///   so this port builds two fresh `u64` values (`low`/`critical`, bit 0 = `animal+0x298`'s own bit 0,
+    ///   bit 32 = `animal+0x29c`'s own bit 0, and the same split for `critical`/`0x2a0`+`0x2a4`) and writes
+    ///   all four dwords once at the end, rather than replicating the RMW pattern read-for-read.
+    /// - Named condition bits (`record`'s 22 flag `bool`s, real field names/order confirmed via
+    ///   `ZTSpeciesAttribs` - see [`ZTHabitatSuitabilityRecord`]'s own doc comment): each "critical"
+    ///   flag sets BOTH of its corresponding low-word bit positions in the critical word (not just one) -
+    ///   confirmed via disassembly, e.g. `criticalElevation` alone sets both the bit `tooMuchElevation`
+    ///   would use and the bit `needElevation` would use, within the critical word only.
+    ///   - bit 8 `tank_too_shallow`, bit 9 `tank_too_deep` (low); `critical_tank_depth` -> critical bits
+    ///     8 AND 9.
+    ///   - bit 11: real vanilla's own vtable slot `+0x28` on `self` (`ZTHabitat`), called twice - once
+    ///     with no extra argument (result inverted into the low bit), once with the animal's own
+    ///     `entity_type` pointer as a second thiscall argument IF `entity_type` is non-null and passes
+    ///     [`type_check`]`(entity_type_ptr, `[`RVA_ANIMAL_TYPE_CHECK`]`)` else `0` (result inverted into
+    ///     the critical bit). Base `ZTHabitat`'s own pole at this slot (`0x00446995`,
+    ///     `OOAnalyzer::BFEntity::vf_return1`) is a shared, ~150-class "always return true" stub that
+    ///     never reads its arguments (same shared-stub pattern [`Self::is_tank_base_default`]'s own doc
+    ///     comment documents for slot `+0x20`) - dispatched live via
+    ///     [`call_vtable_slot_noargs_ret_bool`]/[`call_vtable_slot_with_ptr_ret_bool`] rather than assumed
+    ///     constant, in case a real override (e.g. `ZTTankExhibit`) behaves differently.
+    ///   - bit 12 `need_foliage`, bit 13 `too_much_foliage` (low); `critical_foliage` -> critical bits 12
+    ///     AND 13.
+    ///   - bit 17 `need_elevation`, bit 18 `too_much_elevation` (low); `critical_elevation` -> critical
+    ///     bits 17 AND 18.
+    ///   - bit 19 `need_rocks`, bit 20 `too_many_rocks` (low); `critical_rocks` -> critical bits 19 AND
+    ///     20.
+    ///   - bit 57 `need_more_shelter`, bit 58 `need_space` (low); `critical_shelter` -> critical bits 57
+    ///     AND 58.
+    ///   - bit 59 `need_toys`, bit 60 `too_crowded` (low); `critical_toys` -> critical bits 59 AND 60.
+    ///   - bit 61: `extra_low_bit` (low), `extra_critical_bit` (critical) - real vanilla's own
+    ///     `param_4[+4]`/`param_4[+5]` byte reads.
+    ///   - bit 63: `record.critical_water` -> low only (no critical-word counterpart - `criticalWater`
+    ///     is itself already a critical-severity flag).
+    /// - Per-category loop (bits 21-56, 18 categories x 2 bits each = "too low" bit at `21+2i`, "too
+    ///   high" bit at `22+2i`; entirely skipped when [`Self::is_tank`] - confirmed via two identical
+    ///   `is_tank()`-equivalent vtable-`0x20` dispatches gating both branches): for each category `i` in
+    ///   `0..18`, reads a per-species config value via `BFCategory::getValue(entity_type+0x2d8, i)` (real
+    ///   vanilla's own THIRD distinct `getCategoryList`-shaped offset on `ZTAnimalType`, alongside the
+    ///   already-used `+0x2c0`/`+0x2cc` - `entity_type` here is `0` when the same cast check gating bit 11
+    ///   above fails, matching real vanilla's own un-null-checked pointer arithmetic on that case rather
+    ///   than adding a defensive guard vanilla itself doesn't have).
+    ///   - Config value `< 0` (species doesn't care about this category): if
+    ///     `terrain_histogram_ptr[i] > 0`, sets the "too high" bit only - no critical-word effect.
+    ///   - Config value `>= 0`: computes `pct = count * 100.0 / (record.occurrence_count +
+    ///     record.fresh_water_tile_adjustment + record.salt_water_tile_adjustment)`, where `count` is
+    ///     `terrain_histogram_ptr[i]` normally, but `record.fresh_water_tile_adjustment` for `i == 9` and
+    ///     `record.salt_water_tile_adjustment` for `i == 10` (real vanilla's own two special-cased
+    ///     category indices, confirmed via disassembly - presumably the freshwater/saltwater tile
+    ///     categories). Sets "too low" (config below `pct - 3.0`) or "too high" (config above `pct +
+    ///     3.0`) in the low word; if `|pct - config| > 6.0`, sets BOTH bits in the critical word too
+    ///     (real vanilla's own `cls_0x4478e5::meth_0x44791e`/`meth_0x4478e5` calls - both fully resolved
+    ///     this pass: trivial `this->mbr_0x2a0/0x2a4 |=/&= mask` and `this->mbr_0x298/0x29c |=/&= mask`
+    ///     bit-set/clear helpers on the SAME animal condition word this function already writes directly,
+    ///     not a separate "post a reason" call as earlier speculated).
+    /// - After the loop, real vanilla reuses category 17's own "too low" bit position (bit 55, literal
+    ///   `0x800000` relative to the high dword) for two final, unrelated conditions that OVERWRITE
+    ///   whatever the loop itself left there: low bit 55 = `record.tank_or_visibility_score < 50.0`,
+    ///   critical bit 55 = `record.tank_or_visibility_score < 25.0`. Ordering matters only for this one
+    ///   bit - applied last in this port, matching real vanilla's own final-write-wins semantics.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference (`self`'s own vtable slot `+0x28` is
+    /// dispatched); `animal_ptr`/`record_ptr` must also be live.
+    pub(crate) fn set_animal_conditions(&self, animal_ptr: u32, record_ptr: u32, terrain_histogram_ptr: u32, owned_tile_total: i32, extra_low_bit: bool, extra_critical_bit: bool) {
+        let record = unsafe { ref_from_memory::<ZTHabitatSuitabilityRecord>(record_ptr) };
+        let self_addr = self as *const Self as u32;
+
+        fn apply_bit(word: &mut u64, bit: u32, val: bool) {
+            if val {
+                *word |= 1u64 << bit;
+            } else {
+                *word &= !(1u64 << bit);
+            }
+        }
+
+        // Every condition is a read-modify-write of one bit in the animal's live words: bits this function
+        // does not name keep their value.
+        let word = |lo: u32| get_from_memory::<u32>(animal_ptr + lo) as u64 | (get_from_memory::<u32>(animal_ptr + lo + 4) as u64) << 32;
+        let mut low: u64 = word(0x298);
+        let mut critical: u64 = word(0x2a0);
+
+        apply_bit(&mut low, 8, record.tank_too_shallow);
+        apply_bit(&mut low, 9, record.tank_too_deep);
+        apply_bit(&mut critical, 8, record.critical_tank_depth);
+        apply_bit(&mut critical, 9, record.critical_tank_depth);
+
+        apply_bit(&mut low, 12, record.need_foliage);
+        apply_bit(&mut low, 13, record.too_much_foliage);
+        apply_bit(&mut critical, 12, record.critical_foliage);
+        apply_bit(&mut critical, 13, record.critical_foliage);
+
+        apply_bit(&mut low, 17, record.need_elevation);
+        apply_bit(&mut low, 18, record.too_much_elevation);
+        apply_bit(&mut critical, 17, record.critical_elevation);
+        apply_bit(&mut critical, 18, record.critical_elevation);
+
+        apply_bit(&mut low, 19, record.need_rocks);
+        apply_bit(&mut low, 20, record.too_many_rocks);
+        apply_bit(&mut critical, 19, record.critical_rocks);
+        apply_bit(&mut critical, 20, record.critical_rocks);
+
+        apply_bit(&mut low, 57, record.need_more_shelter);
+        apply_bit(&mut low, 58, record.need_space);
+        apply_bit(&mut critical, 57, record.critical_shelter);
+        apply_bit(&mut critical, 58, record.critical_shelter);
+
+        apply_bit(&mut low, 59, record.need_toys);
+        apply_bit(&mut low, 60, record.too_crowded);
+        apply_bit(&mut critical, 59, record.critical_toys);
+        apply_bit(&mut critical, 60, record.critical_toys);
+
+        apply_bit(&mut low, 61, extra_low_bit);
+        apply_bit(&mut critical, 61, extra_critical_bit);
+
+        apply_bit(&mut low, 63, record.critical_water);
+        // Set unconditionally, right after the critical-water test (`0x0044...` `OR [ESI+0x2a4], 0x80000000`).
+        apply_bit(&mut critical, 63, true);
+
+        let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+        let cast_ok = entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) };
+        let type_arg = if cast_ok { entity_type_ptr } else { 0 };
+
+        // Both real call sites push one stack argument (the slot's shared stub is `RET 4`); a no-argument
+        // call here would let the callee pop four bytes of the caller's frame.
+        let vtable_28_low = unsafe { call_vtable_slot_with_ptr_ret_bool(self_addr, 0x28, type_arg) };
+        let vtable_28_critical = unsafe { call_vtable_slot_with_ptr_ret_bool(self_addr, 0x28, type_arg) };
+        apply_bit(&mut low, 11, !vtable_28_low);
+        apply_bit(&mut critical, 11, !vtable_28_critical);
+
+        if !self.is_tank() {
+            let category_list_ptr = type_arg + 0x2d8;
+            let denom = (owned_tile_total + record.fresh_water_tile_adjustment + record.salt_water_tile_adjustment) as f32;
+
+            for i in 0..18i32 {
+                let bit_lo = (21 + 2 * i) as u32;
+                let bit_hi = (22 + 2 * i) as u32;
+                let config_value = unsafe { BFCATEGORY_GET_VALUE.original()(category_list_ptr as *const u32, i) };
+
+                if config_value < 0 {
+                    let count = get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4);
+                    if count > 0 {
+                        apply_bit(&mut low, bit_hi, true);
+                    }
+                } else {
+                    let count = match i {
+                        9 => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4) + record.fresh_water_tile_adjustment,
+                        10 => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4) + record.salt_water_tile_adjustment,
+                        _ => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4),
+                    };
+                    let pct = (count as f32 * 100.0) / denom;
+                    let config = config_value as f32;
+
+                    if config < pct - 3.0 {
+                        apply_bit(&mut low, bit_hi, true);
+                    } else if pct + 3.0 < config {
+                        apply_bit(&mut low, bit_lo, true);
+                    }
+                    if (pct - config).abs() > 6.0 {
+                        apply_bit(&mut critical, bit_lo, true);
+                        apply_bit(&mut critical, bit_hi, true);
+                    }
+                }
+            }
+        }
+
+        apply_bit(&mut low, 55, record.tank_or_visibility_score < 50.0);
+        apply_bit(&mut critical, 55, record.tank_or_visibility_score < 25.0);
+
+        unsafe {
+            write_live_ptr((animal_ptr + 0x298) as *const u32, low as u32);
+            write_live_ptr((animal_ptr + 0x29c) as *const u32, (low >> 32) as u32);
+            write_live_ptr((animal_ptr + 0x2a0) as *const u32, critical as u32);
+            write_live_ptr((animal_ptr + 0x2a4) as *const u32, (critical >> 32) as u32);
+        }
+    }
+
+    /// Ports `ZTHabitat::checkEscapability` (`CHECK_ESCAPABILITY`, `0x00446088`) - see
+    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 6. Not yet called by
+    /// anything - wired into the full `recalculateCharacteristics` call graph by Stage 8 alongside phases
+    /// 1-6 and `setAnimalConditions`.
+    ///
+    /// Rate-limited: increments the shared global counter at [`RVA_CHECK_ESCAPABILITY_COUNTER`] on every
+    /// call and returns immediately unless `unknown_flag_0x30` is already set or the counter reaches
+    /// `0x1e` (30), at which point both are reset and the real scan runs. Confirmed directly against the
+    /// real disassembly (this function's own `.c` rendering is clean; verified at the instruction level
+    /// anyway given how much of the surrounding `recalculateCharacteristics` family turned out corrupted).
+    ///
+    /// Real body once the gate passes:
+    /// - Clears `field_0x16c` (real vanilla `msvc_std::map<int, EscapabilityRecord>::clear`,
+    ///   [`MSVC_TREE36_CLEAR`]) - see `field_0x16c`'s own doc comment (`pad6`) for the cache's shape.
+    /// - Calls the still-un-ported [`GET_CLOSE_OUTSIDE_TILE`]; a null result ends the pass with the cache
+    ///   left empty (already cleared above).
+    /// - Reads the tile's own position triple (`tile+0x34/0x38/0x3c`, [`crate::ztmapview::BFTile`]'s
+    ///   `pos` field) as the pathfind target. If the tile's own `+0x85` byte has bit `0x20` set, looks up
+    ///   the [`ZTHabitatMgr::get_habitat_ptr`] occupant at that position and, when one exists, dispatches
+    ///   its own vtable `+0x20` slot (discarding the result - real vanilla does too, confirmed via
+    ///   disassembly: the call's `EAX` result is immediately clobbered by the next instruction) and adds
+    ///   its `+0x188` field into the target's own Z component. **Deviation from real vanilla**: real
+    ///   vanilla dereferences the occupant unconditionally with no null guard here; this port adds one
+    ///   (`occupant != 0`), matching this codebase's established "Crash Fix" precedent for an analogous
+    ///   unchecked-vanilla-dereference case ([`ZTHabitatMgr::find_better_gates_for_neighbors`]'s own
+    ///   `+0x128` read) rather than replicating a null-pointer crash byte-for-byte.
+    /// - Sets up `GLOBAL_ZTAIMgr`'s own pathfinding-query scratch fields (`+0x18`/`+0x1c`/`+0x20`) from
+    ///   `GLOBAL_ZTWorldMgr`'s `map_x_size`/`map_y_size` - state the AIMgr's own embedded pathfinder
+    ///   (`AIMgr+0x10`, dispatched below) reads internally. `ZTAIMgr` itself stays out of scope for
+    ///   reimplementation (per this file's own established convention of exposing it only as `globals().
+    ///   ztaimgr_ptr()`, an opaque handle) - these are raw offset pokes, not a modeled struct.
+    /// - Builds one representative animal per distinct species present in the habitat (real vanilla's own
+    ///   local `map<int, ZTAnimal*>` scratch tree, keyed by `entity_type_ptr` (`animal+0x128`) with
+    ///   last-one-wins semantics over [`Self::get_all_animals`]`(false)`) - modeled here as a plain
+    ///   `HashMap`, safe per this plan's own "genuinely transient, never touched by un-ported vanilla
+    ///   code" rule (built and torn down entirely within this call, unlike `field_0x16c` itself).
+    /// - For each representative animal: temporarily forces `animal+0x391` to `1` and dispatches the
+    ///   animal's own vtable `+0x1ac` slot (real name `diagonalOK` per `generated.rs`'s `ztanimal::
+    ///   DIAGONAL_OK`, `this->[+0x391]==0` - forcing the byte to `1` makes every real-vanilla override of
+    ///   this slot that follows the same shape return `false`; dispatched live rather than called as a
+    ///   fixed address, matching [`Self::set_animal_conditions`]'s own precedent, in case some animal
+    ///   subclass overrides it differently), restores the byte, and stashes the (masked) result into
+    ///   `GLOBAL_ZTAIMgr+0x5c`. Then calls the still-un-ported [`BFENTITY_GET_GRID_POS`] to convert the
+    ///   animal's own world position into a 3-int grid position, and dispatches `GLOBAL_ZTAIMgr+0x10`'s
+    ///   own embedded pathfinder object's vtable slot `0` with `(grid_pos, tile_pos, animal_ptr, 0)` -
+    ///   same shared `(this, ptr, ptr, ptr, u32) -> bool` shape [`call_vtable_slot_ptr_ptr_ptr_u32_ret_
+    ///   bool`]'s own doc comment already documents for the *other* `GLOBAL_ZTAIMgr` path-reachability
+    ///   dispatch (`ZTHabitat::getNearestDirtPile`/`getNearestSickAnimal`'s `this=ai_mgr, vtable+0x1c`) -
+    ///   confirmed as a different call site (different `this`, different slot) via the real stack-argument
+    ///   trace, not assumed identical.
+    /// - When that call returns `true`, inserts/overwrites `field_0x16c[entity_type_ptr]` ([`MSVC_TREE36_
+    ///   OPERATOR_INDEX`], find-or-insert) with `{can_escape: true, close_outside_tile_ptr: tile_ptr}`.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference - `self`'s own address feeds `field_0x16c`'s
+    /// raw address and the [`GET_CLOSE_OUTSIDE_TILE`] call.
+    pub(crate) fn check_escapability(&self) {
+        let base = get_module_base("zoo.exe") as u32;
+        let counter_addr = base + RVA_CHECK_ESCAPABILITY_COUNTER;
+        let counter = get_from_memory::<i32>(counter_addr) + 1;
+        save_to_memory(counter_addr, counter);
+
+        if self.unknown_flag_0x30 == 0 && counter < 0x1e {
+            return;
+        }
+        save_to_memory(counter_addr, 0i32);
+        write_live!(self, unknown_flag_0x30, 0u8);
+
+        let cache_head = self as *const Self as u32 + 0x16c;
+        unsafe { MSVC_TREE36_CLEAR.original()(cache_head as *const u32) };
+
+        let tile_ptr = unsafe { GET_CLOSE_OUTSIDE_TILE.original()(self as *const Self as *const std::ffi::c_void) } as u32;
+        if tile_ptr == 0 {
+            return;
+        }
+
+        let mut tile_pos = [
+            get_from_memory::<i32>(tile_ptr + 0x34),
+            get_from_memory::<i32>(tile_ptr + 0x38),
+            get_from_memory::<i32>(tile_ptr + 0x3c),
+        ];
+
+        if get_from_memory::<u8>(tile_ptr + 0x85) & 0x20 != 0 {
+            let occupant = globals().zthabitatmgr().get_habitat_ptr(tile_pos[0], tile_pos[1]);
+            if occupant != 0 {
+                unsafe { call_vtable_slot_noargs(occupant, 0x20) };
+                tile_pos[2] += get_from_memory::<i32>(occupant + 0x188);
+            }
+        }
+
+        let aimgr = globals().ztaimgr_ptr() as u32;
+        let worldmgr_ptr = globals().ztworldmgr_ptr() as u32;
+        let world = globals().ztworldmgr();
+        save_to_memory(aimgr + 0x18, worldmgr_ptr + 0x8);
+        save_to_memory(aimgr + 0x1c, world.map_y_size);
+        save_to_memory(aimgr + 0x20, world.map_x_size * world.map_y_size);
+
+        let mut representative_by_species: HashMap<u32, u32> = HashMap::new();
+        for animal_ptr in self.get_all_animals(false) {
+            let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            representative_by_species.insert(entity_type_ptr, animal_ptr);
+        }
+
+        for (species_key, &animal_ptr) in &representative_by_species {
+            let orig_flag = get_from_memory::<u8>(animal_ptr + 0x391);
+            save_to_memory(animal_ptr + 0x391, 1u8);
+            let diagonal_ok = unsafe { call_vtable_slot_noargs_ret_bool(animal_ptr, 0x1ac) };
+            save_to_memory(animal_ptr + 0x391, orig_flag);
+            save_to_memory(aimgr + 0x5c, diagonal_ok as u32 & 0xff);
+
+            let mut grid_pos = [0i32; 3];
+            unsafe { BFENTITY_GET_GRID_POS.original()(animal_ptr as *const u32, grid_pos.as_mut_ptr()) };
+
+            let can_reach = unsafe {
+                call_vtable_slot_ptr_ptr_ptr_u32_ret_bool(
+                    aimgr + 0x10,
+                    0,
+                    grid_pos.as_ptr() as u32,
+                    tile_pos.as_ptr() as u32,
+                    animal_ptr,
+                    0,
+                )
+            };
+
+            if can_reach {
+                let key = *species_key;
+                let value_ptr = unsafe { MSVC_TREE36_OPERATOR_INDEX.original()(cache_head as *const u32, &key as *const u32) } as u32;
+                save_to_memory(value_ptr, 1u8);
+                save_to_memory(value_ptr + 8, tile_ptr);
+            }
         }
     }
 
@@ -3013,7 +5098,7 @@ impl ZTHabitat {
     /// `recalculateCharacteristics` call-through above.
     pub fn trigger_keeper_arrived(&self, keeper_ptr: u32, scheduled: bool) {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         write_live!(self, scheduled_service_counter, self.scheduled_service_counter.wrapping_sub(1).max(0));
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
@@ -3043,7 +5128,7 @@ impl ZTHabitat {
     /// `recalculateCharacteristics` call-through above.
     pub fn trigger_death_arrived(&self, species_key: i32) {
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
@@ -3125,7 +5210,7 @@ impl ZTHabitat {
             return 0;
         }
         if self.characteristics_dirty != 0 {
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
         if walk_tile_list(self.owned_tiles_ptr).count() < 2 {
             return 1;
@@ -3780,8 +5865,8 @@ impl ZTHabitat {
     /// macOS decompile's identical shape): plays every queued ambient sound
     /// (`ambients_begin`/`ambients_end`), advances the species-list/characteristics lazy-recalculate
     /// timers - rerolling each via the shared game RNG ([`lcg_next`]) and calling through to the
-    /// still-un-ported real vanilla `reviseSpeciesList`/`recalculateCharacteristics` once its own
-    /// threshold trips, the same dirty-flag/timer shape [`Self::get_attractiveness`] already relies on
+    /// still-un-ported real vanilla `reviseSpeciesList` and [`Self::recalculate_characteristics`] once
+    /// its own threshold trips, the same dirty-flag/timer shape [`Self::get_attractiveness`] already relies on
     /// for `characteristics_dirty` - ticks every viewing area's own ambient state
     /// (`viewing_areas_begin`/`viewing_areas_end`), then calls this object's own ported
     /// [`Self::update_portals`] and finally its already-ported [`Self::listen`].
@@ -3832,7 +5917,7 @@ impl ZTHabitat {
             let rng = lcg_next(get_from_memory::<u32>(rng_addr));
             save_to_memory(rng_addr, rng);
             write_live!(self, characteristics_timer, (rng >> 0x10 & 0x7fff) % 200);
-            unsafe { RECALCULATE_CHARACTERISTICS.original()(self as *const Self as *const u32) };
+            self.recalculate_characteristics();
         }
 
         let mut viewing_area_entry = self.viewing_areas_begin;
@@ -4460,7 +6545,145 @@ impl fmt::Display for ZTHabitat {
 mod tests {
     use std::mem::{self, offset_of};
 
-    use super::ZTHabitat;
+    use crate::zthabitat::support::test_fixtures::{leak_neighbor_set, leak_tile_list, leak_tree_node};
+
+    use super::{
+        clamped_score, corner_height, count_penalty, elevation_band, normalise_scenery_score, overlap_condition_bits, percent_band, terrain_category_step,
+        tile_count_adjustment, PercentBand, ZTHabitat,
+    };
+
+    #[test]
+    fn corner_height_decodes_packed_corners() {
+        // packed = 0b11_10_01_01: corner 1 (bits 6-7) = 3, corner 3 (bits 4-5) = 2, corner 5 (bits 2-3) = 1, low = 1.
+        let packed = 0b1110_0101;
+        assert_eq!(corner_height(10, packed, 1), 10 + 3 - 1);
+        assert_eq!(corner_height(10, packed, 3), 10 + 2 - 1);
+        assert_eq!(corner_height(10, packed, 5), 10 + 1 - 1);
+        assert_eq!(corner_height(10, packed, 7), 10);
+    }
+
+    #[test]
+    fn elevation_band_flags_and_score() {
+        // tally 200 over 100 tiles: pct = 100. threshold 100: perfect.
+        let ok = elevation_band(200, 100, 100);
+        assert_eq!(ok, PercentBand { too_low: false, too_high: false, critical: false, score: 100.0 });
+        // pct 100 vs threshold 130: too low (100 < 120) and critical (30 > 20); score 100 - 30.
+        let low = elevation_band(200, 100, 130);
+        assert!(low.too_low && !low.too_high && low.critical);
+        assert_eq!(low.score, 70.0);
+        // pct 100 vs threshold 85: too high (100 > 95), not critical (15).
+        let high = elevation_band(200, 100, 85);
+        assert!(!high.too_low && high.too_high && !high.critical);
+        assert_eq!(high.score, 85.0);
+        // deviation clamps at 50.
+        assert_eq!(elevation_band(0, 100, 90).score, 50.0);
+    }
+
+    #[test]
+    fn overlap_condition_bits_thresholds() {
+        assert_eq!(overlap_condition_bits(0, 100), (false, false));
+        assert_eq!(overlap_condition_bits(5, 100), (false, false));
+        assert_eq!(overlap_condition_bits(6, 100), (true, false));
+        assert_eq!(overlap_condition_bits(10, 100), (true, false));
+        assert_eq!(overlap_condition_bits(11, 100), (true, true));
+    }
+
+    #[test]
+    fn tile_count_adjustment_gates_and_clamps() {
+        assert_eq!(tile_count_adjustment(false, 50, 0, 100, 1000), 0);
+        assert_eq!(tile_count_adjustment(true, 0, 0, 100, 1000), 0);
+        assert_eq!(tile_count_adjustment(true, 100, 0, 100, 1000), 0);
+        // (100 - 10) * 50 / 50 - 10 = 80, below the cap.
+        assert_eq!(tile_count_adjustment(true, 50, 10, 100, 1000), 80);
+        // capped by the filled size.
+        assert_eq!(tile_count_adjustment(true, 50, 10, 100, 30), 30);
+        // negative raw result clamps to 0: (10 - 40) * 50 / 50 - 40 = -70.
+        assert_eq!(tile_count_adjustment(true, 50, 40, 10, 1000), 0);
+    }
+
+    #[test]
+    fn terrain_category_step_penalty_and_bonus() {
+        // Negative weight only applies when the species' terrain is actually present.
+        assert_eq!(terrain_category_step(10.0, -5, 0, 0, 100), 10.0);
+        assert_eq!(terrain_category_step(10.0, -5, 3, 3, 100), 5.0);
+        // Non-negative weight adds min(weight, count * 100 / denom): 25% of tiles caps a weight of 40 at 25.
+        assert_eq!(terrain_category_step(0.0, 40, 25, 25, 100), 25.0);
+        assert_eq!(terrain_category_step(0.0, 10, 25, 25, 100), 10.0);
+    }
+
+    #[test]
+    fn scenery_normalisation_scales_caps_and_penalises_negatives() {
+        // 40 owned tiles: factor 1.0 -> divide by 100.
+        assert_eq!(normalise_scenery_score(2500.0, 40), 25.0);
+        // 20 owned tiles: factor 0.5 is floored at 1.0 -> still divide by 100.
+        assert_eq!(normalise_scenery_score(2500.0, 20), 25.0);
+        // 80 owned tiles: factor 2.0 -> divide by 200.
+        assert_eq!(normalise_scenery_score(2500.0, 80), 12.5);
+        // Cap at 100.
+        assert_eq!(normalise_scenery_score(90000.0, 40), 100.0);
+        // Negative results are multiplied by 50.
+        assert_eq!(normalise_scenery_score(-100.0, 40), -50.0);
+    }
+
+    #[test]
+    fn count_penalty_thresholds_and_critical_multiplier() {
+        assert_eq!(count_penalty(2, false, 3), 0.0);
+        assert_eq!(count_penalty(3, false, 3), 250.0);
+        // critical shelter multiplies by (count - 3): 4 -> 300 * 1.
+        assert_eq!(count_penalty(4, true, 3), 300.0);
+        // critical with count <= 2: base 0, so the product is (negative * 0) == 0 in value.
+        assert_eq!(count_penalty(1, true, 3), 0.0);
+        // toy critical offset is 2.
+        assert_eq!(count_penalty(3, true, 2), 250.0);
+    }
+
+    #[test]
+    fn clamped_score_caps_at_100() {
+        assert_eq!(clamped_score(0.0), 100.0);
+        assert_eq!(clamped_score(-600.0), 100.0);
+        assert_eq!(clamped_score(250.0), -150.0);
+    }
+
+    #[test]
+    fn percent_band_within_tolerance_scores_full() {
+        // 50 of 100 tiles vs. threshold 50: no flags, perfect score.
+        let band = percent_band(50, 100.0, 50, 4.0);
+        assert_eq!(band, PercentBand { too_low: false, too_high: false, critical: false, score: 100.0 });
+    }
+
+    #[test]
+    fn percent_band_low_high_and_critical_flags() {
+        // pct = 20 vs threshold 50: low + critical, deviation 30 -> 100 - 8*30.
+        let low = percent_band(20, 100.0, 50, 4.0);
+        assert!(low.too_low && !low.too_high && low.critical);
+        assert_eq!(low.score, -140.0);
+
+        // pct = 60 vs threshold 50: high, deviation 10 is critical (> 8).
+        let high = percent_band(60, 100.0, 50, 4.0);
+        assert!(!high.too_low && high.too_high && high.critical);
+
+        // pct = 56 vs threshold 50: high but not critical.
+        let mild = percent_band(56, 100.0, 50, 3.0);
+        assert!(mild.too_high && !mild.critical);
+        assert_eq!(mild.score, 100.0 - 6.0 * 6.0);
+    }
+
+    #[test]
+    fn percent_band_zero_pct_with_positive_threshold_is_too_low() {
+        // threshold 3 (< 4) so `pct < threshold - 4` alone would miss it; the `pct == 0` stub catches it.
+        let band = percent_band(0, 100.0, 3, 4.0);
+        assert!(band.too_low && !band.too_high && !band.critical);
+        // threshold 0: nothing to be short of.
+        let zero = percent_band(0, 100.0, 0, 4.0);
+        assert!(!zero.too_low && !zero.too_high);
+    }
+
+    #[test]
+    fn percent_band_deviation_clamps_at_fifty() {
+        let band = percent_band(0, 100.0, 90, 4.0);
+        assert_eq!(band.score, 100.0 - 8.0 * 50.0);
+    }
+
     use crate::util::{ref_from_memory, save_to_memory};
     use crate::zthabitat::tank_exhibit::ZTTankExhibit;
 
@@ -4495,21 +6718,6 @@ mod tests {
         habitat.all_animals_begin = block.as_ptr() as u32;
         habitat.all_animals_end = block.as_ptr() as u32 + block.len() as u32 * 4;
         habitat
-    }
-
-    /// Leaks a zeroed 20-byte MSVC `_Tree_node`-shaped block and writes `parent`/`left`/`right`/
-    /// `value` into the `+0x4`/`+0x8`/`+0xc`/`+0x10` slots [`walk_neighbor_tree`] and
-    /// [`ZTHabitat::is_show_neighbor`] both read, returning the block's address. Leaked rather
-    /// than stack-allocated so the raw addresses stay valid for the port's volatile reads, same
-    /// pattern as [`fixture_habitat_with_animals`].
-    fn leak_tree_node(parent: u32, left: u32, right: u32, value: u32) -> u32 {
-        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x14].into_boxed_slice());
-        let node_ptr = block.as_ptr() as u32;
-        save_to_memory(node_ptr + 0x4, parent);
-        save_to_memory(node_ptr + 0x8, left);
-        save_to_memory(node_ptr + 0xc, right);
-        save_to_memory(node_ptr + 0x10, value);
-        node_ptr
     }
 
     /// A zeroed [`ZTHabitat`] whose `show_neighbors_head` points at a leaked head node whose
@@ -4696,64 +6904,6 @@ mod tests {
         assert_eq!(habitat.get_show_portal(0x3000), 0xa000_0003);
         assert_eq!(habitat.get_show_portal(0x2500), 0);
         assert_eq!(habitat.get_show_portal(0x4000), 0);
-    }
-
-    /// Leaks a zeroed 16-byte [`TileListNode`](crate::zthabitat::support::TileListNode)-shaped block
-    /// with `next`/`payload` written at the `+0x0`/`+0x8` slots
-    /// [`walk_tile_list`](crate::zthabitat::support::walk_tile_list) and [`ZTHabitat::get_size`] read,
-    /// returning the block's address. `prev` (`+0x4`) stays zeroed - neither walker reads it.
-    fn leak_tile_node(next: u32, payload: u32) -> u32 {
-        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x10].into_boxed_slice());
-        let node_ptr = block.as_ptr() as u32;
-        save_to_memory(node_ptr, next);
-        save_to_memory(node_ptr + 0x8, payload);
-        node_ptr
-    }
-
-    /// Leaks a `TileListNode` sentinel plus one node per `tiles` entry, returning the sentinel's
-    /// address - the value [`ZTHabitat::owned_tiles_ptr`] must hold for
-    /// [`walk_tile_list`](crate::zthabitat::support::walk_tile_list) to walk
-    /// `tiles`. Nodes are spliced at the front (`get_size` counts by walking, so order is immaterial).
-    fn leak_tile_list(tiles: &[u32]) -> u32 {
-        let sentinel = leak_tile_node(0, 0);
-        save_to_memory(sentinel, sentinel); // empty list: the sentinel's own next points back at it
-        save_to_memory(sentinel + 0x4, sentinel);
-        let mut first = sentinel;
-        for &tile in tiles {
-            let node = leak_tile_node(first, tile);
-            save_to_memory(node + 0x4, sentinel);
-            first = node;
-        }
-        save_to_memory(sentinel, first);
-        sentinel
-    }
-
-    /// Leaks an MSVC `std::set` head over `payloads`, returning the head's address - the value
-    /// [`ZTHabitat::amphibious_neighbors_head`] must hold for
-    /// [`walk_neighbor_tree`](crate::zthabitat::support::walk_neighbor_tree) to visit exactly
-    /// `payloads`. Nodes chain in a right-leaning vine (`payloads[n]` the right child of
-    /// `payloads[n-1]`), which keeps the parent fixups to one per node. Every head slot follows MSVC's
-    /// own real construction - `+0x4`/`+0x8`/`+0xc` hold the root/leftmost/rightmost node (the head
-    /// itself when empty) - which matters for the successor walk's end-of-tree climb: a null `+0x8`
-    /// would send it reading address `0xc`, and a null `+0x4` would strand that climb on a
-    /// single-node set.
-    fn leak_neighbor_set(payloads: &[u32]) -> u32 {
-        let head = leak_tree_node(0, 0, 0, 0);
-        save_to_memory(head, 1u8); // the head's own isnil flag; real nodes are all 0 (zeroed)
-        let mut prev = head; // newest node = rightmost so far
-        let mut root = head; // first node added = tree root = leftmost in a right vine
-        for &payload in payloads {
-            let node = leak_tree_node(prev, 0, 0, payload);
-            save_to_memory(prev + 0xc, node);
-            if root == head {
-                root = node;
-            }
-            prev = node;
-        }
-        save_to_memory(head + 0x4, root); // head._Parent = root (the head itself when empty)
-        save_to_memory(head + 0x8, root); // head._Left = leftmost = root in a right vine
-        save_to_memory(head + 0xc, prev); // head._Right = rightmost (the head itself when empty)
-        head
     }
 
     /// A zeroed [`ZTHabitat`]-shaped leaked block whose `owned_tiles_ptr` (`+0x40`) points at a
@@ -5114,4 +7264,3 @@ mod tests {
         }
     }
 }
-

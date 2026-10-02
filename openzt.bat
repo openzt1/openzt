@@ -176,9 +176,9 @@ exit /b 0
 REM ============================================================
 REM Detour-Reentry Audit
 REM ============================================================
-REM Fails if any FunctionDef name is both #[detour(NAME)]'d and called via NAME.original() in the same
-REM file - .original() on a hooked address silently re-enters that detour in release builds (see
-REM openzt/scripts/check-detour-reentry.sh's own header comment for the full history/reasoning).
+REM Fails if a production NAME.original() call targets an address that any #[detour(NAME)] in the crate hooks
+REM (resolved via generated.rs addresses, cross-file) - .original() on a hooked address silently re-enters that detour in release builds (see
+REM openzt/scripts/check_detour_reentry.py's own header comment for the resolution rules/reasoning).
 
 :audit_detour_reentry
 REM Prefer Git for Windows' own bash.exe by well-known install path rather than trusting `where bash` -

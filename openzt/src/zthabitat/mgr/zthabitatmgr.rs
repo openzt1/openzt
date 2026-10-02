@@ -1311,10 +1311,10 @@ impl ZTHabitatMgr {
     /// 2. Picks the two boundary tiles the gate-search loop starts from: `tile_2_ptr`/`tile_3_ptr`
     ///    themselves, unless they resolve (via [`Self::get_habitat_ptr`]) to the *same* owning habitat,
     ///    in which case it starts instead from `habitat_ptr`'s own first boundary tile-pair
-    ///    ([`ZTHabitat::boundary_tile_pairs_begin`]). Then repeatedly calls real vanilla, still-un-ported
-    ///    `getNextFencePair` ([`GET_NEXT_FENCE_PAIR`], single-step mode - the `false` flag, confirmed
-    ///    against `.asm`: this loop is real vanilla's own outer loop, not `getNextFencePair`'s internal
-    ///    one, unlike [`Self::advance_fence_pair`]'s own `true`-flag call in `place_gate`) until the
+    ///    ([`ZTHabitat::boundary_tile_pairs_begin`]). Then repeatedly calls
+    ///    [`Self::get_next_fence_pair`] (single-step mode - the `false` flag, confirmed against `.asm`:
+    ///    this loop is real vanilla's own outer loop, not `getNextFencePair`'s internal one, unlike
+    ///    [`Self::advance_fence_pair`]'s own `true`-flag call in `place_gate`) until the
     ///    second candidate is back in the zoo ([`BFTILE_IS_IN_ZOO`]).
     /// 3. If `habitat_ptr` currently has a gate, captures it ([`ZTHabitat::get_gate`]) to relocate onto
     ///    the new habitat afterward.
@@ -2031,18 +2031,16 @@ impl ZTHabitatMgr {
                         *cand_a = curr_a;
                         *cand_b = curr_b;
                     } else {
-                        *cand_b = curr_b;
+                        // Both tiles inside the habitat: real vanilla stores `curr_b` through its own
+                        // first out-param (`param_3`), not the second.
+                        *cand_a = curr_b;
                     }
-                } else if hab_b == habitat_ptr {
-                    if hab_a != habitat_ptr {
-                        // skip
-                    } else {
-                        *cand_b = curr_b;
-                    }
-                } else {
+                    found_flag = true;
+                } else if hab_b != habitat_ptr {
                     *cand_b = curr_a;
+                    found_flag = true;
                 }
-                found_flag = true;
+                // `hab_a` outside and `hab_b` inside: real vanilla jumps past the "found" flag.
             }
 
             if !check_in_zoo || low_byte_bool(unsafe { BFTILE_IS_IN_ZOO.original()(*cand_b as *const u32, 0) }) {
@@ -2458,12 +2456,11 @@ impl ZTHabitatMgr {
     /// resolves the entity's occupying tile/habitat, marks it dirty, and calls
     /// [`BEFORE_ENTITY_CHANGE`] on it. For a tank habitat containing a scenery or animal entity, also
     /// calls [`BEFORE_ENTITY_CHANGE`] on every amphibious neighbor - collected into a `Vec` up front
-    /// (rather than porting vanilla's own defensive PoolAlloc tree copy) since `BEFORE_ENTITY_CHANGE` is
-    /// an un-ported vanilla function that could itself mutate the live tree. `BEFORE_ENTITY_CHANGE`'s own
-    /// real body (tied to an un-ported species-rating cache) immediately clears `characteristics_dirty`/
-    /// `species_list_dirty` back to `0` as part of its own work (confirmed live - the dirty write here is
-    /// real, but does not outlive the call), so no test can observe the dirty flags as still set once this
-    /// method returns.
+    /// (rather than porting vanilla's own defensive PoolAlloc tree copy) since [`Self::before_entity_change`]
+    /// runs species-rating work that could itself mutate the live tree. `characteristics_dirty`/
+    /// `species_list_dirty` are back to `0` by the time the call returns (confirmed live - the dirty write
+    /// here is real, but does not outlive the call), so no test can observe the dirty flags as still set
+    /// once this method returns.
     pub fn entity_about_to_be_removed(&self, entity_ptr: u32) {
         if entity_ptr == 0 {
             return;
@@ -3267,7 +3264,7 @@ impl ZTHabitatMgr {
 
     /// Ports `ZTHabitatMgr::canSeeShowFromBuilding` (`ZTHabitatMgr_canSeeShowFromBuilding.c`): the show
     /// id ([`ZTHabitat::get_show_info_id`]) of the first `exhibit_array` entry with a real `ZTShowInfo`
-    /// that [`Self::can_see_habitat_from_building`] (kept un-ported - see that method's own doc comment)
+    /// that [`Self::can_see_habitat_from_building`]
     /// reports visible from `building_ptr`, or `0` if none. Real vanilla's own return value packs
     /// undefined upper 16 bits around the real `u16` show id (same `CONCAT22` shape [`ZTHabitat::get_show_info_id`]'s
     /// own doc comment documents) - masked here via a plain zero-extending cast, matching that method.
@@ -4075,6 +4072,71 @@ mod tests {
     fn all_show_tanks_count_zero() {
         let mgr = fixture_mgr(&[(ZTHabitat::TANK_VTABLE_PTR, 0x1000); 3]);
         assert_eq!(mgr.get_num_non_show_non_world_habitats(), 0);
+    }
+
+    /// Leaks an outer per-x-column array (`0xc`-byte entries, `start`/`end` at `+0x0`/`+0x4`) over
+    /// one leaked `0x28`-stride column per `rows` entry, and points a zeroed mgr's
+    /// `other_array_start`/`other_array_end` at it. Returns the mgr and each column's start address.
+    fn fixture_grid(rows: &[u32]) -> (&'static mut ZTHabitatMgr, Vec<u32>) {
+        let mgr: &'static mut ZTHabitatMgr = Box::leak(Box::new(unsafe { mem::zeroed() }));
+        let outer: &'static mut [u8] = Box::leak(vec![0u8; rows.len().max(1) * 0xc].into_boxed_slice());
+        let outer_start = outer.as_ptr() as u32;
+        let mut column_starts = Vec::new();
+        for (x, &row_count) in rows.iter().enumerate() {
+            let column: &'static mut [u8] = Box::leak(vec![0u8; (row_count as usize).max(1) * 0x28].into_boxed_slice());
+            let start = column.as_ptr() as u32;
+            let entry = outer_start + x as u32 * 0xc;
+            save_to_memory(entry, start);
+            save_to_memory(entry + 4, start + row_count * 0x28);
+            column_starts.push(start);
+        }
+        mgr.other_array_start = outer_start;
+        mgr.other_array_end = outer_start + rows.len() as u32 * 0xc;
+        (mgr, column_starts)
+    }
+
+    #[test]
+    fn habitat_cell_addr_rejects_negative_coordinates() {
+        let (mgr, _) = fixture_grid(&[3, 3]);
+        assert_eq!(mgr.get_habitat_cell_addr(-1, 0), None);
+        assert_eq!(mgr.get_habitat_cell_addr(0, -1), None);
+        assert_eq!(mgr.get_habitat_cell_addr(i32::MIN, i32::MIN), None);
+    }
+
+    #[test]
+    fn habitat_cell_addr_rejects_out_of_range_column_and_row() {
+        let (mgr, _) = fixture_grid(&[3, 3]);
+        assert_eq!(mgr.get_habitat_cell_addr(2, 0), None); // x == column_count
+        assert_eq!(mgr.get_habitat_cell_addr(0, 3), None); // y == row_count
+        assert_eq!(mgr.get_habitat_cell_addr(100, 100), None);
+    }
+
+    #[test]
+    fn habitat_cell_addr_first_and_last_cell_math() {
+        let (mgr, columns) = fixture_grid(&[4, 2]);
+        assert_eq!(mgr.get_habitat_cell_addr(0, 0), Some(columns[0]));
+        assert_eq!(mgr.get_habitat_cell_addr(0, 3), Some(columns[0] + 3 * 0x28));
+        assert_eq!(mgr.get_habitat_cell_addr(1, 0), Some(columns[1]));
+        assert_eq!(mgr.get_habitat_cell_addr(1, 1), Some(columns[1] + 0x28));
+        assert_eq!(mgr.get_habitat_cell_addr(1, 2), None); // second column is shorter
+    }
+
+    #[test]
+    fn habitat_cell_addr_empty_column_and_empty_grid() {
+        let (mgr, _) = fixture_grid(&[0, 2]);
+        assert_eq!(mgr.get_habitat_cell_addr(0, 0), None);
+        assert!(mgr.get_habitat_cell_addr(1, 0).is_some());
+        let (empty, _) = fixture_grid(&[]);
+        assert_eq!(empty.get_habitat_cell_addr(0, 0), None);
+    }
+
+    #[test]
+    fn habitat_ptr_reads_first_slot_of_cell() {
+        let (mgr, columns) = fixture_grid(&[2]);
+        save_to_memory(columns[0] + 0x28, 0xdead_beefu32);
+        assert_eq!(mgr.get_habitat_ptr(0, 1), 0xdead_beef);
+        assert_eq!(mgr.get_habitat_ptr(0, 0), 0);
+        assert_eq!(mgr.get_habitat_ptr(0, 2), 0);
     }
 
     /// Leaks a tile-shaped block (the struct's own `0x8c` bytes) carrying just the two coordinates the

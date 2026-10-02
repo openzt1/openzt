@@ -55,7 +55,7 @@ pub mod hooks_zthabitatmgr {
             GET_ATTRACTIVENESS, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, GET_GATE_TILE_PASS_IN, GET_GATE_TILE_PASS_OUT,
             GET_NEAR_CLEAR_TILE, GET_NEAREST_CLEAR_TILE, GET_NEAREST_CLEAR_WATER_TILE,
             GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
-            SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE, BLOCK_SERVICE,
+            SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE, BLOCK_SERVICE, RECALCULATE_CHARACTERISTICS,
             GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1,
             RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS, CREATE_EDGE_PAIRS,
             ADD_LAND_TILES, ADD_WATER_TILES, ADD_UNDERWATER_TILES,
@@ -223,6 +223,18 @@ pub mod hooks_zthabitatmgr {
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const u32, elapsed: u32) {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.update(elapsed)
+    }
+
+    #[detour(RECALCULATE_CHARACTERISTICS)]
+    unsafe extern "thiscall" fn recalculate_characteristics(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.recalculate_characteristics()
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_size_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn recalculate_characteristics_real(this: *const u32) {
+        unsafe { RECALCULATE_CHARACTERISTICS_DETOUR.call(this) }
     }
 
     #[detour(BLOCK_SERVICE)]
@@ -603,6 +615,45 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn update_portals_real(this: *const u32) {
         unsafe { UPDATE_PORTALS_DETOUR.call(this) }
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test, same as
+    /// [`update_portals_real`].
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn send_maint_worker_cleanup_events_real(this: *const u32) {
+        unsafe { SEND_MAINT_WORKER_CLEANUP_EVENTS_DETOUR.call(this) }
+    }
+
+    /// Release-safe paths back to real vanilla for the viewing-area live comparison tests, same as
+    /// [`update_portals_real`].
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn remove_from_all_vas_real(this: *const u32, tile_ptr: i32) {
+        unsafe { REMOVE_FROM_ALL_VAS_DETOUR.call(this, tile_ptr) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn zthabitat_path_placed_real(this: *const u32, tile_ptr: *const std::ffi::c_void) {
+        unsafe { ZTHABITAT_PATH_PLACED_DETOUR.call(this, tile_ptr) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn zthabitatmgr_path_placed_real(this: *const u32, tile_ptr: *const u32) {
+        unsafe { ZTHABITATMGR_PATH_PLACED_DETOUR.call(this, tile_ptr) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn zthabitatmgr_path_removed_real(this: *const u32, tile_ptr: i32) {
+        unsafe { ZTHABITATMGR_PATH_REMOVED_DETOUR.call(this, tile_ptr) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn do_show_check_real(this: *const u32, habitat: *const i32, remove_illegal: i8) -> bool {
+        unsafe { DO_SHOW_CHECK_DETOUR.call(this, habitat, remove_illegal) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn mark_zoo_exterior_real(this: *const u32) {
+        unsafe { MARK_ZOO_EXTERIOR_DETOUR.call(this) }
     }
 
     /// Ports `ZTHabitat::getTilesCopy` - the out-param is a real `list<uint>` that `0x004f3a31`'s own

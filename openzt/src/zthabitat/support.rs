@@ -4,7 +4,14 @@ use openzt_detour::{
         bfmap::WORLD_TO_VIRTUAL_0,
         bfsndmgr::ACQUIRE as BFSNDMGR_ACQUIRE,
         msvc_std_listuint::INSERT as MSVC_LIST_UINT_INSERT,
-        msvc_std_mapint_habitatsuitability::OPERATOR_INDEX as MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_INDEX,
+        msvc_std_mapint_float::{
+            CLEAR_0 as MSVC_MAP_INT_FLOAT_CLEAR, OPERATOR_INDEX as MSVC_MAP_INT_FLOAT_OPERATOR_INDEX, TREE as MSVC_MAP_INT_FLOAT_TREE,
+        },
+        msvc_std_mapint_habitatsuitability::{
+            OPERATOR_ASSIGN as MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_ASSIGN,
+            OPERATOR_INDEX as MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_INDEX, TREE as MSVC_MAP_INT_HABITATSUITABILITY_TREE,
+            TREE_DTOR as MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR,
+        },
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
         zthabitat::GET_SPECIES_RATING,
@@ -344,6 +351,113 @@ pub const RVA_BUILDING_TYPE_CHECK_ARG: u32 = 0x0023_8680;
 pub fn map_int_habitatsuitability_find_or_insert(map_ptr: u32, key: i32) -> u32 {
     (unsafe { MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_INDEX.original()(map_ptr as *const i32, &key as *const i32) }) as u32
 }
+
+/// Constructs a real vanilla `msvc_std::map<int, ZTHabitatSuitabilityRecord>` header in place at
+/// `header_ptr` - the same function-local scratch tree `ZTHabitat::recalculateCharacteristics` builds as
+/// a stack local at the very top of its own body (`msvc_std::map<int_habitatsuitability>::Tree`,
+/// `generated.rs`'s `msvc_std_mapint_habitatsuitability::TREE`, live-decompiled to confirm the exact
+/// writes below). `header_ptr` needs at least 12 bytes (a `[u32; 4]`/16-byte caller-owned buffer is the
+/// established convention - see [`destroy_suitability_scratch_tree`]'s own caller); real vanilla itself
+/// keeps this as a stack local for the duration of a single `recalculateCharacteristics` call, so a
+/// Rust stack-local array works identically - the header itself is never touched by any other, un-ported
+/// vanilla code, only [`map_int_habitatsuitability_find_or_insert`]'s own node allocations (which go
+/// through real vanilla's `operator_new`/allocator) need to stay vanilla-shaped.
+///
+/// The real ctor's own body: allocates one sentinel tree node (`operator_new(0x84)`, matching
+/// `map_int_habitatsuitability_find_or_insert`'s own node-size derivation) whose `color`/`parent`/
+/// `left`/`right` fields are zeroed/self-referenced (an empty-tree sentinel, same shape as
+/// `amphibious_neighbors_head`'s own family), sets `header+0x0` (`_Myhead`) to that sentinel and
+/// `header+0x4` (`_Mysize`) to `0`, then copies its own second parameter (the comparator/allocator
+/// functor) into `header+0x8` - dead in practice, since `std::less<int>`/its allocator are both
+/// stateless; the ctor never reads its *third* parameter at all. Both extra arguments are passed as
+/// plain readable stack addresses here for that reason - their contents are never meaningfully used.
+pub fn init_suitability_scratch_tree(header_ptr: u32) {
+    let dummy_comparator: i32 = 0;
+    let dummy_allocator: i8 = 0;
+    unsafe {
+        MSVC_MAP_INT_HABITATSUITABILITY_TREE.original()(
+            header_ptr as *const i32,
+            &dummy_comparator as *const i32,
+            &dummy_allocator as *const i8,
+        );
+    }
+}
+
+/// Tears down a tree built by [`init_suitability_scratch_tree`] (or found in `ZTHabitat::
+/// speciesSuitabilityCache`), freeing the sentinel and every inserted node through real vanilla's own
+/// allocator. These nodes were allocated by real vanilla's `operator_new`/`PoolAlloc`, never by `Box` -
+/// see `AGENTS.md`'s cross-allocator safety rules for why they must be freed this way, never by a Rust
+/// `Box`-walking teardown.
+pub fn destroy_suitability_scratch_tree(header_ptr: u32) {
+    unsafe { MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR.original()(header_ptr as *const i32) };
+}
+
+/// Copies the scratch suitability tree at `source_header_ptr` into the tree header at `dest_header_ptr`
+/// through real vanilla's own `map::operator=` (`0x00446370`), which clears the destination and
+/// allocates the copied nodes with vanilla's allocator - the only safe way to fill a live habitat's own
+/// `species_suitability_cache` (`+0x148`), whose nodes un-ported vanilla code later frees.
+pub fn assign_suitability_tree(dest_header_ptr: u32, source_header_ptr: u32) {
+    unsafe { MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_ASSIGN.original()(dest_header_ptr as *const i32, source_header_ptr as *const i32) };
+}
+
+/// Finds (or default-inserts, `0.0`) the value for `key` in a real vanilla `msvc_std::map<int, float>` at
+/// `map_ptr`, returning the value's own address - real vanilla's `OPERATOR_INDEX`
+/// (`msvc_std_mapint_float::OPERATOR_INDEX`), the same "don't hand-roll the find/insert dance" precedent
+/// [`map_int_habitatsuitability_find_or_insert`]'s own doc comment already established (same shared
+/// `FIND`/`ITERATOR_ASSIGN` navigation primitives underneath - `generated.rs`'s `msvc_std_tree` module -
+/// confirmed via disassembly to be reused, value-type-agnostic, across both map instantiations).
+///
+/// `ZTHabitat::recalculateCharacteristics` builds two of these (`local_c30`/`local_bc0`, the plan's own
+/// Stage 7 "five distinct passes" breakdown step (3)) but - per that same breakdown's step (5) - they are
+/// only ever read/written later, by `constructSurroundingSpeciesList`'s own follow-up walk; step (4)'s
+/// `GET_SURROUNDING_ANIMALS` scan (confirmed via disassembly this session) does not touch either despite
+/// initially looking like it might.
+pub fn map_int_float_find_or_insert(map_ptr: u32, key: i32) -> u32 {
+    (unsafe { MSVC_MAP_INT_FLOAT_OPERATOR_INDEX.original()(map_ptr as *const std::ffi::c_void, &key as *const i32) }) as u32
+}
+
+/// Constructs a real vanilla `msvc_std::map<int, float>` header in place at `header_ptr` - same
+/// stack-local-buffer convention as [`init_suitability_scratch_tree`] (a `[u32; 4]`/16-byte caller-owned
+/// buffer), confirmed via disassembly at `0x004452ab`-`0x004452d2` (real vanilla constructs two of these
+/// back-to-back, `local_c30` then `local_bc0`, right after step (2)'s own `local_c1c`/`local_c10` arrays).
+/// Unlike the habitat-suitability tree's own 3-argument ctor, `msvc_std_mapint_float::TREE` takes only one
+/// extra argument (the comparator/allocator functor, `std::less<int>` - stateless, dead in practice, same
+/// caveat as `init_suitability_scratch_tree`'s own dummy arguments).
+///
+/// Tear it down with [`clear_float_scratch_tree`].
+pub fn init_float_scratch_tree(header_ptr: u32) {
+    // `msvc_std_mapint_float::TREE` (`0x00404b91`) ends in `RET 8`: two stack arguments, both dead. The
+    // `generated.rs` entry declares one, so the address is called with its real shape here.
+    let dummy_a: i8 = 0;
+    let dummy_b: i8 = 0;
+    let ctor: unsafe extern "thiscall" fn(*const std::ffi::c_void, *const i8, *const i8) -> *const u32 =
+        unsafe { std::mem::transmute(MSVC_MAP_INT_FLOAT_TREE.address) };
+    unsafe { ctor(header_ptr as *const std::ffi::c_void, &dummy_a, &dummy_b) };
+}
+
+/// Frees every node of a tree built by [`init_float_scratch_tree`] through real vanilla's own
+/// `map<int, float>::clear` (`0x0041e7f6`), exactly as `recalculateCharacteristics`'s own teardown does.
+/// Like vanilla, this leaves the tree's sentinel node allocated.
+pub fn clear_float_scratch_tree(header_ptr: u32) {
+    unsafe { MSVC_MAP_INT_FLOAT_CLEAR.original()(header_ptr as *const std::ffi::c_void) };
+}
+
+/// `DAT_006393c8`'s RVA - a shared, stateless scratch dword `ZTHabitat::recalculateCharacteristics`
+/// stashes the *current* animal's species id into immediately before scanning its own found-species
+/// list via `ZTSpecies::isSpecialDummySpecies` (`generated.rs`'s `ztspecies::IS_SPECIAL_DUMMY_SPECIES`).
+/// That function's real body is just `*(int*)(param+0x1ec) == DAT_006393c8` - real vanilla repurposes
+/// it here as a plain "does this candidate's species id equal the stashed one" equality check, not a
+/// genuine dummy-species filter (confirmed via its own decompile: no other logic in the function).
+/// Callers must write the current species id here (`save_to_memory`) before calling it for this
+/// purpose. RVA = `0x006393c8 - 0x400000`.
+pub const RVA_CURRENT_SPECIES_ID_STASH: u32 = 0x0023_93c8;
+
+/// `DAT_006393c0`'s RVA - the shared rate-limit counter `ZTHabitat::checkEscapability` increments on
+/// every call, resetting it (and doing real work) once it reaches `0x1e` (30) or `unknown_flag_0x30` is
+/// already set. Not per-habitat - every habitat's `checkEscapability` call shares this one global dword,
+/// matching real vanilla exactly (`ZTHabitat_checkEscapability.asm`'s own `DAT_006393c0` reference). RVA
+/// = `0x006393c0 - 0x400000`.
+pub const RVA_CHECK_ESCAPABILITY_COUNTER: u32 = 0x0023_93c0;
 
 /// `isCastClass`-style type-check argument for the `ZTFood` gate in `getNumKeeperFoodTiles`
 /// (`&DAT_006386c0` in the decompile; the macOS build names the same call site
@@ -823,6 +937,20 @@ pub fn free_event_vector_buffer(buf: u32, byte_capacity: u32) {
     save_to_memory(bucket_head_addr, buf);
 }
 
+/// Tears down the real vanilla-layout found-species scratch vector `ZTHabitat::recalc_phase_1_2`/
+/// `recalc_phase_3` build and extend (real vanilla's own `in_stack_fffff3b8`/`_bc`/`_c0` stack local,
+/// `msvc_std::vector_pod<>::_Tidy`'d at the very end of the whole `recalculateCharacteristics` call) -
+/// frees the buffer through [`free_event_vector_buffer`]'s same freelist-bucket/`operator_delete` split,
+/// matching `ZTHabitat_addFoundSpecies.c`'s own internal growth teardown exactly (this vector is only
+/// ever grown through [`vector_push_pool_alloc4`] or real vanilla's own `addFoundSpecies`, both of which
+/// share this same allocator convention). No `generated.rs` entry exists for real vanilla's own `_Tidy`
+/// (not yet cataloged by the Ghidra pass) - reimplemented directly here rather than guessed/hand-added.
+pub fn destroy_found_species_vector(vec: &crate::vanilla_vector::VanillaVector<u32>) {
+    let begin = vec.begin as u32;
+    let cap_end = vec.cap_end as u32;
+    free_event_vector_buffer(begin, cap_end - begin);
+}
+
 /// Appends `value` (a raw `u32` pointer) to a real vanilla `std::vector<T*>` (`begin`/`end`/`cap_end`, one
 /// word each) living at `vector_ptr` - the shared out-param growth shape `ZTHabitat_getSicklyAnimals.c`/
 /// `_getViewingAreasWithGuests.c` both use identically (real vanilla's own `PoolAlloc::allocate` doubling
@@ -1106,4 +1234,184 @@ pub unsafe fn call_save_vtable_slot(entity_ptr: u32, file: *const i8) -> bool {
     let target = get_from_memory::<u32>(vtable + 0x1c);
     let f = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, *const i8) -> u8>(target) };
     f(entity_ptr, file) != 0
+}
+
+/// Leaked-block fixtures shared by the `ZTHabitat` and `support` unit tests: raw addresses stay valid for
+/// the port's volatile reads because nothing is ever freed.
+#[cfg(test)]
+pub(super) mod test_fixtures {
+    use crate::util::save_to_memory;
+
+    /// Leaks a zeroed 20-byte MSVC `_Tree_node`-shaped block and writes `parent`/`left`/`right`/
+    /// `value` into the `+0x4`/`+0x8`/`+0xc`/`+0x10` slots [`super::walk_neighbor_tree`] reads,
+    /// returning the block's address.
+    pub fn leak_tree_node(parent: u32, left: u32, right: u32, value: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x14].into_boxed_slice());
+        let node_ptr = block.as_ptr() as u32;
+        save_to_memory(node_ptr + 0x4, parent);
+        save_to_memory(node_ptr + 0x8, left);
+        save_to_memory(node_ptr + 0xc, right);
+        save_to_memory(node_ptr + 0x10, value);
+        node_ptr
+    }
+
+    /// Leaks a zeroed 16-byte [`TileListNode`](super::TileListNode)-shaped block with `next`/`payload`
+    /// written at the `+0x0`/`+0x8` slots [`super::walk_tile_list`] reads, returning its address.
+    /// `prev` (`+0x4`) stays zeroed - no walker reads it.
+    pub fn leak_tile_node(next: u32, payload: u32) -> u32 {
+        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x10].into_boxed_slice());
+        let node_ptr = block.as_ptr() as u32;
+        save_to_memory(node_ptr, next);
+        save_to_memory(node_ptr + 0x8, payload);
+        node_ptr
+    }
+
+    /// Leaks a `TileListNode` sentinel plus one node per `tiles` entry, returning the sentinel's
+    /// address - the value `owned_tiles_ptr` must hold for [`super::walk_tile_list`] to walk `tiles`.
+    /// Nodes are spliced at the front, so the walk yields them in reverse of `tiles`' order.
+    pub fn leak_tile_list(tiles: &[u32]) -> u32 {
+        let sentinel = leak_tile_node(0, 0);
+        save_to_memory(sentinel, sentinel); // empty list: the sentinel's own next points back at it
+        save_to_memory(sentinel + 0x4, sentinel);
+        let mut first = sentinel;
+        for &tile in tiles {
+            let node = leak_tile_node(first, tile);
+            save_to_memory(node + 0x4, sentinel);
+            first = node;
+        }
+        save_to_memory(sentinel, first);
+        sentinel
+    }
+
+    /// Leaks an MSVC `std::set` head over `payloads`, returning the head's address - the value
+    /// `amphibious_neighbors_head` must hold for [`super::walk_neighbor_tree`] to visit exactly
+    /// `payloads`. Nodes chain in a right-leaning vine (`payloads[n]` the right child of
+    /// `payloads[n-1]`). Every head slot follows MSVC's own real construction - `+0x4`/`+0x8`/`+0xc` hold
+    /// the root/leftmost/rightmost node (the head itself when empty) - which matters for the successor
+    /// walk's end-of-tree climb: a null `+0x8` would send it reading address `0xc`, and a null `+0x4`
+    /// would strand that climb on a single-node set.
+    pub fn leak_neighbor_set(payloads: &[u32]) -> u32 {
+        let head = leak_tree_node(0, 0, 0, 0);
+        save_to_memory(head, 1u8); // the head's own isnil flag; real nodes are all 0 (zeroed)
+        let mut prev = head; // newest node = rightmost so far
+        let mut root = head; // first node added = tree root = leftmost in a right vine
+        for &payload in payloads {
+            let node = leak_tree_node(prev, 0, 0, payload);
+            save_to_memory(prev + 0xc, node);
+            if root == head {
+                root = node;
+            }
+            prev = node;
+        }
+        save_to_memory(head + 0x4, root); // head._Parent = root (the head itself when empty)
+        save_to_memory(head + 0x8, root); // head._Left = leftmost = root in a right vine
+        save_to_memory(head + 0xc, prev); // head._Right = rightmost (the head itself when empty)
+        head
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_fixtures::{leak_neighbor_set, leak_tile_list, leak_tile_node, leak_tree_node};
+    use super::{lcg_next, rotate_cardinal_direction, walk_neighbor_tree, walk_tile_list};
+    use crate::util::get_from_memory;
+
+    #[test]
+    fn lcg_next_known_sequence() {
+        assert_eq!(lcg_next(0), 0x269ec3);
+        assert_eq!(lcg_next(0x269ec3), 0x269ec3u32.wrapping_mul(0x343fd).wrapping_add(0x269ec3));
+        assert_eq!(lcg_next(1), 0x343fd + 0x269ec3);
+    }
+
+    #[test]
+    fn lcg_next_wraps_at_u32_max() {
+        // u32::MAX * 0x343fd == -0x343fd (mod 2^32), so the result is 0x269ec3 - 0x343fd.
+        assert_eq!(lcg_next(u32::MAX), 0x269ec3u32.wrapping_sub(0x343fd));
+    }
+
+    #[test]
+    fn walk_tile_list_empty_yields_nothing() {
+        let sentinel = leak_tile_list(&[]);
+        assert_eq!(walk_tile_list(sentinel).count(), 0);
+    }
+
+    #[test]
+    fn walk_tile_list_yields_nodes_never_sentinel() {
+        let sentinel = leak_tile_list(&[0xa, 0xb, 0xc]);
+        let nodes: Vec<u32> = walk_tile_list(sentinel).collect();
+        assert_eq!(nodes.len(), 3);
+        assert!(!nodes.contains(&sentinel));
+        // Front-spliced: the walk yields the last-added node first.
+        let payloads: Vec<u32> = nodes.iter().map(|&n| get_from_memory::<u32>(n + 0x8)).collect();
+        assert_eq!(payloads, vec![0xc, 0xb, 0xa]);
+    }
+
+    #[test]
+    fn walk_tile_list_hand_built_chain_order() {
+        let sentinel = leak_tile_node(0, 0);
+        let second = leak_tile_node(sentinel, 2);
+        let first = leak_tile_node(second, 1);
+        crate::util::save_to_memory(sentinel, first);
+        assert_eq!(walk_tile_list(sentinel).collect::<Vec<_>>(), vec![first, second]);
+    }
+
+    fn payloads_of(nodes: &[u32]) -> Vec<u32> {
+        nodes.iter().map(|&n| get_from_memory::<u32>(n + 0x10)).collect()
+    }
+
+    #[test]
+    fn walk_neighbor_tree_empty() {
+        let head = leak_neighbor_set(&[]);
+        assert_eq!(walk_neighbor_tree(head).count(), 0);
+    }
+
+    #[test]
+    fn walk_neighbor_tree_single_node() {
+        let head = leak_neighbor_set(&[0x1111]);
+        let nodes: Vec<u32> = walk_neighbor_tree(head).collect();
+        assert_eq!(nodes.len(), 1);
+        assert_ne!(nodes[0], head);
+        assert_eq!(payloads_of(&nodes), vec![0x1111]);
+    }
+
+    #[test]
+    fn walk_neighbor_tree_right_vine_in_order() {
+        let head = leak_neighbor_set(&[0x1, 0x2, 0x3, 0x4]);
+        let nodes: Vec<u32> = walk_neighbor_tree(head).collect();
+        assert_eq!(nodes.len(), 4);
+        assert!(!nodes.contains(&head));
+        assert_eq!(payloads_of(&nodes), vec![0x1, 0x2, 0x3, 0x4]);
+    }
+
+    #[test]
+    fn walk_neighbor_tree_with_left_child_climbs_to_parent() {
+        // root(2) with left child (1) and right child (3): in-order 1, 2, 3. The step off the left
+        // leaf takes the "right child == 0, climb via parent" branch.
+        let head = leak_tree_node(0, 0, 0, 0);
+        crate::util::save_to_memory(head, 1u8);
+        let left = leak_tree_node(0, 0, 0, 1);
+        let right = leak_tree_node(0, 0, 0, 3);
+        let root = leak_tree_node(head, left, right, 2);
+        crate::util::save_to_memory(left + 0x4, root);
+        crate::util::save_to_memory(right + 0x4, root);
+        crate::util::save_to_memory(head + 0x4, root);
+        crate::util::save_to_memory(head + 0x8, left);
+        crate::util::save_to_memory(head + 0xc, right);
+
+        let nodes: Vec<u32> = walk_neighbor_tree(head).collect();
+        assert_eq!(nodes, vec![left, root, right]);
+        assert_eq!(payloads_of(&nodes), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn rotate_cardinal_direction_wraps_and_rejects() {
+        assert_eq!(rotate_cardinal_direction(0, 2), Some(2));
+        assert_eq!(rotate_cardinal_direction(6, 2), Some(0));
+        assert_eq!(rotate_cardinal_direction(0, -2), Some(6));
+        assert_eq!(rotate_cardinal_direction(2, 0), Some(2));
+        assert_eq!(rotate_cardinal_direction(1, 2), None);
+        assert_eq!(rotate_cardinal_direction(7, 2), None);
+        assert_eq!(rotate_cardinal_direction(8, 2), None);
+        assert_eq!(rotate_cardinal_direction(0xffff_ffff, 2), None);
+    }
 }

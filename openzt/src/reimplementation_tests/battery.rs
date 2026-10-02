@@ -232,6 +232,7 @@ pub(super) mod detour_zoo_main {
                 name: "ZTHABITAT_ADD_HABITAT_TILES_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_add_habitat_tiles_roundtrip_live_test,
             },
+            RegisteredTest { name: "ZTHABITAT_RECALCULATE_CHARACTERISTICS_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_habitat_recalculate_characteristics_matches_real_live_test },
             RegisteredTest { name: "ZTHABITAT_UPDATE_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_update_smoke_live_test },
             RegisteredTest { name: "ZTTANKEXHIBIT_UPDATE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_tankexhibit_update_matches_real_live_test },
             RegisteredTest { name: "ZTHABITAT_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_habitat_save_matches_real_live_test },
@@ -301,28 +302,28 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_hilite_neighbors_roundtrip_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_CHECK_AMPHIBIOUS_NEIGHBOR_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_check_amphibious_neighbor_smoke_live_test,
+                name: "ZTHABITATMGR_CHECK_AMPHIBIOUS_NEIGHBOR_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_check_amphibious_neighbor_matches_real_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_UPDATE_AMPHIBIOUS_NEIGHBORS_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_update_amphibious_neighbors_smoke_live_test,
+                name: "ZTHABITATMGR_UPDATE_AMPHIBIOUS_NEIGHBORS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_update_amphibious_neighbors_matches_real_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_CHECK_SHOW_NEIGHBOR_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_check_show_neighbor_smoke_live_test,
+                name: "ZTHABITATMGR_CHECK_SHOW_NEIGHBOR_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_check_show_neighbor_matches_real_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_UPDATE_SHOW_NEIGHBORS_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_update_show_neighbors_smoke_live_test,
+                name: "ZTHABITATMGR_UPDATE_SHOW_NEIGHBORS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_update_show_neighbors_matches_real_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_DO_SHOW_CHECK_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_do_show_check_smoke_live_test,
+                name: "ZTHABITATMGR_DO_SHOW_CHECK_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_do_show_check_matches_real_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_CAN_SEE_SHOW_FROM_BUILDING_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_can_see_show_from_building_smoke_live_test,
+                name: "ZTHABITATMGR_BUILDING_VISIBILITY_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_building_visibility_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITATMGR_CAN_FIND_PATH_ROUNDTRIP_LIVE",
@@ -424,16 +425,16 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_zthabitatmgr_break_amphibious_connection_smoke_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_RECALCULATE_DETERIORATION_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_recalculate_deterioration_smoke_live_test,
+                name: "ZTHABITATMGR_RECALCULATE_DETERIORATION_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_recalculate_deterioration_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_SET_DETERIORATION_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_set_deterioration_matches_real_live_test,
             },
             RegisteredTest {
-                name: "ZTHABITATMGR_MARK_ZOO_EXTERIOR_SMOKE_LIVE",
-                run: tests::zthabitatmgr::run_zthabitatmgr_mark_zoo_exterior_smoke_live_test,
+                name: "ZTHABITATMGR_MARK_ZOO_EXTERIOR_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_mark_zoo_exterior_matches_real_live_test,
             },
             RegisteredTest { name: "ZTHABITATMGR_UPDATE_SMOKE_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_update_smoke_live_test },
             RegisteredTest {
@@ -648,15 +649,10 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTHABITAT_GET_NEAREST_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_nearest_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_RANDOM_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_random_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_HAS_BLDG_LIVE", run: tests::zthabitatmgr::run_habitat_has_bldg_live_test },
-            // ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS is deliberately NOT exercised by a live test.
-            // It previously hung/crashed silently (no exception logged) the moment `sendEvent`'s real
-            // call-through was genuinely invoked - root cause was `generated.rs`'s `SEND_EVENT` carrying a
-            // zero-arg signature for what's actually a 6-stack-arg thiscall (`RET 0x18`), corrupting the
-            // caller's stack on every call; fixed by regenerating that entry and passing the real args (see
-            // ZTHabitat::send_maint_worker_cleanup_events's own doc comment). Not yet covered by a live test
-            // beyond `DETOURS_ENABLED` since exercising it needs a real habitat with owned scenery tiles and
-            // a live `GLOBAL_ZTAIMgr` - same "no known safe fabricated-fixture shape yet" gap as
-            // `ZTHabitatMgr::trigger_death_arrived`/`fence_replaced`.
+            RegisteredTest {
+                name: "ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_send_maint_worker_cleanup_events_matches_real_live_test,
+            },
             RegisteredTest {
                 name: "ZTHABITAT_GET_SICKLY_ANIMALS_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_sickly_animals_matches_real_live_test,
@@ -712,6 +708,34 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_ADDITIONAL_SCENERY_SUITABILITY_CHANGE_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_additional_scenery_suitability_change_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_GET_NEXT_FENCE_PAIR_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_next_fence_pair_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_CHECK_GATE_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_check_gate_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_UPDATE_NEIGHBORS_FROM_TILE_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_update_neighbors_from_tile_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_REMOVE_FROM_ALL_VAS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_remove_from_all_vas_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_PATH_REMOVED_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_path_removed_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_PATH_PLACED_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_path_placed_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_PATH_PLACED_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_path_placed_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_REMOVE_VIEWING_AREAS_ROUNDTRIP_LIVE",

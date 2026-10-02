@@ -52,6 +52,11 @@ mod io_redirect;
 #[cfg(target_os = "windows")]
 pub(crate) mod portal_dispatch_recorder;
 
+/// Redirects `zthabitat::SEND_EVENT` into an in-memory call record - lets the live
+/// `sendMaintWorkerCleanupEvents` comparison observe real vanilla's sends without delivering them.
+#[cfg(target_os = "windows")]
+pub(crate) mod send_event_recorder;
+
 pub fn init() {
     #[cfg(target_os = "windows")]
     {
@@ -69,6 +74,7 @@ pub fn init() {
 
         io_redirect::init();
         portal_dispatch_recorder::init();
+        send_event_recorder::init();
 
         // Installs `resource_manager::init()`'s hooks so `LAZY_RESOURCE_MAP` is populated before
         // `detour_zoo_main`'s battery runs, letting `ZTMARKETINGMGR_LOAD_CONFIGURATIONS`'s
