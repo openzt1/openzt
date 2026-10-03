@@ -46,6 +46,17 @@ mod tests;
 #[cfg(target_os = "windows")]
 mod io_redirect;
 
+/// Redirects `zttankwall::SET_IS_OPEN_PORTAL` into an in-memory call record instead of letting it run
+/// for real - lets `battery`'s live `ZTHabitat::updatePortals` comparison call the real `.original()`
+/// path without flipping a real fence's open/close state or firing its sound.
+#[cfg(target_os = "windows")]
+pub(crate) mod portal_dispatch_recorder;
+
+/// Redirects `zthabitat::SEND_EVENT` into an in-memory call record - lets the live
+/// `sendMaintWorkerCleanupEvents` comparison observe real vanilla's sends without delivering them.
+#[cfg(target_os = "windows")]
+pub(crate) mod send_event_recorder;
+
 pub fn init() {
     #[cfg(target_os = "windows")]
     {
@@ -62,6 +73,8 @@ pub fn init() {
         }
 
         io_redirect::init();
+        portal_dispatch_recorder::init();
+        send_event_recorder::init();
 
         // Installs `resource_manager::init()`'s hooks so `LAZY_RESOURCE_MAP` is populated before
         // `detour_zoo_main`'s battery runs, letting `ZTMARKETINGMGR_LOAD_CONFIGURATIONS`'s
@@ -132,6 +145,13 @@ pub fn init() {
         // of hook state (routed through the hook registry's trampoline - see `openzt-detour`'s
         // `FunctionDef::original` doc comment).
         crate::zoostatus::init();
+
+        // ZTHabitatMgr/ZTHabitat: installs the class's 17 detours so ZTHABITATMGR_DETOURS_ENABLED can
+        // assert the wiring itself (same rationale as the MenuMusicHandler/ZTSoundscape/ZooStatus
+        // blocks above). The ZTHABITATMGR_* comparison tests are unaffected: they call
+        // `<FN>.original()` directly, which keeps reaching real vanilla in debug builds regardless of
+        // hook state.
+        crate::zthabitatmgr::init();
 
         unsafe { battery::detour_zoo_main::init_detours() }.is_err().then(|| {
             error!("Error initialising zoo_main detours");

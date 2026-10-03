@@ -92,7 +92,8 @@ use crate::bfconfigfile;
 use crate::globals::get_module_base;
 #[cfg(feature = "reimplementation-tests")]
 use crate::util::ZTArray;
-use crate::util::{get_from_memory, mut_from_memory, ref_from_memory, save_to_memory};
+use crate::util::{get_from_memory, ref_from_memory, save_to_memory, write_live_ptr};
+use crate::write_live;
 
 /// `.rdata` addresses of the three config string literals `Ambients::Ambients` reads (per
 /// `Ambients_Ambients.asm`'s `s_ambientlevels_0063b740`/`s_group_0063b750`/`s_value_0063914c` operand
@@ -181,6 +182,7 @@ pub struct Ambients {
     x: i32,            // 0x0c - world position, jittered in place by ZTSoundscape::update today
     y: i32,            // 0x10
     z: i32,            // 0x14
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<Ambients>() == 0x18);
@@ -225,13 +227,13 @@ impl Ambients {
     /// the module doc comment for why this particular config instance (opened, read, and discarded
     /// entirely within this one call) doesn't need to be real vanilla memory the way
     /// [`AmbientsGroup::construct`]'s own `config` parameter does.
-    pub fn construct(&mut self, name: *const u8, position: *const i32) {
-        self.groups_begin = 0;
-        self.groups_end = 0;
-        self.groups_cap = 0;
-        self.x = get_from_memory(position as u32);
-        self.y = get_from_memory(position as u32 + 4);
-        self.z = get_from_memory(position as u32 + 8);
+    pub fn construct(&self, name: *const u8, position: *const i32) {
+        write_live!(self, groups_begin, 0);
+        write_live!(self, groups_end, 0);
+        write_live!(self, groups_cap, 0);
+        write_live!(self, x, get_from_memory(position as u32));
+        write_live!(self, y, get_from_memory(position as u32 + 4));
+        write_live!(self, z, get_from_memory(position as u32 + 8));
 
         let name_present = !name.is_null() && get_from_memory::<u8>(name as u32) != 0;
         if !name_present {
@@ -271,7 +273,7 @@ impl Ambients {
     /// comment for why this departs from vanilla's own incremental-growth loop). A name with no
     /// matching range pair (a malformed config) gets `(0, 0)` rather than reading past the end of the
     /// flat list, unlike vanilla's own unchecked parallel-array indexing.
-    fn build_groups_from_ini(&mut self, ini: &Ini) {
+    fn build_groups_from_ini(&self, ini: &Ini) {
         let names = bfconfigfile::ini_compat::values(ini, "ambientlevels", "group");
         let flat_ranges: Vec<i32> = bfconfigfile::ini_compat::values(ini, "ambientlevels", "value").iter().filter_map(|v| v.parse().ok()).collect();
         let ranges: Vec<(i32, i32)> =
@@ -297,9 +299,9 @@ impl Ambients {
                 for (i, &group) in groups.iter().enumerate() {
                     save_to_memory(buf + (i as u32) * 4, group);
                 }
-                self.groups_begin = buf;
-                self.groups_end = buf + byte_size;
-                self.groups_cap = buf + byte_size;
+                write_live!(self, groups_begin, buf);
+                write_live!(self, groups_end, buf + byte_size);
+                write_live!(self, groups_cap, buf + byte_size);
             }
         }
     }
@@ -312,7 +314,7 @@ impl Ambients {
     /// `operator_delete`, by **capacity** (`groups_cap - groups_begin`), not the used range, matching
     /// vanilla's own `param_1[2] - puVar2` exactly (both are equal in this port's exact-fit allocation,
     /// but the real field is preserved for fidelity).
-    pub fn destruct(&mut self) {
+    pub fn destruct(&self) {
         let mut p = self.groups_begin;
         while p != self.groups_end {
             let group = get_from_memory::<u32>(p);
@@ -369,6 +371,7 @@ pub struct AmbientsGroup {
     range_hi: i32, // 0x204 - guest-count band upper bound
     /// Borrowed, not owned - see the struct doc comment.
     sound_group: u32, // 0x208 - *const SoundGroup
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(std::mem::size_of::<AmbientsGroup>() == 0x20c);
@@ -390,13 +393,13 @@ impl AmbientsGroup {
     /// a different function than it uses for `Ambients::Ambients`'s own `"ambientlevels"` list buffers
     /// (see both constants' doc comments); the `VECTORINT_0`/`VECTORINT_1` copies built from
     /// them are deliberately never freed here, matching vanilla (absorbed by `NEW_SOUND_GROUP` by value).
-    pub fn construct(&mut self, config: *const u32, name: *const u8, range_lo: i32, range_hi: i32) {
-        self.range_lo = range_lo;
-        self.range_hi = range_hi;
+    pub fn construct(&self, config: *const u32, name: *const u8, range_lo: i32, range_hi: i32) {
+        write_live!(self, range_lo, range_lo);
+        write_live!(self, range_hi, range_hi);
 
         let name_len = unsafe { CStr::from_ptr(name as *const i8) }.to_bytes().len();
         let copy_len = name_len.min(self.name.len() - 1);
-        unsafe { std::ptr::copy_nonoverlapping(name, self.name.as_mut_ptr(), copy_len + 1) };
+        unsafe { std::ptr::copy_nonoverlapping(name, self.name.as_ptr().cast_mut(), copy_len + 1) };
 
         let base = get_module_base("zoo.exe") as u32;
         let name_section = name as *const i8;
@@ -425,7 +428,7 @@ impl AmbientsGroup {
         }
 
         let sndmgr: u32 = get_from_memory(base + GLOBAL_DX8SNDMGR_RVA);
-        self.sound_group = unsafe {
+        let sound_group = unsafe {
             NEW_SOUND_GROUP.original()(
                 sndmgr as *const u32,
                 chance as u32,
@@ -437,6 +440,7 @@ impl AmbientsGroup {
                 prob_copy[2] as *const u32,
             ) as u32
         };
+        write_live!(self, sound_group, sound_group);
 
         // Real vanilla frees `sound_buf`/`prob_buf` unconditionally here, prob first then sound
         // (`AmbientsGroup_AmbientsGroup.asm`'s own tail) - not `DEALLOCATE_VECTOR`, and not guarded by
@@ -467,22 +471,22 @@ impl AmbientsGroup {
     /// themselves need no explicit free on the success path: `NEW_SOUND_GROUP`'s own internal
     /// `vector_t_4` destructors consume them by value, exactly as they do the `VECTORINT_0`/
     /// `VECTORINT_1` copies [`Self::construct`] builds.
-    pub fn construct_from_ini(&mut self, ini: &Ini, name: &str, range_lo: i32, range_hi: i32) {
-        self.range_lo = range_lo;
-        self.range_hi = range_hi;
+    pub fn construct_from_ini(&self, ini: &Ini, name: &str, range_lo: i32, range_hi: i32) {
+        write_live!(self, range_lo, range_lo);
+        write_live!(self, range_hi, range_hi);
 
         let name_bytes = name.as_bytes();
         let copy_len = name_bytes.len().min(self.name.len() - 1);
         unsafe {
-            std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), self.name.as_mut_ptr(), copy_len);
-            self.name[copy_len] = 0;
+            std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), self.name.as_ptr().cast_mut(), copy_len);
+            write_live_ptr(core::ptr::addr_of!(self.name[copy_len]).cast_mut(), 0u8);
         }
 
         let chance: i32 = bfconfigfile::ini_compat::first_parse(ini, name, "chance").unwrap_or(0);
         let sound_names = bfconfigfile::ini_compat::word_list(ini, name, "sound");
         let probs: Vec<i32> = bfconfigfile::ini_compat::word_list(ini, name, "prob").iter().filter_map(|v| v.parse().ok()).collect();
 
-        self.sound_group = 0;
+        write_live!(self, sound_group, 0);
         let Some((sound_array, sound_ptrs)) = build_vanilla_string_array(&sound_names) else {
             return;
         };
@@ -496,7 +500,7 @@ impl AmbientsGroup {
 
         let base = get_module_base("zoo.exe") as u32;
         let sndmgr: u32 = get_from_memory(base + GLOBAL_DX8SNDMGR_RVA);
-        self.sound_group = unsafe {
+        let sound_group = unsafe {
             NEW_SOUND_GROUP.original()(
                 sndmgr as *const u32,
                 chance as u32,
@@ -508,6 +512,7 @@ impl AmbientsGroup {
                 prob_array[2] as *const u32,
             ) as u32
         };
+        write_live!(self, sound_group, sound_group);
 
         // `NEW_SOUND_GROUP`'s own internal `vector_t_4` destructors already freed both arrays'
         // backing buffers (see this method's doc comment); the per-string buffers are still ours.
@@ -617,7 +622,7 @@ mod ambients_detours {
 
     #[detour(AMBIENTS_CONSTRUCTOR)]
     unsafe extern "thiscall" fn ambients_constructor(this: *const u32, name: *const u32, position: *const u32) -> *const u32 {
-        unsafe { mut_from_memory::<Ambients>(this) }.construct(name as *const u8, position as *const i32);
+        unsafe { ref_from_memory::<Ambients>(this) }.construct(name as *const u8, position as *const i32);
         this
     }
 
@@ -628,7 +633,7 @@ mod ambients_detours {
 
     #[detour(AMBIENTS_DESTRUCTOR)]
     unsafe extern "fastcall" fn ambients_destructor(this: *const c_void) {
-        unsafe { mut_from_memory::<Ambients>(this) }.destruct();
+        unsafe { ref_from_memory::<Ambients>(this) }.destruct();
     }
 
     /// Signature per `generated.rs`'s `ambientsgroup::CONSTRUCTOR` (see [`AmbientsGroup::construct`]'s
@@ -643,7 +648,7 @@ mod ambients_detours {
         range_lo: u32,
         range_hi: *const i32,
     ) -> *const u32 {
-        unsafe { mut_from_memory::<AmbientsGroup>(this) }.construct(config as *const u32, name as *const u8, range_lo as i32, range_hi as i32);
+        unsafe { ref_from_memory::<AmbientsGroup>(this) }.construct(config as *const u32, name as *const u8, range_lo as i32, range_hi as i32);
         this
     }
 
@@ -652,7 +657,7 @@ mod ambients_detours {
         unsafe { ref_from_memory::<AmbientsGroup>(this) }.play(delta, position);
     }
 
-    /// Live-test access to the real vanilla bodies and to the detours' installation state - same
+    /// Live-test access to the real vanilla bodies - same
     /// per-profile rationale as `ztsoundscape.rs`'s own `soundscape_detours::test_real` (`.original()`
     /// on a hooked address is a raw cast in release, so it would re-enter these detours instead of
     /// reaching vanilla; `*_DETOUR.call` stays correct in every profile). Lives inside the detour
@@ -686,18 +691,6 @@ mod ambients_detours {
         pub(crate) fn ambientsgroup_play(this: *const u32, delta: i32, position: *const i32) {
             unsafe { super::AMBIENTSGROUP_PLAY_DETOUR.call(this, delta, position) }
         }
-
-        /// `(name, is_enabled)` per detour - a battery `AMBIENTS_DETOURS_ENABLED`-style test asserts all
-        /// five to catch a silently-failed `init_detours()` (error logged, game continues on vanilla).
-        pub(crate) fn status() -> [(&'static str, bool); 5] {
-            [
-                ("AMBIENTS_CONSTRUCTOR", super::AMBIENTS_CONSTRUCTOR_DETOUR.is_enabled()),
-                ("AMBIENTS_PLAY", super::AMBIENTS_PLAY_DETOUR.is_enabled()),
-                ("AMBIENTS_DESTRUCTOR", super::AMBIENTS_DESTRUCTOR_DETOUR.is_enabled()),
-                ("AMBIENTSGROUP_CONSTRUCTOR", super::AMBIENTSGROUP_CONSTRUCTOR_DETOUR.is_enabled()),
-                ("AMBIENTSGROUP_PLAY", super::AMBIENTSGROUP_PLAY_DETOUR.is_enabled()),
-            ]
-        }
     }
 }
 
@@ -716,9 +709,9 @@ pub(crate) mod live_support {
 
     use super::*;
 
-    /// `(name, is_enabled)` per detour - see `ambients_detours::test_real::status`.
-    pub(crate) fn detour_status() -> [(&'static str, bool); 5] {
-        ambients_detours::test_real::status()
+    /// `(name, is_enabled)` per detour - see `ambients_detours::status`.
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
+        ambients_detours::status()
     }
 
     /// Allocates a fresh, uninitialized `0x18`-byte block via the real vanilla allocator - mirrors

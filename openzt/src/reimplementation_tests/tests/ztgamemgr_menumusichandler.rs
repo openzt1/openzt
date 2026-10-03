@@ -8,6 +8,7 @@ use std::mem::size_of;
 use tracing::error;
 
 use crate::reimplementation_tests::harness::{finish_test, write_success_line};
+use crate::util::low_byte_bool;
 use crate::ztgamemgr_menumusichandler::{self, live_support as menumusichandler_live_support};
 
 /// `MENUMUSICHANDLER_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
@@ -215,12 +216,19 @@ pub(crate) fn run_menumusichandler_init_test(failure_log: &mut Option<std::fs::F
         menumusichandler_live_support::real_constructor(real_ptr as *const u32);
         (*reimpl_ptr).construct();
 
-        // Phase 1: first init on a fresh constructor.
-        let real_result = menumusichandler_live_support::real_init(real_ptr as *const u32, FILENAME.as_ptr() as u32, ATTENUATION);
-        let reimpl_result = (*reimpl_ptr).init(FILENAME.as_ptr() as *const i8, ATTENUATION) as u32;
+        // Phase 1: first init on a fresh constructor. Real vanilla returns the bool in `EAX`'s low
+        // byte with the upper 24 bits undefined (macOS renders `in_EAX & 0xffffff00`; the only
+        // Windows caller, `initMenuMusic`, ignores the return entirely) - read it via
+        // `low_byte_bool`, same masking convention as `ZTHABITATMGR_LEADS_TO_LIVE`.
+        let real_result = low_byte_bool(menumusichandler_live_support::real_init(
+            real_ptr as *const u32,
+            FILENAME.as_ptr() as u32,
+            ATTENUATION,
+        ));
+        let reimpl_result = (*reimpl_ptr).init(FILENAME.as_ptr() as *const i8, ATTENUATION);
 
-        if (real_result != 0) != (reimpl_result != 0) {
-            mismatches.push(format!("return value: real={real_result}, reimpl={reimpl_result}"));
+        if real_result != reimpl_result {
+            mismatches.push(format!("return value: real={}, reimpl={}", real_result, reimpl_result));
         }
         mismatches.extend(menumusichandler_field_mismatches(real, reimpl));
         if !mismatches.is_empty() {
@@ -231,14 +239,19 @@ pub(crate) fn run_menumusichandler_init_test(failure_log: &mut Option<std::fs::F
             failed = true;
         }
 
-        // Phase 2: second init on the already-init'ed pair (see this test's doc comment).
+        // Phase 2: second init on the already-init'ed pair (see this test's doc comment). Same
+        // `low_byte_bool` masking as phase 1 - real vanilla's `EAX` upper bits are undefined here too.
         if !failed {
-            let real_result = menumusichandler_live_support::real_init(real_ptr as *const u32, FILENAME.as_ptr() as u32, ATTENUATION);
-            let reimpl_result = (*reimpl_ptr).init(FILENAME.as_ptr() as *const i8, ATTENUATION) as u32;
+            let real_result = low_byte_bool(menumusichandler_live_support::real_init(
+                real_ptr as *const u32,
+                FILENAME.as_ptr() as u32,
+                ATTENUATION,
+            ));
+            let reimpl_result = (*reimpl_ptr).init(FILENAME.as_ptr() as *const i8, ATTENUATION);
 
             mismatches.clear();
-            if (real_result != 0) != (reimpl_result != 0) {
-                mismatches.push(format!("second-init return value: real={real_result}, reimpl={reimpl_result}"));
+            if real_result != reimpl_result {
+                mismatches.push(format!("second-init return value: real={}, reimpl={}", real_result, reimpl_result));
             }
             mismatches.extend(menumusichandler_field_mismatches(real, reimpl));
             if !mismatches.is_empty() {

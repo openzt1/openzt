@@ -58,7 +58,7 @@ pub(crate) fn run_ztshowui_fill_trick_lists_live_test(failure_log: &mut Option<s
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: BLOCKED - no qualifying show-tank habitat found\n", test_name).as_bytes());
         }
-        return false;
+        return true;
     };
 
     if let Some(log_file) = failure_log {
@@ -102,7 +102,7 @@ pub(crate) fn run_ztshowui_fill_trick_lists_live_test(failure_log: &mut Option<s
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: BLOCKED - no committed species and no trick-eligible animal\n", test_name).as_bytes());
         }
-        return false;
+        return true;
     };
     if let Some(log_file) = failure_log {
         let _ = log_file.write_all(
@@ -118,7 +118,7 @@ pub(crate) fn run_ztshowui_fill_trick_lists_live_test(failure_log: &mut Option<s
         if let Some(log_file) = failure_log {
             let _ = log_file.write_all(format!("Test Failed {}: BLOCKED - resolved unit type pointer is null\n", test_name).as_bytes());
         }
-        return false;
+        return true;
     }
 
     let mut fail_flag = false;

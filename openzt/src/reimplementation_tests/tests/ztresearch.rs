@@ -1317,15 +1317,15 @@ pub(crate) fn run_branch_update_test(failure_log: &mut Option<std::fs::File>) ->
             let available_cash = (cash_delta * cash_multiplier).max(0.0);
 
             let real_progress = live_support::with_update_test_branch(TARGET_COST, initial_progress, funding_rate, funding_cost, |mgr| {
-                let branch = mgr.branch_mut(0);
+                let branch = mgr.branch(0);
                 live_support::with_ztgamemgr_cash(available_cash, || unsafe {
-                    ZTRESEARCHBRANCH_UPDATE.original()((branch as *mut ZTResearchBranch) as *const u32, days);
+                    ZTRESEARCHBRANCH_UPDATE.original()((branch as *const ZTResearchBranch) as *const u32, days);
                 });
                 branch.current_program().map(|p| p.current_progress())
             });
 
             let reimpl_progress = live_support::with_update_test_branch(TARGET_COST, initial_progress, funding_rate, funding_cost, |mgr| {
-                let branch = mgr.branch_mut(0);
+                let branch = mgr.branch(0);
                 live_support::with_ztgamemgr_cash(available_cash, || branch.update(days));
                 branch.current_program().map(|p| p.current_progress())
             });
@@ -1385,7 +1385,7 @@ pub(crate) fn run_branch_update_reimpl_boundary_test(failure_log: &mut Option<st
     let (cash_delta, _) = predict_branch_progress(days, funding_cost, funding_rate, f32::MAX);
 
     live_support::with_update_test_branch(TARGET_COST, initial_progress, funding_rate, funding_cost, |mgr| {
-        let branch = mgr.branch_mut(0);
+        let branch = mgr.branch(0);
         info!("{}: about to call reimplemented ZTResearchBranch::update with available_cash == cash_delta ({})", test_name, cash_delta);
         live_support::with_ztgamemgr_cash(cash_delta, || branch.update(days));
         info!("{}: reimplemented call returned without crashing", test_name);

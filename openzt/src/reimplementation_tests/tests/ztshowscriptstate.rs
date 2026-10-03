@@ -194,11 +194,11 @@ pub(crate) fn run_ztshowscriptstate_save_load_roundtrip_test(failure_log: &mut O
     let rust_save_ret = unsafe { ZTSHOWSCRIPTSTATE_SAVE.hooked()(save_source_rust as *const u32, file_ptr) };
     let rust_bytes = io_redirect::end_capture();
 
-    if real_save_ret & 0xff != 1 {
-        failures.push(format!("real save should return 1 in the low byte, got {real_save_ret:#010x}"));
+    if !real_save_ret {
+        failures.push("real save should return true".to_string());
     }
-    if rust_save_ret & 0xff != 1 {
-        failures.push(format!("rust save should return 1 in the low byte, got {rust_save_ret:#010x}"));
+    if !rust_save_ret {
+        failures.push("rust save should return true".to_string());
     }
     // The exact nine fields: 2 (script_id) + 4 (key) + 2 (trick_index) + 6x1 (flags).
     if real_bytes.len() != 14 {

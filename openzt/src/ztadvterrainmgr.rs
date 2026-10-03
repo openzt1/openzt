@@ -23,7 +23,7 @@ use std::{ffi::c_void, fmt, fmt::Display};
 use openzt_detour::generated::{
     bfterrainimage,
     bfuimgr::{HIDE_BUSY_CURSOR, SHOW_BUSY_CURSOR},
-    ztadvterrainmgr::{LOAD_TEXTURES_0, SETUP_RENDER, SET_AUX_IMAGE, SET_GROUND_IMAGE, SET_IMAGE, START, START2D, START_D3D, UPDATE},
+    ztadvterrainmgr::{LOAD_TEXTURES, SETUP_RENDER, SET_AUX_IMAGE, SET_GROUND_IMAGE, SET_IMAGE, START, START2D, START_D3D, UPDATE},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::{error, info};
@@ -34,6 +34,7 @@ use crate::{
     globals::{get_module_base, globals},
     lua_fn,
     util::{get_from_memory, save_to_memory, ZTBufferString},
+    write_live,
     ztworldmgr::IVec3,
 };
 
@@ -50,7 +51,7 @@ const QUEUE_SENTINEL_PTR_OFFSET: u32 = 0x1d8;
 /// MOV DAT_00638008,EAX`). RVA = `0x00638008 - 0x400000`.
 const RVA_BFPOS_NODE_FREELIST_HEAD: u32 = 0x0023_8008;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct ZTAdvTerrainMgr_raw {
     vtable: u32,
@@ -81,6 +82,7 @@ pub struct ZTAdvTerrainMgr_raw {
     // Total size is 0x1dc. Only the front ~0x1c bytes plus one far-away field (update()'s queue sentinel
     // pointer at +0x1d8, accessed via raw offset arithmetic - see QUEUE_SENTINEL_PTR_OFFSET - not
     // modeled as a struct field) are load-bearing here.
+    pub _live: crate::util::LiveMemory,
 }
 
 /// One node of the vanilla `std::list<BFPos>` `update()` drains - `{next, prev, x, y}`, confirmed from
@@ -103,8 +105,8 @@ struct ZTAdvTerrainMgr {
     bf_terrain_type_info_array: Vec<BFTerrainTypeInfo>,
 }
 
-impl From<ZTAdvTerrainMgr_raw> for ZTAdvTerrainMgr {
-    fn from(raw: ZTAdvTerrainMgr_raw) -> Self {
+impl From<&ZTAdvTerrainMgr_raw> for ZTAdvTerrainMgr {
+    fn from(raw: &ZTAdvTerrainMgr_raw) -> Self {
         info!(
             "Reading terrain types from {:#x} to {:#x}",
             raw.bf_terrain_type_info_array_start, raw.bf_terrain_type_info_array_end
@@ -128,8 +130,8 @@ impl ZTAdvTerrainMgr_raw {
         self.state as i32
     }
 
-    pub fn set_state(&mut self, value: i32) {
-        self.state = value as u32;
+    pub fn set_state(&self, value: i32) {
+        write_live!(self, state, value as u32);
     }
 
     fn queue_sentinel_ptr(&self) -> u32 {
@@ -152,7 +154,7 @@ impl ZTAdvTerrainMgr_raw {
     /// Unlinks the queue's front node and recycles it via [`release_bfpos_node`] onto vanilla's own
     /// freelist - never through Rust's allocator, since the node was never allocated by Rust (see the
     /// module doc comment).
-    fn pop_front_and_release(&mut self) {
+    fn pop_front_and_release(&self) {
         let sentinel = self.queue_sentinel_ptr();
         let front = Self::unlink_front(sentinel);
         unsafe { release_bfpos_node(front) };
@@ -175,27 +177,27 @@ impl ZTAdvTerrainMgr_raw {
     /// `ZTAdvTerrainMgr_start.c`: `start2D()` -> `startD3D()` -> `loadTextures()` -> `setupRender()`,
     /// `true` only if all four succeed. `this->state = 2` is a plain field write with no other side
     /// effects (the mac build calls `BFTerrainMgr::setPerfBias(this, 2)` for the same effect).
-    pub fn start(&mut self) -> bool {
+    pub fn start(&self) -> bool {
         self.set_state(2);
         let this = self.base_addr() as *const u32;
         unsafe {
-            if START2D.original()(this) == 0 {
+            if !START2D.original()(this) {
                 return false;
             }
-            if START_D3D.original()(this) == 0 {
+            if !START_D3D.original()(this) {
                 return false;
             }
-            if LOAD_TEXTURES_0.original()(this) == 0 {
+            if !LOAD_TEXTURES.original()(this) {
                 return false;
             }
-            SETUP_RENDER.original()(this) != 0
+            SETUP_RENDER.original()(this)
         }
     }
 
     /// 3-call dispatcher, per `ZTAdvTerrainMgr_setImage.c` (both platforms agree): `setAuxImage`, then
     /// `setGroundImage` (with `ground` set from `state > 1`), then `BFTerrainImage::computeImageSize`,
     /// returning `setGroundImage`'s result.
-    pub fn set_image(&mut self, image: *const u32, map: *const u32, tile: *const u32) -> i8 {
+    pub fn set_image(&self, image: *const u32, map: *const u32, tile: *const u32) -> i8 {
         let this = self.base_addr() as *const u32;
         unsafe {
             SET_AUX_IMAGE.original()(this, image, map as *const i8, tile as *const c_void);
@@ -211,7 +213,7 @@ impl ZTAdvTerrainMgr_raw {
     /// `get_tile_from_pos`, which already returns `None` for out-of-range/negative coords) and, if in
     /// range, calls `setGroundImage(this, tile+0x50, world_mgr+0x8, tile, 0)` - confirmed directly from
     /// the asm's `CALL ZTAdvTerrainMgr::setGroundImage` argument setup - then pops and recycles the node.
-    pub fn update(&mut self, delta_ticks: u32) {
+    pub fn update(&self, delta_ticks: u32) {
         let now = unsafe { GetTickCount() };
         let (deadline, show_busy_cursor, early_return) = Self::compute_update_state(self.state(), now, delta_ticks);
         if early_return {
@@ -294,7 +296,7 @@ struct BFTerrainTypeInfo {
 
 
 fn read_ztadvterrainmgr_from_memory() -> ZTAdvTerrainMgr {
-    ZTAdvTerrainMgr::from(*globals().ztadvterrainmgr())
+    ZTAdvTerrainMgr::from(globals().ztadvterrainmgr())
 }
 
 fn read_bfterraintypeinfo_from_memory(address: u32) -> BFTerrainTypeInfo {
@@ -314,21 +316,21 @@ fn command_get_bfterraintypeinfo(_args: Vec<&str>) -> Result<String, CommandErro
 #[detour_mod]
 mod ztadvterrainmgr_detours {
     use super::*;
-    use crate::util::mut_from_memory;
+    use crate::util::ref_from_memory;
 
     #[detour(START)]
     unsafe extern "thiscall" fn start(this: *const u32) -> u32 {
-        unsafe { mut_from_memory::<ZTAdvTerrainMgr_raw>(this) }.start() as u32
+        unsafe { ref_from_memory::<ZTAdvTerrainMgr_raw>(this) }.start() as u32
     }
 
     #[detour(SET_IMAGE)]
     unsafe extern "thiscall" fn set_image(this: *const u32, image: *const u32, map: *const u32, tile: *const u32) -> u32 {
-        unsafe { mut_from_memory::<ZTAdvTerrainMgr_raw>(this) }.set_image(image, map, tile) as u32
+        unsafe { ref_from_memory::<ZTAdvTerrainMgr_raw>(this) }.set_image(image, map, tile) as u32
     }
 
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const u32, delta_ticks: u32) {
-        unsafe { mut_from_memory::<ZTAdvTerrainMgr_raw>(this) }.update(delta_ticks);
+        unsafe { ref_from_memory::<ZTAdvTerrainMgr_raw>(this) }.update(delta_ticks);
     }
 }
 
