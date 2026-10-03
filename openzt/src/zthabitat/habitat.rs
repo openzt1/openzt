@@ -6,7 +6,9 @@ use openzt_detour::generated::{
         bftile::{
             IS_IN_ZOO as BFTILE_IS_IN_ZOO, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         },
-        msvc_std_listuint::INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE,
+        msvc_std_basic_string::BASIC_STRING_0 as MSVC_BASIC_STRING_DTOR,
+        msvc_std_listuint::{INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE, LIST as MSVC_LIST_UINT_DTOR},
+        msvc_std_vector_t_4::VECTOR_T_4 as MSVC_VECTOR_T_4_DTOR,
         msvc_std_tree36::{CLEAR as MSVC_TREE36_CLEAR, OPERATOR_INDEX as MSVC_TREE36_OPERATOR_INDEX},
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
@@ -18,7 +20,8 @@ use openzt_detour::generated::{
         zthabitat::{
             ADD_FOUND_SPECIES, ADD_SHOW_UNIT, CREATE_VIEWING_AREAS, GET_CLOSE_OUTSIDE_TILE, GET_EVENTS, GET_SURROUNDING_ANIMALS,
             NEEDS_SERVICE,
-            REVISE_SPECIES_LIST, SEND_EVENT,
+            REMOVE_AMPHIBIOUS_NEIGHBOR, REMOVE_SHOW_NEIGHBOR, REMOVE_SHOW_PORTAL, REVISE_SPECIES_LIST, SEND_EVENT,
+            SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
         zthabitatmgr::REMOVE_HABITAT_0,
         ztkeeper::CLEANS_UP,
@@ -54,7 +57,12 @@ use crate::{
     ztworldmgr::Direction,
 };
 use super::mgr::zthabitatmgr::ZTHabitatMgr;
-use super::support::*;
+
+/// Number of times [`ZTHabitat::destruct`] has run - lets the live battery prove the destructor port was
+/// actually reached by vanilla teardown paths.
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) static DESTRUCT_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+use super::support::{self, *};
 use super::tank_exhibit::ZTTankExhibit;
 
 #[derive(Debug, Getters)]
@@ -710,7 +718,7 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::getNeedyNestedTank` (`ZTHabitat_getNeedyNestedTank.c`/`.asm`) - depth-first
-    /// search over the amphibious-connected tank chain (via [`Self::boundary_tile_pairs_begin`]/`_end`,
+    /// search over the amphibious-connected tank chain (via [`Self::boundary_tile_pairs`],
     /// not the `amphibious_neighbors_head` tree despite this file's own earlier "recurses the
     /// amphibious-neighbor tree" description) for a tank whose own `needsService(keeper_ptr, true)` is
     /// true and whose keeper isn't already stationed there ([`ztunit::GET_HABITAT`] on `keeper_ptr` !=
@@ -756,7 +764,7 @@ impl ZTHabitat {
         }
 
         let mgr = globals().zthabitatmgr();
-        let pairs = ZTHabitatMgr::snapshot_boundary_tile_pairs(self.boundary_tile_pairs_begin, self.boundary_tile_pairs_end);
+        let pairs = self.boundary_tile_pairs();
         for (first_ptr, second_ptr) in pairs {
             if first_ptr == 0 || second_ptr == 0 {
                 continue;
@@ -5395,7 +5403,7 @@ impl ZTHabitat {
     /// documents for `highlightHabitat`/`replaceGate`/`clearStaffHabitat` - ported as a `ZTHabitat`
     /// method instead.
     ///
-    /// For every entry in this habitat's own [`Self::boundary_tile_pairs_begin`]/`_end` (a fresh
+    /// For every entry in this habitat's own [`Self::boundary_tile_pairs`] (a fresh
     /// snapshot via [`ZTHabitatMgr::snapshot_boundary_tile_pairs`], matching real vanilla's own
     /// copy-before-iterate shape), resolves the fence connecting the pair in each direction
     /// ([`Self::tile_fence_in_direction`] + [`BFMAP_GET_DIRECTION_0`], only kept when a genuine
@@ -5408,7 +5416,7 @@ impl ZTHabitat {
     /// initializer that the loop never gets a chance to flip - see [`ZTHabitatMgr::create_habitat`]'s
     /// own call site, which relies on exactly this default for a brand-new seed-tile habitat.
     pub fn do_tank_check(&self) -> bool {
-        let pairs = ZTHabitatMgr::snapshot_boundary_tile_pairs(self.boundary_tile_pairs_begin, self.boundary_tile_pairs_end);
+        let pairs = self.boundary_tile_pairs();
         for (tile_a_ptr, tile_b_ptr) in pairs {
             // A boundary-tile-pair entry can hold a null tile pointer while the pairs are stale
             // (e.g. mid-bulldoze on a shared tank wall) - skipped defensively, same "dead in
@@ -5602,6 +5610,192 @@ impl ZTHabitat {
             }
         }
         candidate != head && get_from_memory::<u32>(candidate + 0x10) <= neighbor_ptr
+    }
+
+    /// Whether the habitat at `habitat_ptr` is a show tank: `isTank()` by real vtable dispatch (slot
+    /// `+0x20`, which a subclass may override) and a non-null show-info pointer. The gate both
+    /// `addShowNeighbor` and `removeShowNeighbor` apply to each side.
+    fn is_show_tank_by_vtable(habitat_ptr: u32) -> bool {
+        let is_tank = unsafe { call_vtable_slot_noargs_ret_bool(habitat_ptr, 0x20) };
+        is_tank && get_from_memory::<u32>(habitat_ptr + 0x4) != 0
+    }
+
+    /// Ports `ZTHabitat::addAmphibiousNeighbor` (`generated.rs`'s `ADD_AMPHIBIOUS_NEIGHBOR`, `0x005078d3`;
+    /// the macOS `ZTHabitat_addAmphibiousNeighbor.c` agrees): inserts `other_ptr` into the amphibious
+    /// `std::set<ZTHabitat*>` ([`Self::amphibious_neighbors_head`], size at `+0xc`) when the two
+    /// habitats' `isTank()` results differ. The return is true whenever that gate passes, whether or not
+    /// the key was already present. Nodes come from `PoolAlloc` (see [`rb_set_insert`]), matching what
+    /// vanilla's `clearAmphibiousNeighbors`/destructor free.
+    pub fn add_amphibious_neighbor(&self, other_ptr: u32) -> bool {
+        if other_ptr == 0 {
+            return false;
+        }
+        let self_addr = self as *const Self as u32;
+        let other_is_tank = unsafe { call_vtable_slot_noargs_ret_bool(other_ptr, 0x20) };
+        let self_is_tank = unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) };
+        if self_is_tank == other_is_tank {
+            return false;
+        }
+        rb_set_insert(self_addr + 0x8, other_ptr);
+        true
+    }
+
+    /// Ports `ZTHabitat::clearAmphibiousNeighbors` (`CLEAR_AMPHIBIOUS_NEIGHBORS`, `0x00417460`): calls
+    /// real vanilla `removeAmphibiousNeighbor(neighbor, self)` on every member (un-ported - it edits the
+    /// *neighbour's* set, not this one), then frees the whole tree.
+    pub fn clear_amphibious_neighbors(&self) {
+        let self_addr = self as *const Self as u32;
+        let neighbors: Vec<u32> = walk_neighbor_tree(self.amphibious_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+        for neighbor in neighbors {
+            unsafe { REMOVE_AMPHIBIOUS_NEIGHBOR.original()(neighbor as *const u32, self_addr as *const u32) };
+        }
+        rb_tree_clear(self_addr + 0x8, 0x14);
+    }
+
+    /// Ports `ZTHabitat::addShowNeighbor` (`ADD_SHOW_NEIGHBOR`, `0x005ab1e7`, `ZTHabitat_addShowNeighbor.c`):
+    /// when exactly one of the two habitats is a show tank ([`Self::is_show_tank_by_vtable`]) and both
+    /// have the same `isTank()` result, inserts `other_ptr` into the show-neighbor set
+    /// ([`Self::show_neighbors_head`], size at `+0x18`). If `other_ptr` is the show tank, every animal of
+    /// this habitat and of each amphibious neighbour that passes its vtable `+0x228` predicate is
+    /// registered with it via real vanilla `addShowUnit`. Returns whether the insert gate passed.
+    pub fn add_show_neighbor(&self, other_ptr: u32) -> bool {
+        if other_ptr == 0 {
+            return false;
+        }
+        let self_addr = self as *const Self as u32;
+        if Self::is_show_tank_by_vtable(other_ptr) == Self::is_show_tank_by_vtable(self_addr) {
+            return false;
+        }
+        if unsafe { call_vtable_slot_noargs_ret_bool(other_ptr, 0x20) } != unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
+            return false;
+        }
+        rb_set_insert(self_addr + 0x14, other_ptr);
+        if Self::is_show_tank_by_vtable(other_ptr) {
+            let register_show_units = |habitat: &ZTHabitat| {
+                let animals: Vec<u32> = habitat.get_all_animals(false).collect();
+                for animal in animals {
+                    if unsafe { call_entity_vtable_noargs(animal, 0x228) } {
+                        unsafe { ADD_SHOW_UNIT.original()(other_ptr as *const u32, animal) };
+                    }
+                }
+            };
+            register_show_units(self);
+            let neighbors: Vec<u32> = walk_neighbor_tree(self.amphibious_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+            for neighbor in neighbors {
+                register_show_units(unsafe { ref_from_memory::<ZTHabitat>(neighbor) });
+            }
+        }
+        true
+    }
+
+    /// Ports `ZTHabitat::clearShowNeighbors` (`CLEAR_SHOW_NEIGHBORS`, `0x00458a88`): for every member
+    /// calls real vanilla `removeShowNeighbor(member, self)`, `removeShowPortal(member, self)` and
+    /// `removeShowPortal(self, member)` (all un-ported), then frees the show-neighbor set and the
+    /// show-portal map ([`Self::show_portal_map_head`], size at `+0x24`, `0x18`-byte nodes).
+    pub fn clear_show_neighbors(&self) {
+        let self_addr = self as *const Self as u32;
+        let neighbors: Vec<u32> = walk_neighbor_tree(self.show_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+        for neighbor in neighbors {
+            unsafe {
+                REMOVE_SHOW_NEIGHBOR.original()(neighbor as *const u32, self_addr as *const u32);
+                REMOVE_SHOW_PORTAL.original()(neighbor as *const u32, self_addr as *const u32);
+                REMOVE_SHOW_PORTAL.original()(self_addr as *const u32, neighbor as *const u32);
+            }
+        }
+        rb_tree_clear(self_addr + 0x14, 0x14);
+        rb_tree_clear(self_addr + 0x20, 0x18);
+    }
+
+    /// Vtable address real vanilla's destructor resets `this` to before tearing down (the base
+    /// `ZTHabitat` vtable, `0x00632100`).
+    const BASE_VTABLE_PTR: u32 = 0x0063_2100;
+
+    /// Ports `ZTHabitat::~ZTHabitat` (`generated.rs`'s `DESTRUCTOR_0`, `0x00458cab`, called by
+    /// `DESTRUCTOR_1`'s scalar-deleting wrapper and by the `ZTTankExhibit` destructor), step for step in
+    /// vanilla's order: reset the vtable; send maintenance-worker cleanup events; remove viewing areas
+    /// and habitat tiles; delete every `Ambients` and empty the `+0x54`/`+0x60` vectors; clear the show
+    /// exhibit state and amphibious neighbours; break the amphibious connection of every
+    /// boundary tile-pair; clear the show neighbours; then free every container the constructor
+    /// allocated, each back to the `PoolAlloc` size class vanilla uses.
+    ///
+    /// The container frees go through [`Self::free_pool_block`]/real vanilla's own container destructors
+    /// (`~vector<T>`, `~list<uint>`, `~basic_string`, the species-suitability cache and `tree36::clear`),
+    /// which are un-detoured, so every allocation stays on vanilla's allocator.
+    pub fn destruct(&self) {
+        let self_addr = self as *const Self as u32;
+        #[cfg(feature = "reimplementation-tests")]
+        DESTRUCT_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        write_live!(self, vtable, Self::BASE_VTABLE_PTR);
+
+        self.send_maint_worker_cleanup_events();
+        self.remove_viewing_areas();
+        self.remove_habitat_tiles();
+
+        let ambients_begin: u32 = get_from_memory(self_addr + 0x54);
+        let ambients_end: u32 = get_from_memory(self_addr + 0x58);
+        for entry in (ambients_begin..ambients_end).step_by(8) {
+            let ambients_ptr: u32 = get_from_memory(entry + 4);
+            if ambients_ptr != 0 {
+                unsafe { ref_from_memory::<Ambients>(ambients_ptr) }.destruct();
+                unsafe { OPERATOR_DELETE.original()(ambients_ptr) };
+            }
+        }
+        save_to_memory(self_addr + 0x64, get_from_memory::<u32>(self_addr + 0x60));
+        save_to_memory(self_addr + 0x58, ambients_begin);
+
+        self.set_is_not_show_exhibit();
+        self.clear_amphibious_neighbors();
+        for (tile_a, tile_b) in support::take_boundary_tile_pairs(self_addr) {
+            ZTHabitatMgr::break_amphibious_connection(tile_a, tile_b);
+        }
+        self.clear_show_neighbors();
+
+        unsafe { MSVC_TREE36_CLEAR.original()((self_addr + 0x16c) as *const u32) };
+        Self::free_pool_block(get_from_memory(self_addr + 0x16c), 0x24);
+        unsafe {
+            MSVC_BASIC_STRING_DTOR.original()((self_addr + 0x154) as *const std::ffi::c_void);
+            SPECIES_SUITABILITY_CACHE_CLEAR.original()((self_addr + 0x148) as *const std::ffi::c_void);
+            SPECIES_SUITABILITY_CACHE_DTOR.original()((self_addr + 0x148) as *const std::ffi::c_void);
+            for vector_offset in [0x13c, 0x78, 0x6c, 0x60] {
+                MSVC_VECTOR_T_4_DTOR.original()((self_addr + vector_offset) as *const u32);
+            }
+        }
+        // `+0x54` (8-byte pairs) and `+0x48` (vanilla's boundary-pair vector, never allocated) free by capacity.
+        for vector_offset in [0x54, 0x48] {
+            let begin: u32 = get_from_memory(self_addr + vector_offset);
+            let cap_end: u32 = get_from_memory(self_addr + vector_offset + 8);
+            Self::free_pool_block(begin, cap_end.wrapping_sub(begin));
+        }
+        unsafe { MSVC_LIST_UINT_DTOR.original()((self_addr + 0x44) as *const std::ffi::c_void) };
+
+        let owned_tiles_head = self.owned_tiles_ptr;
+        let mut node: u32 = get_from_memory(owned_tiles_head);
+        while node != owned_tiles_head {
+            let next: u32 = get_from_memory(node);
+            Self::free_pool_block(node, 0xc);
+            node = next;
+        }
+        save_to_memory(owned_tiles_head, owned_tiles_head);
+        save_to_memory(owned_tiles_head + 4, owned_tiles_head);
+        Self::free_pool_block(owned_tiles_head, 0xc);
+
+        unsafe { MSVC_VECTOR_T_4_DTOR.original()((self_addr + 0x34) as *const u32) };
+
+        // The three `std::set`/`std::map` containers: every node was already freed by the clears
+        // above, so only the header node (0x14/0x18 bytes, same size class) remains.
+        for (container_offset, node_size) in [(0x20, 0x18), (0x14, 0x14), (0x8, 0x14)] {
+            let head: u32 = get_from_memory(self_addr + container_offset);
+            rb_erase_subtree(get_from_memory(head + 4), node_size);
+            Self::free_pool_block(head, node_size);
+        }
+    }
+
+    /// Returns `ptr` to `PoolAlloc`'s freelist for `byte_size` (or `operator_delete`s it above 0x80
+    /// bytes); a null `ptr` is skipped - `PoolAlloc::deallocate(NULL, n)` writes through the null.
+    fn free_pool_block(ptr: u32, byte_size: u32) {
+        if ptr != 0 {
+            unsafe { POOLALLOC_DEALLOCATE.original()(ptr as *const u32, byte_size) };
+        }
     }
 
     /// Ports `ZTHabitat::getShowPortal` (`generated.rs`'s `GET_SHOW_PORTAL`, `0x0059e0a9`, confirmed
@@ -6102,55 +6296,20 @@ impl ZTHabitat {
         }
     }
 
-    /// Push-back helper for [`Self::create_edge_pairs`]'s own [`Self::boundary_tile_pairs_begin`]/`_end`/
-    /// `_cap_end` vector - real vanilla's own `PoolAlloc::allocate`/`PoolAlloc::deallocate` doubling growth
-    /// (`ZTHabitat_createEdgePairs.c`), called through rather than reimplemented. The
-    /// decompile's own general "insert in the middle" shift helper (`FUN_00411192`) never actually executes
-    /// for this call site (insertion is always at the vector's own current end - the loop that would call it
-    /// is unconditionally empty here), so it's sidestepped entirely rather than needing to be identified.
+    /// Appends `(tile_a, tile_b)` to this habitat's boundary tile-pairs (see [`Self::boundary_tile_pairs`]).
     pub(crate) fn push_boundary_tile_pair(&self, tile_a: u32, tile_b: u32) {
-        let self_addr = self as *const Self as u32;
-        let begin = self.boundary_tile_pairs_begin;
-        let end = self.boundary_tile_pairs_end;
-        let cap_end = self.boundary_tile_pairs_cap_end;
+        support::push_boundary_tile_pair(self as *const Self as u32, tile_a, tile_b);
+    }
 
-        if end == cap_end {
-            let old_len = (end - begin) / 8;
-            let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
-            let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 8) } as u32;
-
-            for i in 0..old_len {
-                let a: u32 = get_from_memory(begin + i * 8);
-                let b: u32 = get_from_memory(begin + i * 8 + 4);
-                if new_buf != 0 {
-                    save_to_memory(new_buf + i * 8, a);
-                    save_to_memory(new_buf + i * 8 + 4, b);
-                }
-            }
-            if new_buf != 0 {
-                save_to_memory(new_buf + old_len * 8, tile_a);
-                save_to_memory(new_buf + old_len * 8 + 4, tile_b);
-            }
-            // Vanilla skips the free for an empty, never-allocated vector (`TEST EAX,EAX` / `JZ` ahead of
-            // the call in `ZTHabitat_createEdgePairs.asm`). `PoolAlloc::deallocate(NULL, 0)` is not
-            // harmless: a size of 0 computes bucket index `(0 - 1) >> 3` and then writes through the null
-            // pointer.
-            if begin != 0 {
-                unsafe { POOLALLOC_DEALLOCATE.original()(begin as *const u32, cap_end - begin) };
-            }
-
-            save_to_memory(self_addr + 0x48, new_buf);
-            save_to_memory(self_addr + 0x4c, new_buf + (old_len + 1) * 8);
-            save_to_memory(self_addr + 0x50, new_buf + new_cap * 8);
-        } else {
-            save_to_memory(end, tile_a);
-            save_to_memory(end + 4, tile_b);
-            save_to_memory(self_addr + 0x4c, end + 8);
-        }
+    /// Copy of this habitat's boundary tile-pairs, built by [`Self::create_edge_pairs`]. Owned by Rust:
+    /// vanilla's `+0x48`/`+0x4c`/`+0x50` vector stays empty. A copy, so callers may re-enter code that
+    /// rebuilds the pairs mid-iteration.
+    pub fn boundary_tile_pairs(&self) -> Vec<(u32, u32)> {
+        support::boundary_tile_pairs(self as *const Self as u32)
     }
 
     /// Ports `ZTHabitat::createEdgePairs` (`ZTHabitat_createEdgePairs.c`/`.asm`, `generated.rs`'s
-    /// `CREATE_EDGE_PAIRS`): rebuilds [`Self::boundary_tile_pairs_begin`]/`_end` from scratch (real
+    /// `CREATE_EDGE_PAIRS`): rebuilds [`Self::boundary_tile_pairs`] from scratch (real
     /// vanilla's own `end = begin` reset, keeping the existing buffer rather than deallocating it), then
     /// walks the owned-tile list ([`walk_tile_list`]) and, for every owned tile and each of its 4 cardinal
     /// neighbours ([`get_neighbour_ptr`]), pushes `(owned_tile, neighbour_tile)` ([`Self::push_boundary_tile_pair`])
@@ -6162,7 +6321,7 @@ impl ZTHabitat {
     /// Verified against real vanilla via a direct call (`ZTHABITAT_CREATE_EDGE_PAIRS_MATCHES_REAL_LIVE`).
     pub fn create_edge_pairs(&self) {
         let self_addr = self as *const Self as u32;
-        save_to_memory(self_addr + 0x4c, self.boundary_tile_pairs_begin);
+        support::clear_boundary_tile_pairs(self_addr);
 
         let world = globals().ztworldmgr();
         let habitat_mgr = globals().zthabitatmgr();

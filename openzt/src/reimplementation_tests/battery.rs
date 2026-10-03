@@ -101,6 +101,7 @@ pub(super) mod detour_zoo_main {
     /// appending - see Stage 6 of `openzt/plans/reimplementation-tests-refactor-plan.md`).
     fn always_late_tests() -> Vec<RegisteredTest> {
         let mut tests = vec![
+            RegisteredTest { name: "ZTHABITAT_NEIGHBOR_SET_INSERT_CLEAR_MATCHES_REAL", run: tests::zthabitatmgr::run_neighbor_set_insert_clear_matches_real_test },
             RegisteredTest { name: "ZTRESEARCHPROGRAM_ON_COMPLETION_RESET", run: tests::ztresearch::run_ztresearchprogram_on_completion_reset_test },
             RegisteredTest { name: "ZTRESEARCHBRANCH_FUNDING_TEXT", run: tests::ztresearch::run_funding_text_test },
             RegisteredTest { name: "ZTRESEARCHBRANCH_UPDATE", run: tests::ztresearch::run_branch_update_test },
@@ -856,6 +857,7 @@ pub(super) mod detour_zoo_main {
             // openzt/plans/ztgamemgr-vanilla-storage-migration-plan.md's Stage 4 live test: also needs
             // start() (see ZTGAMEMGR_START_STOP_SMOKE's own note above), so stays right after it.
             RegisteredTest { name: "ZTGAMEMGR_DESTRUCT", run: tests::ztgamemgr::run_gamemgr_destruct_test },
+            RegisteredTest { name: "ZTHABITAT_DESTRUCTOR_REACHED", run: tests::zthabitatmgr::run_habitat_destructor_reached_test },
             // openzt/plans/real-zoo-save-load-roundtrip-tests-plan.md's ZTGameMgr item: mutates the live
             // singleton's cash/date/elapsed_sim_ticks in place (there's no cheap standalone copy of a
             // fully-populated real ZTGameMgr to load into instead) - run genuinely last so nothing above

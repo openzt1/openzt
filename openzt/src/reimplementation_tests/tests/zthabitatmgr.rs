@@ -10824,3 +10824,146 @@ pub(crate) fn run_zthabitatmgr_path_placed_matches_real_live_test(failure_log: &
         &|_, tiles, _| globals().zthabitatmgr().path_placed(tiles[0]),
     )
 }
+
+/// `std::set<ZTHabitat*>` header + `{head*, size}` container backing a standalone neighbour-set fixture.
+/// The header node and container live in Rust-owned memory (vanilla never frees a header); every real
+/// node is allocated and freed through `PoolAlloc` on both sides, so no cross-allocator hazard.
+struct SetFixture {
+    header: Box<[u32; 5]>,
+    container: Box<[u32; 2]>,
+}
+
+impl SetFixture {
+    fn new() -> Self {
+        let mut header = Box::new([0u32; 5]);
+        let head = header.as_ptr() as u32;
+        header[2] = head; // _Left (leftmost)
+        header[3] = head; // _Right (rightmost)
+        let container = Box::new([head, 0]);
+        SetFixture { header, container }
+    }
+
+    fn container_addr(&self) -> u32 {
+        self.container.as_ptr() as u32
+    }
+
+    fn head(&self) -> u32 {
+        self.header.as_ptr() as u32
+    }
+}
+
+/// Compares two tree shapes node for node (colour, key, children), returning the node count or a
+/// description of the first mismatch. Parent links are checked against the walk's own call stack.
+fn compare_tree_shapes(a: u32, a_parent: u32, b: u32, b_parent: u32) -> Result<u32, String> {
+    if a == 0 || b == 0 {
+        return if a == b { Ok(0) } else { Err("one side has a child the other lacks".to_string()) };
+    }
+    let (ka, kb): (u32, u32) = (get_from_memory(a + 0x10), get_from_memory(b + 0x10));
+    let (ca, cb): (u8, u8) = (get_from_memory(a), get_from_memory(b));
+    if ka != kb || ca != cb {
+        return Err(format!("node mismatch: key {ka:#x}/{kb:#x}, colour {ca}/{cb}"));
+    }
+    if get_from_memory::<u32>(a + 4) != a_parent || get_from_memory::<u32>(b + 4) != b_parent {
+        return Err(format!("parent link broken at key {ka:#x}"));
+    }
+    let left = compare_tree_shapes(get_from_memory(a + 8), a, get_from_memory(b + 8), b)?;
+    let right = compare_tree_shapes(get_from_memory(a + 0xc), a, get_from_memory(b + 0xc), b)?;
+    Ok(1 + left + right)
+}
+
+/// `ZTHABITAT_NEIGHBOR_SET_INSERT_CLEAR_MATCHES_REAL`: drives the port's `rb_set_insert`/`rb_tree_clear`
+/// (behind `addAmphibiousNeighbor`/`addShowNeighbor`/`clear*Neighbors`) against real vanilla's generic
+/// `std::set<ptr>::insert` (`AI_cls_0x404fd6::meth_0x5b355e`, `0x005b355e`, `thiscall(container, out*,
+/// key*)`, `RET 8`) on two standalone sets fed the same ascending, descending and pseudo-random key
+/// sequences (with duplicates). After every insert the inserted flag and the whole tree shape (colours,
+/// keys, links, header min/max, size) must agree; afterwards the port clears both and the empty header
+/// shape is checked. Vanilla's header is never touched by the allocator, and every node on both sides
+/// comes from and returns to `PoolAlloc`.
+pub(crate) fn run_neighbor_set_insert_clear_matches_real_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_insert, rb_tree_clear};
+    let test_name = "ZTHABITAT_NEIGHBOR_SET_INSERT_CLEAR_MATCHES_REAL";
+    type VanillaInsert = unsafe extern "thiscall" fn(u32, *mut u32, *const u32) -> u32;
+    let vanilla_insert: VanillaInsert = unsafe { std::mem::transmute::<usize, VanillaInsert>(0x005b355e) };
+
+    let mut sequences: Vec<(&str, Vec<u32>)> = Vec::new();
+    sequences.push(("ascending", (1..=64).map(|i| 0x1000 + i * 0x10).collect()));
+    sequences.push(("descending", (1..=64).rev().map(|i| 0x1000 + i * 0x10).collect()));
+    let mut state = 0x2545_f491u32;
+    let random: Vec<u32> = (0..300)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            0x1000 + ((state >> 16) % 96) * 0x10
+        })
+        .collect();
+    sequences.push(("random-with-duplicates", random));
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut total_inserts = 0usize;
+    for (label, keys) in &sequences {
+        let port = SetFixture::new();
+        let real = SetFixture::new();
+        for (index, &key) in keys.iter().enumerate() {
+            let port_inserted = rb_set_insert(port.container_addr(), key);
+            let mut out = [0u32; 2];
+            unsafe { vanilla_insert(real.container_addr(), out.as_mut_ptr(), &key as *const u32) };
+            let real_inserted = (out[1] & 0xff) != 0;
+            total_inserts += 1;
+            if port_inserted != real_inserted {
+                failures.push(format!("{label}[{index}] key {key:#x}: inserted port={port_inserted} real={real_inserted}"));
+                break;
+            }
+            let (port_size, real_size): (u32, u32) = (port.container[1], real.container[1]);
+            let root_p: u32 = get_from_memory(port.head() + 4);
+            let root_r: u32 = get_from_memory(real.head() + 4);
+            match compare_tree_shapes(root_p, port.head(), root_r, real.head()) {
+                Ok(count) if count == port_size && port_size == real_size => {}
+                Ok(count) => {
+                    failures.push(format!("{label}[{index}]: node count {count} vs size port={port_size} real={real_size}"));
+                    break;
+                }
+                Err(msg) => {
+                    failures.push(format!("{label}[{index}] key {key:#x}: {msg}"));
+                    break;
+                }
+            }
+            let min_max = |fx: &SetFixture| -> (u32, u32) {
+                let l: u32 = get_from_memory(fx.head() + 8);
+                let r: u32 = get_from_memory(fx.head() + 0xc);
+                (get_from_memory(l + 0x10), get_from_memory(r + 0x10))
+            };
+            if min_max(&port) != min_max(&real) {
+                failures.push(format!("{label}[{index}]: header min/max keys differ port={:?} real={:?}", min_max(&port), min_max(&real)));
+                break;
+            }
+        }
+        // The walker used by every production reader must see the same sorted, unique keys.
+        let port_keys: Vec<u32> = walk_neighbor_tree(port.head()).map(|n| get_from_memory::<u32>(n + 0x10)).collect();
+        let real_keys: Vec<u32> = walk_neighbor_tree(real.head()).map(|n| get_from_memory::<u32>(n + 0x10)).collect();
+        if port_keys != real_keys || !port_keys.windows(2).all(|w| w[0] < w[1]) {
+            failures.push(format!("{label}: in-order walk differs or is not strictly increasing"));
+        }
+        for (side, fx) in [("port", &port), ("real", &real)] {
+            rb_tree_clear(fx.container_addr(), 0x14);
+            let head = fx.head();
+            if fx.container[1] != 0 || get_from_memory::<u32>(head + 4) != 0 || get_from_memory::<u32>(head + 8) != head || get_from_memory::<u32>(head + 0xc) != head {
+                failures.push(format!("{label}: {side} set not in empty shape after rb_tree_clear"));
+            }
+        }
+    }
+    let _ = total_inserts;
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTHABITAT_DESTRUCTOR_REACHED`: the `~ZTHabitat` port ([`ZTHabitat::destruct`]) must have been run by
+/// vanilla's own teardown paths (habitat removal / zoo clear) earlier in the battery - the destructor
+/// has no standalone-fixture comparison, so this guards against the detour silently never firing.
+pub(crate) fn run_habitat_destructor_reached_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_DESTRUCTOR_REACHED";
+    let calls = crate::zthabitat::habitat::DESTRUCT_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let mut failures = Vec::new();
+    if calls == 0 {
+        failures.push("ZTHabitat::destruct never ran during the battery".to_string());
+    }
+    tracing::info!("{}: destruct ran {} time(s)", test_name, calls);
+    finish_test(test_name, failures, failure_log)
+}

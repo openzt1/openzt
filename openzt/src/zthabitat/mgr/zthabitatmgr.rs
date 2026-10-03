@@ -14,8 +14,7 @@ use openzt_detour::generated::{
         standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            ADD_AMPHIBIOUS_NEIGHBOR, ADD_SHOW_NEIGHBOR, ADD_SHOW_PORTAL, CLEAR_AMPHIBIOUS_NEIGHBORS,
-            CLEAR_SHOW_NEIGHBORS, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
+            ADD_SHOW_PORTAL, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{AFTER_ENTITY_CHANGE, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
@@ -1311,7 +1310,7 @@ impl ZTHabitatMgr {
     /// 2. Picks the two boundary tiles the gate-search loop starts from: `tile_2_ptr`/`tile_3_ptr`
     ///    themselves, unless they resolve (via [`Self::get_habitat_ptr`]) to the *same* owning habitat,
     ///    in which case it starts instead from `habitat_ptr`'s own first boundary tile-pair
-    ///    ([`ZTHabitat::boundary_tile_pairs_begin`]). Then repeatedly calls
+    ///    ([`ZTHabitat::boundary_tile_pairs`]). Then repeatedly calls
     ///    [`Self::get_next_fence_pair`] (single-step mode - the `false` flag, confirmed against `.asm`:
     ///    this loop is real vanilla's own outer loop, not `getNextFencePair`'s internal one, unlike
     ///    [`Self::advance_fence_pair`]'s own `true`-flag call in `place_gate`) until the
@@ -1392,10 +1391,7 @@ impl ZTHabitatMgr {
             self.get_habitat_ptr(tile_3.pos.x, tile_3.pos.y)
         };
         let (mut cand_a, mut cand_b) = if owner_2 == owner_3 {
-            (
-                get_from_memory::<u32>(habitat.boundary_tile_pairs_begin),
-                get_from_memory::<u32>(habitat.boundary_tile_pairs_begin + 4),
-            )
+            habitat.boundary_tile_pairs().first().copied().unwrap_or((0, 0))
         } else {
             (tile_2_ptr, tile_3_ptr)
         };
@@ -1685,15 +1681,7 @@ impl ZTHabitatMgr {
             return false;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
-        let pairs_begin = habitat.boundary_tile_pairs_begin;
-        let pairs_end = habitat.boundary_tile_pairs_end;
-        if pairs_begin == 0 || pairs_end <= pairs_begin {
-            return false;
-        }
-        let num_pairs = (pairs_end - pairs_begin) / 8;
-        for i in 0..num_pairs {
-            let pair_addr = pairs_begin + i * 8;
-            let tile_a_ptr = get_from_memory::<u32>(pair_addr);
+        for (tile_a_ptr, tile_b_ptr) in habitat.boundary_tile_pairs() {
             let tile_b_ptr = get_from_memory::<u32>(pair_addr + 4);
             if tile_b_ptr == 0 {
                 continue;
@@ -1774,16 +1762,7 @@ impl ZTHabitatMgr {
             return;
         }
         let tank = unsafe { ref_from_memory::<ZTHabitat>(tank_ptr) };
-        let pairs_begin = tank.boundary_tile_pairs_begin;
-        let pairs_end = tank.boundary_tile_pairs_end;
-        if pairs_begin == 0 || pairs_end <= pairs_begin {
-            return;
-        }
-        let num_pairs = (pairs_end - pairs_begin) / 8;
-        for i in 0..num_pairs {
-            let pair_addr = pairs_begin + i * 8;
-            let tile_a_ptr = get_from_memory::<u32>(pair_addr);
-            let tile_b_ptr = get_from_memory::<u32>(pair_addr + 4);
+        for (tile_a_ptr, tile_b_ptr) in tank.boundary_tile_pairs() {
             if tile_a_ptr == 0 || tile_b_ptr == 0 {
                 continue;
             }
@@ -2061,8 +2040,8 @@ impl ZTHabitatMgr {
     /// `entity_type` are reused here, confirmed identical at the `.asm` level.
     ///
     /// Clears `tank_ptr`'s own wall vector ([`ZTTANKEXHIBIT_CLEAR_WALL_VECTOR`]), then snapshots its
-    /// [`ZTHabitat::boundary_tile_pairs_begin`]/`_end` vector (the same
-    /// [snapshot][Self::snapshot_boundary_tile_pairs]/iterate shape [`Self::update_amphibious_neighbors`]/
+    /// [`ZTHabitat::boundary_tile_pairs`] (the same
+    /// copy of/iterate shape [`Self::update_amphibious_neighbors`]/
     /// [`Self::update_show_neighbors`]/[`Self::do_show_check`] already use - real vanilla builds this same
     /// defensive copy up front too) and, for each `(tile_a, tile_b)` boundary pair:
     ///
@@ -2109,7 +2088,7 @@ impl ZTHabitatMgr {
         unsafe { ZTTANKEXHIBIT_CLEAR_WALL_VECTOR.original()(tank_ptr as i32) };
 
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(tank_ptr) };
-        let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
+        let pairs = habitat.boundary_tile_pairs();
 
         let world_map_ptr = globals().ztworldmgr_ptr() as u32;
         let load_in_progress = get_from_memory::<u8>(base + RVA_APP_INIT_SUCCESS_BASE + 0x441) != 0;
@@ -2822,11 +2801,8 @@ impl ZTHabitatMgr {
     /// vanilla `ZTHabitat::addAmphibiousNeighbor` both directions and sets the wall's combined-connector
     /// flag, returning `true`.
     ///
-    /// `addAmphibiousNeighbor`/`clearAmphibiousNeighbors` themselves are deliberately left un-ported and
-    /// called only via `.original()` - see `zthabitatmgr-implementation-plan.md`'s own top-level note on
-    /// why (real STL red-black-tree insert/erase through an unidentified internal helper - cross-allocator
-    /// risk for no behavioral gain, since every consumer here only needs to *call* add, never reimplement
-    /// it).
+    /// Calls the port ([`ZTHabitat::add_amphibious_neighbor`]) directly - never `.original()`, since that
+    /// address is detoured.
     pub fn check_amphibious_neighbor(&self, habitat_a_ptr: u32, tile_a_ptr: u32, tile_b_ptr: u32) -> bool {
         if tile_b_ptr == 0 {
             return false;
@@ -2911,42 +2887,25 @@ impl ZTHabitatMgr {
         }
 
         unsafe {
-            ADD_AMPHIBIOUS_NEIGHBOR.original()(habitat_b_ptr as *const u32, habitat_a_ptr as *const u32);
-            ADD_AMPHIBIOUS_NEIGHBOR.original()(habitat_a_ptr as *const u32, habitat_b_ptr as *const u32);
+            ref_from_memory::<ZTHabitat>(habitat_b_ptr).add_amphibious_neighbor(habitat_a_ptr);
+            ref_from_memory::<ZTHabitat>(habitat_a_ptr).add_amphibious_neighbor(habitat_b_ptr);
             SET_IS_COMBINED_CONNECTOR.original()(connector as *const u32, true);
         }
         true
     }
 
-    /// Snapshots `habitat_ptr`'s own [`ZTHabitat::boundary_tile_pairs_begin`]/`_end` vector into a plain
-    /// `Vec<(u32,u32)>` - shared by [`Self::update_amphibious_neighbors`]/[`Self::update_show_neighbors`]/
-    /// [`Self::do_show_check`], all three of which iterate real vanilla `checkAmphibiousNeighbor`/
-    /// `checkShowNeighbor`/show-exhibit calls that can themselves mutate habitat state, matching real
-    /// vanilla's own defensive snapshot-before-iterate shape (a fresh `std::vector` copy) rather than
-    /// walking the live vector in place.
-    pub(crate) fn snapshot_boundary_tile_pairs(begin: u32, end: u32) -> Vec<(u32, u32)> {
-        let mut pairs = Vec::new();
-        let mut entry = begin;
-        while entry != end {
-            pairs.push((get_from_memory(entry), get_from_memory(entry + 4)));
-            entry += 8;
-        }
-        pairs
-    }
-
     /// Ports `ZTHabitatMgr::updateAmphibiousNeighbors` (`_1`, `ZTHabitatMgr_updateAmphibiousNeighbors_1.c`):
     /// gated on `habitat_ptr` not being the "world" habitat ([`ZTHabitat::unknown_flag_0x2c`] clear),
-    /// calls through to real vanilla `ZTHabitat::clearAmphibiousNeighbors` (left un-ported - see
-    /// [`Self::check_amphibious_neighbor`]'s own doc comment), then re-derives every amphibious
+    /// calls [`ZTHabitat::clear_amphibious_neighbors`], then re-derives every amphibious
     /// connection from scratch via [`Self::check_amphibious_neighbor`] over a
-    /// [snapshot][Self::snapshot_boundary_tile_pairs] of the habitat's own boundary tile-pairs.
+    /// copy of of the habitat's own boundary tile-pairs.
     pub fn update_amphibious_neighbors(&self, habitat_ptr: u32) {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
         if habitat.unknown_flag_0x2c != 0 {
             return;
         }
-        unsafe { CLEAR_AMPHIBIOUS_NEIGHBORS.original()(habitat_ptr as *const u32) };
-        let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
+        habitat.clear_amphibious_neighbors();
+        let pairs = habitat.boundary_tile_pairs();
         for (tile_a_ptr, tile_b_ptr) in pairs {
             self.check_amphibious_neighbor(habitat_ptr, tile_a_ptr, tile_b_ptr);
         }
@@ -3004,8 +2963,7 @@ impl ZTHabitatMgr {
     /// already exist. Always returns `true` once a connection was made, regardless of the portal calls'
     /// own results - matching real vanilla's own unconditional `return true` tail.
     ///
-    /// `addShowNeighbor`/`clearShowNeighbors` themselves are deliberately left un-ported - same reasoning
-    /// as [`Self::check_amphibious_neighbor`]'s own doc comment gives for `addAmphibiousNeighbor`.
+    /// Calls the port ([`ZTHabitat::add_show_neighbor`]) directly, as [`Self::check_amphibious_neighbor`] does.
     pub fn check_show_neighbor(&self, habitat_a_ptr: u32, tile_a_ptr: u32, tile_b_ptr: u32) -> bool {
         if tile_b_ptr == 0 {
             return false;
@@ -3043,8 +3001,8 @@ impl ZTHabitatMgr {
         }
 
         unsafe {
-            ADD_SHOW_NEIGHBOR.original()(habitat_a_ptr as *const u32, habitat_b_ptr as *const u32);
-            ADD_SHOW_NEIGHBOR.original()(habitat_b_ptr as *const u32, habitat_a_ptr as *const u32);
+            ref_from_memory::<ZTHabitat>(habitat_a_ptr).add_show_neighbor(habitat_b_ptr);
+            ref_from_memory::<ZTHabitat>(habitat_b_ptr).add_show_neighbor(habitat_a_ptr);
         }
 
         let tile_a = get_from_memory::<BFTile>(tile_a_ptr);
@@ -3084,9 +3042,8 @@ impl ZTHabitatMgr {
     /// ([`ZTHabitat::unknown_flag_0x2c`] clear).
     ///
     /// If `habitat_ptr` is itself "showable" ([`ZTHabitat::is_tank`] `&&` `zt_show_info_ptr != 0`): calls
-    /// through to real vanilla `ZTHabitat::clearShowNeighbors` (left un-ported - see
-    /// [`Self::check_show_neighbor`]'s own doc comment), then re-derives every show connection via
-    /// [`Self::check_show_neighbor`] over a [snapshot][Self::snapshot_boundary_tile_pairs] of the
+    /// [`ZTHabitat::clear_show_neighbors`], then re-derives every show connection via
+    /// [`Self::check_show_neighbor`] over a copy of of the
     /// boundary tile-pairs.
     ///
     /// Otherwise: for each boundary pair's own *second* tile (matching the real decompile's own
@@ -3101,10 +3058,10 @@ impl ZTHabitatMgr {
             return;
         }
         let showable = habitat.is_tank() && habitat.zt_show_info_ptr != 0;
-        let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
+        let pairs = habitat.boundary_tile_pairs();
 
         if showable {
-            unsafe { CLEAR_SHOW_NEIGHBORS.original()(habitat_ptr as *const u32) };
+            habitat.clear_show_neighbors();
             for (tile_a_ptr, tile_b_ptr) in pairs {
                 self.check_show_neighbor(habitat_ptr, tile_a_ptr, tile_b_ptr);
             }
@@ -3160,7 +3117,7 @@ impl ZTHabitatMgr {
 
     /// Ports `ZTHabitatMgr::doShowCheck` (`ZTHabitatMgr_doShowCheck.c`/`.asm`, read at the `.asm` level
     /// throughout for the same reason as [`Self::check_amphibious_neighbor`]). Over a
-    /// [snapshot][Self::snapshot_boundary_tile_pairs] of `habitat_ptr`'s own boundary tile-pairs (an empty
+    /// copy of of `habitat_ptr`'s own boundary tile-pairs (an empty
     /// snapshot immediately fails the whole check, matching real vanilla exactly), for each pair resolves
     /// the fence on each tile's own connecting-direction slot (own/reverse direction, both gated on
     /// [`RVA_FENCE_TYPE_CHECK_ARG`] like [`Self::check_show_neighbor`]) and:
@@ -3182,7 +3139,7 @@ impl ZTHabitatMgr {
     /// vanilla `ZTWorldMgr::updateShowAssociations`, then returns the success/failure result.
     pub fn do_show_check(&self, habitat_ptr: u32, remove_illegal: bool) -> bool {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
-        let pairs = Self::snapshot_boundary_tile_pairs(habitat.boundary_tile_pairs_begin, habitat.boundary_tile_pairs_end);
+        let pairs = habitat.boundary_tile_pairs();
 
         let mut still_valid = !pairs.is_empty();
         let mut found_show_neighbor = false;

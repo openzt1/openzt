@@ -273,6 +273,221 @@ pub fn walk_neighbor_tree(head_ptr: u32) -> impl Iterator<Item = u32> {
     })
 }
 
+/// Size of a `std::set<ZTHabitat*>` node (`color`, `parent`, `left`, `right`, `key`), allocated from
+/// `PoolAlloc`'s size-class-2 freelist.
+const RB_SET_NODE_SIZE: u32 = 0x14;
+const RB_RED: u8 = 0;
+const RB_BLACK: u8 = 1;
+
+fn rb_parent(node: u32) -> u32 {
+    get_from_memory(node + 0x4)
+}
+fn rb_left(node: u32) -> u32 {
+    get_from_memory(node + 0x8)
+}
+fn rb_right(node: u32) -> u32 {
+    get_from_memory(node + 0xc)
+}
+fn rb_key(node: u32) -> u32 {
+    get_from_memory(node + 0x10)
+}
+fn rb_color(node: u32) -> u8 {
+    get_from_memory(node)
+}
+
+/// `_Lrotate` (`0x00403347`): `root_addr` is the address of the head's `_Parent` slot.
+fn rb_rotate_left(x: u32, root_addr: u32) {
+    let y = rb_right(x);
+    save_to_memory(x + 0xc, rb_left(y));
+    if rb_left(y) != 0 {
+        save_to_memory(rb_left(y) + 0x4, x);
+    }
+    save_to_memory(y + 0x4, rb_parent(x));
+    if x == get_from_memory::<u32>(root_addr) {
+        save_to_memory(root_addr, y);
+    } else if x == rb_left(rb_parent(x)) {
+        save_to_memory(rb_parent(x) + 0x8, y);
+    } else {
+        save_to_memory(rb_parent(x) + 0xc, y);
+    }
+    save_to_memory(y + 0x8, x);
+    save_to_memory(x + 0x4, y);
+}
+
+/// `_Rrotate` (`0x0040338e`), mirror of [`rb_rotate_left`].
+fn rb_rotate_right(x: u32, root_addr: u32) {
+    let y = rb_left(x);
+    save_to_memory(x + 0x8, rb_right(y));
+    if rb_right(y) != 0 {
+        save_to_memory(rb_right(y) + 0x4, x);
+    }
+    save_to_memory(y + 0x4, rb_parent(x));
+    if x == get_from_memory::<u32>(root_addr) {
+        save_to_memory(root_addr, y);
+    } else if x == rb_right(rb_parent(x)) {
+        save_to_memory(rb_parent(x) + 0xc, y);
+    } else {
+        save_to_memory(rb_parent(x) + 0x8, y);
+    }
+    save_to_memory(y + 0xc, x);
+    save_to_memory(x + 0x4, y);
+}
+
+/// Iterator decrement (`FUN_00403103`), including the `end()` (header) case.
+fn rb_decrement(node: u32) -> u32 {
+    if rb_color(node) == RB_RED && rb_parent(rb_parent(node)) == node {
+        return rb_right(node);
+    }
+    let left = rb_left(node);
+    if left == 0 {
+        let mut parent = rb_parent(node);
+        if node == rb_left(parent) {
+            let mut cursor = parent;
+            loop {
+                parent = rb_parent(cursor);
+                let was_left = cursor == rb_left(parent);
+                cursor = parent;
+                if !was_left {
+                    break;
+                }
+            }
+        }
+        parent
+    } else {
+        let mut result = left;
+        let mut next = rb_right(result);
+        while next != 0 {
+            result = next;
+            next = rb_right(next);
+        }
+        result
+    }
+}
+
+/// Links a freshly `PoolAlloc`-allocated node holding `key` under `parent` and rebalances - the body of
+/// `msvc_std::tree::meth_0x4fbeee` (`_Tree::_Insert` + inlined `_Insert_fixup`) with `force_left == 0`.
+fn rb_set_insert_node(container: u32, parent: u32, key: u32) {
+    let head: u32 = get_from_memory(container);
+    let root_addr = head + 0x4;
+    let node = unsafe { POOLALLOC_ALLOCATE.original()(RB_SET_NODE_SIZE) } as u32;
+    if node != 0 {
+        save_to_memory(node + 0x10, key);
+    }
+
+    if parent == head || key < rb_key(parent) {
+        save_to_memory(parent + 0x8, node);
+        if parent == head {
+            save_to_memory(head + 0x4, node);
+            save_to_memory(head + 0xc, node);
+        } else if parent == rb_left(head) {
+            save_to_memory(head + 0x8, node);
+        }
+    } else {
+        save_to_memory(parent + 0xc, node);
+        if parent == rb_right(head) {
+            save_to_memory(head + 0xc, node);
+        }
+    }
+    save_to_memory(node + 0x4, parent);
+    save_to_memory(node + 0x8, 0u32);
+    save_to_memory(node + 0xc, 0u32);
+    save_to_memory(node, RB_RED);
+
+    let mut x = node;
+    while x != get_from_memory::<u32>(root_addr) {
+        let p = rb_parent(x);
+        if rb_color(p) != RB_RED {
+            break;
+        }
+        let grandparent = rb_parent(p);
+        let p_is_left = p == rb_left(grandparent);
+        let uncle = if p_is_left { rb_right(grandparent) } else { rb_left(grandparent) };
+        if uncle == 0 || rb_color(uncle) != RB_RED {
+            let inner = if p_is_left { x == rb_right(p) } else { x == rb_left(p) };
+            if inner {
+                if p_is_left {
+                    rb_rotate_left(p, root_addr);
+                } else {
+                    rb_rotate_right(p, root_addr);
+                }
+                x = p;
+            }
+            save_to_memory(rb_parent(x), RB_BLACK);
+            let gp = rb_parent(rb_parent(x));
+            save_to_memory(gp, RB_RED);
+            if p_is_left {
+                rb_rotate_right(gp, root_addr);
+            } else {
+                rb_rotate_left(gp, root_addr);
+            }
+        } else {
+            save_to_memory(p, RB_BLACK);
+            save_to_memory(uncle, RB_BLACK);
+            save_to_memory(rb_parent(p), RB_RED);
+            x = rb_parent(p);
+        }
+    }
+    save_to_memory(get_from_memory::<u32>(root_addr), RB_BLACK);
+    save_to_memory(container + 0x4, get_from_memory::<u32>(container + 0x4) + 1);
+}
+
+/// `std::set<ptr>::insert` over a vanilla-layout set whose `{head*, size}` pair lives at `container`
+/// (`ZTHabitat+0x8` amphibious neighbours, `+0x14` show neighbours). Returns whether `key` was newly
+/// inserted. Matches `addAmphibiousNeighbor`'s inline find-then-`_Insert` (and `0x005b355e` for the show
+/// set): descend to the would-be parent, and for a left-going leaf that isn't the leftmost node compare
+/// against its in-order predecessor before inserting.
+pub fn rb_set_insert(container: u32, key: u32) -> bool {
+    let head: u32 = get_from_memory(container);
+    let mut parent = head;
+    let mut went_left = true;
+    let mut node = rb_parent(head);
+    while node != 0 {
+        parent = node;
+        went_left = key < rb_key(node);
+        node = if went_left { rb_left(node) } else { rb_right(node) };
+    }
+    let mut predecessor = parent;
+    if went_left {
+        if parent == rb_left(head) {
+            rb_set_insert_node(container, parent, key);
+            return true;
+        }
+        predecessor = rb_decrement(parent);
+    }
+    if rb_key(predecessor) < key {
+        rb_set_insert_node(container, parent, key);
+        true
+    } else {
+        false
+    }
+}
+
+/// Frees `node`'s whole subtree: right subtree recursively, then the node, then loops down the left
+/// spine - `msvc_std::tree::meth_0x49304a`'s shape. `node_size` is the pool size class the nodes came
+/// from (`0x14` for the sets, `0x18` for the show-portal map; both land in the same bucket).
+pub fn rb_erase_subtree(mut node: u32, node_size: u32) {
+    while node != 0 {
+        rb_erase_subtree(rb_right(node), node_size);
+        let left = rb_left(node);
+        unsafe { POOLALLOC_DEALLOCATE.original()(node as *const u32, node_size) };
+        node = left;
+    }
+}
+
+/// `clear()` of a vanilla-layout tree container at `container` (`{head*, size}`): a no-op when
+/// `size == 0`, else frees every node back to `PoolAlloc` and resets the head to the empty shape.
+pub fn rb_tree_clear(container: u32, node_size: u32) {
+    if get_from_memory::<u32>(container + 0x4) == 0 {
+        return;
+    }
+    let head: u32 = get_from_memory(container);
+    rb_erase_subtree(rb_parent(head), node_size);
+    save_to_memory(head + 0x8, head);
+    save_to_memory(head + 0x4, 0u32);
+    save_to_memory(head + 0xc, head);
+    save_to_memory(container + 0x4, 0u32);
+}
+
 /// Calls vtable slot `+0x100` on every occupant of `tile` (a live `BFTile*`) - the inner walk
 /// `ZTHabitat::reset_unit_ai` performs for each owned tile and for the gate-out tile. `tile+0x0`
 /// (`BFTile::unit_list_ptr`) is a [`TileListNode`] sentinel of the exact same shape/pool as
@@ -1414,4 +1629,34 @@ mod tests {
         assert_eq!(rotate_cardinal_direction(8, 2), None);
         assert_eq!(rotate_cardinal_direction(0xffff_ffff, 2), None);
     }
+}
+
+/// Per-habitat boundary tile-pair lists (`(owned tile, neighbouring tile)` addresses), keyed by the
+/// `ZTHabitat`'s own address. Vanilla's `+0x48`/`+0x4c`/`+0x50` vector triple is never written once the
+/// constructor has zeroed it, so vanilla code sees an empty vector. Entries are created by
+/// [`push_boundary_tile_pair`] and removed by [`take_boundary_tile_pairs`] in `ZTHabitat::destruct`.
+static BOUNDARY_TILE_PAIRS: LazyLock<Mutex<HashMap<u32, Vec<(u32, u32)>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn boundary_tile_pairs_store() -> MutexGuard<'static, HashMap<u32, Vec<(u32, u32)>>> {
+    BOUNDARY_TILE_PAIRS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Copy of `habitat_ptr`'s boundary tile-pairs; empty when none have been built.
+pub(crate) fn boundary_tile_pairs(habitat_ptr: u32) -> Vec<(u32, u32)> {
+    boundary_tile_pairs_store().get(&habitat_ptr).cloned().unwrap_or_default()
+}
+
+pub(crate) fn push_boundary_tile_pair(habitat_ptr: u32, tile_a: u32, tile_b: u32) {
+    boundary_tile_pairs_store().entry(habitat_ptr).or_default().push((tile_a, tile_b));
+}
+
+pub(crate) fn clear_boundary_tile_pairs(habitat_ptr: u32) {
+    if let Some(pairs) = boundary_tile_pairs_store().get_mut(&habitat_ptr) {
+        pairs.clear();
+    }
+}
+
+/// Removes and returns `habitat_ptr`'s boundary tile-pairs.
+pub(crate) fn take_boundary_tile_pairs(habitat_ptr: u32) -> Vec<(u32, u32)> {
+    boundary_tile_pairs_store().remove(&habitat_ptr).unwrap_or_default()
 }

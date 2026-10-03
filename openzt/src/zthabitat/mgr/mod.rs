@@ -9,6 +9,7 @@ use openzt_detour::generated::{
         SAVE as ZTHABITAT_SAVE,
         SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
         GET_OUTERMOST_TANK as ZTHABITAT_GET_OUTERMOST_TANK,
+        DESTRUCTOR_0 as ZTHABITAT_DESTRUCTOR_0,
     },
     zthabitatmgr::{
         SAVE as ZTHABITATMGR_SAVE,
@@ -676,6 +677,61 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn is_show_neighbor_real(this: *const u32, neighbor: *const u32) -> bool {
         unsafe { IS_SHOW_NEIGHBOR_DETOUR.call(this, neighbor) }
+    }
+
+    /// `~ZTHabitat`'s body (`0x00458cab`); the scalar-deleting wrapper (`DESTRUCTOR_1`) and the
+    /// `ZTTankExhibit` destructor both call this address, so one detour covers every habitat teardown.
+    #[detour(ZTHABITAT_DESTRUCTOR_0)]
+    unsafe extern "thiscall" fn zthabitat_destructor(this: *const u32) -> *const u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.destruct();
+        this
+    }
+
+    /// Release-safe path to real vanilla `~ZTHabitat` for live comparison tests.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn zthabitat_destructor_real(this: *const u32) -> *const u32 {
+        unsafe { ZTHABITAT_DESTRUCTOR_0_DETOUR.call(this) }
+    }
+
+    #[detour(ADD_AMPHIBIOUS_NEIGHBOR)]
+    unsafe extern "thiscall" fn add_amphibious_neighbor(this: *const u32, other: *const u32) -> u8 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_amphibious_neighbor(other as u32) as u8
+    }
+
+    #[detour(CLEAR_AMPHIBIOUS_NEIGHBORS)]
+    unsafe extern "thiscall" fn clear_amphibious_neighbors(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.clear_amphibious_neighbors()
+    }
+
+    #[detour(ADD_SHOW_NEIGHBOR)]
+    unsafe extern "thiscall" fn add_show_neighbor(this: *const u32, other: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_show_neighbor(other as u32) as u32
+    }
+
+    #[detour(CLEAR_SHOW_NEIGHBORS)]
+    unsafe extern "thiscall" fn clear_show_neighbors(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.clear_show_neighbors()
+    }
+
+    /// Release-safe paths back to real vanilla for the neighbour-set live comparison tests.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn add_amphibious_neighbor_real(this: *const u32, other: *const u32) -> u8 {
+        unsafe { ADD_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, other) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn clear_amphibious_neighbors_real(this: *const u32) {
+        unsafe { CLEAR_AMPHIBIOUS_NEIGHBORS_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn add_show_neighbor_real(this: *const u32, other: *const u32) -> u32 {
+        unsafe { ADD_SHOW_NEIGHBOR_DETOUR.call(this, other) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn clear_show_neighbors_real(this: *const u32) {
+        unsafe { CLEAR_SHOW_NEIGHBORS_DETOUR.call(this) }
     }
 
     /// Release-safe path back to real vanilla for the live comparison test, same as
