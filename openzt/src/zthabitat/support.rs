@@ -276,6 +276,7 @@ pub fn walk_neighbor_tree(head_ptr: u32) -> impl Iterator<Item = u32> {
 /// Size of a `std::set<ZTHabitat*>` node (`color`, `parent`, `left`, `right`, `key`), allocated from
 /// `PoolAlloc`'s size-class-2 freelist.
 const RB_SET_NODE_SIZE: u32 = 0x14;
+const RB_MAP_NODE_SIZE: u32 = 0x18;
 const RB_RED: u8 = 0;
 const RB_BLACK: u8 = 1;
 
@@ -366,12 +367,18 @@ fn rb_decrement(node: u32) -> u32 {
 
 /// Links a freshly `PoolAlloc`-allocated node holding `key` under `parent` and rebalances - the body of
 /// `msvc_std::tree::meth_0x4fbeee` (`_Tree::_Insert` + inlined `_Insert_fixup`) with `force_left == 0`.
-fn rb_set_insert_node(container: u32, parent: u32, key: u32) {
+///
+/// `node_size` is `RB_SET_NODE_SIZE` for a set and `RB_MAP_NODE_SIZE` for the show-portal map, whose
+/// nodes carry a zero-initialised value word at `+0x14`. Returns the new node.
+fn rb_set_insert_node(container: u32, parent: u32, key: u32, node_size: u32) -> u32 {
     let head: u32 = get_from_memory(container);
     let root_addr = head + 0x4;
-    let node = unsafe { POOLALLOC_ALLOCATE.original()(RB_SET_NODE_SIZE) } as u32;
+    let node = unsafe { POOLALLOC_ALLOCATE.original()(node_size) } as u32;
     if node != 0 {
         save_to_memory(node + 0x10, key);
+        if node_size == RB_MAP_NODE_SIZE {
+            save_to_memory(node + 0x14, 0u32);
+        }
     }
 
     if parent == head || key < rb_key(parent) {
@@ -429,6 +436,42 @@ fn rb_set_insert_node(container: u32, parent: u32, key: u32) {
     }
     save_to_memory(get_from_memory::<u32>(root_addr), RB_BLACK);
     save_to_memory(container + 0x4, get_from_memory::<u32>(container + 0x4) + 1);
+    node
+}
+
+/// The node holding `key` in a vanilla-layout tree container at `container`, if any (`lower_bound`
+/// followed by an equality check, as `get_show_portal`'s own inline descent does).
+pub fn rb_find(container: u32, key: u32) -> Option<u32> {
+    let head: u32 = get_from_memory(container);
+    let mut candidate = head;
+    let mut node = rb_parent(head);
+    while node != 0 {
+        if rb_key(node) < key {
+            node = rb_right(node);
+        } else {
+            candidate = node;
+            node = rb_left(node);
+        }
+    }
+    (candidate != head && rb_key(candidate) <= key).then_some(candidate)
+}
+
+/// `std::map<ZTHabitat*, ZTFence*>::operator[]`'s insert half over the show-portal map at `container`
+/// (`ZTHabitat+0x20`, `0x18`-byte nodes): returns the node for `key`, inserting a zero-valued one
+/// when absent. The new node's position is the plain leaf insert of a unique key, so its shape matches
+/// vanilla's `tree24::insert`.
+pub fn rb_map_find_or_insert(container: u32, key: u32) -> u32 {
+    if let Some(node) = rb_find(container, key) {
+        return node;
+    }
+    let head: u32 = get_from_memory(container);
+    let mut parent = head;
+    let mut node = rb_parent(head);
+    while node != 0 {
+        parent = node;
+        node = if key < rb_key(node) { rb_left(node) } else { rb_right(node) };
+    }
+    rb_set_insert_node(container, parent, key, RB_MAP_NODE_SIZE)
 }
 
 /// `std::set<ptr>::insert` over a vanilla-layout set whose `{head*, size}` pair lives at `container`
@@ -449,13 +492,13 @@ pub fn rb_set_insert(container: u32, key: u32) -> bool {
     let mut predecessor = parent;
     if went_left {
         if parent == rb_left(head) {
-            rb_set_insert_node(container, parent, key);
+            rb_set_insert_node(container, parent, key, RB_SET_NODE_SIZE);
             return true;
         }
         predecessor = rb_decrement(parent);
     }
     if rb_key(predecessor) < key {
-        rb_set_insert_node(container, parent, key);
+        rb_set_insert_node(container, parent, key, RB_SET_NODE_SIZE);
         true
     } else {
         false
@@ -486,6 +529,270 @@ pub fn rb_tree_clear(container: u32, node_size: u32) {
     save_to_memory(head + 0x4, 0u32);
     save_to_memory(head + 0xc, head);
     save_to_memory(container + 0x4, 0u32);
+}
+
+/// Iterator increment (`msvc_std::tree::meth_0x427950`), including the climb off the rightmost node
+/// onto the header.
+fn rb_increment(node: u32) -> u32 {
+    let right = rb_right(node);
+    if right != 0 {
+        let mut result = right;
+        while rb_left(result) != 0 {
+            result = rb_left(result);
+        }
+        return result;
+    }
+    let mut cursor = node;
+    let mut parent = rb_parent(node);
+    if cursor == rb_right(parent) {
+        loop {
+            cursor = parent;
+            parent = rb_parent(cursor);
+            if cursor != rb_right(parent) {
+                break;
+            }
+        }
+    }
+    if rb_right(cursor) != parent {
+        cursor = parent;
+    }
+    cursor
+}
+
+fn rb_set_color(node: u32, color: u8) {
+    save_to_memory(node, color);
+}
+
+/// A null child counts as black, as in the vanilla rebalance's `x == 0 || *x == 1` tests.
+fn rb_is_black(node: u32) -> bool {
+    node == 0 || rb_color(node) != RB_RED
+}
+
+/// Unlinks `z` from the tree under `head` and rebalances - `FUN_0040a3da` (`_Rebalance_for_erase`),
+/// with `head+4`/`+8`/`+0xc` as its root/leftmost/rightmost slots. Returns the node to free (always
+/// `z`); the caller owns the free and the size decrement.
+fn rb_rebalance_for_erase(z: u32, head: u32) -> u32 {
+    let root_addr = head + 0x4;
+    let min_addr = head + 0x8;
+    let max_addr = head + 0xc;
+    let root = || get_from_memory::<u32>(root_addr);
+
+    let mut y = z;
+    let mut x: u32;
+    let mut x_parent: u32;
+    let z_left = rb_left(z);
+
+    if z_left == 0 {
+        x = rb_right(z);
+    } else {
+        let z_right = rb_right(z);
+        x = z_left;
+        if z_right != 0 {
+            y = z_right;
+            while rb_left(y) != 0 {
+                y = rb_left(y);
+            }
+            x = rb_right(y);
+            if y != z {
+                save_to_memory(z_left + 0x4, y);
+                save_to_memory(y + 0x8, rb_left(z));
+                x_parent = y;
+                if y != z_right {
+                    x_parent = rb_parent(y);
+                    if x != 0 {
+                        save_to_memory(x + 0x4, x_parent);
+                    }
+                    save_to_memory(rb_parent(y) + 0x8, x);
+                    save_to_memory(y + 0xc, rb_right(z));
+                    save_to_memory(rb_right(z) + 0x4, y);
+                }
+                if root() == z {
+                    save_to_memory(root_addr, y);
+                } else {
+                    let parent = rb_parent(z);
+                    if rb_left(parent) == z {
+                        save_to_memory(parent + 0x8, y);
+                    } else {
+                        save_to_memory(parent + 0xc, y);
+                    }
+                }
+                save_to_memory(y + 0x4, rb_parent(z));
+                let (y_color, z_color) = (rb_color(y), rb_color(z));
+                rb_set_color(y, z_color);
+                rb_set_color(z, y_color);
+                return rb_erase_fixup(z, x, x_parent, head);
+            }
+        }
+    }
+
+    x_parent = rb_parent(y);
+    if x != 0 {
+        save_to_memory(x + 0x4, x_parent);
+    }
+    if root() == z {
+        save_to_memory(root_addr, x);
+    } else {
+        let parent = rb_parent(z);
+        if rb_left(parent) == z {
+            save_to_memory(parent + 0x8, x);
+        } else {
+            save_to_memory(parent + 0xc, x);
+        }
+    }
+    if get_from_memory::<u32>(min_addr) == z {
+        if rb_right(z) == 0 {
+            save_to_memory(min_addr, rb_parent(z));
+        } else {
+            let mut leftmost = x;
+            while rb_left(leftmost) != 0 {
+                leftmost = rb_left(leftmost);
+            }
+            save_to_memory(min_addr, leftmost);
+        }
+    }
+    if get_from_memory::<u32>(max_addr) == z {
+        if rb_left(z) == 0 {
+            save_to_memory(max_addr, rb_parent(z));
+        } else {
+            let mut rightmost = x;
+            while rb_right(rightmost) != 0 {
+                rightmost = rb_right(rightmost);
+            }
+            save_to_memory(max_addr, rightmost);
+        }
+    }
+    rb_erase_fixup(y, x, x_parent, head)
+}
+
+/// Tail of [`rb_rebalance_for_erase`] (`LAB_0040a428`): restores the black-height invariant when the
+/// physically removed node `y` was black. `x` is the node that took its place (possibly null) under
+/// `x_parent`.
+fn rb_erase_fixup(y: u32, mut x: u32, mut x_parent: u32, head: u32) -> u32 {
+    let root_addr = head + 0x4;
+    let root = || get_from_memory::<u32>(root_addr);
+
+    if rb_color(y) != RB_RED {
+        while x != root() {
+            if x != 0 && rb_color(x) != RB_BLACK {
+                break;
+            }
+            let parent = x_parent;
+            if x == rb_left(parent) {
+                let mut sibling = rb_right(parent);
+                if rb_color(sibling) == RB_RED {
+                    rb_set_color(sibling, RB_BLACK);
+                    rb_set_color(parent, RB_RED);
+                    rb_rotate_left(parent, root_addr);
+                    sibling = rb_right(parent);
+                }
+                if !rb_is_black(rb_left(sibling)) || !rb_is_black(rb_right(sibling)) {
+                    if rb_is_black(rb_right(sibling)) {
+                        if rb_left(sibling) != 0 {
+                            rb_set_color(rb_left(sibling), RB_BLACK);
+                        }
+                        rb_set_color(sibling, RB_RED);
+                        rb_rotate_right(sibling, root_addr);
+                        sibling = rb_right(parent);
+                    }
+                    rb_set_color(sibling, rb_color(parent));
+                    rb_set_color(parent, RB_BLACK);
+                    if rb_right(sibling) != 0 {
+                        rb_set_color(rb_right(sibling), RB_BLACK);
+                    }
+                    rb_rotate_left(parent, root_addr);
+                    break;
+                }
+                rb_set_color(sibling, RB_RED);
+            } else {
+                let mut sibling = rb_left(parent);
+                if rb_color(sibling) == RB_RED {
+                    rb_set_color(sibling, RB_BLACK);
+                    rb_set_color(parent, RB_RED);
+                    rb_rotate_right(parent, root_addr);
+                    sibling = rb_left(parent);
+                }
+                if !rb_is_black(rb_right(sibling)) || !rb_is_black(rb_left(sibling)) {
+                    if rb_is_black(rb_left(sibling)) {
+                        if rb_right(sibling) != 0 {
+                            rb_set_color(rb_right(sibling), RB_BLACK);
+                        }
+                        rb_set_color(sibling, RB_RED);
+                        rb_rotate_left(sibling, root_addr);
+                        sibling = rb_left(parent);
+                    }
+                    rb_set_color(sibling, rb_color(parent));
+                    rb_set_color(parent, RB_BLACK);
+                    if rb_left(sibling) != 0 {
+                        rb_set_color(rb_left(sibling), RB_BLACK);
+                    }
+                    rb_rotate_right(parent, root_addr);
+                    break;
+                }
+                rb_set_color(sibling, RB_RED);
+            }
+            x = parent;
+            x_parent = rb_parent(parent);
+            if parent == root() {
+                break;
+            }
+        }
+        if x != 0 {
+            rb_set_color(x, RB_BLACK);
+        }
+    }
+    y
+}
+
+/// `std::set<ptr>::erase(key)` over a vanilla-layout set whose `{head*, size}` pair lives at
+/// `container`: `removeAmphibiousNeighbor`'s `equal_range` + `erase(first, last)` (`0x59f5d5`). Erasing
+/// the whole tree takes vanilla's clear path ([`rb_tree_clear`]); otherwise each node in the range is
+/// unlinked with [`rb_rebalance_for_erase`], freed to `PoolAlloc`, and the size decremented. An absent
+/// key is a no-op.
+pub fn rb_set_erase(container: u32, key: u32) {
+    rb_erase_key(container, key, RB_SET_NODE_SIZE);
+}
+
+/// `std::map<ZTHabitat*, ZTFence*>::erase(key)` over the show-portal map at `container` - the same
+/// erase as [`rb_set_erase`] over `0x18`-byte nodes.
+pub fn rb_map_erase(container: u32, key: u32) {
+    rb_erase_key(container, key, RB_MAP_NODE_SIZE);
+}
+
+fn rb_erase_key(container: u32, key: u32, node_size: u32) {
+    let head: u32 = get_from_memory(container);
+
+    let mut upper = head;
+    let mut node = rb_parent(head);
+    while node != 0 {
+        if key < rb_key(node) {
+            upper = node;
+            node = rb_left(node);
+        } else {
+            node = rb_right(node);
+        }
+    }
+    let mut lower = head;
+    node = rb_parent(head);
+    while node != 0 {
+        if rb_key(node) >= key {
+            lower = node;
+            node = rb_left(node);
+        } else {
+            node = rb_right(node);
+        }
+    }
+
+    if lower == rb_left(head) && upper == head {
+        rb_tree_clear(container, node_size);
+        return;
+    }
+    while lower != upper {
+        let erased = lower;
+        lower = rb_increment(lower);
+        let freed = rb_rebalance_for_erase(erased, head);
+        unsafe { POOLALLOC_DEALLOCATE.original()(freed as *const u32, node_size) };
+        save_to_memory(container + 0x4, get_from_memory::<u32>(container + 0x4) - 1);
+    }
 }
 
 /// Calls vtable slot `+0x100` on every occupant of `tile` (a live `BFTile*`) - the inner walk
@@ -1152,6 +1459,26 @@ pub fn free_event_vector_buffer(buf: u32, byte_capacity: u32) {
     save_to_memory(bucket_head_addr, buf);
 }
 
+/// Fills the `{begin, end, cap_end}` vector header at `out_ptr` the way vanilla's `vector<int>::buy(n)`
+/// plus an element copy leaves it: all null for an empty slice, else one `PoolAlloc::allocate(n * 4)`
+/// buffer with `end == cap_end` (so [`free_event_vector_buffer`] by capacity releases it correctly).
+pub fn write_exact_u32_vector(out_ptr: u32, values: &[u32]) {
+    if values.is_empty() {
+        for offset in [0, 4, 8] {
+            save_to_memory(out_ptr + offset, 0u32);
+        }
+        return;
+    }
+    let byte_len = values.len() as u32 * 4;
+    let buf = unsafe { POOLALLOC_ALLOCATE.original()(byte_len) } as u32;
+    for (i, &value) in values.iter().enumerate() {
+        save_to_memory(buf + i as u32 * 4, value);
+    }
+    save_to_memory(out_ptr, buf);
+    save_to_memory(out_ptr + 4, buf + byte_len);
+    save_to_memory(out_ptr + 8, buf + byte_len);
+}
+
 /// Tears down the real vanilla-layout found-species scratch vector `ZTHabitat::recalc_phase_1_2`/
 /// `recalc_phase_3` build and extend (real vanilla's own `in_stack_fffff3b8`/`_bc`/`_c0` stack local,
 /// `msvc_std::vector_pod<>::_Tidy`'d at the very end of the whole `recalculateCharacteristics` call) -
@@ -1635,9 +1962,10 @@ mod tests {
 /// `ZTHabitat`'s own address. Vanilla's `+0x48`/`+0x4c`/`+0x50` vector triple is never written once the
 /// constructor has zeroed it, so vanilla code sees an empty vector. Entries are created by
 /// [`push_boundary_tile_pair`] and removed by [`take_boundary_tile_pairs`] in `ZTHabitat::destruct`.
-static BOUNDARY_TILE_PAIRS: LazyLock<Mutex<HashMap<u32, Vec<(u32, u32)>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+type BoundaryPairsByHabitat = HashMap<u32, Vec<(u32, u32)>>;
+static BOUNDARY_TILE_PAIRS: LazyLock<Mutex<BoundaryPairsByHabitat>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn boundary_tile_pairs_store() -> MutexGuard<'static, HashMap<u32, Vec<(u32, u32)>>> {
+fn boundary_tile_pairs_store() -> MutexGuard<'static, BoundaryPairsByHabitat> {
     BOUNDARY_TILE_PAIRS.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

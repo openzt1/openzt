@@ -14,7 +14,7 @@ use openzt_detour::generated::{
         standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            ADD_SHOW_PORTAL, CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
+            CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
         },
         zthabitatmgr::{AFTER_ENTITY_CHANGE, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
@@ -1682,7 +1682,6 @@ impl ZTHabitatMgr {
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
         for (tile_a_ptr, tile_b_ptr) in habitat.boundary_tile_pairs() {
-            let tile_b_ptr = get_from_memory::<u32>(pair_addr + 4);
             if tile_b_ptr == 0 {
                 continue;
             }
@@ -3028,11 +3027,8 @@ impl ZTHabitatMgr {
         }
 
         let existing_portal = habitat_a.get_show_portal(habitat_b_ptr);
-        if existing_portal == 0 {
-            let added = unsafe { ADD_SHOW_PORTAL.original()(habitat_a_ptr as *const u32, tile_a_ptr as *const u32, tile_b_ptr as *const u32) };
-            if added != 0 {
-                unsafe { ADD_SHOW_PORTAL.original()(habitat_b_ptr as *const u32, tile_b_ptr as *const u32, tile_a_ptr as *const u32) };
-            }
+        if existing_portal == 0 && habitat_a.add_show_portal(tile_a_ptr, tile_b_ptr) {
+            habitat_b.add_show_portal(tile_b_ptr, tile_a_ptr);
         }
         true
     }

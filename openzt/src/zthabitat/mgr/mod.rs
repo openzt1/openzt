@@ -734,6 +734,103 @@ pub mod hooks_zthabitatmgr {
         unsafe { CLEAR_SHOW_NEIGHBORS_DETOUR.call(this) }
     }
 
+    /// Low byte only is meaningful, as with vanilla's (`CONCAT31`-packed) return.
+    #[detour(REMOVE_AMPHIBIOUS_NEIGHBOR)]
+    unsafe extern "thiscall" fn remove_amphibious_neighbor(this: *const u32, other: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_amphibious_neighbor(other as u32) as u32
+    }
+
+    #[detour(IS_AMPHIBIOUS_NEIGHBOR)]
+    unsafe extern "thiscall" fn is_amphibious_neighbor(this: *const std::ffi::c_void, neighbor: u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitat>(this as *const u32) }.is_amphibious_neighbor(neighbor)
+    }
+
+    #[detour(GET_CLOSE_OUTSIDE_TILE)]
+    unsafe extern "thiscall" fn get_close_outside_tile(this: *const std::ffi::c_void) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this as *const u32) }.get_close_outside_tile() as i32
+    }
+
+    /// Returns `out_vector` (vanilla's `RET 4` hands the RVO target back in `EAX`).
+    #[detour(GET_SURROUNDING_ANIMALS)]
+    unsafe extern "thiscall" fn get_surrounding_animals(this: *const u32, out_vector: *const u32) -> *const u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_surrounding_animals(out_vector as u32);
+        out_vector
+    }
+
+    /// Release-safe paths back to real vanilla for the neighbour-set live comparison tests.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn remove_amphibious_neighbor_real(this: *const u32, other: *const u32) -> u32 {
+        unsafe { REMOVE_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, other) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn is_amphibious_neighbor_real(this: *const std::ffi::c_void, neighbor: u32) -> bool {
+        unsafe { IS_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, neighbor) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_close_outside_tile_real(this: *const std::ffi::c_void) -> i32 {
+        unsafe { GET_CLOSE_OUTSIDE_TILE_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_surrounding_animals_real(this: *const u32, out_vector: *const u32) -> *const u32 {
+        unsafe { GET_SURROUNDING_ANIMALS_DETOUR.call(this, out_vector) }
+    }
+
+    #[detour(ADD_SHOW_UNIT)]
+    unsafe extern "thiscall" fn add_show_unit(this: *const u32, unit: u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_show_unit(unit)
+    }
+
+    #[detour(REMOVE_SHOW_UNIT)]
+    unsafe extern "thiscall" fn remove_show_unit(this: *const u32, unit: *const u32) -> u8 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_show_unit(unit as u32)
+    }
+
+    /// Low byte only is meaningful, as with vanilla's (`CONCAT31`-packed) return.
+    #[detour(REMOVE_SHOW_NEIGHBOR)]
+    unsafe extern "thiscall" fn remove_show_neighbor(this: *const u32, other: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_show_neighbor(other as u32) as u32
+    }
+
+    /// Low byte only is meaningful, as with vanilla's (`CONCAT31`-packed) return.
+    #[detour(ADD_SHOW_PORTAL)]
+    unsafe extern "thiscall" fn add_show_portal(this: *const u32, tile_a: *const u32, tile_b: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_show_portal(tile_a as u32, tile_b as u32) as u32
+    }
+
+    #[detour(REMOVE_SHOW_PORTAL)]
+    unsafe extern "thiscall" fn remove_show_portal(this: *const u32, other: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.remove_show_portal(other as u32)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn add_show_portal_real(this: *const u32, tile_a: *const u32, tile_b: *const u32) -> u32 {
+        unsafe { ADD_SHOW_PORTAL_DETOUR.call(this, tile_a, tile_b) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn remove_show_portal_real(this: *const u32, other: *const u32) {
+        unsafe { REMOVE_SHOW_PORTAL_DETOUR.call(this, other) }
+    }
+
+    /// Release-safe paths back to real vanilla for the show-unit live comparison tests.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn add_show_unit_real(this: *const u32, unit: u32) -> u32 {
+        unsafe { ADD_SHOW_UNIT_DETOUR.call(this, unit) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn remove_show_unit_real(this: *const u32, unit: *const u32) -> u8 {
+        unsafe { REMOVE_SHOW_UNIT_DETOUR.call(this, unit) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn remove_show_neighbor_real(this: *const u32, other: *const u32) -> u32 {
+        unsafe { REMOVE_SHOW_NEIGHBOR_DETOUR.call(this, other) }
+    }
+
     /// Release-safe path back to real vanilla for the live comparison test, same as
     /// [`is_show_neighbor_real`].
     #[cfg(feature = "reimplementation-tests")]

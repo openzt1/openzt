@@ -178,7 +178,10 @@ pub(crate) fn run_habitat_do_tank_check_live_test(failure_log: &mut Option<std::
     compare_over_live_habitats(
         failure_log,
         "ZTHABITAT_DO_TANK_CHECK_LIVE",
-        |ptr| unsafe { zthabitatmgr::DO_TANK_CHECK.original()(ptr as i32) },
+        |ptr| {
+            sync_real_boundary_pairs(ptr as u32);
+            unsafe { zthabitatmgr::DO_TANK_CHECK.original()(ptr as i32) }
+        },
         |habitat| habitat.do_tank_check(),
     )
 }
@@ -2722,7 +2725,7 @@ pub(crate) fn run_zthabitatmgr_check_amphibious_neighbor_matches_real_live_test(
             continue;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-        for (tile_a, tile_b) in ZTHabitatMgr::snapshot_boundary_tile_pairs(*habitat.boundary_tile_pairs_begin(), *habitat.boundary_tile_pairs_end()) {
+        for (tile_a, tile_b) in habitat.boundary_tile_pairs() {
             let real = low_byte_bool(unsafe { zthabitatmgr::CHECK_AMPHIBIOUS_NEIGHBOR.original()(mgr_ptr, ptr as *const u32, tile_a as *const u32, tile_b as *const u32) });
             let real_sets = snapshot_all_neighbor_sets();
             let port = habitat_mgr.check_amphibious_neighbor(ptr, tile_a, tile_b);
@@ -2749,6 +2752,7 @@ pub(crate) fn run_zthabitatmgr_update_amphibious_neighbors_matches_real_live_tes
         if ptr == 0 {
             continue;
         }
+        sync_real_boundary_pairs(ptr);
         unsafe { zthabitatmgr::UPDATE_AMPHIBIOUS_NEIGHBORS_1.original()(mgr_ptr, ptr as *const u32) };
         let real_sets = snapshot_all_neighbor_sets();
         habitat_mgr.update_amphibious_neighbors(ptr);
@@ -2772,7 +2776,7 @@ pub(crate) fn run_zthabitatmgr_check_show_neighbor_matches_real_live_test(failur
             continue;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-        for (tile_a, tile_b) in ZTHabitatMgr::snapshot_boundary_tile_pairs(*habitat.boundary_tile_pairs_begin(), *habitat.boundary_tile_pairs_end()) {
+        for (tile_a, tile_b) in habitat.boundary_tile_pairs() {
             let real = low_byte_bool(unsafe { zthabitatmgr::CHECK_SHOW_NEIGHBOR.original()(mgr_ptr, ptr as *const u32, tile_a as *const u32, tile_b as *const u32) });
             let real_sets = snapshot_all_neighbor_sets();
             let port = habitat_mgr.check_show_neighbor(ptr, tile_a, tile_b);
@@ -2798,6 +2802,7 @@ pub(crate) fn run_zthabitatmgr_update_show_neighbors_matches_real_live_test(fail
         if ptr == 0 {
             continue;
         }
+        sync_real_boundary_pairs(ptr);
         unsafe { zthabitatmgr::UPDATE_SHOW_NEIGHBORS_1.original()(mgr_ptr, ptr as *const u32) };
         let real_sets = snapshot_all_neighbor_sets();
         habitat_mgr.update_show_neighbors(ptr);
@@ -2823,6 +2828,7 @@ pub(crate) fn run_zthabitatmgr_do_show_check_matches_real_live_test(failure_log:
         if ptr == 0 {
             continue;
         }
+        sync_real_boundary_pairs(ptr);
         let real = hooks_zthabitatmgr::do_show_check_real(mgr_ptr, ptr as *const i32, 0);
         let port = habitat_mgr.do_show_check(ptr, false);
         compared += 1;
@@ -7647,9 +7653,18 @@ pub(crate) fn run_habitat_set_time_last_serviced_roundtrip_live_test(failure_log
     }
 }
 
-/// Reads `ptr`'s own `boundary_tile_pairs_begin`/`_end` vector into a plain `Vec` for
-/// [`run_habitat_create_edge_pairs_matches_real_live_test`]'s own before/after comparison.
-fn snapshot_boundary_pairs(ptr: u32) -> Vec<(u32, u32)> {
+/// Fills `ptr`'s raw `+0x48`/`+0x4c` boundary-pair vector, which real vanilla readers
+/// (`doTankCheck`, `updateAmphibiousNeighbors`, ...) consume but the reimplementation leaves empty.
+/// Call before invoking a real reader on a live habitat.
+fn sync_real_boundary_pairs(ptr: u32) {
+    hooks_zthabitatmgr::create_edge_pairs_real(ptr as *const u32);
+}
+
+/// Reads the vector real vanilla `createEdgePairs` writes at `ptr`'s raw `+0x48`/`+0x4c` slots into a
+/// plain `Vec` for [`run_habitat_create_edge_pairs_matches_real_live_test`]'s comparison. The
+/// reimplementation writes [`ZTHabitat::boundary_tile_pairs`] instead and leaves these slots alone; the
+/// buffer real vanilla allocates here is freed by `ZTHabitat::destruct` through the raw capacity slot.
+fn real_raw_boundary_pairs(ptr: u32) -> Vec<(u32, u32)> {
     let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
     let begin = *habitat.boundary_tile_pairs_begin();
     let end = *habitat.boundary_tile_pairs_end();
@@ -7663,7 +7678,7 @@ fn snapshot_boundary_pairs(ptr: u32) -> Vec<(u32, u32)> {
 }
 
 /// Compares real vanilla `ZTHabitat::createEdgePairs` against the reimplementation on the same live
-/// habitat, called back-to-back: `createEdgePairs` fully rebuilds `boundary_tile_pairs_begin`/`_end` from
+/// habitat, called back-to-back: `createEdgePairs` fully rebuilds the pair list from
 /// scratch every call (clears then repopulates - no dependency on the vector's own prior contents), so
 /// calling real first and then the reimplementation on the identical, now-settled input produces directly
 /// comparable output, the same "real-then-reimpl call-through-safe" reasoning
@@ -7678,10 +7693,10 @@ pub(crate) fn run_habitat_create_edge_pairs_matches_real_live_test(failure_log: 
     };
 
     hooks_zthabitatmgr::create_edge_pairs_real(ptr as *const u32);
-    let real_pairs = snapshot_boundary_pairs(ptr);
+    let real_pairs = real_raw_boundary_pairs(ptr);
 
     unsafe { ref_from_memory::<ZTHabitat>(ptr) }.create_edge_pairs();
-    let reimpl_pairs = snapshot_boundary_pairs(ptr);
+    let reimpl_pairs = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.boundary_tile_pairs();
 
     if real_pairs == reimpl_pairs {
         write_success_line(failure_log, test_name);
@@ -8017,13 +8032,8 @@ pub(crate) fn run_zthabitatmgr_break_amphibious_connection_smoke_live_test(failu
             continue;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-        let mut entry = *habitat.boundary_tile_pairs_begin();
-        let end = *habitat.boundary_tile_pairs_end();
-        while entry != end {
-            let tile_a: u32 = get_from_memory(entry);
-            let tile_b: u32 = get_from_memory(entry + 4);
+        for (tile_a, tile_b) in habitat.boundary_tile_pairs() {
             crate::zthabitatmgr::ZTHabitatMgr::break_amphibious_connection(tile_a, tile_b);
-            entry += 8;
         }
     }
     write_success_line(failure_log, test_name);
@@ -10387,7 +10397,7 @@ pub(crate) fn run_zthabitatmgr_get_next_fence_pair_matches_real_live_test(failur
             continue;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-        for (tile_a, tile_b) in ZTHabitatMgr::snapshot_boundary_tile_pairs(*habitat.boundary_tile_pairs_begin(), *habitat.boundary_tile_pairs_end()) {
+        for (tile_a, tile_b) in habitat.boundary_tile_pairs() {
             for check_in_zoo in [false, true] {
                 let (mut real_a, mut real_b) = (tile_a, tile_b);
                 let real = low_byte_bool(unsafe {
@@ -10439,7 +10449,7 @@ pub(crate) fn run_zthabitatmgr_check_gate_matches_real_live_test(failure_log: &m
             continue;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-        for (tile_a, tile_b) in ZTHabitatMgr::snapshot_boundary_tile_pairs(*habitat.boundary_tile_pairs_begin(), *habitat.boundary_tile_pairs_end()) {
+        for (tile_a, tile_b) in habitat.boundary_tile_pairs() {
             for (a, b) in [(tile_a, tile_b), (tile_b, tile_a)] {
                 for flag in [false, true] {
                     let mut real_cost = i32::MIN;
@@ -10483,7 +10493,7 @@ pub(crate) fn run_zthabitatmgr_update_neighbors_from_tile_matches_real_live_test
             continue;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-        for (tile_a, tile_b) in ZTHabitatMgr::snapshot_boundary_tile_pairs(*habitat.boundary_tile_pairs_begin(), *habitat.boundary_tile_pairs_end()) {
+        for (tile_a, tile_b) in habitat.boundary_tile_pairs() {
             let direction = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_a as i32, tile_b as i32) };
             if tile_a == 0 || tile_b == 0 || direction < 0 {
                 continue;
@@ -10952,6 +10962,701 @@ pub(crate) fn run_neighbor_set_insert_clear_matches_real_test(failure_log: &mut 
     }
     let _ = total_inserts;
     finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTHABITAT_NEIGHBOR_SET_ERASE_MATCHES_REAL`: the port's `rb_set_erase` (behind
+/// `removeAmphibiousNeighbor`) against real vanilla `removeAmphibiousNeighbor` (`0x00507a90`, reached
+/// through the release-safe `remove_amphibious_neighbor_real`). Vanilla reads its set from `this+8`
+/// (head) / `this+0xc` (size), so the real side's fixture is a fake four-word habitat whose `+8`/`+0xc`
+/// words are that pair. Both sides are built with `rb_set_insert` (shape-checked against vanilla's
+/// insert by the sibling test), then erased key by key in ascending, descending and pseudo-random
+/// orders - including absent keys, a null key and repeated keys - down to empty. After every erase the
+/// return value (non-null key => true), size, header min/max and the whole tree shape must agree.
+pub(crate) fn run_neighbor_set_erase_matches_real_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_erase, rb_set_insert, rb_tree_clear};
+    let test_name = "ZTHABITAT_NEIGHBOR_SET_ERASE_MATCHES_REAL";
+
+    let mut state = 0x9e37_79b9u32;
+    let mut next_random = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        state >> 16
+    };
+    let ascending: Vec<u32> = (1..=64).map(|i| 0x1000 + i * 0x10).collect();
+    let descending: Vec<u32> = ascending.iter().rev().copied().collect();
+    let shuffled = |rng: &mut dyn FnMut() -> u32| {
+        let mut keys = ascending.clone();
+        for i in (1..keys.len()).rev() {
+            keys.swap(i, rng() as usize % (i + 1));
+        }
+        keys
+    };
+    let mut scenarios: Vec<(&str, Vec<u32>, Vec<u32>)> = vec![
+        ("ascending/ascending", ascending.clone(), ascending.clone()),
+        ("ascending/descending", ascending.clone(), descending.clone()),
+        ("descending/ascending", descending.clone(), ascending.clone()),
+    ];
+    for round in 0..4 {
+        let insert_order = shuffled(&mut next_random);
+        let mut erase_order = shuffled(&mut next_random);
+        // Sprinkle absent keys, a null key and repeats among the real ones.
+        for n in 0..12u32 {
+            let position = next_random() as usize % (erase_order.len() + 1);
+            let extra = match n % 3 {
+                0 => 0x2000 + n * 0x10,
+                1 => 0,
+                _ => erase_order[next_random() as usize % erase_order.len()],
+            };
+            erase_order.insert(position, extra);
+        }
+        let label: &'static str = ["random/random A", "random/random B", "random/random C", "random/random D"][round];
+        scenarios.push((label, insert_order, erase_order));
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut erases = 0usize;
+    'scenarios: for (label, insert_order, erase_order) in &scenarios {
+        let port = SetFixture::new();
+        let real_set = SetFixture::new();
+        let mut fake_habitat = Box::new([0u32; 4]);
+        fake_habitat[2] = real_set.head();
+        let real_container = fake_habitat.as_ptr() as u32 + 8;
+        for &key in insert_order {
+            rb_set_insert(port.container_addr(), key);
+            rb_set_insert(real_container, key);
+        }
+        for (index, &key) in erase_order.iter().enumerate() {
+            rb_set_erase(port.container_addr(), key);
+            let real_ret = hooks_zthabitatmgr::remove_amphibious_neighbor_real(fake_habitat.as_ptr(), key as *const u32);
+            erases += 1;
+            if (real_ret & 0xff != 0) != (key != 0) {
+                failures.push(format!("{label}[{index}] key {key:#x}: real return {real_ret:#x}"));
+                break 'scenarios;
+            }
+            let (port_size, real_size) = (port.container[1], fake_habitat[3]);
+            let root_p: u32 = get_from_memory(port.head() + 4);
+            let root_r: u32 = get_from_memory(real_set.head() + 4);
+            match compare_tree_shapes(root_p, port.head(), root_r, real_set.head()) {
+                Ok(count) if count == port_size && port_size == real_size => {}
+                Ok(count) => {
+                    failures.push(format!("{label}[{index}] key {key:#x}: node count {count} vs size port={port_size} real={real_size}"));
+                    break 'scenarios;
+                }
+                Err(msg) => {
+                    failures.push(format!("{label}[{index}] key {key:#x}: {msg}"));
+                    break 'scenarios;
+                }
+            }
+            let ends = |head: u32| -> (u32, u32) {
+                let (min, max): (u32, u32) = (get_from_memory(head + 8), get_from_memory(head + 0xc));
+                if min == head { (0, 0) } else { (get_from_memory(min + 0x10), get_from_memory(max + 0x10)) }
+            };
+            if ends(port.head()) != ends(real_set.head()) {
+                failures.push(format!("{label}[{index}] key {key:#x}: header min/max differ port={:?} real={:?}", ends(port.head()), ends(real_set.head())));
+                break 'scenarios;
+            }
+        }
+        for (side, container, head) in [("port", port.container_addr(), port.head()), ("real", real_container, real_set.head())] {
+            if get_from_memory::<u32>(container + 4) != 0 {
+                failures.push(format!("{label}: {side} set not empty after erasing every key"));
+            }
+            rb_tree_clear(container, 0x14);
+            if get_from_memory::<u32>(head + 4) != 0 {
+                failures.push(format!("{label}: {side} root not null after clear"));
+            }
+        }
+    }
+    finish_test(&format!("{} (erases compared: {}, scenarios: {})", test_name, erases, scenarios.len()), failures, failure_log)
+}
+
+/// `ZTHABITAT_NEIGHBOR_QUERIES_MATCH_REAL_LIVE`: real vanilla vs port for `isAmphibiousNeighbor`,
+/// `getSurroundingAnimals` and `getCloseOutsideTile` on every habitat in the loaded zoo.
+/// - `isAmphibiousNeighbor` over every habitat pointer plus null, also against a [`walk_neighbor_tree`]
+///   membership oracle.
+/// - `getSurroundingAnimals`: identical element lists and identical buffer capacity; both buffers are
+///   `PoolAlloc` output and are released with [`free_event_vector_buffer`].
+/// - `getCloseOutsideTile`: the shared game RNG is rewound to the same seed before each side; the
+///   returned tile and the RNG state afterwards must agree.
+/// Coverage counters are logged so a save without amphibious neighbours or outside tiles is visibly
+/// comparison-only.
+pub(crate) fn run_habitat_neighbor_queries_match_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_NEIGHBOR_QUERIES_MATCH_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    if habitat_ptrs.is_empty() {
+        return finish_test(test_name, vec!["no live habitats found".to_string()], failure_log);
+    }
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+
+    let mut failures: Vec<String> = Vec::new();
+    let (mut neighbor_hits, mut nonempty_surrounding, mut outside_tiles) = (0u32, 0u32, 0u32);
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+
+        let members: Vec<u32> = walk_neighbor_tree(*habitat.amphibious_neighbors_head()).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        for &target in habitat_ptrs.iter().chain(std::iter::once(&0u32)) {
+            let real = hooks_zthabitatmgr::is_amphibious_neighbor_real(habitat_ptr as *const std::ffi::c_void, target);
+            let port = habitat.is_amphibious_neighbor(target);
+            if real != port || members.contains(&target) != real {
+                failures.push(format!("habitat {habitat_ptr:#010x} target {target:#010x}: isAmphibiousNeighbor real={real} port={port} oracle={}", members.contains(&target)));
+            }
+            neighbor_hits += real as u32;
+        }
+
+        let mut real_vec = [0u32; 3];
+        let mut port_vec = [0u32; 3];
+        hooks_zthabitatmgr::get_surrounding_animals_real(habitat_ptr as *const u32, real_vec.as_mut_ptr());
+        habitat.get_surrounding_animals(port_vec.as_mut_ptr() as u32);
+        let read_vec = |v: &[u32; 3]| -> Vec<u32> { (v[0]..v[1]).step_by(4).map(get_from_memory::<u32>).collect() };
+        let (real_animals, port_animals) = (read_vec(&real_vec), read_vec(&port_vec));
+        if real_animals != port_animals || real_vec[2] - real_vec[0] != port_vec[2] - port_vec[0] || (real_vec[0] == 0) != (port_vec[0] == 0) {
+            failures.push(format!(
+                "habitat {habitat_ptr:#010x}: getSurroundingAnimals real={real_animals:x?} (cap {}) port={port_animals:x?} (cap {})",
+                real_vec[2] - real_vec[0],
+                port_vec[2] - port_vec[0]
+            ));
+        }
+        nonempty_surrounding += !real_animals.is_empty() as u32;
+        for v in [real_vec, port_vec] {
+            free_event_vector_buffer(v[0], v[2] - v[0]);
+        }
+
+        let seed: u32 = get_from_memory(rng_addr);
+        let real_tile = hooks_zthabitatmgr::get_close_outside_tile_real(habitat_ptr as *const std::ffi::c_void);
+        let real_seed: u32 = get_from_memory(rng_addr);
+        save_to_memory(rng_addr, seed);
+        let port_tile = habitat.get_close_outside_tile() as i32;
+        let port_seed: u32 = get_from_memory(rng_addr);
+        if real_tile != port_tile || real_seed != port_seed {
+            failures.push(format!(
+                "habitat {habitat_ptr:#010x}: getCloseOutsideTile real={real_tile:#x} (seed {real_seed:#x}) port={port_tile:#x} (seed {port_seed:#x})"
+            ));
+        }
+        outside_tiles += (real_tile != 0) as u32;
+    }
+    let summary = format!(
+        "{} (habitats: {}, amphibious-neighbor hits: {}, non-empty surrounding-animal lists: {}, habitats with an outside tile: {})",
+        test_name,
+        habitat_ptrs.len(),
+        neighbor_hits,
+        nonempty_surrounding,
+        outside_tiles
+    );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// Heap-leaked, zeroed fake game objects (habitat, animal, unit, entity type) with fake vtables whose
+/// `+0x20` slot is a fixed reply and whose `+0x228` slot always answers true. Real vanilla and the port
+/// only read these objects through the offsets the show-unit cluster touches.
+mod show_unit_fixture {
+    use super::*;
+
+    extern "thiscall" fn reply_false(_this: u32) -> bool {
+        false
+    }
+    extern "thiscall" fn reply_true(_this: u32) -> bool {
+        true
+    }
+    pub const UNIT_TYPE_ID: u32 = 0x7f3;
+    extern "thiscall" fn reply_unit_type_id(_this: u32) -> u32 {
+        UNIT_TYPE_ID
+    }
+
+    fn leak_vtable(slot_20: u32) -> u32 {
+        let mut table = Box::new([0u32; 0x90]);
+        table[0x20 / 4] = slot_20;
+        table[0x228 / 4] = reply_true as *const () as u32;
+        Box::leak(table).as_ptr() as u32
+    }
+
+    fn leak_object(vtable: u32) -> u32 {
+        let mut object = Box::new([0u32; 0x100]);
+        object[0] = vtable;
+        Box::leak(object).as_ptr() as u32
+    }
+
+    pub fn new_entity_type() -> u32 {
+        leak_object(leak_vtable(reply_unit_type_id as *const () as u32))
+    }
+
+    pub fn new_unit(entity_type: u32, id: u32) -> u32 {
+        let unit = leak_object(leak_vtable(reply_false as *const () as u32));
+        save_to_memory(unit + 0x124, id);
+        save_to_memory(unit + 0x128, entity_type);
+        unit
+    }
+
+    pub fn new_habitat(is_tank: bool, show_info: u32, animals: &[u32]) -> u32 {
+        let slot = if is_tank { reply_true as *const () as u32 } else { reply_false as *const () as u32 };
+        let habitat = leak_object(leak_vtable(slot));
+        let sets = [SetFixture::new(), SetFixture::new()];
+        save_to_memory(habitat + 4, show_info);
+        save_to_memory(habitat + 8, sets[0].head());
+        save_to_memory(habitat + 0x14, sets[1].head());
+        let buffer: &'static mut [u32] = Box::leak(animals.to_vec().into_boxed_slice());
+        let begin = buffer.as_ptr() as u32;
+        let end = begin + 4 * animals.len() as u32;
+        save_to_memory(habitat + 0x6c, begin);
+        save_to_memory(habitat + 0x70, end);
+        save_to_memory(habitat + 0x74, end);
+        // The set headers live as long as the habitat.
+        for set in sets {
+            std::mem::forget(set);
+        }
+        habitat
+    }
+}
+
+/// `ZTHABITAT_SHOW_UNIT_CLUSTER_MATCHES_REAL`: real vanilla `addShowUnit`/`removeShowUnit`/
+/// `removeShowNeighbor` against the ports on two identical graphs of fake habitats seeded with show and
+/// amphibious neighbour sets (a show tank with a standalone `ZTShowInfo`, land habitats forwarding to it
+/// directly or through an amphibious neighbour, a no-op land habitat and an info-less tank). The same
+/// operation sequence runs on both graphs; after each step the return low byte, the show info's unit list
+/// and the habitats' set sizes must agree.
+pub(crate) fn run_show_unit_cluster_matches_real_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::rb_set_insert;
+    use crate::ztshow::{find_or_insert_pending_script_node, live_support as ztshow_live_support};
+    use show_unit_fixture::*;
+    let test_name = "ZTHABITAT_SHOW_UNIT_CLUSTER_MATCHES_REAL";
+
+    struct Graph {
+        node: u32,
+        tank: u32,
+        land1: u32,
+        land2: u32,
+        land3: u32,
+        bare_tank: u32,
+        units: [u32; 3],
+    }
+    let build = || {
+        let info = ztshow_live_support::build_standalone_show_info();
+        let (node, _) = find_or_insert_pending_script_node(info, UNIT_TYPE_ID);
+        let entity_type = new_entity_type();
+        let units = [new_unit(entity_type, 0x1001), new_unit(entity_type, 0x1002), new_unit(entity_type, 0x1003)];
+        let tank = new_habitat(true, info, &[]);
+        let land1 = new_habitat(false, 0, &[units[0], units[1]]);
+        let land2 = new_habitat(false, 0, &[units[2]]);
+        let land3 = new_habitat(false, 0, &[]);
+        let bare_tank = new_habitat(true, 0, &[]);
+        rb_set_insert(land1 + 0x14, tank);
+        rb_set_insert(land2 + 0x8, land1);
+        rb_set_insert(bare_tank + 0x8, land1);
+        Graph { node, tank, land1, land2, land3, bare_tank, units }
+    };
+    let (port, real) = (build(), build());
+
+    let list_contents = |node: u32| -> Vec<u32> {
+        let sentinel = get_from_memory::<u32>(node + 0x18);
+        let mut values = Vec::new();
+        let mut cursor = get_from_memory::<u32>(sentinel);
+        while cursor != sentinel {
+            values.push(get_from_memory::<u32>(cursor + 0x8));
+            cursor = get_from_memory::<u32>(cursor);
+        }
+        values
+    };
+
+    type Pick = fn(&Graph) -> u32;
+    enum Op {
+        Add(Pick, usize),
+        AddNull(Pick),
+        Remove(Pick, usize),
+        RemoveNeighbor(Pick, Pick),
+        RemoveNeighborNull(Pick),
+    }
+    let tank: Pick = |g| g.tank;
+    let land1: Pick = |g| g.land1;
+    let land2: Pick = |g| g.land2;
+    let land3: Pick = |g| g.land3;
+    let bare_tank: Pick = |g| g.bare_tank;
+    let ops: Vec<(&str, Op)> = vec![
+        ("add u0 -> tank (leaf)", Op::Add(tank, 0)),
+        ("add u1 -> land1 (show neighbour)", Op::Add(land1, 1)),
+        ("add u2 -> land2 (amphibious -> land1 -> tank)", Op::Add(land2, 2)),
+        ("add u0 -> land3 (no neighbours)", Op::Add(land3, 0)),
+        ("add u0 -> bare tank (tank, no info)", Op::Add(bare_tank, 0)),
+        ("add null -> land1", Op::AddNull(land1)),
+        ("remove u2 -> land2", Op::Remove(land2, 2)),
+        ("remove u0 -> tank (leaf)", Op::Remove(tank, 0)),
+        ("remove u1 -> land1", Op::Remove(land1, 1)),
+        ("remove u0 -> land3", Op::Remove(land3, 0)),
+        ("re-add u0 -> tank", Op::Add(tank, 0)),
+        ("re-add u1 -> tank", Op::Add(tank, 1)),
+        ("re-add u2 -> tank", Op::Add(tank, 2)),
+        ("removeShowNeighbor(land2, tank): not a member, drops u2 and land1's units", Op::RemoveNeighbor(land2, tank)),
+        ("re-add u0 -> tank", Op::Add(tank, 0)),
+        ("re-add u1 -> tank", Op::Add(tank, 1)),
+        ("re-add u2 -> tank", Op::Add(tank, 2)),
+        ("removeShowNeighbor(land1, tank): member", Op::RemoveNeighbor(land1, tank)),
+        ("removeShowNeighbor(land1, land3): not a show tank", Op::RemoveNeighbor(land1, land3)),
+        ("removeShowNeighbor(land1, null)", Op::RemoveNeighborNull(land1)),
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut nonempty_steps = 0usize;
+    for (label, op) in &ops {
+        let (port_ret, real_ret) = match op {
+            Op::Add(habitat, unit) => (
+                unsafe { ref_from_memory::<ZTHabitat>(habitat(&port)) }.add_show_unit(port.units[*unit]),
+                hooks_zthabitatmgr::add_show_unit_real(habitat(&real) as *const u32, real.units[*unit]),
+            ),
+            Op::AddNull(habitat) => (
+                unsafe { ref_from_memory::<ZTHabitat>(habitat(&port)) }.add_show_unit(0),
+                hooks_zthabitatmgr::add_show_unit_real(habitat(&real) as *const u32, 0),
+            ),
+            Op::Remove(habitat, unit) => (
+                unsafe { ref_from_memory::<ZTHabitat>(habitat(&port)) }.remove_show_unit(port.units[*unit]) as u32,
+                hooks_zthabitatmgr::remove_show_unit_real(habitat(&real) as *const u32, real.units[*unit] as *const u32) as u32,
+            ),
+            Op::RemoveNeighbor(habitat, other) => (
+                unsafe { ref_from_memory::<ZTHabitat>(habitat(&port)) }.remove_show_neighbor(other(&port)) as u32,
+                hooks_zthabitatmgr::remove_show_neighbor_real(habitat(&real) as *const u32, other(&real) as *const u32),
+            ),
+            Op::RemoveNeighborNull(habitat) => (
+                unsafe { ref_from_memory::<ZTHabitat>(habitat(&port)) }.remove_show_neighbor(0) as u32,
+                hooks_zthabitatmgr::remove_show_neighbor_real(habitat(&real) as *const u32, std::ptr::null()),
+            ),
+        };
+        let (port_list, real_list) = (list_contents(port.node), list_contents(real.node));
+        if port_ret & 0xff != real_ret & 0xff {
+            failures.push(format!("{label}: return port={port_ret:#x} real={real_ret:#x}"));
+        }
+        if port_list != real_list {
+            failures.push(format!("{label}: unit list port={port_list:x?} real={real_list:x?}"));
+        }
+        let set_sizes = |g: &Graph| -> Vec<u32> {
+            [g.tank, g.land1, g.land2, g.land3, g.bare_tank].iter().flat_map(|&h| [get_from_memory::<u32>(h + 0xc), get_from_memory::<u32>(h + 0x18)]).collect()
+        };
+        if set_sizes(&port) != set_sizes(&real) {
+            failures.push(format!("{label}: neighbour set sizes port={:?} real={:?}", set_sizes(&port), set_sizes(&real)));
+        }
+        nonempty_steps += !port_list.is_empty() as usize;
+        if !failures.is_empty() {
+            break;
+        }
+    }
+    finish_test(&format!("{} (steps: {}, steps with a non-empty unit list: {})", test_name, ops.len(), nonempty_steps), failures, failure_log)
+}
+
+/// Fake objects for the show-portal map tests: a habitat whose `+0x20` `{head*, size}` map container is
+/// real tree memory, fences whose vtable `+0x138` slot records its calls, tiles carrying only the fields
+/// `addShowPortal` and `BFMap::getDirection` read.
+mod show_portal_fixture {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// `(fence, argument)` of every recorded vtable `+0x138` call, in order.
+    pub static PORTAL_CALLS: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
+
+    extern "thiscall" fn record_portal_call(this: u32, arg: u32) {
+        PORTAL_CALLS.lock().unwrap().push((this, arg));
+    }
+    extern "thiscall" fn type_check_pass(_this: u32, _arg: u32) -> bool {
+        true
+    }
+    extern "thiscall" fn type_check_fail(_this: u32, _arg: u32) -> bool {
+        false
+    }
+
+    fn leak_zeroed(words: usize) -> u32 {
+        Box::leak(vec![0u32; words].into_boxed_slice()).as_ptr() as u32
+    }
+
+    /// A fence-like entity. `type_name` is the first byte of its entity type's name (`'g'` = gate);
+    /// `family_member` is the answer its entity type gives to the fence-family type check.
+    pub fn new_fence(family_member: bool, type_name: u8) -> u32 {
+        let name = Box::leak(Box::new([type_name, 0u8])).as_ptr() as u32;
+        let type_vtable = leak_zeroed(0x90);
+        let check = if family_member { type_check_pass as *const () as u32 } else { type_check_fail as *const () as u32 };
+        save_to_memory(type_vtable + 0x1c, check);
+        let entity_type = leak_zeroed(0x60);
+        save_to_memory(entity_type, type_vtable);
+        save_to_memory(entity_type + 0xa4, name);
+        let vtable = leak_zeroed(0x90);
+        save_to_memory(vtable + 0x138, record_portal_call as *const () as u32);
+        let fence = leak_zeroed(0x100);
+        save_to_memory(fence, vtable);
+        save_to_memory(fence + 0x128, entity_type);
+        fence
+    }
+
+    pub fn new_tile(x: i32, y: i32) -> u32 {
+        let tile = leak_zeroed(0x40);
+        save_to_memory(tile + 0x34, x);
+        save_to_memory(tile + 0x38, y);
+        tile
+    }
+
+    /// Fake habitat memory with an empty `+0x20` map (`{head*, size}`; the head node points at itself).
+    pub fn new_portal_habitat() -> u32 {
+        let habitat = leak_zeroed(0x200);
+        let head = leak_zeroed(5);
+        save_to_memory(head + 0x8, head);
+        save_to_memory(head + 0xc, head);
+        save_to_memory(habitat + 0x20, head);
+        habitat
+    }
+
+    pub fn map_head(habitat: u32) -> u32 {
+        get_from_memory(habitat + 0x20)
+    }
+}
+
+/// `ZTHABITAT_SHOW_PORTAL_ERASE_MATCHES_REAL`: the port's `removeShowPortal` (map find + erase) against
+/// real vanilla `removeShowPortal` (`0x005aa4d9`, via `remove_show_portal_real`) on two fake habitats
+/// whose `+0x20` maps hold the same keys (ascending, descending and pseudo-random insert orders; values
+/// are non-world pointers, so neither side issues a vtable call), erased in ascending, descending and
+/// random orders including absent and repeated keys down to empty. After every erase the node count,
+/// tree shape, per-node value and header min/max must agree.
+pub(crate) fn run_show_portal_erase_matches_real_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::rb_map_find_or_insert;
+    use show_portal_fixture::*;
+    let test_name = "ZTHABITAT_SHOW_PORTAL_ERASE_MATCHES_REAL";
+
+    let mut state = 0x1357_9bdfu32;
+    let mut next_random = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        state >> 16
+    };
+    let ascending: Vec<u32> = (1..=48).map(|i| 0x4000 + i * 0x10).collect();
+    let descending: Vec<u32> = ascending.iter().rev().copied().collect();
+    let shuffled = |rng: &mut dyn FnMut() -> u32| {
+        let mut keys = ascending.clone();
+        for i in (1..keys.len()).rev() {
+            keys.swap(i, rng() as usize % (i + 1));
+        }
+        keys
+    };
+    let mut scenarios: Vec<(String, Vec<u32>, Vec<u32>)> = vec![
+        ("ascending/ascending".into(), ascending.clone(), ascending.clone()),
+        ("ascending/descending".into(), ascending.clone(), descending.clone()),
+        ("descending/ascending".into(), descending.clone(), ascending.clone()),
+    ];
+    for round in 0..4 {
+        let insert_order = shuffled(&mut next_random);
+        let mut erase_order = shuffled(&mut next_random);
+        for n in 0..10u32 {
+            let position = next_random() as usize % (erase_order.len() + 1);
+            let extra = if n % 2 == 0 { 0x9000 + n * 0x10 } else { erase_order[next_random() as usize % erase_order.len()] };
+            erase_order.insert(position, extra);
+        }
+        scenarios.push((format!("random/random {round}"), insert_order, erase_order));
+    }
+
+    let value_of = |key: u32| 0x7000_0000 + key;
+    let ends = |head: u32| -> (u32, u32) {
+        let (min, max): (u32, u32) = (get_from_memory(head + 8), get_from_memory(head + 0xc));
+        if min == head { (0, 0) } else { (get_from_memory(min + 0x10), get_from_memory(max + 0x10)) }
+    };
+    fn values_in_order(head: u32) -> Vec<(u32, u32)> {
+        walk_neighbor_tree(head).map(|node| (get_from_memory(node + 0x10), get_from_memory(node + 0x14))).collect()
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut erases = 0usize;
+    'scenarios: for (label, insert_order, erase_order) in &scenarios {
+        let (port, real) = (new_portal_habitat(), new_portal_habitat());
+        for &key in insert_order {
+            for habitat in [port, real] {
+                let node = rb_map_find_or_insert(habitat + 0x20, key);
+                save_to_memory(node + 0x14, value_of(key));
+            }
+        }
+        for (index, &key) in erase_order.iter().enumerate() {
+            unsafe { ref_from_memory::<ZTHabitat>(port) }.remove_show_portal(key);
+            hooks_zthabitatmgr::remove_show_portal_real(real as *const u32, key as *const u32);
+            erases += 1;
+            let (port_head, real_head) = (map_head(port), map_head(real));
+            let (port_size, real_size): (u32, u32) = (get_from_memory(port + 0x24), get_from_memory(real + 0x24));
+            match compare_tree_shapes(get_from_memory(port_head + 4), port_head, get_from_memory(real_head + 4), real_head) {
+                Ok(count) if count == port_size && port_size == real_size => {}
+                Ok(count) => {
+                    failures.push(format!("{label}[{index}] key {key:#x}: node count {count} vs size port={port_size} real={real_size}"));
+                    break 'scenarios;
+                }
+                Err(msg) => {
+                    failures.push(format!("{label}[{index}] key {key:#x}: {msg}"));
+                    break 'scenarios;
+                }
+            }
+            if values_in_order(port_head) != values_in_order(real_head) || ends(port_head) != ends(real_head) {
+                failures.push(format!("{label}[{index}] key {key:#x}: node values or header min/max differ"));
+                break 'scenarios;
+            }
+        }
+        if get_from_memory::<u32>(port + 0x24) != 0 || get_from_memory::<u32>(real + 0x24) != 0 {
+            failures.push(format!("{label}: map not empty after erasing every key"));
+        }
+    }
+    if !PORTAL_CALLS.lock().unwrap().is_empty() {
+        failures.push("a vtable +0x138 call was made for a non-world fence".to_string());
+    }
+    finish_test(&format!("{} (erases compared: {}, scenarios: {})", test_name, erases, scenarios.len()), failures, failure_log)
+}
+
+/// `ZTHABITAT_ADD_SHOW_PORTAL_MATCHES_REAL_LIVE`: real vanilla `addShowPortal` (`0x005ab354`) and
+/// `removeShowPortal` against the ports, driven in lockstep on two fake habitats. The portal owners are
+/// the live zoo's real habitats (`tile_b` is a fake tile placed on a tile each real habitat owns, so the
+/// vanilla habitat-table lookup resolves a real owner); `tile_a` sits one step away in a direction
+/// `BFMap::getDirection` accepts, each tile carrying one fake fence in the connecting slot. Compared per
+/// step: the return low byte, the recorded fence vtable `+0x138` calls (fence role, argument), the map's
+/// tree shape and per-node fence role. Covers a first add per owner, replacing an existing entry's
+/// fence, the bail-outs (null `tile_b`, a second fence on a tile, a gate fence, a non-fence entity) and
+/// erasing every owner (plus an absent one). **Gap**: a previous fence that is a live world entity (the
+/// `+0x138(0)` call on replacement/removal) is not exercised - it would call into a real fence.
+pub(crate) fn run_add_show_portal_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use show_portal_fixture::*;
+    let test_name = "ZTHABITAT_ADD_SHOW_PORTAL_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+
+    // One owned tile position per live habitat that the vanilla table lookup attributes back to it.
+    let mut owner_positions: Vec<(u32, i32, i32)> = Vec::new();
+    for &habitat_ptr in &habitat_ptrs {
+        let sentinel: u32 = get_from_memory(habitat_ptr + 0x40);
+        if let Some(node) = walk_tile_list(sentinel).next() {
+            let tile = get_from_memory::<TileListNode>(node).payload;
+            if tile != 0 {
+                let (x, y): (i32, i32) = (get_from_memory(tile + 0x34), get_from_memory(tile + 0x38));
+                if habitat_mgr.get_habitat_ptr(x, y) == habitat_ptr {
+                    owner_positions.push((habitat_ptr, x, y));
+                }
+            }
+        }
+    }
+    if owner_positions.is_empty() {
+        return finish_test(test_name, vec!["no live habitat with an owned tile found".to_string()], failure_log);
+    }
+
+    struct Side {
+        habitat: u32,
+        fences: Vec<u32>,
+    }
+    let mut sides = [Side { habitat: new_portal_habitat(), fences: Vec::new() }, Side { habitat: new_portal_habitat(), fences: Vec::new() }];
+    let role = |side: &Side, ptr: u32| -> usize { side.fences.iter().position(|&f| f == ptr).map_or(0, |i| i + 1) };
+    let mut failures: Vec<String> = Vec::new();
+    let (mut adds_true, mut adds_false) = (0usize, 0usize);
+
+    // Builds one `(tile_a, tile_b)` pair per side for `owner_pos`, with fence roles allocated in the same
+    // order on both sides. `a_fences`/`b_fences` are `(family_member, type_name)` per tile (empty = no fence).
+    let build_pair = |sides: &mut [Side; 2], owner_pos: (i32, i32), a_fences: &[(bool, u8)], b_fences: &[(bool, u8)]| -> Option<[(u32, u32); 2]> {
+        let mut pairs = [(0u32, 0u32); 2];
+        for (index, side) in sides.iter_mut().enumerate() {
+            let tile_b = new_tile(owner_pos.0, owner_pos.1);
+            let mut found = None;
+            for (dx, dy) in [(0, -1), (1, 0), (0, 1), (-1, 0)] {
+                let tile_a = new_tile(owner_pos.0 + dx, owner_pos.1 + dy);
+                let direction = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_a as i32, tile_b as i32) };
+                if direction != -1 {
+                    found = Some((tile_a, direction));
+                    break;
+                }
+            }
+            let (tile_a, direction) = found?;
+            let slots_a = [direction / 2, ((direction - 4) & 7) / 2];
+            for (tile, fences, slot) in [(tile_a, a_fences, slots_a[0]), (tile_b, b_fences, slots_a[1])] {
+                for (n, &(family_member, type_name)) in fences.iter().enumerate() {
+                    let fence = new_fence(family_member, type_name);
+                    side.fences.push(fence);
+                    // Extra fences land in other slots so the tile's fence count rises without
+                    // touching the connecting slot.
+                    save_to_memory(tile + 0x14 + (((slot + n as i32) % 4) as u32) * 4, fence);
+                }
+            }
+            pairs[index] = (tile_a, tile_b);
+        }
+        Some(pairs)
+    };
+
+    let normalized_calls = |sides: &[Side; 2]| -> [Vec<(usize, u32)>; 2] {
+        let calls = std::mem::take(&mut *PORTAL_CALLS.lock().unwrap());
+        // Calls were recorded in port-then-real order for each step; split by which side owns the fence.
+        let mut per_side = [Vec::new(), Vec::new()];
+        for (fence, arg) in calls {
+            for (i, side) in sides.iter().enumerate() {
+                let r = role(side, fence);
+                if r != 0 {
+                    per_side[i].push((r, arg));
+                }
+            }
+        }
+        per_side
+    };
+    let map_roles = |side: &Side| -> Vec<(u32, usize)> {
+        walk_neighbor_tree(map_head(side.habitat)).map(|node| (get_from_memory::<u32>(node + 0x10), role(side, get_from_memory::<u32>(node + 0x14)))).collect()
+    };
+
+    enum Step {
+        Add { owner: usize, a: Vec<(bool, u8)>, b: Vec<(bool, u8)>, null_b: bool },
+        Remove(u32),
+    }
+    let mut steps: Vec<(String, Step)> = Vec::new();
+    for (i, &(habitat_ptr, _, _)) in owner_positions.iter().enumerate() {
+        steps.push((format!("first add for owner {habitat_ptr:#x}"), Step::Add { owner: i, a: vec![(true, b'w')], b: vec![(true, b'w')], null_b: false }));
+    }
+    steps.push(("replace existing entry's fence".into(), Step::Add { owner: 0, a: vec![(true, b'w')], b: vec![(true, b'w')], null_b: false }));
+    steps.push(("null tile_b".into(), Step::Add { owner: 0, a: vec![(true, b'w')], b: vec![], null_b: true }));
+    steps.push(("second fence on tile_a".into(), Step::Add { owner: 0, a: vec![(true, b'w'), (true, b'w')], b: vec![(true, b'w')], null_b: false }));
+    steps.push(("gate fence on tile_a".into(), Step::Add { owner: 0, a: vec![(true, b'g')], b: vec![(true, b'w')], null_b: false }));
+    steps.push(("gate fence on tile_b".into(), Step::Add { owner: 0, a: vec![(true, b'w')], b: vec![(true, b'g')], null_b: false }));
+    steps.push(("non-fence entity on tile_a".into(), Step::Add { owner: 0, a: vec![(false, b'w')], b: vec![(true, b'w')], null_b: false }));
+    steps.push(("no fence on tile_b".into(), Step::Add { owner: 0, a: vec![(true, b'w')], b: vec![], null_b: false }));
+    for &(habitat_ptr, _, _) in owner_positions.iter().rev() {
+        steps.push((format!("remove owner {habitat_ptr:#x}"), Step::Remove(habitat_ptr)));
+    }
+    steps.push(("remove absent owner".into(), Step::Remove(0x1234_5670)));
+
+    for (label, step) in &steps {
+        let results: [u32; 2] = match step {
+            Step::Add { owner, a, b, null_b } => {
+                let (_, x, y) = owner_positions[*owner];
+                let Some(pairs) = build_pair(&mut sides, (x, y), a, b) else {
+                    failures.push(format!("{label}: BFMap::getDirection rejected every neighbouring fake tile"));
+                    break;
+                };
+                let tile_b = |pair: (u32, u32)| if *null_b { 0 } else { pair.1 };
+                let port_result = unsafe { ref_from_memory::<ZTHabitat>(sides[0].habitat) }.add_show_portal(pairs[0].0, tile_b(pairs[0])) as u32;
+                let real_result = hooks_zthabitatmgr::add_show_portal_real(sides[1].habitat as *const u32, pairs[1].0 as *const u32, tile_b(pairs[1]) as *const u32);
+                [port_result, real_result]
+            }
+            Step::Remove(key) => {
+                unsafe { ref_from_memory::<ZTHabitat>(sides[0].habitat) }.remove_show_portal(*key);
+                hooks_zthabitatmgr::remove_show_portal_real(sides[1].habitat as *const u32, *key as *const u32);
+                [0, 0]
+            }
+        };
+        if let Step::Add { .. } = step {
+            if results[0] & 0xff != results[1] & 0xff {
+                failures.push(format!("{label}: return port={:#x} real={:#x}", results[0], results[1]));
+            }
+            if results[1] & 0xff != 0 { adds_true += 1 } else { adds_false += 1 }
+        }
+        let calls = normalized_calls(&sides);
+        if calls[0] != calls[1] {
+            failures.push(format!("{label}: fence vtable +0x138 calls port={:?} real={:?}", calls[0], calls[1]));
+        }
+        let (port_head, real_head) = (map_head(sides[0].habitat), map_head(sides[1].habitat));
+        let (port_size, real_size): (u32, u32) = (get_from_memory(sides[0].habitat + 0x24), get_from_memory(sides[1].habitat + 0x24));
+        match compare_tree_shapes(get_from_memory(port_head + 4), port_head, get_from_memory(real_head + 4), real_head) {
+            Ok(count) if count == port_size && port_size == real_size => {}
+            Ok(count) => failures.push(format!("{label}: node count {count} vs size port={port_size} real={real_size}")),
+            Err(msg) => failures.push(format!("{label}: {msg}")),
+        }
+        let (port_roles, real_roles) = (map_roles(&sides[0]), map_roles(&sides[1]));
+        if port_roles != real_roles {
+            failures.push(format!("{label}: map contents port={port_roles:?} real={real_roles:?}"));
+        }
+        if !failures.is_empty() {
+            break;
+        }
+    }
+    if adds_true == 0 {
+        failures.push("no addShowPortal call succeeded on the real side - the fixture never reached the map code".to_string());
+    }
+    finish_test(
+        &format!("{} (owners: {}, steps: {}, adds accepted: {}, adds rejected: {})", test_name, owner_positions.len(), steps.len(), adds_true, adds_false),
+        failures,
+        failure_log,
+    )
 }
 
 /// `ZTHABITAT_DESTRUCTOR_REACHED`: the `~ZTHabitat` port ([`ZTHabitat::destruct`]) must have been run by

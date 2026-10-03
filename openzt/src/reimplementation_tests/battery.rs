@@ -102,6 +102,9 @@ pub(super) mod detour_zoo_main {
     fn always_late_tests() -> Vec<RegisteredTest> {
         let mut tests = vec![
             RegisteredTest { name: "ZTHABITAT_NEIGHBOR_SET_INSERT_CLEAR_MATCHES_REAL", run: tests::zthabitatmgr::run_neighbor_set_insert_clear_matches_real_test },
+            RegisteredTest { name: "ZTHABITAT_NEIGHBOR_SET_ERASE_MATCHES_REAL", run: tests::zthabitatmgr::run_neighbor_set_erase_matches_real_test },
+            RegisteredTest { name: "ZTHABITAT_SHOW_UNIT_CLUSTER_MATCHES_REAL", run: tests::zthabitatmgr::run_show_unit_cluster_matches_real_test },
+            RegisteredTest { name: "ZTHABITAT_SHOW_PORTAL_ERASE_MATCHES_REAL", run: tests::zthabitatmgr::run_show_portal_erase_matches_real_test },
             RegisteredTest { name: "ZTRESEARCHPROGRAM_ON_COMPLETION_RESET", run: tests::ztresearch::run_ztresearchprogram_on_completion_reset_test },
             RegisteredTest { name: "ZTRESEARCHBRANCH_FUNDING_TEXT", run: tests::ztresearch::run_funding_text_test },
             RegisteredTest { name: "ZTRESEARCHBRANCH_UPDATE", run: tests::ztresearch::run_branch_update_test },
@@ -693,6 +696,14 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_IS_SHOW_NEIGHBOR_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_is_show_neighbor_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_NEIGHBOR_QUERIES_MATCH_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_neighbor_queries_match_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_SHOW_PORTAL_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_add_show_portal_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_GET_SHOW_PORTAL_MATCHES_REAL_LIVE",

@@ -2,6 +2,7 @@ use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour::generated::{
         bfaimgr::CHECK_PATH as BFAIMGR_CHECK_PATH,
         bfcategory::GET_VALUE as BFCATEGORY_GET_VALUE,
+        bfworldmgr::VERIFY_ENTITY_0 as BFWORLDMGR_VERIFY_ENTITY_0,
         bfentity::{GET_GRID_POS as BFENTITY_GET_GRID_POS, GET_TILE as BFENTITY_GET_TILE},bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION},
         bftile::{
             IS_IN_ZOO as BFTILE_IS_IN_ZOO, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
@@ -18,9 +19,9 @@ use openzt_detour::generated::{
         },
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            ADD_FOUND_SPECIES, ADD_SHOW_UNIT, CREATE_VIEWING_AREAS, GET_CLOSE_OUTSIDE_TILE, GET_EVENTS, GET_SURROUNDING_ANIMALS,
+            ADD_FOUND_SPECIES, CREATE_VIEWING_AREAS, GET_EVENTS,
             NEEDS_SERVICE,
-            REMOVE_AMPHIBIOUS_NEIGHBOR, REMOVE_SHOW_NEIGHBOR, REMOVE_SHOW_PORTAL, REVISE_SPECIES_LIST, SEND_EVENT,
+            REVISE_SPECIES_LIST, SEND_EVENT,
             SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
         zthabitatmgr::REMOVE_HABITAT_0,
@@ -91,9 +92,9 @@ pub struct ZTHabitat {
     pub viewing_areas_cap_end: u32,  // 0x03c // The vector's own capacity end - written by `ZTHabitat::addViewingArea`'s own growth path (see `Self::add_viewing_area`), previously undifferentiated padding.
     pub owned_tiles_ptr: u32,        // 0x040 // Pointer to the sentinel node of this habitat's owned-tile list (see TileListNode below), not a BFTile* itself - see getSize/removeHabitatTiles/validatePositions/resetUnitAI/createEdgePairs, all of which walk it identically.
     pub pad2a1: [u8; 0x4],            // ----------------------- padding: 4 bytes (0x044 - a real field per `ZTHabitat_createViewingAreas.c`'s own use of it as a second tile-list-shaped container, but that function is deferred - see `Self::create_viewing_areas`'s absence - so this stays unidentified padding rather than a guessed name/shape)
-    pub boundary_tile_pairs_begin: u32, // 0x048 // Begin pointer of the real vanilla `std::vector<std::pair<BFTile*,BFTile*>>` `updateAmphibiousNeighbors_1`/`updateShowNeighbors_1`/`doShowCheck` each independently snapshot-and-iterate (see `ZTHabitatMgr::update_amphibious_neighbors`/`update_show_neighbors`/`do_show_check`), and `ZTHabitat::createEdgePairs` (see `Self::create_edge_pairs`) populates - confirmed via all these decompiles reading/writing the identical `field_0x48`/`field_0x4c`/`field_0x50` triple.
+    pub boundary_tile_pairs_begin: u32, // 0x048 // Vanilla's `std::vector<std::pair<BFTile*,BFTile*>>` begin/end/cap_end triple, zeroed by the vanilla constructor and never written by the reimplementation: the boundary pairs live in a Rust-side store ([`Self::boundary_tile_pairs`]). Real vanilla `createEdgePairs` is the only writer (live tests only); `Self::destruct` frees any buffer it allocated.
     pub boundary_tile_pairs_end: u32,   // 0x04c
-    pub boundary_tile_pairs_cap_end: u32, // 0x050 // The vector's own capacity end - written by `Self::create_edge_pairs`'s own growth path, previously undifferentiated padding.
+    pub boundary_tile_pairs_cap_end: u32, // 0x050
     pub ambients_begin: u32,         // 0x054 // Begin pointer of the real vanilla std::vector<(u32, Ambients*)> update() walks to play each entry's own ambient sound - see viewing_areas_begin's own doc comment for the same only-begin/end-modeled reasoning.
     pub ambients_end: u32,           // 0x058
     pub pad2b_a: [u8; 0x4],          // ----------------------- padding: 4 bytes (cap_end of the ambients vector above)
@@ -3356,7 +3357,7 @@ impl ZTHabitat {
                     save_to_memory(record_ptr + 0x08, sum_2b8 + get_from_memory::<i32>(occupant + 0x2b8));
 
                     if self.show_unit_scan_pending != 0 && unsafe { call_entity_vtable_noargs(occupant, 0x228) } {
-                        unsafe { ADD_SHOW_UNIT.original()(self as *const Self as *const u32, occupant) };
+                        self.add_show_unit(occupant);
                     }
                 } else if unsafe { entity_type_matches(occupant, RVA_KEEPER_TYPE_CHECK_ARG) } {
                     let subtype: u32 = get_from_memory(occupant + 0x170);
@@ -4402,7 +4403,7 @@ impl ZTHabitat {
         float_cache_b: u32,
     ) -> VanillaEventVector {
         let mut animals = VanillaEventVector::rvo_target();
-        unsafe { GET_SURROUNDING_ANIMALS.original()(self as *const Self as *const u32, animals.as_ptr()) };
+        self.get_surrounding_animals(animals.as_ptr() as u32);
 
         for addr in (animals.begin..animals.end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
@@ -4872,7 +4873,7 @@ impl ZTHabitat {
         let cache_head = self as *const Self as u32 + 0x16c;
         unsafe { MSVC_TREE36_CLEAR.original()(cache_head as *const u32) };
 
-        let tile_ptr = unsafe { GET_CLOSE_OUTSIDE_TILE.original()(self as *const Self as *const std::ffi::c_void) } as u32;
+        let tile_ptr = self.get_close_outside_tile();
         if tile_ptr == 0 {
             return;
         }
@@ -5404,8 +5405,7 @@ impl ZTHabitat {
     /// method instead.
     ///
     /// For every entry in this habitat's own [`Self::boundary_tile_pairs`] (a fresh
-    /// snapshot via [`ZTHabitatMgr::snapshot_boundary_tile_pairs`], matching real vanilla's own
-    /// copy-before-iterate shape), resolves the fence connecting the pair in each direction
+    /// copy, matching real vanilla's own copy-before-iterate shape), resolves the fence connecting the pair in each direction
     /// ([`Self::tile_fence_in_direction`] + [`BFMAP_GET_DIRECTION_0`], only kept when a genuine
     /// fence-family member - [`RVA_FENCE_TYPE_CHECK_ARG`]), and requires **at least one side** to be a
     /// fence whose own `entity_type+0x193` byte is set ([`is_tank_wall`], preferring the "A to B" side
@@ -5647,9 +5647,92 @@ impl ZTHabitat {
         let self_addr = self as *const Self as u32;
         let neighbors: Vec<u32> = walk_neighbor_tree(self.amphibious_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
         for neighbor in neighbors {
-            unsafe { REMOVE_AMPHIBIOUS_NEIGHBOR.original()(neighbor as *const u32, self_addr as *const u32) };
+            unsafe { ref_from_memory::<ZTHabitat>(neighbor) }.remove_amphibious_neighbor(self_addr);
         }
         rb_tree_clear(self_addr + 0x8, 0x14);
+    }
+
+    /// Ports `ZTHabitat::removeAmphibiousNeighbor` (`REMOVE_AMPHIBIOUS_NEIGHBOR`, `0x00507a90`): erases
+    /// `other_ptr` from the amphibious set ([`rb_set_erase`]; vanilla's `equal_range` +
+    /// `erase(first, last)`). Returns whether `other_ptr` is non-null, whether or not it was present.
+    /// Vanilla's low byte is all the real callers read (the decompile packs garbage upper bytes).
+    pub fn remove_amphibious_neighbor(&self, other_ptr: u32) -> bool {
+        if other_ptr == 0 {
+            return false;
+        }
+        rb_set_erase(self as *const Self as u32 + 0x8, other_ptr);
+        true
+    }
+
+    /// Ports `ZTHabitat::isAmphibiousNeighbor` (`IS_AMPHIBIOUS_NEIGHBOR`, `0x00448c79`): whether
+    /// `neighbor_ptr` is in the amphibious set - the same `lower_bound` + `key <= neighbor` shape as
+    /// [`Self::is_show_neighbor`], over [`Self::amphibious_neighbors_head`].
+    pub fn is_amphibious_neighbor(&self, neighbor_ptr: u32) -> bool {
+        let head = self.amphibious_neighbors_head;
+        let mut candidate = head;
+        let mut node: u32 = get_from_memory(head + 0x4);
+        while node != 0 {
+            if get_from_memory::<u32>(node + 0x10) < neighbor_ptr {
+                node = get_from_memory(node + 0xc);
+            } else {
+                candidate = node;
+                node = get_from_memory(node + 0x8);
+            }
+        }
+        candidate != head && get_from_memory::<u32>(candidate + 0x10) <= neighbor_ptr
+    }
+
+    /// Ports `ZTHabitat::getCloseOutsideTile` (`GET_CLOSE_OUTSIDE_TILE`, `0x00448cb7`). The Windows body
+    /// differs from the macOS one (`ZTHabitat_getCloseOutsideTile.c`): it walks the tile list at
+    /// `this+0x44` (sentinel pointer, `+0x8` payload per node, the shape [`walk_tile_list`] reads), looks
+    /// up each tile's owning habitat through the habitat manager's tile table (`tile+0x34`/`+0x38` = x/y;
+    /// a null tile counts as owner `0`), and keeps the tiles whose owner is not an amphibious neighbour.
+    /// An empty candidate list returns null without touching the RNG; otherwise one LCG step picks the
+    /// candidate at `(seed >> 0x10 & 0x7fff) % count` ([`Self::pick_random_candidate_tile`]).
+    pub fn get_close_outside_tile(&self) -> u32 {
+        let sentinel: u32 = get_from_memory(self as *const Self as u32 + 0x44);
+        let habitat_mgr = globals().zthabitatmgr();
+        let mut candidates: Vec<u32> = Vec::new();
+        for node in walk_tile_list(sentinel) {
+            let tile = get_from_memory::<TileListNode>(node).payload;
+            let owner = if tile == 0 {
+                0
+            } else {
+                habitat_mgr.get_habitat_ptr(get_from_memory::<i32>(tile + 0x34), get_from_memory::<i32>(tile + 0x38))
+            };
+            if !self.is_amphibious_neighbor(owner) {
+                candidates.push(tile);
+            }
+        }
+        if candidates.is_empty() {
+            return 0;
+        }
+        self.pick_random_candidate_tile(candidates)
+    }
+
+    /// Ports `ZTHabitat::getSurroundingAnimals` (`GET_SURROUNDING_ANIMALS`, `0x00446436`): builds into
+    /// the caller's RVO vector `out_ptr` this habitat's own animals (`+0x6c`..`+0x70`, read raw - no
+    /// recalculate), then, unless this habitat is a tank (vtable `+0x20`), every animal of each
+    /// amphibious neighbour (in-order, via the neighbour's own [`Self::get_animals`]) whose home habitat
+    /// is this one. The result buffer is `PoolAlloc`-sized to exactly its length, as vanilla's
+    /// `vector<int>::buy(size)` leaves it, so callers can release it with [`free_event_vector_buffer`].
+    pub fn get_surrounding_animals(&self, out_ptr: u32) {
+        let self_addr = self as *const Self as u32;
+        let mut animals: Vec<u32> = (self.all_animals_begin..self.all_animals_end).step_by(4).map(get_from_memory::<u32>).collect();
+        if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor = unsafe { ref_from_memory::<ZTHabitat>(get_from_memory::<u32>(node + 0x10)) };
+                let vector_addr = neighbor.get_animals();
+                let (begin, end): (u32, u32) = (get_from_memory(vector_addr), get_from_memory(vector_addr + 4));
+                let neighbor_animals: Vec<u32> = (begin..end).step_by(4).map(get_from_memory::<u32>).collect();
+                for animal in neighbor_animals {
+                    if unsafe { animal_home_habitat(animal) } == self_addr {
+                        animals.push(animal);
+                    }
+                }
+            }
+        }
+        write_exact_u32_vector(out_ptr, &animals);
     }
 
     /// Ports `ZTHabitat::addShowNeighbor` (`ADD_SHOW_NEIGHBOR`, `0x005ab1e7`, `ZTHabitat_addShowNeighbor.c`):
@@ -5657,7 +5740,7 @@ impl ZTHabitat {
     /// have the same `isTank()` result, inserts `other_ptr` into the show-neighbor set
     /// ([`Self::show_neighbors_head`], size at `+0x18`). If `other_ptr` is the show tank, every animal of
     /// this habitat and of each amphibious neighbour that passes its vtable `+0x228` predicate is
-    /// registered with it via real vanilla `addShowUnit`. Returns whether the insert gate passed.
+    /// registered with it via [`Self::add_show_unit`]. Returns whether the insert gate passed.
     pub fn add_show_neighbor(&self, other_ptr: u32) -> bool {
         if other_ptr == 0 {
             return false;
@@ -5675,7 +5758,7 @@ impl ZTHabitat {
                 let animals: Vec<u32> = habitat.get_all_animals(false).collect();
                 for animal in animals {
                     if unsafe { call_entity_vtable_noargs(animal, 0x228) } {
-                        unsafe { ADD_SHOW_UNIT.original()(other_ptr as *const u32, animal) };
+                        unsafe { ref_from_memory::<ZTHabitat>(other_ptr) }.add_show_unit(animal);
                     }
                 }
             };
@@ -5689,21 +5772,189 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::clearShowNeighbors` (`CLEAR_SHOW_NEIGHBORS`, `0x00458a88`): for every member
-    /// calls real vanilla `removeShowNeighbor(member, self)`, `removeShowPortal(member, self)` and
-    /// `removeShowPortal(self, member)` (all un-ported), then frees the show-neighbor set and the
+    /// calls [`Self::remove_show_neighbor`]`(member, self)` and real vanilla `removeShowPortal(member, self)` and
+    /// `removeShowPortal(self, member)` (un-ported), then frees the show-neighbor set and the
     /// show-portal map ([`Self::show_portal_map_head`], size at `+0x24`, `0x18`-byte nodes).
     pub fn clear_show_neighbors(&self) {
         let self_addr = self as *const Self as u32;
         let neighbors: Vec<u32> = walk_neighbor_tree(self.show_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
         for neighbor in neighbors {
-            unsafe {
-                REMOVE_SHOW_NEIGHBOR.original()(neighbor as *const u32, self_addr as *const u32);
-                REMOVE_SHOW_PORTAL.original()(neighbor as *const u32, self_addr as *const u32);
-                REMOVE_SHOW_PORTAL.original()(self_addr as *const u32, neighbor as *const u32);
-            }
+            let neighbor_habitat = unsafe { ref_from_memory::<ZTHabitat>(neighbor) };
+            neighbor_habitat.remove_show_neighbor(self_addr);
+            neighbor_habitat.remove_show_portal(self_addr);
+            self.remove_show_portal(neighbor);
         }
         rb_tree_clear(self_addr + 0x14, 0x14);
         rb_tree_clear(self_addr + 0x20, 0x18);
+    }
+
+    /// Ports `ZTHabitat::addShowUnit` (`ADD_SHOW_UNIT`, `0x00458610`): registers `unit_ptr` with this
+    /// habitat's own `ZTShowInfo` ([`ztshowinfo::add_unit`]) when it is a show exhibit (`+0x4`). Otherwise
+    /// it forwards to every show neighbour when there are any, or - for a non-tank habitat with no show
+    /// neighbours - to every amphibious neighbour. Returns the last forwarded result (low byte only is
+    /// meaningful, as with vanilla), `0` for a null unit or an empty set. Vanilla's discarded
+    /// `isTank()` call on each forwarded neighbour is skipped.
+    pub fn add_show_unit(&self, unit_ptr: u32) -> u32 {
+        if unit_ptr == 0 {
+            return 0;
+        }
+        if self.zt_show_info_ptr != 0 {
+            return ztshowinfo::add_unit(self.zt_show_info_ptr, unit_ptr) as u32;
+        }
+        let self_addr = self as *const Self as u32;
+        let forward = |head: u32| -> u32 {
+            let neighbors: Vec<u32> = walk_neighbor_tree(head).map(|node| get_from_memory(node + 0x10)).collect();
+            let mut result = 0;
+            for neighbor in neighbors {
+                if neighbor != 0 {
+                    result = unsafe { ref_from_memory::<ZTHabitat>(neighbor) }.add_show_unit(unit_ptr);
+                } else {
+                    result = 0;
+                }
+            }
+            result
+        };
+        if get_from_memory::<u32>(self_addr + 0x18) != 0 {
+            forward(self.show_neighbors_head)
+        } else if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } && get_from_memory::<u32>(self_addr + 0xc) != 0 {
+            forward(self.amphibious_neighbors_head)
+        } else {
+            0
+        }
+    }
+
+    /// Ports `ZTHabitat::removeShowUnit` (`REMOVE_SHOW_UNIT`, `0x004586b9`): the mirror of
+    /// [`Self::add_show_unit`]. A show exhibit removes the unit from its `ZTShowInfo` by the unit's
+    /// entity-type id (entity type vtable `+0x20`) and its id at `unit+0x124`, and returns `1`; other
+    /// habitats forward to the show neighbours, else (non-tank) the amphibious neighbours. Unlike
+    /// `addShowUnit` there is no null-unit guard. Low byte of the result only is meaningful.
+    pub fn remove_show_unit(&self, unit_ptr: u32) -> u8 {
+        if self.zt_show_info_ptr != 0 {
+            let entity_type_ptr = get_from_memory::<u32>(unit_ptr + 0x128);
+            let unit_id = get_from_memory::<u32>(unit_ptr + 0x124);
+            let unit_type_id = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) };
+            ztshowinfo::remove_unit(self.zt_show_info_ptr, unit_type_id, unit_id);
+            return 1;
+        }
+        let self_addr = self as *const Self as u32;
+        let forward = |head: u32| -> u8 {
+            let neighbors: Vec<u32> = walk_neighbor_tree(head).map(|node| get_from_memory(node + 0x10)).collect();
+            let mut result = 0;
+            for neighbor in neighbors {
+                // A null neighbour reads its `+0x4` in vanilla; neighbour sets never hold one.
+                result = unsafe { ref_from_memory::<ZTHabitat>(neighbor) }.remove_show_unit(unit_ptr);
+            }
+            result
+        };
+        if get_from_memory::<u32>(self_addr + 0x18) != 0 {
+            forward(self.show_neighbors_head)
+        } else if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } && get_from_memory::<u32>(self_addr + 0xc) != 0 {
+            forward(self.amphibious_neighbors_head)
+        } else {
+            0
+        }
+    }
+
+    /// Ports `ZTHabitat::removeShowNeighbor` (`REMOVE_SHOW_NEIGHBOR`, `0x005aa75e`): erases `other_ptr`
+    /// from the show-neighbour set ([`rb_set_erase`]) and, if `other_ptr` is a show tank
+    /// ([`Self::is_show_tank_by_vtable`]), removes every animal of this habitat and of each amphibious
+    /// neighbour that passes its vtable `+0x228` predicate from `other_ptr`'s show via
+    /// [`Self::remove_show_unit`]. Returns whether `other_ptr` is non-null.
+    pub fn remove_show_neighbor(&self, other_ptr: u32) -> bool {
+        if other_ptr == 0 {
+            return false;
+        }
+        rb_set_erase(self as *const Self as u32 + 0x14, other_ptr);
+        if Self::is_show_tank_by_vtable(other_ptr) {
+            let other = unsafe { ref_from_memory::<ZTHabitat>(other_ptr) };
+            let remove_show_units = |habitat: &ZTHabitat| {
+                let animals: Vec<u32> = habitat.get_all_animals(false).collect();
+                for animal in animals {
+                    if unsafe { call_entity_vtable_noargs(animal, 0x228) } {
+                        other.remove_show_unit(animal);
+                    }
+                }
+            };
+            remove_show_units(self);
+            let neighbors: Vec<u32> = walk_neighbor_tree(self.amphibious_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+            for neighbor in neighbors {
+                remove_show_units(unsafe { ref_from_memory::<ZTHabitat>(neighbor) });
+            }
+        }
+        true
+    }
+
+    /// Whether `fence_ptr` is a live world entity (`BFWorldMgr::verifyEntity`, `0x00443ffa`).
+    fn is_live_world_entity(fence_ptr: u32) -> bool {
+        let world_ptr = globals().ztworldmgr_ptr() as *const u32;
+        unsafe { BFWORLDMGR_VERIFY_ENTITY_0.original()(world_ptr, fence_ptr as *const u32) != 0 }
+    }
+
+    /// Ports `ZTHabitat::addShowPortal` (`ADD_SHOW_PORTAL`, `0x005ab354`, `ZTHabitat_addShowPortal.c`):
+    /// registers the fence between `tile_a_ptr` (this habitat's side) and `tile_b_ptr` as this habitat's
+    /// show portal towards the habitat that owns `tile_b_ptr`, in the `+0x20` `map<ZTHabitat*, ZTFence*>`.
+    ///
+    /// Bails (returns false) unless `tile_b` has an owner and each tile has exactly one fence among its
+    /// four slots, the two tiles are adjacent ([`BFMAP_GET_DIRECTION_0`] != -1), `tile_a`'s fence in that
+    /// direction and `tile_b`'s in the opposite one (`(dir - 4) & 7`, each slot `dir / 2`) are both
+    /// fence-family members, and neither fence's type name starts with `'g'` (a gate). A fence already
+    /// stored for that owner is told to drop its portal state (vtable `+0x138(0)`, when still a live world
+    /// entity) before `tile_a`'s fence is told to take it (`+0x138(1)`) and stored.
+    pub fn add_show_portal(&self, tile_a_ptr: u32, tile_b_ptr: u32) -> bool {
+        if tile_b_ptr == 0 {
+            return false;
+        }
+        let tile_b = get_from_memory::<BFTile>(tile_b_ptr);
+        let owner = globals().zthabitatmgr().get_habitat_ptr(tile_b.pos.x, tile_b.pos.y);
+        if owner == 0 {
+            return false;
+        }
+        let tile_a = get_from_memory::<BFTile>(tile_a_ptr);
+        let fence_count = |tile: &BFTile| [tile.north_fence, tile.east_fence, tile.south_fence, tile.west_fence].iter().filter(|&&f| f != 0).count();
+        if fence_count(&tile_a) != 1 || fence_count(&tile_b) != 1 {
+            return false;
+        }
+        let direction = unsafe { BFMAP_GET_DIRECTION_0.original()(tile_a_ptr as i32, tile_b_ptr as i32) };
+        if direction == -1 {
+            return false;
+        }
+        let fence_family_member = |fence: u32| if fence != 0 && unsafe { entity_type_matches(fence, RVA_FENCE_TYPE_CHECK_ARG) } { fence } else { 0 };
+        let fence_a = fence_family_member(Self::fence_slot_by_index(&tile_a, direction / 2));
+        let fence_b = fence_family_member(Self::fence_slot_by_index(&tile_b, ((direction - 4) & 7) / 2));
+        if fence_a == 0 || fence_b == 0 {
+            return false;
+        }
+        let is_gate = |fence: u32| get_from_memory::<u8>(get_from_memory::<u32>(get_from_memory::<u32>(fence + 0x128) + 0xa4)) == b'g';
+        if is_gate(fence_a) || is_gate(fence_b) {
+            return false;
+        }
+
+        let map_addr = self as *const Self as u32 + 0x20;
+        if let Some(existing) = rb_find(map_addr, owner) {
+            let previous_fence: u32 = get_from_memory(existing + 0x14);
+            if Self::is_live_world_entity(previous_fence) {
+                unsafe { call_vtable_slot_with_ptr(previous_fence, 0x138, 0) };
+            }
+        }
+        unsafe { call_vtable_slot_with_ptr(fence_a, 0x138, 1) };
+        let node = rb_map_find_or_insert(map_addr, owner);
+        save_to_memory(node + 0x14, fence_a);
+        true
+    }
+
+    /// Ports `ZTHabitat::removeShowPortal` (`REMOVE_SHOW_PORTAL`, `0x005aa4d9`): if `other_ptr` has a
+    /// stored portal fence, tells it to drop its portal state (vtable `+0x138(0)`, when still a live world
+    /// entity) and erases the entry. A no-op for an unknown habitat.
+    pub fn remove_show_portal(&self, other_ptr: u32) {
+        let map_addr = self as *const Self as u32 + 0x20;
+        let Some(node) = rb_find(map_addr, other_ptr) else {
+            return;
+        };
+        let fence: u32 = get_from_memory(node + 0x14);
+        if fence != 0 && Self::is_live_world_entity(fence) {
+            unsafe { call_vtable_slot_with_ptr(fence, 0x138, 0) };
+        }
+        rb_map_erase(map_addr, other_ptr);
     }
 
     /// Vtable address real vanilla's destructor resets `this` to before tearing down (the base
