@@ -1,4 +1,5 @@
 use openzt_detour::generated::{
+        bfcategory::GET_VALUE as BFCATEGORY_GET_VALUE,
         bfentity::{DIR_TO_SET as BFENTITY_DIR_TO_SET, GET_TILE as BFENTITY_GET_TILE, SET_WORLD_POS as BFENTITY_SET_WORLD_POS
     },bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE, WORLD_TO_VIRTUAL_0},
         bftile::{
@@ -16,7 +17,7 @@ use openzt_detour::generated::{
         zthabitat::{
             CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
         },
-        zthabitatmgr::{AFTER_ENTITY_CHANGE, MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
+        zthabitatmgr::{MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
             ADD_TANK_WALL as ZTTANKEXHIBIT_ADD_TANK_WALL, CLEAR_WALL_VECTOR as ZTTANKEXHIBIT_CLEAR_WALL_VECTOR,
             CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR, FILL as ZTTANKEXHIBIT_FILL,
@@ -46,7 +47,7 @@ use crate::{
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory, ZTArray, ZTString},
     ztmapview::BFTile,
     ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG},
-    ztshow::{type_check, RVA_ANIMAL_TYPE_CHECK},
+    ztshow::{call_entity_vtable_u32_noargs, type_check, RVA_ANIMAL_TYPE_CHECK},
     ztworldmgr::{Direction, IVec3},
 };
 use super::super::habitat::ZTHabitat;
@@ -2493,9 +2494,7 @@ impl ZTHabitatMgr {
         habitat.set_dirty_characteristics();
         habitat.set_species_list_dirty();
         self.scenery_entity_change(tile_ptr);
-        unsafe {
-            AFTER_ENTITY_CHANGE.original()(habitat_ptr as *const u32, entity_type_ptr as *const u32, tile_ptr as *const u32, true, 0);
-        }
+        Self::after_entity_change(habitat_ptr, entity_type_ptr, true, false);
         if !habitat.is_tank() {
             return;
         }
@@ -2509,9 +2508,7 @@ impl ZTHabitatMgr {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             neighbor.set_dirty_characteristics();
             neighbor.set_species_list_dirty();
-            unsafe {
-                AFTER_ENTITY_CHANGE.original()(neighbor_ptr as *const u32, entity_type_ptr as *const u32, tile_ptr as *const u32, true, 1);
-            }
+            Self::after_entity_change(neighbor_ptr, entity_type_ptr, true, true);
         }
     }
 
@@ -2570,9 +2567,7 @@ impl ZTHabitatMgr {
         habitat.set_species_list_dirty();
         self.scenery_entity_change(tile_ptr);
         let entity_type_ptr = get_from_memory::<u32>(entity_ptr + 0x128);
-        unsafe {
-            AFTER_ENTITY_CHANGE.original()(habitat_ptr as *const u32, entity_type_ptr as *const u32, std::ptr::null(), false, 0);
-        }
+        Self::after_entity_change(habitat_ptr, entity_type_ptr, false, false);
         if !habitat.is_tank() {
             return;
         }
@@ -2586,9 +2581,7 @@ impl ZTHabitatMgr {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             neighbor.set_dirty_characteristics();
             neighbor.set_species_list_dirty();
-            unsafe {
-                AFTER_ENTITY_CHANGE.original()(neighbor_ptr as *const u32, entity_type_ptr as *const u32, std::ptr::null(), false, 1);
-            }
+            Self::after_entity_change(neighbor_ptr, entity_type_ptr, false, true);
         }
     }
 
@@ -2596,17 +2589,15 @@ impl ZTHabitatMgr {
     /// vanilla is a free `stdcall` helper taking a habitat pointer directly, not a `ZTHabitatMgr`
     /// instance method (`generated.rs`'s own `BEFORE_ENTITY_CHANGE` has no `this`) - called as an
     /// associated function here, matching [`Self::replace_gate_with_fence`]'s own precedent for the same
-    /// shape. Clears real vanilla's own single, separate, file-scope `map<int,float>`
-    /// (`DAT_0063b998`/`_99c`) at the top of every call - architecturally distinct from
-    /// [`SPECIES_RATING_CACHE`] above, not a second producer/consumer of it, per
-    /// `species-rating-cache-identification-handover.md`. Unless `habitat_ptr` is the "world" habitat
-    /// ([`ZTHabitat::unknown_flag_0x2c`] set), calls [`get_species_rating`] for every one of its current
-    /// [`ZTHabitat::surrounding_species`]. Real vanilla stores each result back into that just-cleared
-    /// map, but nothing else anywhere in the decompile corpus ever reads it afterward (confirmed in the
-    /// handover doc) - the whole function's only observable effect is the `getSpeciesRating` calls
-    /// themselves, so this port performs the same calls in the same order without modeling the
-    /// write-only map.
+    /// shape. Clears vanilla's single, separate, file-scope `map<int,float>` (`DAT_0063b998`/`_99c`) at
+    /// the top of every call - architecturally distinct from [`SPECIES_RATING_CACHE`] above, not a second
+    /// producer/consumer of it, per `species-rating-cache-identification-handover.md`. Unless
+    /// `habitat_ptr` is the "world" habitat ([`ZTHabitat::unknown_flag_0x2c`] set), stores
+    /// [`get_species_rating`] for every one of its current [`ZTHabitat::surrounding_species`] into that
+    /// map. [`Self::after_entity_change`] reads the map back, so it is modeled as the Rust store
+    /// [`PRE_CHANGE_SPECIES_RATINGS`] rather than left write-only.
     pub fn before_entity_change(habitat_ptr: u32) {
+        lock_pre_change_species_ratings().clear();
         if habitat_ptr == 0 {
             return;
         }
@@ -2616,7 +2607,114 @@ impl ZTHabitatMgr {
         }
         for species_ptr in habitat.surrounding_species() {
             let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
-            unsafe { get_species_rating(habitat_ptr, species_key) };
+            let rating = unsafe { get_species_rating(habitat_ptr, species_key) };
+            lock_pre_change_species_ratings().insert(species_key, rating);
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::afterEntityChange` (`AFTER_ENTITY_CHANGE`, `0x004d89b2`, `stdcall`, `RET 0x14`;
+    /// a free helper keyed by the habitat, like [`Self::before_entity_change`]). The `.asm` was read in full
+    /// from live Ghidra (the exported `.asm` stops after the prologue), since the decompile's tail and
+    /// early-return shape are unreliable. The third argument (the tile) is never read.
+    ///
+    /// Does nothing while the game-paused flag ([`RVA_GAME_PAUSED_FLAG`]) is set or for the "world"
+    /// habitat ([`ZTHabitat::unknown_flag_0x2c`]). Otherwise, for each of the habitat's
+    /// [`ZTHabitat::surrounding_species`] it decides whether the change affects that species:
+    /// skipped when the habitat is a tank and the species type passes vtable `+0xcc` unless the habitat
+    /// has no amphibious neighbours and the changed type is an animal or scenery type; also skipped when
+    /// `neighbor_pass` (`param_5`) is set and the species type fails vtable `+0xcc`.
+    ///
+    /// For an affected species the fresh [`get_species_rating`] is compared against the value
+    /// [`Self::before_entity_change`] stored in [`PRE_CHANGE_SPECIES_RATINGS`] (inserted at `0.0` when
+    /// absent; a stored value equal to [`RVA_PRE_CHANGE_RATING_SENTINEL`]'s float makes the fresh rating
+    /// `0.0`). A higher rating calls `generateFaces(.., true)` (smile), a lower or unordered one
+    /// `generateFaces(.., false)` (frown). On an exact tie, a scenery (non-fence) change uses
+    /// `category(species+0x2cc)` values of the scenery's `+0x10c` and vtable `+0x20` (negated when
+    /// `removal`) and an animal change the three `category(species+0x2c0)` values of the animal type's
+    /// `+0x1e4/+0x1e8/+0x1ec` (negated when `removal`); positive smiles, negative frowns, zero does
+    /// nothing. Any smile result then plays `ZTWorldMgr::playSmileSound`, any frown result
+    /// `playFrownSound` (both can fire - the decompile's early `return` after the smile is a Ghidra
+    /// artefact; the `.asm` falls through).
+    ///
+    /// `generateFaces` is reached through [`GENERATE_FACES`]`.hooked()` (the port's own detour, which the live
+    /// recorder also intercepts), as are the two sound calls, so the live test's recorder sees both from each side.
+    pub fn after_entity_change(habitat_ptr: u32, entity_type_ptr: u32, removal: bool, neighbor_pass: bool) {
+        if get_from_memory::<u8>(get_module_base("zoo.exe") as u32 + RVA_GAME_PAUSED_FLAG) != 0 || habitat_ptr == 0 {
+            return;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        if habitat.unknown_flag_0x2c != 0 {
+            return;
+        }
+        let is_type = |rva: u32| entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, rva) };
+        let animal_type = if is_type(RVA_ANIMAL_TYPE_CHECK) { entity_type_ptr } else { 0 };
+        let scenery_type = if is_type(RVA_SCENERY_TYPE_CHECK_ARG) { entity_type_ptr } else { 0 };
+        let is_fence_type = is_type(RVA_FENCE_TYPE_CHECK_ARG);
+        let module_base = get_module_base("zoo.exe") as u32;
+        let category_value = |category: u32, index: i32| unsafe { BFCATEGORY_GET_VALUE.original()(category as *const u32, index) };
+        let signed = |sum: i32| if removal { sum.wrapping_neg() } else { sum };
+        let generate_faces = |species_ptr: u32, smile: bool| unsafe {
+            GENERATE_FACES.hooked()(habitat_ptr as *const u32, species_ptr as *const u32, smile, std::ptr::null())
+        };
+
+        let (mut smile, mut frown) = (false, false);
+        let species_list: Vec<u32> = habitat.surrounding_species().collect();
+        for species_ptr in species_list {
+            let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
+            let is_tank = unsafe { call_vtable_slot_noargs_ret_bool(habitat_ptr, 0x20) };
+            let passes_species_gate = unsafe { call_vtable_slot_noargs_ret_bool(species_ptr, 0xcc) };
+            let first_gate = !(is_tank && passes_species_gate)
+                || (get_from_memory::<u32>(habitat_ptr + 0xc) == 0 && (animal_type != 0 || scenery_type != 0));
+            if !first_gate || (neighbor_pass && !passes_species_gate) {
+                continue;
+            }
+
+            let mut fresh = unsafe { get_species_rating(habitat_ptr, species_key) };
+            let stored = *lock_pre_change_species_ratings().entry(species_key).or_insert(0.0);
+            let sentinel = get_from_memory::<f32>(module_base + RVA_PRE_CHANGE_RATING_SENTINEL);
+            if matches!(stored.partial_cmp(&sentinel), Some(std::cmp::Ordering::Equal) | None) {
+                fresh = 0.0;
+            }
+
+            let scenery_delta = if scenery_type != 0 && !is_fence_type {
+                let category = species_ptr + 0x2cc;
+                let by_field = category_value(category, get_from_memory(scenery_type + 0x10c));
+                let by_slot = category_value(category, unsafe { call_entity_vtable_u32_noargs(scenery_type, 0x20) } as i32);
+                signed(by_field.wrapping_add(by_slot))
+            } else {
+                0
+            };
+
+            if fresh > stored {
+                smile |= generate_faces(species_ptr, true);
+            } else if fresh != stored {
+                frown |= generate_faces(species_ptr, false);
+            } else if scenery_type != 0 && scenery_delta != 0 {
+                if scenery_delta > 0 {
+                    smile |= generate_faces(species_ptr, true);
+                } else {
+                    frown |= generate_faces(species_ptr, false);
+                }
+            } else if animal_type != 0 {
+                let category = species_ptr + 0x2c0;
+                let sum = [0x1ec, 0x1e8, 0x1e4].iter().fold(0i32, |acc, &offset| {
+                    acc.wrapping_add(category_value(category, get_from_memory(animal_type + offset)))
+                });
+                let sum = signed(sum);
+                if sum > 0 {
+                    smile |= generate_faces(species_ptr, true);
+                } else if sum < 0 {
+                    frown |= generate_faces(species_ptr, false);
+                }
+            }
+        }
+
+        let world_ptr = globals().ztworldmgr_ptr() as u32;
+        if smile {
+            unsafe { ZTWORLDMGR_PLAY_SMILE_SOUND.hooked()(world_ptr as *const u32) };
+        }
+        if frown {
+            unsafe { ZTWORLDMGR_PLAY_FROWN_SOUND.hooked()(world_ptr as *const u32) };
         }
     }
 
@@ -2744,11 +2842,11 @@ impl ZTHabitatMgr {
                 let cached_rating = *entry.ratings.entry(species_key).or_insert(0.0);
                 if cached_rating < fresh_rating {
                     let generated =
-                        unsafe { GENERATE_FACES.original()(entry.habitat_ptr as *const u32, species_ptr as *const u32, true, std::ptr::null()) };
+                        unsafe { GENERATE_FACES.hooked()(entry.habitat_ptr as *const u32, species_ptr as *const u32, true, std::ptr::null()) };
                     smile |= generated;
                 } else if fresh_rating < cached_rating {
                     let generated =
-                        unsafe { GENERATE_FACES.original()(entry.habitat_ptr as *const u32, species_ptr as *const u32, false, std::ptr::null()) };
+                        unsafe { GENERATE_FACES.hooked()(entry.habitat_ptr as *const u32, species_ptr as *const u32, false, std::ptr::null()) };
                     frown |= generated;
                 }
             }

@@ -20,7 +20,9 @@ use openzt_detour::generated::{
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             ADD_FOUND_SPECIES, CREATE_VIEWING_AREAS, GET_EVENTS,
-            NEEDS_SERVICE,
+            GET_ELEVATION_SUITABILITY, GET_FOLIAGE_DENSITY_SUITABILITY, GET_OBJECT_SUITABILITY,
+            GET_ROCK_DENSITY_SUITABILITY, GET_SHELTER_SUITABILITY, GET_TANK_CLEANLINESS_SUITABILITY,
+            GET_TANK_DEPTH_SUITABILITY, GET_TANK_SALINITY_SUITABILITY, GET_TERRAIN_SUITABILITY, GET_TOY_SUITABILITY,
             REVISE_SPECIES_LIST, SEND_EVENT,
             SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
@@ -65,6 +67,58 @@ use super::mgr::zthabitatmgr::ZTHabitatMgr;
 pub(crate) static DESTRUCT_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 use super::support::{self, *};
 use super::tank_exhibit::ZTTankExhibit;
+
+/// Water-clean threshold setting (`DAT_006390a4`) `needsService` compares a tank's `+0x1a8` against. RVA = address - `0x400000`.
+const RVA_WATER_CLEAN_THRESHOLD: u32 = 0x006390a4 - 0x400000;
+
+/// `ZTAnimal::FUN_004d9a2f(smile)` (not in `generated.rs`): queues a smile/frown face on the animal.
+/// Reached through `.hooked()` by [`ZTHabitat::generate_faces`] so the live battery's recorder can
+/// observe the per-animal requests without spawning faces.
+pub(crate) const ANIMAL_SHOW_FACE: openzt_detour::FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = openzt_detour::FunctionDef::new(0x004d9a2f);
+
+/// `f32` weights `findBestRating` applies to the five `get*Suitability` terms of a land habitat
+/// (`DAT_00635408`/`0063540c`/`00635480`/`00635484`/`00635488`). RVA = address - `0x400000`.
+const RVA_SUITABILITY_WEIGHT_TERRAIN: u32 = 0x0023_5408;
+const RVA_SUITABILITY_WEIGHT_OBJECT: u32 = 0x0023_540c;
+const RVA_SUITABILITY_WEIGHT_FOLIAGE: u32 = 0x0023_5480;
+const RVA_SUITABILITY_WEIGHT_ROCK: u32 = 0x0023_5484;
+const RVA_SUITABILITY_WEIGHT_ELEVATION: u32 = 0x0023_5488;
+const RVA_SUITABILITY_WEIGHT_SHELTER: u32 = 0x0023_548c;
+const RVA_SUITABILITY_WEIGHT_LAND_TOY: u32 = 0x0023_5410;
+
+/// `getHabitatRating`'s `f32` constants: the rating of a null animal/species type
+/// (`DAT_00630d5c`), the penalty for a tank rated for an amphibious animal (`DAT_00635544`), and the
+/// seed of the max-over-neighbours search (`0xc47a0000`, `-1000.0`).
+const RVA_RATING_NO_ANIMAL: u32 = 0x0023_0d5c;
+const RVA_RATING_AMPHIBIOUS_TANK_PENALTY: u32 = 0x0023_5544;
+const NEIGHBOR_RATING_SEED: f32 = -1000.0;
+
+/// Weights `getHabitatRating` applies to the depth/cleanliness/salinity/object/toy terms of a tank
+/// (the foliage/rock/elevation/shelter weights are shared with the land sum): show tank
+/// (`DAT_00635018..28`) and ordinary tank (`DAT_006354d0..e0`).
+struct TankRatingWeights {
+    depth: u32,
+    cleanliness: u32,
+    salinity: u32,
+    object: u32,
+    toy: u32,
+}
+const SHOW_TANK_RATING_WEIGHTS: TankRatingWeights =
+    TankRatingWeights { depth: 0x0023_5018, cleanliness: 0x0023_501c, salinity: 0x0023_5020, object: 0x0023_5024, toy: 0x0023_5028 };
+const PLAIN_TANK_RATING_WEIGHTS: TankRatingWeights =
+    TankRatingWeights { depth: 0x0023_54d0, cleanliness: 0x0023_54d4, salinity: 0x0023_54d8, object: 0x0023_54dc, toy: 0x0023_54e0 };
+
+/// The accumulation `getHabitatRating` performs. The game runs with the x87 control word at 24-bit
+/// precision (Direct3D's default), so every `FMUL`/`FADD`/`FSUB` result is already rounded to `f32`;
+/// plain `f32` arithmetic reproduces it (a wider intermediate is off by one ULP).
+fn x87_weighted_sum(terms: &[(f64, f64)]) -> f64 {
+    let mut sum = 0.0f32;
+    for (value, weight) in terms {
+        let product = *value as f32 * *weight as f32;
+        sum = product + sum;
+    }
+    sum as f64
+}
 
 #[derive(Debug, Getters)]
 #[repr(C)]
@@ -290,12 +344,10 @@ pub(crate) struct RecalcPhase5Summary {
     pub weighted_purity_debt: f32,
 }
 
-/// `ZTAnimal::getHomeHabitat` (`0x004161da`), returning the habitat in `EAX`. `generated.rs`'s
-/// `ztanimal::GET_HOME_HABITAT` entry declares no return value; this calls the same address with the
-/// real `-> u32` shape.
+/// `ZTAnimal::getHomeHabitat` (`0x004161da`): the animal's home habitat (recomputed through
+/// `recalcHomeHabitat`/`getMostSuitableHabitat` on every call), as a raw pointer.
 unsafe fn animal_home_habitat(animal_ptr: u32) -> u32 {
-    let home_habitat: extern "thiscall" fn(u32) -> u32 = unsafe { std::mem::transmute(0x004161da_u32) };
-    home_habitat(animal_ptr)
+    unsafe { openzt_detour::generated::ztanimal::GET_HOME_HABITAT.original()(animal_ptr as *const u32) as u32 }
 }
 
 /// The two `ph_AdditionalConditionValues` bytes `setAnimalConditions` reads
@@ -757,7 +809,7 @@ impl ZTHabitat {
             return 0;
         }
 
-        if low_byte_bool(unsafe { NEEDS_SERVICE.original()(self_ptr as *const u32, keeper_ptr as *const u32, true) }) {
+        if self.needs_service(keeper_ptr, true) {
             let keepers_habitat = unsafe { ZTUNIT_GET_HABITAT.original()(keeper_ptr as *const u32) } as u32;
             if keepers_habitat != self_ptr {
                 return self_ptr;
@@ -5882,6 +5934,468 @@ impl ZTHabitat {
             }
         }
         true
+    }
+
+    /// Ports the free function `findBestRating` (`FIND_BEST_RATING`, `0x00498a05`, `cdecl`): walks the
+    /// `std::set<ZTHabitat*>` whose container (`{header*, count}`) is at `set_container_ptr` in order
+    /// and returns the habitat with the best rating for `animal_ptr` - the first one, then any strictly
+    /// better. A tank member rates through `getHabitatRating(animal, is_show_set)`; a land member
+    /// through the weighted sum of five `get*Suitability(species)` terms.
+    ///
+    /// The land sum follows the `.asm`, not the decompile: terrain/object/foliage/rock partial sums are
+    /// each rounded to `f32` (`FSTP`) after the add, but the last add (elevation) stays unrounded in
+    /// `ST0` for the compare against the `f32` best-so-far. x87 uses an 80-bit mantissa; `f64` stands
+    /// in for it here (each product of two `f32`s is exact in both).
+    ///
+    /// Vanilla dereferences a null `ZTAnimal` cast in the land branch; the port uses species `0` there.
+    pub fn find_best_rating(animal_ptr: u32, set_container_ptr: u32, is_show_set: bool) -> u32 {
+        let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+        let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
+        let module_base = get_module_base("zoo.exe") as u32;
+        let weight = |rva: u32| get_from_memory::<f32>(module_base + rva) as f64;
+
+        let members: Vec<u32> =
+            walk_neighbor_tree(get_from_memory::<u32>(set_container_ptr)).map(|node| get_from_memory(node + 0x10)).collect();
+        let mut best_rating: f32 = -1.0;
+        let mut best: u32 = 0;
+        for habitat_ptr in members {
+            let habitat = habitat_ptr as *const u32;
+            let rating: f64 = if unsafe { call_vtable_slot_noargs_ret_bool(habitat_ptr, 0x20) } {
+                unsafe { ref_from_memory::<ZTHabitat>(habitat) }.habitat_rating_unrounded(animal_ptr, is_show_set)
+            } else {
+                let species = if animal_type != 0 { unsafe { call_entity_vtable_u32_noargs(animal_type, 0x20) } } else { 0 } as i32;
+                let terrain = unsafe { GET_TERRAIN_SUITABILITY.original()(habitat, species) } as f64;
+                let object = unsafe { GET_OBJECT_SUITABILITY.original()(habitat, species) } as f64;
+                let foliage = unsafe { GET_FOLIAGE_DENSITY_SUITABILITY.original()(habitat, species) } as f64;
+                let rock = unsafe { GET_ROCK_DENSITY_SUITABILITY.original()(habitat, species) } as f64;
+                let elevation = unsafe { GET_ELEVATION_SUITABILITY.original()(habitat, species) } as f64;
+                let sum = (terrain * weight(RVA_SUITABILITY_WEIGHT_TERRAIN)) as f32;
+                let sum = (object * weight(RVA_SUITABILITY_WEIGHT_OBJECT) + sum as f64) as f32;
+                let sum = (foliage * weight(RVA_SUITABILITY_WEIGHT_FOLIAGE) + sum as f64) as f32;
+                let sum = (rock * weight(RVA_SUITABILITY_WEIGHT_ROCK) + sum as f64) as f32;
+                elevation * weight(RVA_SUITABILITY_WEIGHT_ELEVATION) + sum as f64
+            };
+            if (best_rating as f64) < rating || best == 0 {
+                best_rating = rating as f32;
+                best = habitat_ptr;
+            }
+        }
+        best
+    }
+
+    /// Ports `ZTHabitat::needsService` (`NEEDS_SERVICE`, `0x0049d202`, `thiscall(keeper, include_neighbors)`
+    /// low-byte bool; the decompile's `ZTHabitatMgr` vtable call and `this_03` aliasing are Ghidra
+    /// artefacts, the `.asm` is followed here). In order:
+    /// 1. With `include_neighbors`: bail out `false` unless `isTank()` equals the keeper's vtable `+0x16c`
+    ///    predicate.
+    /// 2. Walk own animals (`+0x6c`..`+0x70`); with `include_neighbors`, an animal whose type passes the
+    ///    `+0xcc` predicate is skipped in a tank. An animal the keeper `canService` marks "serviceable";
+    ///    with `include_neighbors` a sickly one (and any non-show-tank, unflagged (`+0x395`) hungry-and-
+    ///    foodless animal whose home habitat is this one) means `true`.
+    /// 3. Any owned tile (`+0x40`, payload `+0x10`) the keeper's vtable `+0x324` accepts: `true`.
+    /// 4. Tank with the keeper predicate, `+0x188 > 0` and `+0x1a8 < DAT_006390a4` (the water-purity
+    ///    threshold): `true`. `needsShowKeeper`: `true`.
+    /// 5. When some animal was serviceable: `true` if never serviced (`+0xec == 0`) or the AI manager's
+    ///    `+0xec` clock minus ours exceeds the habitat manager's `+0x64` (unsigned).
+    /// 6. With `include_neighbors`: any amphibious neighbour needing service (`include_neighbors = false`).
+    ///
+    /// A null animal-type cast in step 2's predicate is a vanilla null dereference; the port treats it as false.
+    pub fn needs_service(&self, keeper_ptr: u32, include_neighbors: bool) -> bool {
+        let self_addr = self as *const Self as u32;
+        if self.characteristics_dirty != 0 {
+            self.recalculate_characteristics();
+        }
+        let is_tank = || unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) };
+        let keeper_predicate = || unsafe { call_vtable_slot_noargs_ret_bool(keeper_ptr, 0x16c) };
+        if include_neighbors {
+            if is_tank() && !keeper_predicate() {
+                return false;
+            }
+            if !is_tank() && keeper_predicate() {
+                return false;
+            }
+        }
+
+        let mut needs_attention = false;
+        let mut any_serviceable = false;
+        let animals: Vec<u32> = self.get_all_animals(false).collect();
+        for animal_ptr in animals {
+            if needs_attention {
+                return true;
+            }
+            if include_neighbors {
+                let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+                let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
+                if animal_type != 0 && unsafe { call_vtable_slot_noargs_ret_bool(animal_type, 0xcc) } && is_tank() {
+                    continue;
+                }
+            }
+            if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
+                continue;
+            }
+            any_serviceable = true;
+            if include_neighbors && low_byte_bool(unsafe { IS_SICKLY.original()(animal_ptr as *const u32) }) {
+                needs_attention = true;
+            }
+            if get_from_memory::<u8>(animal_ptr + 0x395) == 0
+                && !Self::is_show_tank_by_vtable(self_addr)
+                && low_byte_bool(unsafe { IS_HUNGRY_AND_FOODLESS.original()(animal_ptr as *const u32) })
+                && unsafe { animal_home_habitat(animal_ptr) } == self_addr
+            {
+                needs_attention = true;
+            }
+        }
+        if needs_attention {
+            return true;
+        }
+
+        let tiles: Vec<u32> = walk_tile_list(self.owned_tiles_ptr).collect();
+        for node in tiles {
+            let tile_ptr: u32 = get_from_memory(node + 0x8);
+            let tile_value: u32 = get_from_memory(tile_ptr + 0x10);
+            if unsafe { call_vtable_slot_with_ptr_ret_bool(keeper_ptr, 0x324, tile_value) } {
+                return true;
+            }
+        }
+
+        let module_base = get_module_base("zoo.exe") as u32;
+        if is_tank()
+            && keeper_predicate()
+            && get_from_memory::<i32>(self_addr + 0x188) > 0
+            && get_from_memory::<i32>(self_addr + 0x1a8) < get_from_memory::<i32>(module_base + RVA_WATER_CLEAN_THRESHOLD)
+        {
+            return true;
+        }
+        if self.needs_show_keeper(keeper_ptr) {
+            return true;
+        }
+        if any_serviceable {
+            if self.time_last_serviced == 0 {
+                return true;
+            }
+            let service_interval: u32 = get_from_memory(globals().zthabitatmgr_ptr() as u32 + 0x64);
+            let ai_mgr_ptr = globals().ztaimgr_ptr() as u32;
+            let elapsed = if ai_mgr_ptr == 0 { 0 } else { get_from_memory::<u32>(ai_mgr_ptr + 0xec).wrapping_sub(self.time_last_serviced) };
+            if elapsed > service_interval {
+                return true;
+            }
+        }
+        if include_neighbors {
+            let neighbors: Vec<u32> =
+                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+            for neighbor_ptr in neighbors {
+                if unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.needs_service(keeper_ptr, false) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Ports `ZTHabitat::getRandomHungryAnimal` (`GET_RANDOM_HUNGRY_ANIMAL`, `0x0049f01a`,
+    /// `thiscall(keeper, include_neighbors, home_habitat) -> ZTAnimal*`). Walks this habitat's own animals
+    /// (`+0x6c`..`+0x70`); an animal qualifies when the keeper `canService` it, its `+0x124` id is not in
+    /// the keeper's excluded-id vector (`keeper+0x270`..`+0x274`), `getAmountKeeperFood(species key at
+    /// type+0x3c8, include_neighbors)` is `<= 0`, its `+0x395` flag is clear and its home habitat equals
+    /// `home_habitat` (compared as given, including null). A qualifying animal whose `+0x2b0` is at least
+    /// the animal type's `+0x20c` is returned immediately; otherwise it joins a candidate list. A non-empty
+    /// list advances the shared RNG (`DAT_00638060`) exactly once and returns a uniformly picked candidate
+    /// (`(state >> 16 & 0x7fff) % len`). With no candidates and `include_neighbors`, the first amphibious
+    /// neighbour (`+0x8`) returning a non-null animal (searched with `include_neighbors = false` and
+    /// `home_habitat = self`) wins; otherwise null. The candidate list is a Rust `Vec`: nothing outside
+    /// sees vanilla's `PoolAlloc` vector.
+    pub fn get_random_hungry_animal(&self, keeper_ptr: u32, include_neighbors: bool, home_habitat_ptr: u32) -> u32 {
+        let self_addr = self as *const Self as u32;
+        if self.characteristics_dirty != 0 {
+            self.recalculate_characteristics();
+        }
+        let excluded_begin: u32 = get_from_memory(keeper_ptr + 0x270);
+        let excluded_end: u32 = get_from_memory(keeper_ptr + 0x274);
+        let is_excluded = |animal_ptr: u32| {
+            let id: u32 = get_from_memory(animal_ptr + 0x124);
+            (excluded_begin..excluded_end).step_by(4).any(|slot| get_from_memory::<u32>(slot) == id)
+        };
+
+        let mut candidates: Vec<u32> = Vec::new();
+        let animals: Vec<u32> = self.get_all_animals(false).collect();
+        for animal_ptr in animals {
+            if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) || is_excluded(animal_ptr) {
+                continue;
+            }
+            let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
+            let species_key: u32 = if animal_type != 0 { get_from_memory(animal_type + 0x3c8) } else { 0 };
+            if self.get_amount_keeper_food(species_key, include_neighbors) > 0 {
+                continue;
+            }
+            if get_from_memory::<u8>(animal_ptr + 0x395) != 0 || unsafe { animal_home_habitat(animal_ptr) } != home_habitat_ptr {
+                continue;
+            }
+            candidates.push(animal_ptr);
+            if animal_type != 0 && get_from_memory::<i32>(animal_ptr + 0x2b0) >= get_from_memory::<i32>(animal_type + 0x20c) {
+                return animal_ptr;
+            }
+        }
+
+        if !candidates.is_empty() {
+            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+            let state = lcg_next(get_from_memory::<u32>(rng_addr));
+            save_to_memory(rng_addr, state);
+            return candidates[((state >> 16) & 0x7fff) as usize % candidates.len()];
+        }
+        if include_neighbors {
+            let neighbors: Vec<u32> =
+                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+            for neighbor_ptr in neighbors {
+                let found = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.get_random_hungry_animal(keeper_ptr, false, self_addr);
+                if found != 0 {
+                    return found;
+                }
+            }
+        }
+        0
+    }
+
+    /// Ports `ZTHabitat::generateFaces` (`GENERATE_FACES`, `0x004d9953`, `thiscall(species_type, smile,
+    /// other_habitat) -> bool`): asks every animal of `species_type` in this habitat's own list
+    /// (`+0x6c`..`+0x70`) to show a smile/frown face (`ZTAnimal::FUN_004d9a2f`, [`ANIMAL_SHOW_FACE`]), and
+    /// for a land habitat visited directly (`other_habitat == 0`) with a species whose type passes the
+    /// vtable `+0xcc` predicate, recurses into every amphibious neighbour (`+0x8`) with `other_habitat =
+    /// self` and the same `smile` (the decompile shows `false`; the `.asm` pushes the caller's `[ESP+0x1c]`, the smile argument). Returns whether any animal
+    /// matched (the decompile drops the `1` store; the `.asm` sets the result byte on every match). An
+    /// animal is skipped when its `+0x395` flag is set, or when `other_habitat != 0` and its home habitat
+    /// is not `other_habitat`. Does nothing while the game-paused flag is set.
+    pub fn generate_faces(&self, species_type_ptr: u32, smile: bool, other_habitat_ptr: u32) -> bool {
+        let self_addr = self as *const Self as u32;
+        if get_from_memory::<u8>(get_module_base("zoo.exe") as u32 + RVA_GAME_PAUSED_FLAG) != 0 {
+            return false;
+        }
+        if self.characteristics_dirty != 0 {
+            self.recalculate_characteristics();
+        }
+        let mut any_matched = false;
+        let animals: Vec<u32> = self.get_all_animals(false).collect();
+        for animal_ptr in animals {
+            if get_from_memory::<u8>(animal_ptr + 0x395) != 0 {
+                continue;
+            }
+            if other_habitat_ptr != 0 && unsafe { animal_home_habitat(animal_ptr) } != other_habitat_ptr {
+                continue;
+            }
+            let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
+            if animal_type == species_type_ptr {
+                any_matched = true;
+                unsafe { ANIMAL_SHOW_FACE.hooked()(animal_ptr as *const u32, smile) };
+            }
+        }
+        if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) }
+            && other_habitat_ptr == 0
+            && unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) }
+        {
+            let neighbors: Vec<u32> =
+                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+            for neighbor_ptr in neighbors {
+                any_matched |= unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.generate_faces(species_type_ptr, smile, self_addr);
+            }
+        }
+        any_matched
+    }
+
+    /// Ports `ZTHabitat::getHabitatRating` (`GET_HABITAT_RATING`, `0x00415dd7`, `thiscall(animal, bool)`
+    /// returning `f32` in `ST0`). Vanilla's body is split across four fragments; the branches are:
+    /// - no animal / no entity type: the `DAT_00630d5c` constant;
+    /// - non-amphibious animal: show tank -> show-tank weighted sum, other tank -> plain-tank sum, else land;
+    /// - amphibious animal: show tank -> show-tank sum, minus the penalty unless the show-neighbour
+    ///   count (`+0x18`) is non-zero; other tank -> with `include_neighbors` and a non-empty amphibious
+    ///   set (`+0xc`) the max of the neighbours' ratings (`include_neighbors = false`), else the plain-tank
+    ///   sum minus the penalty; non-tank -> land.
+    ///
+    /// Vanilla dereferences a null `ZTAnimal` cast for the amphibious predicate; the port treats it as false.
+    pub fn get_habitat_rating(&self, animal_ptr: u32, include_neighbors: bool) -> f32 {
+        self.habitat_rating_unrounded(animal_ptr, include_neighbors) as f32
+    }
+
+    /// [`Self::get_habitat_rating`] before the final `f32` rounding: the value vanilla leaves in `ST0`
+    /// (callers such as `findBestRating` compare it unrounded). Partial sums follow [`x87_weighted_sum`].
+    fn habitat_rating_unrounded(&self, animal_ptr: u32, include_neighbors: bool) -> f64 {
+        let self_addr = self as *const Self as u32;
+        let habitat = self_addr as *const u32;
+        let module_base = get_module_base("zoo.exe") as u32;
+        let weight = |rva: u32| get_from_memory::<f32>(module_base + rva) as f64;
+
+        if animal_ptr == 0 {
+            return weight(RVA_RATING_NO_ANIMAL);
+        }
+        let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+        if entity_type_ptr == 0 {
+            return weight(RVA_RATING_NO_ANIMAL);
+        }
+        let species = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) } as i32;
+        let is_amphibious_animal = unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) }
+            && unsafe { call_vtable_slot_noargs_ret_bool(entity_type_ptr, 0xcc) };
+
+        let land_sum = || {
+            let terms = [
+                (unsafe { GET_TERRAIN_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_TERRAIN)),
+                (unsafe { GET_OBJECT_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_OBJECT)),
+                (unsafe { GET_FOLIAGE_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_FOLIAGE)),
+                (unsafe { GET_ROCK_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ROCK)),
+                (unsafe { GET_ELEVATION_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ELEVATION)),
+                (unsafe { GET_SHELTER_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_SHELTER)),
+                (unsafe { GET_TOY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_LAND_TOY)),
+            ];
+            x87_weighted_sum(&terms)
+        };
+        let tank_sum = |weights: &TankRatingWeights| {
+            let terms = [
+                (unsafe { GET_TANK_DEPTH_SUITABILITY.original()(habitat, species) } as f64, weight(weights.depth)),
+                (unsafe { GET_TANK_CLEANLINESS_SUITABILITY.original()(habitat, species) } as f64, weight(weights.cleanliness)),
+                (unsafe { GET_TANK_SALINITY_SUITABILITY.original()(habitat, species) } as f64, weight(weights.salinity)),
+                (unsafe { GET_OBJECT_SUITABILITY.original()(habitat, species) } as f64, weight(weights.object)),
+                (unsafe { GET_FOLIAGE_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_FOLIAGE)),
+                (unsafe { GET_ROCK_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ROCK)),
+                (unsafe { GET_ELEVATION_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ELEVATION)),
+                (unsafe { GET_SHELTER_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_SHELTER)),
+                (unsafe { GET_TOY_SUITABILITY.original()(habitat, species) } as f64, weight(weights.toy)),
+            ];
+            x87_weighted_sum(&terms)
+        };
+        let penalty = || weight(RVA_RATING_AMPHIBIOUS_TANK_PENALTY);
+
+        if Self::is_show_tank_by_vtable(self_addr) {
+            let rating = tank_sum(&SHOW_TANK_RATING_WEIGHTS);
+            return if !is_amphibious_animal || get_from_memory::<u32>(self_addr + 0x18) != 0 { rating } else { ((rating as f32) - (penalty() as f32)) as f64 };
+        }
+        if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
+            return land_sum();
+        }
+        if !is_amphibious_animal {
+            return tank_sum(&PLAIN_TANK_RATING_WEIGHTS);
+        }
+        if include_neighbors && get_from_memory::<u32>(self_addr + 0xc) != 0 {
+            let neighbors: Vec<u32> =
+                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+            let mut best = NEIGHBOR_RATING_SEED;
+            for neighbor_ptr in neighbors {
+                let rating = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.habitat_rating_unrounded(animal_ptr, false);
+                if rating > best as f64 {
+                    best = rating as f32;
+                }
+            }
+            return best as f64;
+        }
+        ((tank_sum(&PLAIN_TANK_RATING_WEIGHTS) as f32) - (penalty() as f32)) as f64
+    }
+
+    /// Ports `ZTHabitat::getMostSuitableHabitat` (`GET_MOST_SUITABLE_HABITAT`, `0x004161f5`): for a tank
+    /// and a non-null animal, the best of the amphibious neighbours (when the animal's type passes the
+    /// entity-type vtable `+0xcc` predicate and the set is non-empty), else of the show neighbours (when
+    /// this is a show tank with a non-empty set); otherwise `self`. Vanilla dereferences a null
+    /// `ZTAnimal` cast for the predicate; the port treats it as false.
+    pub fn get_most_suitable_habitat(&self, animal_ptr: u32) -> u32 {
+        let self_addr = self as *const Self as u32;
+        if animal_ptr == 0 || !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
+            return self_addr;
+        }
+        let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+        let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
+        if animal_type != 0 && unsafe { call_vtable_slot_noargs_ret_bool(animal_type, 0xcc) } && get_from_memory::<u32>(self_addr + 0xc) != 0 {
+            return Self::find_best_rating(animal_ptr, self_addr + 0x8, false);
+        }
+        if Self::is_show_tank_by_vtable(self_addr) && get_from_memory::<u32>(self_addr + 0x18) != 0 {
+            return Self::find_best_rating(animal_ptr, self_addr + 0x14, true);
+        }
+        self_addr
+    }
+
+    /// Entity-type field a `ZTScenarioSimpleGoal` of kind `kind` (`goal+0x10`) compares against its
+    /// target value (`goal+0x20`) in [`Self::scenario_goal_eval06`], per the `.asm`'s per-kind
+    /// `CMP [type+off], [goal+0x20]`. Kinds outside `1..=6` carry no per-type filter.
+    fn scenario_goal_type_field_offset(kind: i32) -> Option<u32> {
+        match kind {
+            1 => Some(0x1e4),
+            2 => Some(0x1e8),
+            3 => Some(0x1ec),
+            4 => Some(0x1f4),
+            5 => Some(0x1f8),
+            6 => Some(0x1f0),
+            _ => None,
+        }
+    }
+
+    /// Ports `ZTScenarioSimpleGoal::eval06` (`EVAL06`, `0x0041da81`, `fastcall`, `this` in `ECX`; the
+    /// `eval00` export is the same ICF-folded function). Counts the habitats whose animals' average
+    /// habitat rating reaches `goal+0x18`, and returns `goal+0x18` when that count is at least `goal+0x1c`
+    /// (and positive), else `0`.
+    ///
+    /// Per `exhibit_array` habitat: the animal list is the habitat's own animals followed by the animals
+    /// of each member of the union of its amphibious (`+0x8`) and show (`+0x14`) neighbour sets, in
+    /// ascending pointer order (vanilla copies the `+0x8` set and range-inserts the `+0x14` set into the
+    /// copy, so a habitat in both contributes once). An animal counts when it has no home habitat or its
+    /// home is this habitat, and its type passes the goal kind's field comparison
+    /// ([`Self::scenario_goal_type_field_offset`]); each counted animal adds
+    /// `ZTAnimal::getHabitatRating(animal, habitat)` to the sum, compared as `sum / counted` (signed
+    /// integer division).
+    ///
+    /// Vanilla builds its temporaries (vector copy, set copy) with its own allocator; the port uses plain
+    /// Rust collections because nothing outside the function sees them. Vanilla dereferences a null
+    /// `ZTAnimalType` cast under a kind in `1..=6`; the port treats that animal as filtered out.
+    pub fn scenario_goal_eval06(goal_ptr: u32) -> u32 {
+        let goal_kind: i32 = get_from_memory(goal_ptr + 0x10);
+        let rating_threshold: i32 = get_from_memory(goal_ptr + 0x18);
+        let habitat_count_threshold: i32 = get_from_memory(goal_ptr + 0x1c);
+        let goal_value: i32 = get_from_memory(goal_ptr + 0x20);
+        let type_field_offset = Self::scenario_goal_type_field_offset(goal_kind);
+
+        let mut qualifying_habitats = 0i32;
+        let mut index = 0usize;
+        loop {
+            let exhibit_array = globals().zthabitatmgr().exhibit_array();
+            if index >= exhibit_array.len() {
+                break;
+            }
+            let habitat_ptr = exhibit_array.get_ptr(index);
+            index += 1;
+            let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+
+            let mut animals: Vec<u32> = habitat.get_all_animals(false).collect();
+            let neighbors: std::collections::BTreeSet<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head)
+                .chain(walk_neighbor_tree(habitat.show_neighbors_head))
+                .map(|node| get_from_memory::<u32>(node + 0x10))
+                .collect();
+            for neighbor in neighbors {
+                let neighbor_animals: Vec<u32> = unsafe { ref_from_memory::<ZTHabitat>(neighbor) }.get_all_animals(false).collect();
+                animals.extend(neighbor_animals);
+            }
+
+            let mut counted = 0i32;
+            let mut rating_sum = 0i32;
+            for &animal_ptr in &animals {
+                let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+                let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
+                let home = unsafe { animal_home_habitat(animal_ptr) };
+                if home != 0 && home != habitat_ptr {
+                    continue;
+                }
+                if let Some(offset) = type_field_offset
+                    && (animal_type == 0 || get_from_memory::<i32>(animal_type + offset) != goal_value)
+                {
+                    continue;
+                }
+                counted += 1;
+                rating_sum += unsafe { openzt_detour::generated::ztanimal::GET_HABITAT_RATING.original()(animal_ptr as *const u32, habitat_ptr as *const u32) };
+            }
+            if counted > 0 && rating_threshold <= rating_sum / counted {
+                qualifying_habitats += 1;
+            }
+        }
+
+        if qualifying_habitats > 0 && habitat_count_threshold <= qualifying_habitats {
+            rating_threshold as u32
+        } else {
+            0
+        }
     }
 
     /// Whether `fence_ptr` is a live world entity (`BFWorldMgr::verifyEntity`, `0x00443ffa`).

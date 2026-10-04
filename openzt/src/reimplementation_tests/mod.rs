@@ -57,6 +57,11 @@ pub(crate) mod portal_dispatch_recorder;
 #[cfg(target_os = "windows")]
 pub(crate) mod send_event_recorder;
 
+/// Redirects `zthabitat::GENERATE_FACES` into an in-memory call record with a scripted return - lets the
+/// live `afterEntityChange` comparison observe which faces real vanilla and the port each request.
+#[cfg(target_os = "windows")]
+pub(crate) mod generate_faces_recorder;
+
 pub fn init() {
     #[cfg(target_os = "windows")]
     {
@@ -75,6 +80,7 @@ pub fn init() {
         io_redirect::init();
         portal_dispatch_recorder::init();
         send_event_recorder::init();
+        generate_faces_recorder::init();
 
         // Installs `resource_manager::init()`'s hooks so `LAZY_RESOURCE_MAP` is populated before
         // `detour_zoo_main`'s battery runs, letting `ZTMARKETINGMGR_LOAD_CONFIGURATIONS`'s

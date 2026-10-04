@@ -110,6 +110,22 @@ pub fn lock_species_rating_cache() -> MutexGuard<'static, Vec<SpeciesRatingCache
     SPECIES_RATING_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Ports vanilla's single file-scope `map<int,float>` (`DAT_0063b998`/`_99c`): the per-species ratings
+/// `ZTHabitatMgr::beforeEntityChange` snapshots for one habitat, which `afterEntityChange` then reads back
+/// (insert-if-absent at `0.0`) to decide whether an entity change raised or lowered each species' rating.
+/// Those two are the only readers/writers in the decompile corpus, so this is an independent Rust store
+/// (style 2); vanilla's own map is left inert once both are detoured.
+pub static PRE_CHANGE_SPECIES_RATINGS: LazyLock<Mutex<HashMap<i32, f32>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Locks [`PRE_CHANGE_SPECIES_RATINGS`], recovering from a poisoned lock. Callers must not hold the guard
+/// across a call into vanilla code.
+pub fn lock_pre_change_species_ratings() -> MutexGuard<'static, HashMap<i32, f32>> {
+    PRE_CHANGE_SPECIES_RATINGS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `DAT_00630d5c`, the `float` `afterEntityChange` compares a stored pre-change rating against: equal
+/// means the new rating is treated as `0.0`. RVA = `0x00630d5c - 0x400000`.
+pub const RVA_PRE_CHANGE_RATING_SENTINEL: u32 = 0x0023_0d5c;
 
 /// Base of vanilla's shared small-object freelist bucket array, bucketed by `(byte_capacity - 1) >> 3` -
 /// the same `DAT_00638000` family `ambients.rs`'s `RVA_GROUP_ARRAY_FREELIST_BUCKETS` already documents

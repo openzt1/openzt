@@ -5,6 +5,7 @@ use openzt_detour_macro::detour_mod;
 use openzt_detour::generated::{
     zthabitat::*,
     zthabitatmgr::*,
+    ztscenariosimplegoal::EVAL06,
     zthabitat::{
         SAVE as ZTHABITAT_SAVE,
         SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
@@ -51,6 +52,7 @@ fn command_get_zt_habitats(_args: Vec<&str>) -> Result<String, CommandError> {
 pub mod hooks_zthabitatmgr {
     use super::*;
     use openzt_detour::generated::{
+        standalone::FIND_BEST_RATING,
         bfentity::VF_RETURN1_1 as IS_RIGHT_SALINITY,
         zthabitat::{
             GET_ATTRACTIVENESS, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, GET_GATE_TILE_PASS_IN, GET_GATE_TILE_PASS_OUT,
@@ -63,7 +65,7 @@ pub mod hooks_zthabitatmgr {
             GET_LAND_TILES, GET_WATER_TILES, GET_UNDERWATER_TILES, GET_TILES_COPY,
             GET_NUM_LAND_TILES, GET_NUM_WATER_TILES, GET_NUM_UNDERWATER_TILES, GET_NUM_KEEPER_FOOD_TILES,
             GET_RANDOM_LAND_TILE, GET_RANDOM_WATER_TILE, GET_RANDOM_UNDERWATER_TILE,
-            GET_SIZE,
+            GET_SIZE, GET_HABITAT_RATING, GENERATE_FACES, GET_RANDOM_HUNGRY_ANIMAL, NEEDS_SERVICE,
             GET_SMALLEST_KEEPER_FOOD, GET_NEAREST_KEEPER_FOOD, GET_RANDOM_KEEPER_FOOD,
             GET_NEAREST_DIRT_PILE, GET_SHOW_PORTAL, HAS_PORTAL_ANIMAL, IS_SHOW_NEIGHBOR, NEEDS_SHOW_KEEPER, UPDATE_PORTALS,
             ADD_TO_BUILDING_LIST, ADDITIONAL_SCENERY_SUITABILITY_CHANGE,
@@ -245,7 +247,7 @@ pub mod hooks_zthabitatmgr {
 
     /// `generated.rs`'s own entry types `include_neighbors` as plain `bool` - matches real vanilla's own
     /// `TEST AL,AL` byte-only read (`ZTHabitat_getNumAnimals.asm`), no `low_byte_bool` masking needed.
-    #[detour(GET_NUM_ANIMALS)]
+    #[detour(GET_NUM_ANIMALS_0)]
     unsafe extern "thiscall" fn get_num_animals(this: *const u32, include_neighbors: bool) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_animals(include_neighbors)
     }
@@ -778,6 +780,122 @@ pub mod hooks_zthabitatmgr {
         unsafe { GET_SURROUNDING_ANIMALS_DETOUR.call(this, out_vector) }
     }
 
+    #[detour(GET_MOST_SUITABLE_HABITAT)]
+    unsafe extern "thiscall" fn get_most_suitable_habitat(this: *const u32, animal: *const u32) -> *const u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_most_suitable_habitat(animal as u32) as *const u32
+    }
+
+    #[detour(GENERATE_FACES)]
+    unsafe extern "thiscall" fn generate_faces(this: *const u32, species_type: *const u32, smile: bool, other: *const u32) -> bool {
+        #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+        {
+            if let Some(scripted) = crate::reimplementation_tests::generate_faces_recorder::intercept(this as u32, species_type as u32, smile) {
+                return scripted;
+            }
+            if GENERATE_FACES_REAL_MODE.with(|m| m.get()) {
+                return unsafe { GENERATE_FACES_DETOUR.call(this, species_type, smile, other) };
+            }
+        }
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.generate_faces(species_type as u32, smile, other as u32)
+    }
+
+    // While set, `generate_faces` runs vanilla's own body (so its recursion into neighbours stays
+    // vanilla too) instead of the port.
+    #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+    thread_local! {
+        static GENERATE_FACES_REAL_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+    pub(crate) fn generate_faces_real(this: *const u32, species_type: *const u32, smile: bool, other: *const u32) -> bool {
+        let previous = GENERATE_FACES_REAL_MODE.with(|m| m.replace(true));
+        let result = unsafe { GENERATE_FACES_DETOUR.call(this, species_type, smile, other) };
+        GENERATE_FACES_REAL_MODE.with(|m| m.set(previous));
+        result
+    }
+
+    #[detour(NEEDS_SERVICE)]
+    unsafe extern "thiscall" fn needs_service(this: *const u32, keeper: *const u32, include_neighbors: bool) -> u32 {
+        #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+        if NEEDS_SERVICE_REAL_MODE.with(|m| m.get()) {
+            return unsafe { NEEDS_SERVICE_DETOUR.call(this, keeper, include_neighbors) };
+        }
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.needs_service(keeper as u32, include_neighbors) as u32
+    }
+
+    // While set, `needs_service` runs vanilla's own body so its neighbour recursion stays vanilla.
+    #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+    thread_local! {
+        static NEEDS_SERVICE_REAL_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+    pub(crate) fn needs_service_real(this: *const u32, keeper: *const u32, include_neighbors: bool) -> bool {
+        let previous = NEEDS_SERVICE_REAL_MODE.with(|m| m.replace(true));
+        let result = unsafe { NEEDS_SERVICE_DETOUR.call(this, keeper, include_neighbors) };
+        NEEDS_SERVICE_REAL_MODE.with(|m| m.set(previous));
+        crate::util::low_byte_bool(result)
+    }
+
+    #[detour(GET_RANDOM_HUNGRY_ANIMAL)]
+    unsafe extern "thiscall" fn get_random_hungry_animal(this: *const u32, keeper: *const u32, include_neighbors: bool, home: *const u32) -> *const i32 {
+        #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+        if GET_RANDOM_HUNGRY_ANIMAL_REAL_MODE.with(|m| m.get()) {
+            return unsafe { GET_RANDOM_HUNGRY_ANIMAL_DETOUR.call(this, keeper, include_neighbors, home) };
+        }
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_hungry_animal(keeper as u32, include_neighbors, home as u32) as *const i32
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_random_hungry_animal_real(this: *const u32, keeper: *const u32, include_neighbors: bool, home: *const u32) -> *const i32 {
+        let previous = GET_RANDOM_HUNGRY_ANIMAL_REAL_MODE.with(|m| m.replace(true));
+        let result = unsafe { GET_RANDOM_HUNGRY_ANIMAL_DETOUR.call(this, keeper, include_neighbors, home) };
+        GET_RANDOM_HUNGRY_ANIMAL_REAL_MODE.with(|m| m.set(previous));
+        result
+    }
+
+    // While set, `get_random_hungry_animal` runs vanilla's own body so its neighbour recursion stays vanilla.
+    #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+    thread_local! {
+        static GET_RANDOM_HUNGRY_ANIMAL_REAL_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[detour(GET_HABITAT_RATING)]
+    unsafe extern "thiscall" fn get_habitat_rating(this: *const u32, animal: i32, include_neighbors: i8) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_habitat_rating(animal as u32, include_neighbors != 0)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_habitat_rating_real(this: *const u32, animal: i32, include_neighbors: i8) -> f32 {
+        unsafe { GET_HABITAT_RATING_DETOUR.call(this, animal, include_neighbors) }
+    }
+
+    #[detour(FIND_BEST_RATING)]
+    unsafe extern "cdecl" fn find_best_rating(animal: *const u32, set_container: *const i32, is_show_set: bool) -> *const i32 {
+        ZTHabitat::find_best_rating(animal as u32, set_container as u32, is_show_set) as *const i32
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_most_suitable_habitat_real(this: *const u32, animal: *const u32) -> *const u32 {
+        unsafe { GET_MOST_SUITABLE_HABITAT_DETOUR.call(this, animal) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn find_best_rating_real(animal: *const u32, set_container: *const i32, is_show_set: bool) -> *const i32 {
+        unsafe { FIND_BEST_RATING_DETOUR.call(animal, set_container, is_show_set) }
+    }
+
+    /// `ZTScenarioSimpleGoal::eval06` (ICF-folded with `eval00`): `fastcall` with the goal in `ECX`.
+    #[detour(EVAL06)]
+    unsafe extern "fastcall" fn scenario_goal_eval06(goal: i32) -> u32 {
+        ZTHabitat::scenario_goal_eval06(goal as u32)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn scenario_goal_eval06_real(goal: i32) -> u32 {
+        unsafe { EVAL06_DETOUR.call(goal) }
+    }
+
     #[detour(ADD_SHOW_UNIT)]
     unsafe extern "thiscall" fn add_show_unit(this: *const u32, unit: u32) -> u32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.add_show_unit(unit)
@@ -1125,6 +1243,22 @@ pub mod hooks_zthabitatmgr {
     #[detour(BEFORE_ENTITY_CHANGE)]
     unsafe extern "stdcall" fn before_entity_change(habitat_ptr: *const i32) {
         ZTHabitatMgr::before_entity_change(habitat_ptr as u32)
+    }
+
+    /// `stdcall` with `RET 0x14` (`.asm`-confirmed); the tile argument is never read.
+    #[detour(AFTER_ENTITY_CHANGE)]
+    unsafe extern "stdcall" fn after_entity_change(habitat_ptr: *const u32, entity_type: *const u32, _tile: *const u32, removal: bool, neighbor_pass: u8) {
+        ZTHabitatMgr::after_entity_change(habitat_ptr as u32, entity_type as u32, removal, neighbor_pass != 0)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn after_entity_change_real(habitat_ptr: *const u32, entity_type: *const u32, removal: bool, neighbor_pass: u8) {
+        unsafe { AFTER_ENTITY_CHANGE_DETOUR.call(habitat_ptr, entity_type, std::ptr::null(), removal, neighbor_pass) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn before_entity_change_real(habitat_ptr: *const i32) {
+        unsafe { BEFORE_ENTITY_CHANGE_DETOUR.call(habitat_ptr) }
     }
 
     #[detour(TERRAIN_ABOUT_TO_BE_CHANGED)]

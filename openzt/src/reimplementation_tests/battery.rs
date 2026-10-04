@@ -702,6 +702,34 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_neighbor_queries_match_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_MOST_SUITABLE_HABITAT_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_most_suitable_habitat_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_NEEDS_SERVICE_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_needs_service_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_HUNGRY_ANIMAL_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_get_random_hungry_animal_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GENERATE_FACES_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_generate_faces_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_HABITAT_RATING_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_get_habitat_rating_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_AFTER_ENTITY_CHANGE_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_after_entity_change_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_SCENARIO_GOAL_EVAL06_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_scenario_goal_eval06_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_ADD_SHOW_PORTAL_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_add_show_portal_matches_real_live_test,
             },

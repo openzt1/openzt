@@ -3057,13 +3057,13 @@ pub(crate) fn run_habitat_get_num_animals_live_test(failure_log: &mut Option<std
     let direct = compare_over_live_habitats(
         failure_log,
         "ZTHABITAT_GET_NUM_ANIMALS_LIVE",
-        |ptr| unsafe { zthabitat::GET_NUM_ANIMALS.original()(ptr, false) },
+        |ptr| unsafe { zthabitat::GET_NUM_ANIMALS_0.original()(ptr, false) },
         |habitat| habitat.get_num_animals(false),
     );
     let with_neighbors = compare_over_live_habitats(
         failure_log,
         "ZTHABITAT_GET_NUM_ANIMALS_WITH_NEIGHBORS_LIVE",
-        |ptr| unsafe { zthabitat::GET_NUM_ANIMALS.original()(ptr, true) },
+        |ptr| unsafe { zthabitat::GET_NUM_ANIMALS_0.original()(ptr, true) },
         |habitat| habitat.get_num_animals(true),
     );
     direct || with_neighbors
@@ -11141,6 +11141,743 @@ pub(crate) fn run_habitat_neighbor_queries_match_real_live_test(failure_log: &mu
         nonempty_surrounding,
         outside_tiles
     );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_NEEDS_SERVICE_MATCHES_REAL_LIVE`: real vanilla (vanilla-only mode, so its neighbour
+/// recursion stays vanilla) vs port for `needsService` over every live keeper x live habitat x
+/// `include_neighbors`, comparing the low-byte result. Variants: the habitat's `+0xec` last-serviced
+/// timestamp (live, `0`, a far-future-clock-minus-one value) is rewritten and restored so the timing arm
+/// is covered both ways, and empty amphibious sets are seeded with every other habitat for the neighbour
+/// search. Counters log true/false results.
+pub(crate) fn run_needs_service_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_insert, rb_tree_clear};
+    let test_name = "ZTHABITAT_NEEDS_SERVICE_MATCHES_REAL_LIVE";
+    let keepers: Vec<u32> = globals().ztworldmgr().entity_array().filter(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) }).take(6).collect();
+    if keepers.is_empty() {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    }
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    let ai_clock: u32 = get_from_memory(globals().ztaimgr_ptr() as u32 + 0xec);
+
+    let mut failures: Vec<String> = Vec::new();
+    let (mut calls, mut true_results) = (0u32, 0u32);
+    let mut compare = |habitat_ptr: u32, keeper: u32, include_neighbors: bool, context: &str, failures: &mut Vec<String>| {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let real = hooks_zthabitatmgr::needs_service_real(habitat_ptr as *const u32, keeper as *const u32, include_neighbors);
+        let port = habitat.needs_service(keeper, include_neighbors);
+        if real != port {
+            failures.push(format!("{context} habitat {habitat_ptr:#010x} keeper {keeper:#010x} neighbors={include_neighbors}: real {real} != port {port}"));
+        }
+        calls += 1;
+        true_results += real as u32;
+    };
+
+    for &habitat_ptr in &habitat_ptrs {
+        let live_timestamp: u32 = get_from_memory(habitat_ptr + 0xec);
+        for (label, timestamp) in [("live", live_timestamp), ("never-serviced", 0), ("just-serviced", ai_clock)] {
+            save_to_memory(habitat_ptr + 0xec, timestamp);
+            for &keeper in &keepers {
+                for include_neighbors in [false, true] {
+                    compare(habitat_ptr, keeper, include_neighbors, label, &mut failures);
+                }
+            }
+        }
+        save_to_memory(habitat_ptr + 0xec, live_timestamp);
+    }
+
+    let mut seeded = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        if get_from_memory::<u32>(habitat_ptr + 0xc) != 0 {
+            continue;
+        }
+        for &other in habitat_ptrs.iter().filter(|&&p| p != habitat_ptr) {
+            rb_set_insert(habitat_ptr + 0x8, other);
+        }
+        seeded += 1;
+        for &keeper in &keepers {
+            compare(habitat_ptr, keeper, true, "seeded", &mut failures);
+        }
+        rb_tree_clear(habitat_ptr + 0x8, 0x14);
+    }
+    let summary = format!(
+        "{} (keepers: {}, habitats: {}, calls: {}, true results: {}, seeded habitats: {})",
+        test_name,
+        keepers.len(),
+        habitat_ptrs.len(),
+        calls,
+        true_results,
+        seeded
+    );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_GET_RANDOM_HUNGRY_ANIMAL_MATCHES_REAL_LIVE`: real vanilla (vanilla-only mode, so its
+/// neighbour recursion stays vanilla) vs port for `getRandomHungryAnimal` over every live keeper x live
+/// habitat x `include_neighbors` x `home_habitat` in `{null, self, each other habitat}`. The shared RNG
+/// state is reset to the same seed before each side; the returned animal and the RNG state afterwards must
+/// match (one step iff the candidate list was non-empty). A second pass seeds empty amphibious sets with
+/// every other habitat so the neighbour search runs. Counters log how many calls returned an animal and how
+/// many consumed an RNG step.
+pub(crate) fn run_get_random_hungry_animal_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_insert, rb_tree_clear, GAME_RNG_RVA};
+    let test_name = "ZTHABITAT_GET_RANDOM_HUNGRY_ANIMAL_MATCHES_REAL_LIVE";
+    let keepers: Vec<u32> = globals().ztworldmgr().entity_array().filter(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) }).take(6).collect();
+    if keepers.is_empty() {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    }
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let seed: u32 = get_from_memory(rng_addr);
+
+    let mut failures: Vec<String> = Vec::new();
+    let (mut calls, mut returned, mut rng_steps) = (0u32, 0u32, 0u32);
+    let mut compare = |habitat_ptr: u32, keeper: u32, include_neighbors: bool, home: u32, context: &str, failures: &mut Vec<String>| {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        save_to_memory(rng_addr, seed);
+        let real = hooks_zthabitatmgr::get_random_hungry_animal_real(habitat_ptr as *const u32, keeper as *const u32, include_neighbors, home as *const u32) as u32;
+        let real_rng: u32 = get_from_memory(rng_addr);
+        save_to_memory(rng_addr, seed);
+        let port = habitat.get_random_hungry_animal(keeper, include_neighbors, home);
+        let port_rng: u32 = get_from_memory(rng_addr);
+        if real != port || real_rng != port_rng {
+            failures.push(format!(
+                "{context} habitat {habitat_ptr:#010x} keeper {keeper:#010x} neighbors={include_neighbors} home {home:#010x}: real {real:#x} (rng {real_rng:#x}) != port {port:#x} (rng {port_rng:#x})"
+            ));
+        }
+        calls += 1;
+        returned += (real != 0) as u32;
+        rng_steps += (real_rng != seed) as u32;
+    };
+
+    for &keeper in &keepers {
+        for &habitat_ptr in &habitat_ptrs {
+            for include_neighbors in [false, true] {
+                for home in [0, habitat_ptr].into_iter().chain(habitat_ptrs.iter().copied().filter(|&p| p != habitat_ptr)) {
+                    compare(habitat_ptr, keeper, include_neighbors, home, "live", &mut failures);
+                }
+            }
+        }
+    }
+
+    let mut seeded = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        if get_from_memory::<u32>(habitat_ptr + 0xc) != 0 {
+            continue;
+        }
+        for &other in habitat_ptrs.iter().filter(|&&p| p != habitat_ptr) {
+            rb_set_insert(habitat_ptr + 0x8, other);
+        }
+        seeded += 1;
+        for &keeper in &keepers {
+            for home in [0, habitat_ptr] {
+                compare(habitat_ptr, keeper, true, home, "seeded", &mut failures);
+            }
+        }
+        rb_tree_clear(habitat_ptr + 0x8, 0x14);
+    }
+    save_to_memory(rng_addr, seed);
+    let summary = format!(
+        "{} (keepers: {}, habitats: {}, calls: {}, returned an animal: {}, consumed an rng step: {}, seeded habitats: {})",
+        test_name,
+        keepers.len(),
+        habitat_ptrs.len(),
+        calls,
+        returned,
+        rng_steps,
+        seeded
+    );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_GENERATE_FACES_MATCHES_REAL_LIVE`: real vanilla vs port for `generateFaces` over every live
+/// habitat x every live animal type x `other_habitat` in `{null, each live habitat}` x both `smile`
+/// values. The per-animal `FUN_004d9a2f` requests are recorded rather than executed
+/// (`generate_faces_recorder::begin_animal_face_capture`); the return value and the ordered request log
+/// must match. A second pass seeds the amphibious set of each land habitat that has none with every other
+/// live habitat (then clears it) so the neighbour recursion runs. Real runs in
+/// `generate_faces_real`'s vanilla-only mode, so its recursion stays vanilla too.
+pub(crate) fn run_generate_faces_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::generate_faces_recorder as recorder;
+    use crate::zthabitat::support::{rb_set_insert, rb_tree_clear};
+    let test_name = "ZTHABITAT_GENERATE_FACES_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    if habitat_ptrs.is_empty() {
+        return finish_test(test_name, vec!["no live habitats found".to_string()], failure_log);
+    }
+    let mut species_types: Vec<u32> = Vec::new();
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        for animal in habitat.get_all_animals(false).collect::<Vec<u32>>() {
+            let entity_type: u32 = get_from_memory(animal + 0x128);
+            if entity_type != 0 && !species_types.contains(&entity_type) {
+                species_types.push(entity_type);
+            }
+        }
+    }
+    if species_types.is_empty() {
+        return finish_test(test_name, vec!["no live animals found".to_string()], failure_log);
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let (mut calls, mut matched_calls, mut recorded_requests) = (0u32, 0u32, 0usize);
+    let mut compare = |habitat_ptr: u32, species: u32, smile: bool, other: u32, context: &str, failures: &mut Vec<String>| {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        recorder::begin_animal_face_capture();
+        let real_result = hooks_zthabitatmgr::generate_faces_real(habitat_ptr as *const u32, species as *const u32, smile, other as *const u32);
+        let real_log = recorder::end_animal_face_capture();
+        recorder::begin_animal_face_capture();
+        let port_result = habitat.generate_faces(species, smile, other);
+        let port_log = recorder::end_animal_face_capture();
+        if real_result != port_result || real_log != port_log {
+            failures.push(format!(
+                "{context} habitat {habitat_ptr:#010x} species {species:#010x} smile {smile} other {other:#010x}: real {real_result} {real_log:x?} != port {port_result} {port_log:x?}"
+            ));
+        }
+        calls += 1;
+        matched_calls += real_result as u32;
+        recorded_requests += real_log.len();
+    };
+
+    for &habitat_ptr in &habitat_ptrs {
+        for &species in &species_types {
+            for smile in [true, false] {
+                for other in std::iter::once(0).chain(habitat_ptrs.iter().copied()) {
+                    compare(habitat_ptr, species, smile, other, "live", &mut failures);
+                }
+            }
+        }
+    }
+
+    let mut seeded = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let is_tank = unsafe { crate::zthabitat::support::call_vtable_slot_noargs_ret_bool(habitat_ptr, 0x20) };
+        if is_tank || get_from_memory::<u32>(habitat_ptr + 0xc) != 0 {
+            continue;
+        }
+        for &other in habitat_ptrs.iter().filter(|&&p| p != habitat_ptr) {
+            rb_set_insert(habitat_ptr + 0x8, other);
+        }
+        seeded += 1;
+        for &species in &species_types {
+            for smile in [true, false] {
+                compare(habitat_ptr, species, smile, 0, "seeded", &mut failures);
+            }
+        }
+        rb_tree_clear(habitat_ptr + 0x8, 0x14);
+    }
+    let summary = format!(
+        "{} (habitats: {}, species types: {}, calls: {}, matched: {}, recorded requests: {}, seeded land habitats: {})",
+        test_name,
+        habitat_ptrs.len(),
+        species_types.len(),
+        calls,
+        matched_calls,
+        recorded_requests,
+        seeded
+    );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_GET_HABITAT_RATING_MATCHES_REAL_LIVE`: real vanilla vs port for `getHabitatRating` over
+/// every live habitat x up to 40 live animals x both `include_neighbors` values, comparing the `f32` bit
+/// pattern. A second pass seeds the amphibious set (`+0x8`) of each tank that has none with every other
+/// live habitat (then clears it again) so the max-over-neighbours branch is covered, plus the null
+/// animal arm.
+pub(crate) fn run_get_habitat_rating_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_insert, rb_tree_clear};
+    let test_name = "ZTHABITAT_GET_HABITAT_RATING_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    if habitat_ptrs.is_empty() {
+        return finish_test(test_name, vec!["no live habitats found".to_string()], failure_log);
+    }
+    let mut animals: Vec<u32> = Vec::new();
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        animals.extend(habitat.get_all_animals(false).collect::<Vec<u32>>());
+    }
+    animals.truncate(40);
+    if animals.is_empty() {
+        return finish_test(test_name, vec!["no live animals found".to_string()], failure_log);
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut calls = 0u32;
+    let mut compare = |habitat_ptr: u32, animal: u32, include_neighbors: bool, context: &str, failures: &mut Vec<String>| {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let real = hooks_zthabitatmgr::get_habitat_rating_real(habitat_ptr as *const u32, animal as i32, include_neighbors as i8);
+        let port = habitat.get_habitat_rating(animal, include_neighbors);
+        if real.to_bits() != port.to_bits() {
+            failures.push(format!(
+                "{context} habitat {habitat_ptr:#010x} animal {animal:#010x} neighbors={include_neighbors}: getHabitatRating real={real} ({:#x}) port={port} ({:#x})",
+                real.to_bits(),
+                port.to_bits()
+            ));
+        }
+        calls += 1;
+    };
+
+    for &habitat_ptr in &habitat_ptrs {
+        for &animal in animals.iter().chain(std::iter::once(&0)) {
+            for include_neighbors in [false, true] {
+                compare(habitat_ptr, animal, include_neighbors, "live", &mut failures);
+            }
+        }
+    }
+
+    let mut seeded_tanks = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        let is_tank = unsafe { crate::zthabitat::support::call_vtable_slot_noargs_ret_bool(habitat_ptr, 0x20) };
+        if !is_tank || get_from_memory::<u32>(habitat_ptr + 0xc) != 0 {
+            continue;
+        }
+        for &other in habitat_ptrs.iter().filter(|&&p| p != habitat_ptr) {
+            rb_set_insert(habitat_ptr + 0x8, other);
+        }
+        seeded_tanks += 1;
+        for &animal in &animals {
+            compare(habitat_ptr, animal, true, "seeded", &mut failures);
+        }
+        rb_tree_clear(habitat_ptr + 0x8, 0x14);
+    }
+    let summary = format!("{} (habitats: {}, calls: {}, seeded tanks: {})", test_name, habitat_ptrs.len(), calls, seeded_tanks);
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_MOST_SUITABLE_HABITAT_MATCHES_REAL_LIVE`: real vanilla vs port for `getMostSuitableHabitat`
+/// (every live habitat x up to 40 live animals) and `findBestRating` (standalone sets of live habitats -
+/// all, tanks only, land only and each singleton - for every sampled animal, both `bool` values). The
+/// returned habitat pointer must agree. Counters log how many results came from a neighbour branch and
+/// how many `findBestRating` winners were tanks vs land habitats.
+pub(crate) fn run_most_suitable_habitat_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_insert, rb_tree_clear};
+    let test_name = "ZTHABITAT_MOST_SUITABLE_HABITAT_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    if habitat_ptrs.is_empty() {
+        return finish_test(test_name, vec!["no live habitats found".to_string()], failure_log);
+    }
+    let mut animals: Vec<u32> = Vec::new();
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        animals.extend(habitat.get_all_animals(false).collect::<Vec<u32>>());
+    }
+    animals.truncate(40);
+    if animals.is_empty() {
+        return finish_test(test_name, vec!["no live animals found".to_string()], failure_log);
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let (mut neighbor_results, mut most_suitable_calls) = (0u32, 0u32);
+    for &habitat_ptr in &habitat_ptrs {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        for &animal in &animals {
+            let real = hooks_zthabitatmgr::get_most_suitable_habitat_real(habitat_ptr as *const u32, animal as *const u32) as u32;
+            let port = habitat.get_most_suitable_habitat(animal);
+            if real != port {
+                failures.push(format!("habitat {habitat_ptr:#010x} animal {animal:#010x}: getMostSuitableHabitat real={real:#x} port={port:#x}"));
+            }
+            neighbor_results += (real != habitat_ptr) as u32;
+            most_suitable_calls += 1;
+        }
+    }
+
+    let is_tank = |ptr: u32| unsafe { crate::zthabitat::support::call_vtable_slot_noargs_ret_bool(ptr, 0x20) };
+    let mut subsets: Vec<Vec<u32>> = vec![habitat_ptrs.clone()];
+    subsets.push(habitat_ptrs.iter().copied().filter(|&p| is_tank(p)).collect());
+    subsets.push(habitat_ptrs.iter().copied().filter(|&p| !is_tank(p)).collect());
+    subsets.extend(habitat_ptrs.iter().map(|&p| vec![p]));
+    let (mut rating_calls, mut tank_winners, mut land_winners) = (0u32, 0u32, 0u32);
+    for subset in subsets.iter().filter(|s| !s.is_empty()) {
+        let set = SetFixture::new();
+        for &member in subset {
+            rb_set_insert(set.container_addr(), member);
+        }
+        for &animal in &animals {
+            for is_show_set in [false, true] {
+                let real = hooks_zthabitatmgr::find_best_rating_real(animal as *const u32, set.container_addr() as *const i32, is_show_set) as u32;
+                let port = ZTHabitat::find_best_rating(animal, set.container_addr(), is_show_set);
+                if real != port {
+                    failures.push(format!("set of {} animal {animal:#010x} show={is_show_set}: findBestRating real={real:#x} port={port:#x}", subset.len()));
+                }
+                rating_calls += 1;
+                if is_tank(real) {
+                    tank_winners += 1;
+                } else {
+                    land_winners += 1;
+                }
+            }
+        }
+        rb_tree_clear(set.container_addr(), 0x14);
+    }
+    let summary = format!(
+        "{} (getMostSuitableHabitat calls: {}, neighbour results: {}, findBestRating calls: {}, tank winners: {}, land winners: {})",
+        test_name, most_suitable_calls, neighbor_results, rating_calls, tank_winners, land_winners
+    );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_AFTER_ENTITY_CHANGE_MATCHES_REAL_LIVE`: real vanilla `afterEntityChange` vs the port on every
+/// live habitat. `generate_faces_recorder` intercepts `generateFaces` and the smile/frown sound stubs for
+/// both calls and records one ordered log of `(habitat, species type, smile)` face requests and sound
+/// plays; the logs must be equal. (The faces themselves are vanilla's un-ported `generateFaces`; what the
+/// port owns is deciding when to request them, which the log covers.) Each case seeds the pre-change rating
+/// store identically on both sides (real vanilla's own `map<int,float>` via real `beforeEntityChange` plus
+/// a raw map write, the port's [`PRE_CHANGE_SPECIES_RATINGS`]) in one of four states - the live ratings
+/// (exact tie), absent (default `0.0`), far below and far above the live ratings - then runs the changed
+/// entity type over `{none, a live animal type, a live non-fence scenery type, a live fence type}` x
+/// `removal` x `neighbor_pass` x scripted `generateFaces` results `{all false, argument-derived}`. Both
+/// sounds are captured, so nothing is audible. Coverage is counted per `(mode, entity type)` - face
+/// requests, smile sounds and frown sounds - and logged in the pass line; a tie row for an animal or
+/// scenery type that recorded no face request at all (its category-sum arm never fired on this save) fails
+/// the test rather than passing silently.
+pub(crate) fn run_after_entity_change_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::generate_faces_recorder::{self as recorder, Recorded};
+    use crate::zthabitat::support::{lock_pre_change_species_ratings, rb_find, rb_map_find_or_insert, RVA_FENCE_TYPE_CHECK_ARG};
+    use crate::ztmegatilemgr::RVA_SCENERY_TYPE_CHECK_ARG;
+    use std::collections::BTreeMap;
+
+    let test_name = "ZTHABITAT_AFTER_ENTITY_CHANGE_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    if habitat_ptrs.is_empty() {
+        return finish_test(test_name, vec!["no live habitats found".to_string()], failure_log);
+    }
+
+    let entity_type_of = |entity: u32| get_from_memory::<u32>(entity + 0x128);
+    let world = globals().ztworldmgr();
+    let scenery_type = world
+        .entity_array()
+        .find(|&e| unsafe { entity_type_matches(e, RVA_SCENERY_TYPE_CHECK_ARG) && !entity_type_matches(e, RVA_FENCE_TYPE_CHECK_ARG) })
+        .map(entity_type_of)
+        .unwrap_or(0);
+    let fence_type = world.entity_array().find(|&e| unsafe { entity_type_matches(e, RVA_FENCE_TYPE_CHECK_ARG) }).map(entity_type_of).unwrap_or(0);
+    let animal_type = habitat_ptrs
+        .iter()
+        .find_map(|&h| unsafe { ref_from_memory::<ZTHabitat>(h) }.surrounding_species().next())
+        .unwrap_or(0);
+    let entity_types: [(&str, u32); 4] = [("none", 0), ("animal", animal_type), ("scenery", scenery_type), ("fence", fence_type)];
+
+    let module_base = get_module_base("zoo.exe") as u32;
+    let real_map_container = module_base + 0x0023_b998;
+    let mut failures: Vec<String> = Vec::new();
+    let mut cases = 0u32;
+    // (mode, entity type) -> (face requests, smile sounds, frown sounds)
+    let mut coverage: BTreeMap<(String, String), (u32, u32, u32)> = BTreeMap::new();
+
+    let seed_stores = |habitat_ptr: u32, mode: &str| {
+        hooks_zthabitatmgr::before_entity_change_real(habitat_ptr as *const i32);
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        ZTHabitatMgr::before_entity_change(habitat_ptr);
+        let species_keys: Vec<i32> = habitat.surrounding_species().map(|s| get_from_memory::<i32>(s + 0x1ec)).collect();
+        for key in species_keys {
+            let live = lock_pre_change_species_ratings().get(&key).copied().unwrap_or(0.0);
+            let seeded = match mode {
+                "tie" => Some(live),
+                "low" => Some(-1.0e9),
+                "high" => Some(1.0e9),
+                _ => None,
+            };
+            match seeded {
+                Some(value) => {
+                    let node = rb_map_find_or_insert(real_map_container, key as u32);
+                    save_to_memory::<f32>(node + 0x14, value);
+                    lock_pre_change_species_ratings().insert(key, value);
+                }
+                None => {
+                    lock_pre_change_species_ratings().remove(&key);
+                    if let Some(node) = rb_find(real_map_container, key as u32) {
+                        save_to_memory::<f32>(node + 0x14, 0.0);
+                    }
+                }
+            }
+        }
+    };
+
+    let mut run_case = |habitat_ptr: u32, mode: &str, label: &str, entity_type: u32, removal: bool, neighbor_pass: u8, scripted: bool| {
+        seed_stores(habitat_ptr, mode);
+        recorder::begin_capture(scripted);
+        hooks_zthabitatmgr::after_entity_change_real(habitat_ptr as *const u32, entity_type as *const u32, removal, neighbor_pass);
+        let real = recorder::end_capture();
+
+        seed_stores(habitat_ptr, mode);
+        recorder::begin_capture(scripted);
+        ZTHabitatMgr::after_entity_change(habitat_ptr, entity_type, removal, neighbor_pass != 0);
+        let port = recorder::end_capture();
+
+        cases += 1;
+        let entry = coverage.entry((mode.to_string(), label.to_string())).or_default();
+        for event in &real {
+            match event {
+                Recorded::GenerateFaces { .. } => entry.0 += 1,
+                Recorded::SmileSound { .. } => entry.1 += 1,
+                Recorded::FrownSound { .. } => entry.2 += 1,
+                Recorded::AnimalFace { .. } => {}
+            }
+        }
+        if real != port {
+            failures.push(format!(
+                "habitat {habitat_ptr:#010x} mode {mode} type {label} removal {removal} neighbor_pass {neighbor_pass} scripted {scripted}: real {real:x?} != port {port:x?}"
+            ));
+        }
+    };
+
+    let missing_types: Vec<&str> = entity_types.iter().filter(|&&(label, ptr)| ptr == 0 && label != "none").map(|&(label, _)| label).collect();
+    for &habitat_ptr in &habitat_ptrs {
+        for mode in ["tie", "absent", "low", "high"] {
+            for &(label, entity_type) in &entity_types {
+                if entity_type == 0 && label != "none" {
+                    continue;
+                }
+                for removal in [false, true] {
+                    for neighbor_pass in [0u8, 1] {
+                        for scripted in [false, true] {
+                            run_case(habitat_ptr, mode, label, entity_type, removal, neighbor_pass, scripted);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The tie rows are where the category-sum arms live (the live ratings are an exact tie, so only the
+    // sums can request a face; a fence has no sum at all).
+    let mut uncovered: Vec<String> = Vec::new();
+    for label in ["animal", "scenery"] {
+        if missing_types.contains(&label) {
+            continue;
+        }
+        let faces = coverage.get(&("tie".to_string(), label.to_string())).map(|c| c.0).unwrap_or(0);
+        if faces == 0 {
+            uncovered.push(format!("tie/{label}"));
+        }
+    }
+    if !uncovered.is_empty() {
+        failures.push(format!("tie arms never fired on this save: {uncovered:?}"));
+    }
+    let coverage_text: Vec<String> =
+        coverage.iter().map(|((mode, label), (faces, smiles, frowns))| format!("{mode}/{label}: {faces}f {smiles}s {frowns}x")).collect();
+    let summary = format!(
+        "{} (cases: {}, entity types missing: {:?}; per row faces/smile/frown: [{}])",
+        test_name,
+        cases,
+        missing_types,
+        coverage_text.join(", ")
+    );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_SCENARIO_GOAL_EVAL06_MATCHES_REAL_LIVE`: real vanilla `ZTScenarioSimpleGoal::eval06` vs the
+/// port over the live zoo. Sweeps goal kinds `0..=7` (kinds `1..=6` filter on an entity-type field, so the
+/// compared value is taken from live animals' own types, plus a value no type has), rating thresholds
+/// (fixed values plus every live per-animal habitat rating and its neighbours, so the average-vs-threshold
+/// compare lands on and either side of real boundaries) and habitat-count thresholds; the return
+/// (`goal+0x18` or `0`) must agree.
+///
+/// `eval06` reads only goal fields `+0x10/+0x18/+0x1c/+0x20` (`.asm`), so no constructed
+/// `ZTScenarioSimpleGoal` is needed: every call runs against two buffers, one zeroed and one poisoned with
+/// `0xA5` outside those fields, and real(zero) == real(poison) == port is required - a read of any other
+/// goal field would show up as a mismatch.
+///
+/// The live zoo's neighbour sets are mostly empty, so the sweep repeats over five neighbour-set scenarios:
+/// the live sets, then raw `rb_set_insert`s that make every habitat an amphibious neighbour of every
+/// other, a show neighbour of every other, both (exercising the union's de-duplication), and a mixed
+/// pattern with partial overlap. The inserted nodes are erased afterwards and the sets are checked equal to
+/// their pre-test contents. Test-side counters per scenario log the habitats with a non-empty neighbour
+/// union, the de-duplicated overlap, and how many neighbour animals pass the home-habitat gate
+/// (`home == 0 || home == habitat`) versus are filtered by it.
+pub(crate) fn run_scenario_goal_eval06_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_erase, rb_set_insert, walk_neighbor_tree};
+    use openzt_detour::generated::ztanimal::GET_HABITAT_RATING as ZTANIMAL_GET_HABITAT_RATING;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let test_name = "ZTHABITAT_SCENARIO_GOAL_EVAL06_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    let animals_of = |habitat_ptr: u32| unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_all_animals(false).collect::<Vec<u32>>();
+    let all_animals: Vec<u32> = habitat_ptrs.iter().flat_map(|&h| animals_of(h)).collect();
+    if all_animals.is_empty() {
+        return finish_test(test_name, vec!["no live animals found".to_string()], failure_log);
+    }
+    let animal_home = |animal: u32| unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(0x004161da)(animal) };
+    let neighbor_keys = |habitat_ptr: u32, set_offset: u32| -> BTreeSet<u32> {
+        walk_neighbor_tree(get_from_memory::<u32>(habitat_ptr + set_offset)).map(|node| get_from_memory::<u32>(node + 0x10)).collect()
+    };
+    let snapshot = || -> BTreeMap<(u32, u32), BTreeSet<u32>> {
+        habitat_ptrs.iter().flat_map(|&h| [0x8u32, 0x14].map(|off| ((h, off), neighbor_keys(h, off)))).collect()
+    };
+
+    let type_field_offsets = [0u32, 0x1e4, 0x1e8, 0x1ec, 0x1f4, 0x1f8, 0x1f0];
+    let mut values_per_kind: Vec<Vec<i32>> = Vec::new();
+    for kind in 0..=7usize {
+        let mut values: Vec<i32> = vec![i32::MIN + 1];
+        if let Some(&offset) = type_field_offsets.get(kind).filter(|_| kind != 0) {
+            for &animal in all_animals.iter().take(40) {
+                let entity_type: u32 = get_from_memory(animal + 0x128);
+                if entity_type != 0 {
+                    let value: i32 = get_from_memory(entity_type + offset);
+                    if !values.contains(&value) {
+                        values.push(value);
+                    }
+                }
+            }
+        }
+        values_per_kind.push(values);
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    let before = snapshot();
+
+    // Edges to add per scenario: (habitat, set offset, neighbour).
+    let n = habitat_ptrs.len();
+    let mut scenarios: Vec<(&str, Vec<(u32, u32, u32)>)> = vec![("live", Vec::new())];
+    for (name, pattern) in [("amphibious-all", 0u8), ("show-all", 1), ("both-all", 2), ("mixed-overlap", 3)] {
+        let mut edges = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                let (h, o) = (habitat_ptrs[i], habitat_ptrs[j]);
+                let (amph, show) = match pattern {
+                    0 => (true, false),
+                    1 => (false, true),
+                    2 => (true, true),
+                    _ => match (i + j) % 3 {
+                        0 => (true, false),
+                        1 => (false, true),
+                        _ => (true, true),
+                    },
+                };
+                if amph {
+                    edges.push((h, 0x8, o));
+                }
+                if show {
+                    edges.push((h, 0x14, o));
+                }
+            }
+        }
+        scenarios.push((name, edges));
+    }
+
+    let zero_goal: &'static mut [u32; 0x10] = Box::leak(Box::new([0u32; 0x10]));
+    let poison_goal: &'static mut [u32; 0x10] = Box::leak(Box::new([0xA5A5_A5A5u32; 0x10]));
+    let (zero, poison) = (zero_goal.as_ptr() as u32, poison_goal.as_ptr() as u32);
+
+    let (mut total_calls, mut total_nonzero) = (0u32, 0u32);
+    let mut scenario_notes: Vec<String> = Vec::new();
+    for (scenario, edges) in &scenarios {
+        let mut inserted: Vec<(u32, u32)> = Vec::new();
+        for &(habitat_ptr, set_offset, neighbor) in edges {
+            if rb_set_insert(habitat_ptr + set_offset, neighbor) {
+                inserted.push((habitat_ptr + set_offset, neighbor));
+            }
+        }
+
+        // Test-side coverage for this scenario's neighbour structure.
+        let (mut nonempty_unions, mut overlap, mut eligible, mut filtered, mut dedupe_sensitive) = (0u32, 0u32, 0u32, 0u32, 0u32);
+        let mut ratings: BTreeSet<i32> = BTreeSet::new();
+        for &habitat_ptr in &habitat_ptrs {
+            let amphibious = neighbor_keys(habitat_ptr, 0x8);
+            let show = neighbor_keys(habitat_ptr, 0x14);
+            overlap += amphibious.intersection(&show).count() as u32;
+            let union: BTreeSet<u32> = amphibious.union(&show).copied().collect();
+            nonempty_unions += !union.is_empty() as u32;
+            for &neighbor in &union {
+                for animal in animals_of(neighbor) {
+                    let home = animal_home(animal);
+                    if home == 0 || home == habitat_ptr {
+                        eligible += 1;
+                    } else {
+                        filtered += 1;
+                    }
+                }
+            }
+            for animal in animals_of(habitat_ptr).into_iter().chain(union.iter().flat_map(|&nb| animals_of(nb))) {
+                ratings.insert(unsafe { ZTANIMAL_GET_HABITAT_RATING.original()(animal as *const u32, habitat_ptr as *const u32) });
+            }
+            // Would a missing de-duplication change this habitat's goal-free average? Average of the
+            // home-gated animals with the union counted once vs with overlapping neighbours counted twice.
+            let average = |neighbors: Vec<u32>| -> Option<i32> {
+                let (mut count, mut sum) = (0i32, 0i32);
+                for animal in animals_of(habitat_ptr).into_iter().chain(neighbors.into_iter().flat_map(&animals_of)) {
+                    let home = animal_home(animal);
+                    if home == 0 || home == habitat_ptr {
+                        count += 1;
+                        sum += unsafe { ZTANIMAL_GET_HABITAT_RATING.original()(animal as *const u32, habitat_ptr as *const u32) };
+                    }
+                }
+                (count > 0).then(|| sum / count)
+            };
+            let duplicated: Vec<u32> = amphibious.iter().chain(show.iter()).copied().collect();
+            dedupe_sensitive += (average(union.iter().copied().collect()) != average(duplicated)) as u32;
+        }
+        let mut thresholds: BTreeSet<i32> = [i32::MIN, -1, 0, 25, 50, 75, 100, i32::MAX].into_iter().collect();
+        for &rating in &ratings {
+            thresholds.extend([rating.saturating_sub(1), rating, rating.saturating_add(1)]);
+        }
+        // Where the neighbour sets overlap, a duplicated neighbour shifts a habitat's average by less than
+        // one rating step, so land a threshold on every integer in the live rating range: that is what
+        // makes a missing de-duplication change some call's result.
+        let dense = scenario.ends_with("overlap") || *scenario == "both-all";
+        if dense && let (Some(&low), Some(&high)) = (ratings.first(), ratings.last()) {
+            thresholds.extend(low.saturating_sub(1)..=high.saturating_add(1));
+        }
+        let count_thresholds: &[i32] = if dense { &[1, 2, 3] } else { &[i32::MIN, 0, 1, 2, 3, 100] };
+
+        let (mut calls, mut nonzero) = (0u32, 0u32);
+        for kind in 0..=7i32 {
+            for &value in &values_per_kind[kind as usize] {
+                for &rating_threshold in &thresholds {
+                    for &count_threshold in count_thresholds {
+                        for goal in [zero, poison] {
+                            save_to_memory::<i32>(goal + 0x10, kind);
+                            save_to_memory::<i32>(goal + 0x18, rating_threshold);
+                            save_to_memory::<i32>(goal + 0x1c, count_threshold);
+                            save_to_memory::<i32>(goal + 0x20, value);
+                        }
+                        let real_zero = hooks_zthabitatmgr::scenario_goal_eval06_real(zero as i32);
+                        let real_poison = hooks_zthabitatmgr::scenario_goal_eval06_real(poison as i32);
+                        let port = ZTHabitat::scenario_goal_eval06(poison);
+                        if real_zero != port || real_poison != port {
+                            failures.push(format!(
+                                "{scenario}: kind {kind} value {value} rating>={rating_threshold} habitats>={count_threshold}: real(zero)={real_zero:#x} real(poison)={real_poison:#x} port={port:#x}"
+                            ));
+                        }
+                        calls += 1;
+                        nonzero += (real_zero != 0) as u32;
+                    }
+                }
+            }
+        }
+        total_calls += calls;
+        total_nonzero += nonzero;
+        scenario_notes.push(format!(
+            "{scenario}: {calls} calls/{nonzero} non-zero, {nonempty_unions} non-empty unions, {overlap} overlap, {eligible} eligible/{filtered} filtered neighbour animals, {dedupe_sensitive} habitats whose average a missing de-duplication would change"
+        ));
+
+        for (container, neighbor) in inserted {
+            rb_set_erase(container, neighbor);
+        }
+    }
+
+    if snapshot() != before {
+        failures.push("neighbour sets were not restored to their pre-test contents".to_string());
+    }
+    if n >= 2 {
+        // A scenario that is supposed to overlap the two sets must have, or the union's de-duplication
+        // went unexercised.
+        if !scenario_notes.iter().any(|note| note.starts_with("both-all") && !note.contains(" 0 overlap")) {
+            failures.push("both-all scenario produced no overlapping neighbours".to_string());
+        }
+    }
+    let summary = format!("{} (calls: {}, non-zero: {}; {})", test_name, total_calls, total_nonzero, scenario_notes.join("; "));
     finish_test(&summary, failures, failure_log)
 }
 
