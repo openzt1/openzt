@@ -10325,10 +10325,28 @@ fn recalculate_characteristics_snapshot(ptr: u32) -> Vec<(String, u32)> {
     out
 }
 
+/// Sets every terrain-category condition bit (21-56, both the low `+0x298` and critical `+0x2a0` words) on
+/// every animal of the habitat, so a recalculation that only ever sets those bits - instead of clearing
+/// each category first, as vanilla does - leaves them behind and the real-vs-port diff catches it.
+fn seed_stale_category_condition_bits(ptr: u32) {
+    const CATEGORY_MASK: u64 = ((1u64 << 36) - 1) << 21;
+    let all_begin = get_from_memory::<u32>(ptr + 0x6c);
+    let all_end = get_from_memory::<u32>(ptr + 0x70);
+    for animal in (all_begin..all_end).step_by(4).map(get_from_memory::<u32>) {
+        for word in [0x298_u32, 0x2a0] {
+            let value = get_from_memory::<u32>(animal + word) as u64 | (get_from_memory::<u32>(animal + word + 4) as u64) << 32;
+            let seeded = value | CATEGORY_MASK;
+            save_to_memory::<u32>(animal + word, seeded as u32);
+            save_to_memory::<u32>(animal + word + 4, (seeded >> 32) as u32);
+        }
+    }
+}
+
 /// `ZTHABITAT_RECALCULATE_CHARACTERISTICS_MATCHES_REAL_LIVE`: over every real habitat, runs real vanilla
 /// (`recalculate_characteristics_real`) and the port from the same dirty state and diffs
-/// [`recalculate_characteristics_snapshot`]. `unknown_flag_0x30` is reset before each run since it is both
-/// an output and `checkEscapability`'s rate-limit input.
+/// [`recalculate_characteristics_snapshot`], with every animal's terrain-category condition bits seeded
+/// before each run ([`seed_stale_category_condition_bits`]). `unknown_flag_0x30` is reset before each run
+/// since it is both an output and `checkEscapability`'s rate-limit input.
 pub(crate) fn run_habitat_recalculate_characteristics_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTHABITAT_RECALCULATE_CHARACTERISTICS_MATCHES_REAL_LIVE";
     let habitat_mgr = globals().zthabitatmgr();
@@ -10343,11 +10361,13 @@ pub(crate) fn run_habitat_recalculate_characteristics_matches_real_live_test(fai
         checked += 1;
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
 
+        seed_stale_category_condition_bits(ptr);
         save_to_memory::<u8>(ptr + 0x30, 0);
         save_to_memory::<u8>(ptr + 0x2d, 1);
         hooks_zthabitatmgr::recalculate_characteristics_real(ptr as *const u32);
         let real = recalculate_characteristics_snapshot(ptr);
 
+        seed_stale_category_condition_bits(ptr);
         save_to_memory::<u8>(ptr + 0x30, 0);
         save_to_memory::<u8>(ptr + 0x2d, 1);
         habitat.recalculate_characteristics();
@@ -11211,6 +11231,78 @@ pub(crate) fn run_needs_service_matches_real_live_test(failure_log: &mut Option<
         true_results,
         seeded
     );
+    finish_test(&summary, failures, failure_log)
+}
+
+/// `ZTHABITAT_GET_NUM_ANIMALS_BY_SPECIES_MATCHES_REAL_LIVE`: real vanilla (vanilla-only mode) vs port for
+/// `getNumAnimals(species_id, include_neighbors)` over every live habitat x (each species id present plus
+/// one absent id) x both flags, with empty amphibious sets seeded with every other habitat for a second
+/// pass. The absent-id call default-inserts a record, so a repeat pass over the same ids must leave the
+/// cache's size (`+0x14c`) unchanged.
+pub(crate) fn run_get_num_animals_by_species_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{rb_set_insert, rb_tree_clear};
+    let test_name = "ZTHABITAT_GET_NUM_ANIMALS_BY_SPECIES_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+
+    let mut failures: Vec<String> = Vec::new();
+    let (mut calls, mut nonzero) = (0u32, 0u32);
+    let mut compare = |habitat_ptr: u32, species_id: i32, include_neighbors: bool, context: &str, failures: &mut Vec<String>| {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let real = hooks_zthabitatmgr::get_num_animals_by_species_real(habitat_ptr as *const u32, species_id, include_neighbors);
+        let port = habitat.get_num_animals_by_species(species_id, include_neighbors);
+        if real != port {
+            failures.push(format!("{context} habitat {habitat_ptr:#010x} species {species_id} neighbors={include_neighbors}: real {real} != port {port}"));
+        }
+        calls += 1;
+        nonzero += (real != 0) as u32;
+    };
+
+    let species_for = |habitat_ptr: u32| -> Vec<i32> {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let mut ids: Vec<i32> = Vec::new();
+        for animal_ptr in habitat.get_all_animals(false) {
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let id: i32 = get_from_memory(animal_type_ptr + 0x1ec);
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids.push(i32::MAX);
+        ids
+    };
+    let cache_size = |habitat_ptr: u32| -> u32 { get_from_memory(habitat_ptr + 0x14c) };
+
+    for &habitat_ptr in &habitat_ptrs {
+        for species_id in species_for(habitat_ptr) {
+            for include_neighbors in [false, true] {
+                compare(habitat_ptr, species_id, include_neighbors, "live", &mut failures);
+            }
+        }
+        let size_a = cache_size(habitat_ptr);
+        for species_id in species_for(habitat_ptr) {
+            compare(habitat_ptr, species_id, false, "repeat", &mut failures);
+        }
+        if cache_size(habitat_ptr) != size_a {
+            failures.push(format!("habitat {habitat_ptr:#010x}: cache size changed on repeat lookups ({size_a} -> {})", cache_size(habitat_ptr)));
+        }
+    }
+
+    let mut seeded = 0u32;
+    for &habitat_ptr in &habitat_ptrs {
+        if get_from_memory::<u32>(habitat_ptr + 0xc) != 0 {
+            continue;
+        }
+        for &other in habitat_ptrs.iter().filter(|&&p| p != habitat_ptr) {
+            rb_set_insert(habitat_ptr + 0x8, other);
+        }
+        seeded += 1;
+        for species_id in species_for(habitat_ptr) {
+            compare(habitat_ptr, species_id, true, "seeded", &mut failures);
+        }
+        rb_tree_clear(habitat_ptr + 0x8, 0x14);
+    }
+    let summary = format!("{} (habitats: {}, calls: {}, nonzero results: {}, seeded habitats: {})", test_name, habitat_ptrs.len(), calls, nonzero, seeded);
     finish_test(&summary, failures, failure_log)
 }
 

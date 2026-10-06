@@ -1073,6 +1073,29 @@ impl ZTHabitat {
         total
     }
 
+    /// Ports `ZTHabitat::getNumAnimals(species_id, include_neighbors)` (`ZTHabitat_getNumAnimals_1.c`,
+    /// `GET_NUM_ANIMALS_1`, `0x004388d7`): the per-species occurrence count, i.e. the first field
+    /// (`occurrence_count`) of the species's `ZTHabitatSuitabilityRecord` in the `+0x148` cache, lazily
+    /// recalculating first. A missing record is default-inserted, as vanilla does, through vanilla's own
+    /// `map::operator[]` so the node is vanilla-allocated. With `include_neighbors`, adds the same lookup
+    /// (with `false`) for every amphibious neighbour.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference; every neighbour in the tree is live.
+    pub fn get_num_animals_by_species(&self, species_id: i32, include_neighbors: bool) -> i32 {
+        if self.characteristics_dirty != 0 {
+            self.recalculate_characteristics();
+        }
+        let record_ptr = map_int_habitatsuitability_find_or_insert(self as *const Self as u32 + 0x148, species_id);
+        let mut total: i32 = get_from_memory(record_ptr);
+        if include_neighbors {
+            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
+                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_animals_by_species(species_id, false);
+            }
+        }
+        total
+    }
+
     /// Ports `ZTHabitat::getNumAdultAnimals` (`ZTHabitat_getNumAdultAnimals_0.c`, `generated.rs`'s
     /// `GET_NUM_ADULT_ANIMALS_0`): reaches the animals through the same `getAllAnimals(this, '\0')` call
     /// real vanilla makes - here [`Self::get_all_animals`]`(false)`, the same
@@ -3776,12 +3799,17 @@ impl ZTHabitat {
             if get_from_memory::<u8>(animal_ptr + 0x395) != 0 {
                 continue;
             }
-            let is_animal_type = unsafe { entity_type_matches(animal_ptr, RVA_ANIMAL_TYPE_CHECK) };
+            // `ZTBuilding::isAnimalType` (`0x00446c9a`) is not a type test: it returns the animal type's own
+            // vtable `+0xcc` predicate, so an animal whose predicate is false is processed even in a tank it
+            // does not call home.
+            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+            let is_animal_type = animal_type_ptr != 0
+                && unsafe { type_check(animal_type_ptr, RVA_ANIMAL_TYPE_CHECK) }
+                && unsafe { call_vtable_slot_noargs_ret_bool(animal_type_ptr, 0xcc) };
             if is_tank && is_animal_type && unsafe { animal_home_habitat(animal_ptr) } != self_addr {
                 continue;
             }
 
-            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
             let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, get_from_memory(animal_type_ptr + 0x1ec));
 
             if is_animal_type && is_tank {
@@ -4714,7 +4742,8 @@ impl ZTHabitat {
     ///   - bit 63: `record.critical_water` -> low only (no critical-word counterpart - `criticalWater`
     ///     is itself already a critical-severity flag).
     /// - Per-category loop (bits 21-56, 18 categories x 2 bits each = "too low" bit at `21+2i`, "too
-    ///   high" bit at `22+2i`; entirely skipped when [`Self::is_tank`] - confirmed via two identical
+    ///   high" bit at `22+2i`; both bits are cleared in both words at the top of every iteration, tank
+    ///   or not, and the set/compute arms are skipped when [`Self::is_tank`] - confirmed via two identical
     ///   `is_tank()`-equivalent vtable-`0x20` dispatches gating both branches): for each category `i` in
     ///   `0..18`, reads a per-species config value via `BFCategory::getValue(entity_type+0x2d8, i)` (real
     ///   vanilla's own THIRD distinct `getCategoryList`-shaped offset on `ZTAnimalType`, alongside the
@@ -4808,38 +4837,46 @@ impl ZTHabitat {
         apply_bit(&mut low, 11, !vtable_28_low);
         apply_bit(&mut critical, 11, !vtable_28_critical);
 
-        if !self.is_tank() {
-            let category_list_ptr = type_arg + 0x2d8;
-            let denom = (owned_tile_total + record.fresh_water_tile_adjustment + record.salt_water_tile_adjustment) as f32;
+        let is_tank = self.is_tank();
+        let category_list_ptr = type_arg + 0x2d8;
+        let denom = (owned_tile_total + record.fresh_water_tile_adjustment + record.salt_water_tile_adjustment) as f32;
 
-            for i in 0..18i32 {
-                let bit_lo = (21 + 2 * i) as u32;
-                let bit_hi = (22 + 2 * i) as u32;
-                let config_value = unsafe { BFCATEGORY_GET_VALUE.original()(category_list_ptr as *const u32, i) };
+        for i in 0..18i32 {
+            let bit_lo = (21 + 2 * i) as u32;
+            let bit_hi = (22 + 2 * i) as u32;
+            // Vanilla clears both bits of every category, in both words, at the top of each iteration -
+            // including for tanks - so a category that is back in range stops reporting.
+            for bit in [bit_lo, bit_hi] {
+                apply_bit(&mut low, bit, false);
+                apply_bit(&mut critical, bit, false);
+            }
+            if is_tank {
+                continue;
+            }
+            let config_value = unsafe { BFCATEGORY_GET_VALUE.original()(category_list_ptr as *const u32, i) };
 
-                if config_value < 0 {
-                    let count = get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4);
-                    if count > 0 {
-                        apply_bit(&mut low, bit_hi, true);
-                    }
-                } else {
-                    let count = match i {
-                        9 => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4) + record.fresh_water_tile_adjustment,
-                        10 => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4) + record.salt_water_tile_adjustment,
-                        _ => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4),
-                    };
-                    let pct = (count as f32 * 100.0) / denom;
-                    let config = config_value as f32;
+            if config_value < 0 {
+                let count = get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4);
+                if count > 0 {
+                    apply_bit(&mut low, bit_hi, true);
+                }
+            } else {
+                let count = match i {
+                    9 => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4) + record.fresh_water_tile_adjustment,
+                    10 => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4) + record.salt_water_tile_adjustment,
+                    _ => get_from_memory::<i32>(terrain_histogram_ptr + (i as u32) * 4),
+                };
+                let pct = (count as f32 * 100.0) / denom;
+                let config = config_value as f32;
 
-                    if config < pct - 3.0 {
-                        apply_bit(&mut low, bit_hi, true);
-                    } else if pct + 3.0 < config {
-                        apply_bit(&mut low, bit_lo, true);
-                    }
-                    if (pct - config).abs() > 6.0 {
-                        apply_bit(&mut critical, bit_lo, true);
-                        apply_bit(&mut critical, bit_hi, true);
-                    }
+                if config < pct - 3.0 {
+                    apply_bit(&mut low, bit_hi, true);
+                } else if pct + 3.0 < config {
+                    apply_bit(&mut low, bit_lo, true);
+                }
+                if (pct - config).abs() > 6.0 {
+                    apply_bit(&mut critical, bit_lo, true);
+                    apply_bit(&mut critical, bit_hi, true);
                 }
             }
         }

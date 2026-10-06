@@ -59,7 +59,7 @@ pub mod hooks_zthabitatmgr {
             GET_NEAR_CLEAR_TILE, GET_NEAREST_CLEAR_TILE, GET_NEAREST_CLEAR_WATER_TILE,
             GET_POPULARITY, GET_SHOW_INFO_ID, HAS_KEEPER_ASSIGNED, IS_SHOW_STOPPED, LISTEN,
             SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT, UPDATE, BLOCK_SERVICE, RECALCULATE_CHARACTERISTICS,
-            GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1,
+            GET_NUM_ADULT_ANIMALS_0, GET_NUM_ADULT_ANIMALS_1, GET_NUM_ANIMALS_1,
             RECALCULATE_VIEWING_AREAS, ADD_VIEWING_AREA, REMOVE_VIEWING_AREA, REMOVE_FROM_ALL_VAS, RECREATE_OAS, CREATE_EDGE_PAIRS,
             ADD_LAND_TILES, ADD_WATER_TILES, ADD_UNDERWATER_TILES,
             GET_LAND_TILES, GET_WATER_TILES, GET_UNDERWATER_TILES, GET_TILES_COPY,
@@ -250,6 +250,29 @@ pub mod hooks_zthabitatmgr {
     #[detour(GET_NUM_ANIMALS_0)]
     unsafe extern "thiscall" fn get_num_animals(this: *const u32, include_neighbors: bool) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_animals(include_neighbors)
+    }
+
+    #[detour(GET_NUM_ANIMALS_1)]
+    unsafe extern "thiscall" fn get_num_animals_by_species(this: *const u32, species_id: i32, include_neighbors: bool) -> i32 {
+        #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+        if GET_NUM_ANIMALS_BY_SPECIES_REAL_MODE.with(|m| m.get()) {
+            return unsafe { GET_NUM_ANIMALS_1_DETOUR.call(this, species_id, include_neighbors) };
+        }
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_animals_by_species(species_id, include_neighbors)
+    }
+
+    // While set, `get_num_animals_by_species` runs vanilla's own body so its neighbour recursion stays vanilla.
+    #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+    thread_local! {
+        static GET_NUM_ANIMALS_BY_SPECIES_REAL_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
+    pub(crate) fn get_num_animals_by_species_real(this: *const u32, species_id: i32, include_neighbors: bool) -> i32 {
+        let previous = GET_NUM_ANIMALS_BY_SPECIES_REAL_MODE.with(|m| m.replace(true));
+        let result = unsafe { GET_NUM_ANIMALS_1_DETOUR.call(this, species_id, include_neighbors) };
+        GET_NUM_ANIMALS_BY_SPECIES_REAL_MODE.with(|m| m.set(previous));
+        result
     }
 
     /// Same byte-only `subhabs` read as [`get_num_animals`] above (`ZTHabitat_getSize.asm`); the

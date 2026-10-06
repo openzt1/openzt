@@ -710,6 +710,10 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_needs_service_matches_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_ANIMALS_BY_SPECIES_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_get_num_animals_by_species_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_GET_RANDOM_HUNGRY_ANIMAL_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_get_random_hungry_animal_matches_real_live_test,
             },
