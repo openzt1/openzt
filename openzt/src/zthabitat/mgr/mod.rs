@@ -72,6 +72,9 @@ pub mod hooks_zthabitatmgr {
             PATH_PLACED as ZTHABITAT_PATH_PLACED,
             GET_NEEDY_NESTED_TANK as ZTHABITAT_GET_NEEDY_NESTED_TANK,
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
+            GET_TERRAIN_SUITABILITY, GET_OBJECT_SUITABILITY, GET_FOLIAGE_DENSITY_SUITABILITY, GET_ROCK_DENSITY_SUITABILITY,
+            GET_ELEVATION_SUITABILITY, GET_SHELTER_SUITABILITY, GET_TOY_SUITABILITY, GET_TANK_DEPTH_SUITABILITY,
+            GET_TANK_CLEANLINESS_SUITABILITY, GET_TANK_SALINITY_SUITABILITY, GET_COMPATIBLE_ANIMAL_RATING,
         },
         zthabitatmgr::{
             DO_TANK_CHECK, ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES,
@@ -563,6 +566,96 @@ pub mod hooks_zthabitatmgr {
     #[detour(GET_NEAREST_DIRT_PILE)]
     unsafe extern "thiscall" fn get_nearest_dirt_pile(this: *const u32, keeper: *const u32, check_can_see: bool) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_nearest_dirt_pile(keeper as u32, check_can_see) as i32
+    }
+
+    #[detour(GET_TERRAIN_SUITABILITY)]
+    unsafe extern "thiscall" fn get_terrain_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_terrain_suitability(species)
+    }
+
+    #[detour(GET_OBJECT_SUITABILITY)]
+    unsafe extern "thiscall" fn get_object_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_object_suitability(species)
+    }
+
+    #[detour(GET_FOLIAGE_DENSITY_SUITABILITY)]
+    unsafe extern "thiscall" fn get_foliage_density_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_foliage_density_suitability(species)
+    }
+
+    #[detour(GET_ROCK_DENSITY_SUITABILITY)]
+    unsafe extern "thiscall" fn get_rock_density_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_rock_density_suitability(species)
+    }
+
+    #[detour(GET_ELEVATION_SUITABILITY)]
+    unsafe extern "thiscall" fn get_elevation_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_elevation_suitability(species)
+    }
+
+    #[detour(GET_SHELTER_SUITABILITY)]
+    unsafe extern "thiscall" fn get_shelter_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_shelter_suitability(species)
+    }
+
+    #[detour(GET_TOY_SUITABILITY)]
+    unsafe extern "thiscall" fn get_toy_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_toy_suitability(species)
+    }
+
+    #[detour(GET_TANK_DEPTH_SUITABILITY)]
+    unsafe extern "thiscall" fn get_tank_depth_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_tank_depth_suitability(species)
+    }
+
+    #[detour(GET_TANK_CLEANLINESS_SUITABILITY)]
+    unsafe extern "thiscall" fn get_tank_cleanliness_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_tank_cleanliness_suitability(species)
+    }
+
+    #[detour(GET_TANK_SALINITY_SUITABILITY)]
+    unsafe extern "thiscall" fn get_tank_salinity_suitability(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_tank_salinity_suitability(species)
+    }
+
+    #[detour(GET_COMPATIBLE_ANIMAL_RATING)]
+    unsafe extern "thiscall" fn get_compatible_animal_rating(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_compatible_animal_rating(species)
+    }
+
+    #[detour(GET_SPECIES_RATING)]
+    unsafe extern "thiscall" fn get_species_rating(this: *const u32, species: i32) -> f32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_species_rating(species)
+    }
+
+    /// Release-safe path back to real vanilla `getSpeciesRating` for the live comparison test - see
+    /// [`get_size_real`] for why `.original()` cannot be used.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn species_rating_real(this: *const u32, species: i32) -> f32 {
+        unsafe { GET_SPECIES_RATING_DETOUR.call(this, species) }
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test, selecting one of the eleven
+    /// getters by index (terrain, object, foliage, rock, elevation, shelter, toy, tank depth, tank
+    /// cleanliness, tank salinity, compatible animal rating) - see [`get_size_real`] for why `.original()` cannot be used.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn suitability_getter_real(index: usize, this: *const u32, species: i32) -> f32 {
+        unsafe {
+            match index {
+                0 => GET_TERRAIN_SUITABILITY_DETOUR.call(this, species),
+                1 => GET_OBJECT_SUITABILITY_DETOUR.call(this, species),
+                2 => GET_FOLIAGE_DENSITY_SUITABILITY_DETOUR.call(this, species),
+                3 => GET_ROCK_DENSITY_SUITABILITY_DETOUR.call(this, species),
+                4 => GET_ELEVATION_SUITABILITY_DETOUR.call(this, species),
+                5 => GET_SHELTER_SUITABILITY_DETOUR.call(this, species),
+                6 => GET_TOY_SUITABILITY_DETOUR.call(this, species),
+                7 => GET_TANK_DEPTH_SUITABILITY_DETOUR.call(this, species),
+                8 => GET_TANK_CLEANLINESS_SUITABILITY_DETOUR.call(this, species),
+                9 => GET_TANK_SALINITY_SUITABILITY_DETOUR.call(this, species),
+                10 => GET_COMPATIBLE_ANIMAL_RATING_DETOUR.call(this, species),
+                _ => unreachable!("suitability getter index out of range"),
+            }
+        }
     }
 
     #[detour(NEEDS_SHOW_KEEPER)]

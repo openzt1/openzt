@@ -139,6 +139,7 @@ impl ZTShowScriptItemRaw {
 #[derive(Debug, Clone, Copy)]
 pub struct ItemSnapshot {
     pub id: u16,
+    /// The item's `+0xc` field (the trick kind vanilla compares against `0`/`1`/`3`), not its `+8` unit-type id.
     pub item_type: u32,
     pub satisfaction: u32,
     pub satisfaction_mirror: u32,
@@ -146,8 +147,22 @@ pub struct ItemSnapshot {
 
 pub(crate) const ITEM_BUFFER_POOL_SIZE: usize = 4;
 
+/// Backing bytes for the six string fields of one pooled [`ZTShowScriptItemRaw`]. Vanilla callers of
+/// `getItem`/`getItemByTrickID` read the strings out of the returned item (e.g. `ZTAnimal::doBehaviorTrick`
+/// builds the trick's behaviour-script call from the `name` at `+0x10`) but never free them, so they stay
+/// Rust-owned and are replaced the next time the slot is written.
+type ItemStringStorage = [Vec<u8>; 6];
+
+fn point_at_bytes(string: &mut ZTBufferString, bytes: &[u8], storage: &mut Vec<u8>) {
+    storage.clear();
+    storage.extend_from_slice(bytes);
+    storage.push(0);
+    let start = storage.as_ptr() as u32;
+    *string = ZTBufferString::from_raw_parts(start, start + bytes.len() as u32, start + storage.len() as u32);
+}
+
 pub(crate) struct ItemBufferPool {
-    slots: RefCell<Vec<*mut ZTShowScriptItemRaw>>,
+    slots: RefCell<Vec<(*mut ZTShowScriptItemRaw, ItemStringStorage)>>,
     cursor: Cell<usize>,
 }
 
@@ -159,12 +174,22 @@ impl ItemBufferPool {
     pub(crate) fn write(&self, item: &ShowScriptItem) -> u32 {
         let mut slots = self.slots.borrow_mut();
         if slots.is_empty() {
-            slots.extend((0..ITEM_BUFFER_POOL_SIZE).map(|_| Box::leak(Box::new(ZTShowScriptItemRaw::from_owned(item))) as *mut ZTShowScriptItemRaw));
+            slots.extend((0..ITEM_BUFFER_POOL_SIZE).map(|_| {
+                (Box::leak(Box::new(ZTShowScriptItemRaw::from_owned(item))) as *mut ZTShowScriptItemRaw, Default::default())
+            }));
         }
         let i = self.cursor.get();
         self.cursor.set((i + 1) % ITEM_BUFFER_POOL_SIZE);
-        unsafe { *slots[i] = ZTShowScriptItemRaw::from_owned(item) };
-        slots[i] as u32
+        let (raw_ptr, storage) = &mut slots[i];
+        let raw = unsafe { &mut **raw_ptr };
+        *raw = ZTShowScriptItemRaw::from_owned(item);
+        point_at_bytes(&mut raw.name, item.name.as_bytes(), &mut storage[0]);
+        point_at_bytes(&mut raw.anim, item.anim.as_bytes(), &mut storage[1]);
+        point_at_bytes(&mut raw.keeper_pre_trick, item.keeper_pre_trick.as_bytes(), &mut storage[2]);
+        point_at_bytes(&mut raw.keeper_post_trick, item.keeper_post_trick.as_bytes(), &mut storage[3]);
+        point_at_bytes(&mut raw.normal_icon, item.normal_icon.as_bytes(), &mut storage[4]);
+        point_at_bytes(&mut raw.grayed_icon, item.grayed_icon.as_bytes(), &mut storage[5]);
+        *raw_ptr as u32
     }
 }
 

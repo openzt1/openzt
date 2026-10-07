@@ -14,7 +14,6 @@ use openzt_detour::{
         },
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
-        zthabitat::GET_SPECIES_RATING,
     },
 };
 use std::{
@@ -62,25 +61,6 @@ pub const RVA_STAFF_TYPE_CHECK_ARG: u32 = 0x0023_8710;
 /// independently confirmed against any other reader, since nothing else in this codebase references this
 /// address yet. RVA = `0x00638588 - 0x400000`.
 pub const RVA_GAME_PAUSED_FLAG: u32 = 0x0023_8588;
-
-/// `ZTHabitat::getSpeciesRating`'s real signature, confirmed by reading `ZTHabitat_getSpeciesRating.asm`
-/// directly rather than trusting the `.c` decompile or `generated.rs`'s own `GET_SPECIES_RATING` entry:
-/// the prologue loads the function's *only* stack argument (the species catalog id) into `EDI` right
-/// after the leading `isTank` vtable dispatch, then reuses `EDI` across a long chain of `PUSH EDI` calls -
-/// which is exactly what the `.c` decompile's spurious `unaff_EDI` third parameter is (Ghidra mistaking
-/// this internal register reuse for a second incoming argument). The function ends `POP EDI; POP ESI;
-/// RET 0x4` - one 4-byte stack argument, no `FSTP` before the return, so the accumulated `FADD` chain's
-/// final value is left on `ST0` as the real return. Real signature:
-/// `unsafe extern "thiscall" fn(*const u32, i32) -> f32` - not `generated.rs`'s declared
-/// `fn(*const u32, *const f32, i32) -> *const f32`, which is the same x87-return mistyping this codebase's
-/// own `ZooStatus::getStatus`/`GET_STATUS` entry already hit (see `zoostatus.rs`), just not yet
-/// regenerated for this entry. Per `CLAUDE.md`'s standing rule this is a call-site transmute to the real
-/// signature, not a hand-edit of `generated.rs` itself - surface the real signature to whoever next runs
-/// the Ghidra/OOAnalyzer pass.
-pub unsafe fn get_species_rating(habitat_ptr: u32, species_key: i32) -> f32 {
-    let real_fn: unsafe extern "thiscall" fn(*const u32, i32) -> f32 = unsafe { mem::transmute(GET_SPECIES_RATING.address) };
-    unsafe { real_fn(habitat_ptr as *const u32, species_key) }
-}
 
 /// One entry of the species-rating cache `ZTHabitatMgr::terrainAboutToBeChanged`/`terrainChanged` share -
 /// see [`SPECIES_RATING_CACHE`]'s own doc comment.
@@ -857,85 +837,152 @@ pub const RVA_KEEPER_TYPE_CHECK_ARG: u32 = 0x0023_8760;
 /// `0x00638680 - 0x400000`.
 pub const RVA_BUILDING_TYPE_CHECK_ARG: u32 = 0x0023_8680;
 
-/// A `ZTHabitatSuitabilityRecord` (the real vanilla `msvc_std::map<int, ZTHabitatSuitabilityRecord>`'s
-/// per-key payload) is `0x70` bytes, confirmed via `msvc_std_mapint_habitatsuitability::TREE`'s own node
-/// allocation (`operator_new(0x84)`, tree node header `0x14` bytes, `0x84 - 0x14 = 0x70`). Field offsets
+/// Rust-owned storage for every `map<int, ZTHabitatSuitabilityRecord>` the habitat code uses: each live
+/// habitat's persistent species-suitability cache (handle = `habitat + 0x148`) and the function-local scratch
+/// maps `ZTHabitat::recalculateCharacteristics` and `additionalScenerySuitabilityChange` fill (handle = the
+/// caller's stack header address, registered by [`init_suitability_scratch_tree`]). The vanilla header at
+/// `habitat + 0x148` is never read or written after construction: it stays the empty sentinel vanilla's
+/// constructor made and `~ZTHabitat` frees, since no un-ported vanilla code reads the cache (see
+/// `plans/zthabitat-suitability-getters-plan.md` Stage 3).
+///
+/// Records are `Box`ed so an address returned by [`map_int_habitatsuitability_find_or_insert`] stays valid
+/// across later inserts into the same map, as a vanilla tree node did. A record is `0x70` bytes of plain
+/// data, zero-initialised exactly as `ZTHabitatSuitabilityRecord`'s vanilla constructor does.
+type SuitabilityRecord = Box<[u32; 0x1c]>;
+type SuitabilityMap = std::collections::BTreeMap<i32, SuitabilityRecord>;
+
+static SUITABILITY_MAPS: LazyLock<Mutex<HashMap<u32, SuitabilityMap>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn suitability_maps() -> MutexGuard<'static, HashMap<u32, SuitabilityMap>> {
+    SUITABILITY_MAPS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn clone_suitability_map(source: &SuitabilityMap) -> SuitabilityMap {
+    source.iter().map(|(&key, record)| (key, record.clone())).collect()
+}
+
+/// Test-only switch routing every suitability-map operation below to real vanilla `msvc_std::map<int,
+/// ZTHabitatSuitabilityRecord>` trees instead of the Rust store, so a live test can run real vanilla (whose
+/// own body builds and reads vanilla trees and calls back into our detours with vanilla map pointers) against
+/// the port. Only set through [`with_vanilla_suitability_maps`].
+#[cfg(feature = "reimplementation-tests")]
+static VANILLA_SUITABILITY_BACKEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(feature = "reimplementation-tests")]
+fn vanilla_backend() -> bool {
+    VANILLA_SUITABILITY_BACKEND.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(not(feature = "reimplementation-tests"))]
+const fn vanilla_backend() -> bool {
+    false
+}
+
+/// Runs `f` with the vanilla-tree backend active (see [`VANILLA_SUITABILITY_BACKEND`]). Maps created under it
+/// are vanilla-allocated and must be used and torn down under it too.
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) fn with_vanilla_suitability_maps<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            VANILLA_SUITABILITY_BACKEND.store(self.0, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let _restore = Restore(VANILLA_SUITABILITY_BACKEND.swap(true, std::sync::atomic::Ordering::Relaxed));
+    f()
+}
+
+/// Finds (or default-inserts) the record for `key` in the suitability map `map_ptr` (a habitat's `+0x148`
+/// cache or a scratch map from [`init_suitability_scratch_tree`]), returning the record's own address. A
+/// `ZTHabitatSuitabilityRecord` is `0x70` bytes, confirmed via `msvc_std_mapint_habitatsuitability::TREE`'s own
+/// node allocation (`operator_new(0x84)`, tree node header `0x14` bytes, `0x84 - 0x14 = 0x70`). Field offsets
 /// are read directly off `ZTHabitatSuitabilityRecord_ZTHabitatSuitabilityRecord.asm`'s own zero-init write
 /// sequence - one dword/byte-run write per instruction, in the exact address order written (`0x0, 0x4,
 /// 0x8, 0xc, 0x38, 0x10, 0x14, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30, 0x34, 0x3c, 0x40, 0x44, 0x48,
 /// 0x4c, 0x50, 0x54`, then a 22-byte flag pack at `0x58..0x6e`) - **not** assumed from the `.c`
-/// decompile's field-declaration order, which does not track true layout for a couple of these fields
-/// (its own `unk_0x28`/`unk_0x2c`/`unk_0x3c`/`unk_0x40`/`unk_0x44` names do match their real offsets,
-/// confirming this address-order reading is correct, but its `sum_category_tally` name is attached to the
-/// field really at `0x38`, not `0x10`).
-/// [`crate::zthabitat::habitat::ZTHabitat::additional_scenery_suitability_change`] only touches
-/// `+0x10` (running `f32` suitability score accumulator), `+0x14` (`i32` count of owned tiles with at
-/// least one matching, flagged scenery occupant) and `+0x1c` (`i32` count of matching scenery occupants
-/// whose own `+0x12b` flag byte is set) - read/written directly as raw offsets off
-/// [`map_int_habitatsuitability_find_or_insert`]'s returned record address, no dedicated struct needed.
+/// decompile's field-declaration order, which does not track true layout for a couple of these fields.
 ///
-/// Finds (or default-inserts) the record for `key` in the real vanilla
-/// `msvc_std::map<int, ZTHabitatSuitabilityRecord>` at `map_ptr`, returning the record's own address
-/// (`node+0x14`). Delegates the whole find-or-insert to real vanilla's own
-/// `msvc_std_mapint_habitatsuitability::OPERATOR_INDEX` (`map::operator[]`) rather than hand-rolling the
-/// manual lower-bound-walk-then-`INSERT_WRAPPER`-on-miss dance `ZTHabitat_additionalScenerySuitabilityChange.c`'s
-/// own body performs inline: a hand-rolled version of that dance crashed inside vanilla's own generic
-/// tree-insert helper (`FUN_00403103`, confirmed live via `crash-capture` - `cmp byte ptr [edx],0` on a
-/// null `edx`) on its very first real insert, despite the argument mapping matching the decompile
-/// byte-for-byte; `OPERATOR_INDEX` performs the identical `insert_wrapper(this, &out, 0, &{key,record})`
-/// sequence internally (confirmed via its own decompile) but is real vanilla's own single entry point for
-/// it, used throughout the game for countless other `map<K,V>::operator[]` call sites, so it carries far
-/// more real-world exercise than any hand assembly of the same steps.
+/// A persistent habitat handle with no entry yet is created empty, as vanilla's constructor leaves the cache
+/// empty. Under [`with_vanilla_suitability_maps`] this delegates to real vanilla's `map::operator[]`
+/// (`OPERATOR_INDEX`) instead; a hand-rolled lower-bound-walk-then-`INSERT_WRAPPER` crashed inside vanilla's
+/// generic tree insert, so vanilla's own single entry point is used.
 pub fn map_int_habitatsuitability_find_or_insert(map_ptr: u32, key: i32) -> u32 {
-    (unsafe { MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_INDEX.original()(map_ptr as *const i32, &key as *const i32) }) as u32
-}
-
-/// Constructs a real vanilla `msvc_std::map<int, ZTHabitatSuitabilityRecord>` header in place at
-/// `header_ptr` - the same function-local scratch tree `ZTHabitat::recalculateCharacteristics` builds as
-/// a stack local at the very top of its own body (`msvc_std::map<int_habitatsuitability>::Tree`,
-/// `generated.rs`'s `msvc_std_mapint_habitatsuitability::TREE`, live-decompiled to confirm the exact
-/// writes below). `header_ptr` needs at least 12 bytes (a `[u32; 4]`/16-byte caller-owned buffer is the
-/// established convention - see [`destroy_suitability_scratch_tree`]'s own caller); real vanilla itself
-/// keeps this as a stack local for the duration of a single `recalculateCharacteristics` call, so a
-/// Rust stack-local array works identically - the header itself is never touched by any other, un-ported
-/// vanilla code, only [`map_int_habitatsuitability_find_or_insert`]'s own node allocations (which go
-/// through real vanilla's `operator_new`/allocator) need to stay vanilla-shaped.
-///
-/// The real ctor's own body: allocates one sentinel tree node (`operator_new(0x84)`, matching
-/// `map_int_habitatsuitability_find_or_insert`'s own node-size derivation) whose `color`/`parent`/
-/// `left`/`right` fields are zeroed/self-referenced (an empty-tree sentinel, same shape as
-/// `amphibious_neighbors_head`'s own family), sets `header+0x0` (`_Myhead`) to that sentinel and
-/// `header+0x4` (`_Mysize`) to `0`, then copies its own second parameter (the comparator/allocator
-/// functor) into `header+0x8` - dead in practice, since `std::less<int>`/its allocator are both
-/// stateless; the ctor never reads its *third* parameter at all. Both extra arguments are passed as
-/// plain readable stack addresses here for that reason - their contents are never meaningfully used.
-pub fn init_suitability_scratch_tree(header_ptr: u32) {
-    let dummy_comparator: i32 = 0;
-    let dummy_allocator: i8 = 0;
-    unsafe {
-        MSVC_MAP_INT_HABITATSUITABILITY_TREE.original()(
-            header_ptr as *const i32,
-            &dummy_comparator as *const i32,
-            &dummy_allocator as *const i8,
-        );
+    if vanilla_backend() {
+        return (unsafe { MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_INDEX.original()(map_ptr as *const i32, &key as *const i32) }) as u32;
     }
+    let mut maps = suitability_maps();
+    let record = maps.entry(map_ptr).or_default().entry(key).or_insert_with(|| Box::new([0u32; 0x1c]));
+    record.as_mut_ptr() as u32
 }
 
-/// Tears down a tree built by [`init_suitability_scratch_tree`] (or found in `ZTHabitat::
-/// speciesSuitabilityCache`), freeing the sentinel and every inserted node through real vanilla's own
-/// allocator. These nodes were allocated by real vanilla's `operator_new`/`PoolAlloc`, never by `Box` -
-/// see `AGENTS.md`'s cross-allocator safety rules for why they must be freed this way, never by a Rust
-/// `Box`-walking teardown.
+/// Registers an empty scratch suitability map under `header_ptr`, a caller-owned stack address that
+/// identifies the map for the duration of one `recalculateCharacteristics`/`additionalScenerySuitabilityChange`
+/// call (vanilla builds the same map as a stack local). Tear it down with
+/// [`destroy_suitability_scratch_tree`]. Under [`with_vanilla_suitability_maps`] it constructs a real vanilla
+/// map header in place instead (`header_ptr` needs 12 bytes; a `[u32; 4]` is the convention).
+pub fn init_suitability_scratch_tree(header_ptr: u32) {
+    if vanilla_backend() {
+        let dummy_comparator: i32 = 0;
+        let dummy_allocator: i8 = 0;
+        unsafe {
+            MSVC_MAP_INT_HABITATSUITABILITY_TREE.original()(header_ptr as *const i32, &dummy_comparator as *const i32, &dummy_allocator as *const i8);
+        }
+        return;
+    }
+    suitability_maps().insert(header_ptr, SuitabilityMap::new());
+}
+
+/// Tears down a map registered by [`init_suitability_scratch_tree`]. Under [`with_vanilla_suitability_maps`]
+/// the vanilla map is freed through vanilla's own allocator, never `Box` (see `AGENTS.md`'s cross-allocator
+/// rules).
 pub fn destroy_suitability_scratch_tree(header_ptr: u32) {
-    unsafe { MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR.original()(header_ptr as *const i32) };
+    if vanilla_backend() {
+        unsafe { MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR.original()(header_ptr as *const i32) };
+        return;
+    }
+    suitability_maps().remove(&header_ptr);
 }
 
-/// Copies the scratch suitability tree at `source_header_ptr` into the tree header at `dest_header_ptr`
-/// through real vanilla's own `map::operator=` (`0x00446370`), which clears the destination and
-/// allocates the copied nodes with vanilla's allocator - the only safe way to fill a live habitat's own
-/// `species_suitability_cache` (`+0x148`), whose nodes un-ported vanilla code later frees.
+/// Replaces the contents of the suitability map `dest_header_ptr` with a copy of `source_header_ptr`'s
+/// (`map::operator=`): records are cloned, so addresses previously returned for `dest_header_ptr` are
+/// invalidated, as the freed vanilla nodes were.
 pub fn assign_suitability_tree(dest_header_ptr: u32, source_header_ptr: u32) {
-    unsafe { MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_ASSIGN.original()(dest_header_ptr as *const i32, source_header_ptr as *const i32) };
+    if vanilla_backend() {
+        unsafe { MSVC_MAP_INT_HABITATSUITABILITY_OPERATOR_ASSIGN.original()(dest_header_ptr as *const i32, source_header_ptr as *const i32) };
+        return;
+    }
+    let mut maps = suitability_maps();
+    let copy = maps.get(&source_header_ptr).map(clone_suitability_map).unwrap_or_default();
+    maps.insert(dest_header_ptr, copy);
+}
+
+/// Drops a habitat's persistent suitability cache; called from `ZTHabitat::destruct`.
+pub fn remove_suitability_cache(map_ptr: u32) {
+    suitability_maps().remove(&map_ptr);
+}
+
+/// Keys of the suitability map `map_ptr`, ascending.
+pub fn suitability_cache_keys(map_ptr: u32) -> Vec<i32> {
+    if vanilla_backend() {
+        return walk_neighbor_tree(get_from_memory::<u32>(map_ptr)).map(|node| get_from_memory::<i32>(node + 0x10)).collect();
+    }
+    suitability_maps().get(&map_ptr).map(|map| map.keys().copied().collect()).unwrap_or_default()
+}
+
+/// Number of entries in the suitability map `map_ptr`.
+pub fn suitability_cache_len(map_ptr: u32) -> usize {
+    if vanilla_backend() {
+        return get_from_memory::<u32>(map_ptr + 4) as usize;
+    }
+    suitability_maps().get(&map_ptr).map_or(0, |map| map.len())
+}
+
+/// Handles of every suitability map currently in the store: each live habitat's `+0x148` cache plus any scratch
+/// map still registered. Outside a `recalculateCharacteristics`/`additionalScenerySuitabilityChange` call, a
+/// handle that is not a live habitat's `+0x148` means a habitat was freed without `destruct` running or a
+/// scratch map was never destroyed.
+pub fn suitability_store_handles() -> Vec<u32> {
+    suitability_maps().keys().copied().collect()
 }
 
 /// Finds (or default-inserts, `0.0`) the value for `key` in a real vanilla `msvc_std::map<int, float>` at

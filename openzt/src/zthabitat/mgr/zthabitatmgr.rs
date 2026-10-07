@@ -2593,7 +2593,7 @@ impl ZTHabitatMgr {
     /// the top of every call - architecturally distinct from [`SPECIES_RATING_CACHE`] above, not a second
     /// producer/consumer of it, per `species-rating-cache-identification-handover.md`. Unless
     /// `habitat_ptr` is the "world" habitat ([`ZTHabitat::unknown_flag_0x2c`] set), stores
-    /// [`get_species_rating`] for every one of its current [`ZTHabitat::surrounding_species`] into that
+    /// [`ZTHabitat::get_species_rating`] for every one of its current [`ZTHabitat::surrounding_species`] into that
     /// map. [`Self::after_entity_change`] reads the map back, so it is modeled as the Rust store
     /// [`PRE_CHANGE_SPECIES_RATINGS`] rather than left write-only.
     pub fn before_entity_change(habitat_ptr: u32) {
@@ -2607,7 +2607,7 @@ impl ZTHabitatMgr {
         }
         for species_ptr in habitat.surrounding_species() {
             let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
-            let rating = unsafe { get_species_rating(habitat_ptr, species_key) };
+            let rating = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_species_rating(species_key);
             lock_pre_change_species_ratings().insert(species_key, rating);
         }
     }
@@ -2624,7 +2624,7 @@ impl ZTHabitatMgr {
     /// has no amphibious neighbours and the changed type is an animal or scenery type; also skipped when
     /// `neighbor_pass` (`param_5`) is set and the species type fails vtable `+0xcc`.
     ///
-    /// For an affected species the fresh [`get_species_rating`] is compared against the value
+    /// For an affected species the fresh [`ZTHabitat::get_species_rating`] is compared against the value
     /// [`Self::before_entity_change`] stored in [`PRE_CHANGE_SPECIES_RATINGS`] (inserted at `0.0` when
     /// absent; a stored value equal to [`RVA_PRE_CHANGE_RATING_SENTINEL`]'s float makes the fresh rating
     /// `0.0`). A higher rating calls `generateFaces(.., true)` (smile), a lower or unordered one
@@ -2669,7 +2669,7 @@ impl ZTHabitatMgr {
                 continue;
             }
 
-            let mut fresh = unsafe { get_species_rating(habitat_ptr, species_key) };
+            let mut fresh = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_species_rating(species_key);
             let stored = *lock_pre_change_species_ratings().entry(species_key).or_insert(0.0);
             let sentinel = get_from_memory::<f32>(module_base + RVA_PRE_CHANGE_RATING_SENTINEL);
             if matches!(stored.partial_cmp(&sentinel), Some(std::cmp::Ordering::Equal) | None) {
@@ -2732,7 +2732,7 @@ impl ZTHabitatMgr {
     /// already fully ported.
     ///
     /// For each distinct habitat found, builds a fresh `species_id -> rating` map from every one of its
-    /// current [`ZTHabitat::surrounding_species`] (via [`get_species_rating`], overwriting on a repeated
+    /// current [`ZTHabitat::surrounding_species`] (via [`ZTHabitat::get_species_rating`], overwriting on a repeated
     /// species key - matches real vanilla's own unconditional overwrite-after-lookup, not a
     /// skip-if-present) and pushes it onto [`SPECIES_RATING_CACHE`]. Real vanilla builds this as a real
     /// RB-tree and deep-copies it twice (a pass-by-value idiom, see the handover doc's Follow-up 2) into
@@ -2777,7 +2777,7 @@ impl ZTHabitatMgr {
             let mut ratings = HashMap::new();
             for species_ptr in habitat.surrounding_species() {
                 let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
-                let rating = unsafe { get_species_rating(habitat_ptr, species_key) };
+                let rating = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_species_rating(species_key);
                 ratings.insert(species_key, rating);
             }
             entries.push(SpeciesRatingCacheEntry { habitat_ptr, ratings });
@@ -2799,7 +2799,7 @@ impl ZTHabitatMgr {
     /// terrain change resets the cache, matching real vanilla's own behavior, quirks included): marks
     /// the habitat dirty ([`ZTHabitat::set_dirty_characteristics`], `species_list_dirty = 1`), then for
     /// every one of its current [`ZTHabitat::surrounding_species`] compares a freshly computed
-    /// [`get_species_rating`] against the cached value (a first-seen species - not part of the last
+    /// [`ZTHabitat::get_species_rating`] against the cached value (a first-seen species - not part of the last
     /// snapshot - is inserted into the cache at `0.0` and compared against that, matching real vanilla's
     /// own insert-if-absent shape), calling real vanilla `ZTHabitat::generateFaces` (smile on an
     /// increase, frown on a decrease) and OR-ing its own return into this tick's overall smile/frown
@@ -2838,7 +2838,7 @@ impl ZTHabitatMgr {
 
             for species_ptr in habitat.surrounding_species() {
                 let species_key = get_from_memory::<i32>(species_ptr + 0x1ec);
-                let fresh_rating = unsafe { get_species_rating(entry.habitat_ptr, species_key) };
+                let fresh_rating = unsafe { ref_from_memory::<ZTHabitat>(entry.habitat_ptr) }.get_species_rating(species_key);
                 let cached_rating = *entry.ratings.entry(species_key).or_insert(0.0);
                 if cached_rating < fresh_rating {
                     let generated =

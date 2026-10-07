@@ -20,9 +20,6 @@ use openzt_detour::generated::{
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             ADD_FOUND_SPECIES, CREATE_VIEWING_AREAS, GET_EVENTS,
-            GET_ELEVATION_SUITABILITY, GET_FOLIAGE_DENSITY_SUITABILITY, GET_OBJECT_SUITABILITY,
-            GET_ROCK_DENSITY_SUITABILITY, GET_SHELTER_SUITABILITY, GET_TANK_CLEANLINESS_SUITABILITY,
-            GET_TANK_DEPTH_SUITABILITY, GET_TANK_SALINITY_SUITABILITY, GET_TERRAIN_SUITABILITY, GET_TOY_SUITABILITY,
             REVISE_SPECIES_LIST, SEND_EVENT,
             SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
@@ -223,14 +220,14 @@ const _: () = assert!(std::mem::offset_of!(ZTHabitat, species_found_count) == 0x
 
 /// One entry of `ZTHabitat::speciesSuitabilityCache` (`field_0x148`/`_0x14c`) - a per-species
 /// suitability-scoring record `ZTHabitat::recalculateCharacteristics` builds in a function-local scratch
-/// tree (phase 4) and whole-tree-replaces into the persistent, vanilla-layout cache (phase 6). Layout
+/// map (phase 4) and whole-map-replaces into the habitat's persistent cache (phase 6). Both live in the Rust
+/// suitability store (`support.rs`), keyed by map handle; the vanilla header at `+0x148`/`+0x14c` stays an
+/// empty, never-read sentinel. Layout
 /// confirmed field-by-field against the live Ghidra project - see
 /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s "`ZTHabitatSuitabilityRecord`'s
-/// 112-byte layout" table for the full evidence per field. Must stay vanilla-layout-compatible: the ten
-/// per-factor suitability getters (`getTerrainSuitability`, `getTankDepthSuitability`, etc.) are
-/// themselves still un-ported, real-vanilla call-throughs that dereference the persistent cache's own
-/// tree nodes directly, so a Rust-only cache would silently break every one of them the moment
-/// `recalculateCharacteristics` is detoured.
+/// 112-byte layout" table for the full evidence per field. The record keeps vanilla's `0x70`-byte layout
+/// because the code reads fields by raw offset, not because any vanilla code reads it: every reader of the
+/// cache is ported.
 ///
 /// Field types/names/offsets confirmed directly against the live Ghidra project's own
 /// `/auto_structs/ZTHabitatSuitabilityRecord` definition (`mcp__ghidra__types` `get`), not inferred from
@@ -1076,8 +1073,7 @@ impl ZTHabitat {
     /// Ports `ZTHabitat::getNumAnimals(species_id, include_neighbors)` (`ZTHabitat_getNumAnimals_1.c`,
     /// `GET_NUM_ANIMALS_1`, `0x004388d7`): the per-species occurrence count, i.e. the first field
     /// (`occurrence_count`) of the species's `ZTHabitatSuitabilityRecord` in the `+0x148` cache, lazily
-    /// recalculating first. A missing record is default-inserted, as vanilla does, through vanilla's own
-    /// `map::operator[]` so the node is vanilla-allocated. With `include_neighbors`, adds the same lookup
+    /// recalculating first. A missing record is default-inserted, as vanilla does. With `include_neighbors`, adds the same lookup
     /// (with `false`) for every amphibious neighbour.
     ///
     /// Must only be called on a live `ZTHabitat` reference; every neighbour in the tree is live.
@@ -1094,6 +1090,113 @@ impl ZTHabitat {
             }
         }
         total
+    }
+
+    /// Shared body of the ten per-factor suitability getters (`getTerrainSuitability` ... `getTankSalinitySuitability`):
+    /// lazily recalculates when `characteristics_dirty` is set, then returns the species's record in the `+0x148`
+    /// cache, default-inserting it when absent (the insert is visible as a side effect, as in vanilla).
+    /// Re-entry into `recalculate_characteristics` is stopped by its own
+    /// `reentrancy_guard`, exactly as in vanilla.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference.
+    fn suitability_record(&self, species: i32) -> u32 {
+        if self.characteristics_dirty != 0 {
+            self.recalculate_characteristics();
+        }
+        map_int_habitatsuitability_find_or_insert(self as *const Self as u32 + 0x148, species)
+    }
+
+    fn suitability_score(&self, species: i32, record_offset: usize) -> f32 {
+        get_from_memory::<f32>(self.suitability_record(species) + record_offset as u32)
+    }
+
+    /// Ports `ZTHabitat::getTerrainSuitability` (`GET_TERRAIN_SUITABILITY`, `0x4160ec`).
+    pub fn get_terrain_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, terrain_type_score))
+    }
+
+    /// Ports `ZTHabitat::getObjectSuitability` (`GET_OBJECT_SUITABILITY`, `0x415a41`).
+    pub fn get_object_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, scenery_category_score))
+    }
+
+    /// Ports `ZTHabitat::getFoliageDensitySuitability` (`GET_FOLIAGE_DENSITY_SUITABILITY`, `0x415ada`).
+    pub fn get_foliage_density_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, score_percent_a))
+    }
+
+    /// Ports `ZTHabitat::getRockDensitySuitability` (`GET_ROCK_DENSITY_SUITABILITY`, `0x415b73`).
+    pub fn get_rock_density_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, score_building_count))
+    }
+
+    /// Ports `ZTHabitat::getElevationSuitability` (`GET_ELEVATION_SUITABILITY`, `0x415c0c`).
+    pub fn get_elevation_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, score_percent_c))
+    }
+
+    /// Ports `ZTHabitat::getShelterSuitability` (`GET_SHELTER_SUITABILITY`, `0x415ca5`).
+    pub fn get_shelter_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, score_d))
+    }
+
+    /// Ports `ZTHabitat::getToySuitability` (`GET_TOY_SUITABILITY`, `0x415d3e`).
+    pub fn get_toy_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, score_e))
+    }
+
+    /// Ports `ZTHabitat::getTankDepthSuitability` (`GET_TANK_DEPTH_SUITABILITY`, `0x49380b`).
+    pub fn get_tank_depth_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, tank_depth_score))
+    }
+
+    /// Ports `ZTHabitat::getTankCleanlinessSuitability` (`GET_TANK_CLEANLINESS_SUITABILITY`, `0x4938a4`).
+    pub fn get_tank_cleanliness_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, tank_or_visibility_score))
+    }
+
+    /// Ports `ZTHabitat::getTankSalinitySuitability` (`GET_TANK_SALINITY_SUITABILITY`, `0x49393d`).
+    pub fn get_tank_salinity_suitability(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, tank_score_baseline))
+    }
+
+    /// Ports `ZTHabitat::getCompatibleAnimalRating` (`GET_COMPATIBLE_ANIMAL_RATING`, `0x438d7b`): the species's
+    /// `sum_category_tally`. Its sole vanilla caller is `ZTAnimal::fCompatAnimalsRating` (`0x438bd4`).
+    pub fn get_compatible_animal_rating(&self, species: i32) -> f32 {
+        self.suitability_score(species, std::mem::offset_of!(ZTHabitatSuitabilityRecord, sum_category_tally))
+    }
+
+    /// Ports `ZTHabitat::getSpeciesRating` (`GET_SPECIES_RATING`, `0x4d92db`): the unweighted sum of the
+    /// per-factor suitability getters for `species`. `isTank` is a real vtable `+0x20` dispatch
+    /// (`ZTTankExhibit` overrides it). Land habitats sum terrain, object, foliage, rock, elevation,
+    /// shelter and toy; tanks sum depth, cleanliness, salinity, object, foliage, rock, shelter and toy.
+    /// The terms are added in the same (reverse-of-call) order as vanilla, rounding to `f32` at each step
+    /// (the game runs the x87 at 24-bit precision, so plain `f32` adds are bit-exact). The first getter
+    /// performs the lazy recalculation and the missing-key default insert, the only visible side effects.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference.
+    pub fn get_species_rating(&self, species: i32) -> f32 {
+        let self_addr = self as *const Self as u32;
+        if unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
+            let depth = self.get_tank_depth_suitability(species);
+            let cleanliness = self.get_tank_cleanliness_suitability(species);
+            let salinity = self.get_tank_salinity_suitability(species);
+            let object = self.get_object_suitability(species);
+            let foliage = self.get_foliage_density_suitability(species);
+            let rock = self.get_rock_density_suitability(species);
+            let shelter = self.get_shelter_suitability(species);
+            let toy = self.get_toy_suitability(species);
+            salinity + cleanliness + depth + toy + shelter + rock + foliage + object
+        } else {
+            let terrain = self.get_terrain_suitability(species);
+            let object = self.get_object_suitability(species);
+            let foliage = self.get_foliage_density_suitability(species);
+            let rock = self.get_rock_density_suitability(species);
+            let elevation = self.get_elevation_suitability(species);
+            let shelter = self.get_shelter_suitability(species);
+            let toy = self.get_toy_suitability(species);
+            toy + shelter + elevation + rock + foliage + object + terrain
+        }
     }
 
     /// Ports `ZTHabitat::getNumAdultAnimals` (`ZTHabitat_getNumAdultAnimals_0.c`, `generated.rs`'s
@@ -3257,12 +3360,9 @@ impl ZTHabitat {
     /// later stage once every phase is ported) owns setting/clearing that guard and constructing
     /// `map_ptr` ([`init_suitability_scratch_tree`]) before calling this.
     ///
-    /// `map_ptr` is the real vanilla-layout scratch `msvc_std::map<int, ZTHabitatSuitabilityRecord>`
-    /// this phase's own animal census both reads and extends (find-or-insert via
-    /// [`map_int_habitatsuitability_find_or_insert`], **not** a Rust-only structure - later phases keep
-    /// extending the same tree, and real vanilla's own per-factor suitability getters this function
-    /// eventually feeds are still un-ported, real-vanilla call-throughs that would silently break against
-    /// a Rust-only cache).
+    /// `map_ptr` is the scratch suitability map handle this phase's own animal census both reads and
+    /// extends (find-or-insert via [`map_int_habitatsuitability_find_or_insert`]); later phases keep
+    /// extending the same map.
     ///
     /// `found_species_vec` is the real vanilla-layout `msvc_std::vector_pod<BFEntityType*>` scratch list
     /// (real vanilla's own `in_stack_fffff3b8`/`_bc`/`_c0` stack local, `msvc_std::vector_pod<>::init`'d by
@@ -3751,8 +3851,8 @@ impl ZTHabitat {
     /// Ports the terminal block of `ZTHabitat::recalculateCharacteristics` (`0x00445e62`-`0x00446039`),
     /// everything after the per-species scoring loop. Checked against raw disassembly.
     ///
-    /// 1. `species_suitability_cache` (`+0x148`) `= *map_ptr`, through vanilla's own `map::operator=`
-    ///    ([`assign_suitability_tree`]) so the copied nodes come from vanilla's allocator.
+    /// 1. `species_suitability_cache` (`+0x148`) `= *map_ptr` ([`assign_suitability_tree`], a copy into the
+    ///    habitat's own store entry).
     /// 2. Keeper walk: the first staff-list entry that casts to `ZTKeeper` and reports this habitat as
     ///    assigned sets `has_keeper_assigned_raw` (`+0x131`, cleared at function entry) and stops the walk.
     /// 3. Per surrounding animal (`animals`, the vector [`Self::recalc_surrounding_animal_building_scan`]
@@ -6001,11 +6101,12 @@ impl ZTHabitat {
                 unsafe { ref_from_memory::<ZTHabitat>(habitat) }.habitat_rating_unrounded(animal_ptr, is_show_set)
             } else {
                 let species = if animal_type != 0 { unsafe { call_entity_vtable_u32_noargs(animal_type, 0x20) } } else { 0 } as i32;
-                let terrain = unsafe { GET_TERRAIN_SUITABILITY.original()(habitat, species) } as f64;
-                let object = unsafe { GET_OBJECT_SUITABILITY.original()(habitat, species) } as f64;
-                let foliage = unsafe { GET_FOLIAGE_DENSITY_SUITABILITY.original()(habitat, species) } as f64;
-                let rock = unsafe { GET_ROCK_DENSITY_SUITABILITY.original()(habitat, species) } as f64;
-                let elevation = unsafe { GET_ELEVATION_SUITABILITY.original()(habitat, species) } as f64;
+                let land = unsafe { ref_from_memory::<ZTHabitat>(habitat) };
+                let terrain = land.get_terrain_suitability(species) as f64;
+                let object = land.get_object_suitability(species) as f64;
+                let foliage = land.get_foliage_density_suitability(species) as f64;
+                let rock = land.get_rock_density_suitability(species) as f64;
+                let elevation = land.get_elevation_suitability(species) as f64;
                 let sum = (terrain * weight(RVA_SUITABILITY_WEIGHT_TERRAIN)) as f32;
                 let sum = (object * weight(RVA_SUITABILITY_WEIGHT_OBJECT) + sum as f64) as f32;
                 let sum = (foliage * weight(RVA_SUITABILITY_WEIGHT_FOLIAGE) + sum as f64) as f32;
@@ -6257,7 +6358,6 @@ impl ZTHabitat {
     /// (callers such as `findBestRating` compare it unrounded). Partial sums follow [`x87_weighted_sum`].
     fn habitat_rating_unrounded(&self, animal_ptr: u32, include_neighbors: bool) -> f64 {
         let self_addr = self as *const Self as u32;
-        let habitat = self_addr as *const u32;
         let module_base = get_module_base("zoo.exe") as u32;
         let weight = |rva: u32| get_from_memory::<f32>(module_base + rva) as f64;
 
@@ -6274,27 +6374,27 @@ impl ZTHabitat {
 
         let land_sum = || {
             let terms = [
-                (unsafe { GET_TERRAIN_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_TERRAIN)),
-                (unsafe { GET_OBJECT_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_OBJECT)),
-                (unsafe { GET_FOLIAGE_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_FOLIAGE)),
-                (unsafe { GET_ROCK_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ROCK)),
-                (unsafe { GET_ELEVATION_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ELEVATION)),
-                (unsafe { GET_SHELTER_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_SHELTER)),
-                (unsafe { GET_TOY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_LAND_TOY)),
+                (self.get_terrain_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_TERRAIN)),
+                (self.get_object_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_OBJECT)),
+                (self.get_foliage_density_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_FOLIAGE)),
+                (self.get_rock_density_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_ROCK)),
+                (self.get_elevation_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_ELEVATION)),
+                (self.get_shelter_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_SHELTER)),
+                (self.get_toy_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_LAND_TOY)),
             ];
             x87_weighted_sum(&terms)
         };
         let tank_sum = |weights: &TankRatingWeights| {
             let terms = [
-                (unsafe { GET_TANK_DEPTH_SUITABILITY.original()(habitat, species) } as f64, weight(weights.depth)),
-                (unsafe { GET_TANK_CLEANLINESS_SUITABILITY.original()(habitat, species) } as f64, weight(weights.cleanliness)),
-                (unsafe { GET_TANK_SALINITY_SUITABILITY.original()(habitat, species) } as f64, weight(weights.salinity)),
-                (unsafe { GET_OBJECT_SUITABILITY.original()(habitat, species) } as f64, weight(weights.object)),
-                (unsafe { GET_FOLIAGE_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_FOLIAGE)),
-                (unsafe { GET_ROCK_DENSITY_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ROCK)),
-                (unsafe { GET_ELEVATION_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_ELEVATION)),
-                (unsafe { GET_SHELTER_SUITABILITY.original()(habitat, species) } as f64, weight(RVA_SUITABILITY_WEIGHT_SHELTER)),
-                (unsafe { GET_TOY_SUITABILITY.original()(habitat, species) } as f64, weight(weights.toy)),
+                (self.get_tank_depth_suitability(species) as f64, weight(weights.depth)),
+                (self.get_tank_cleanliness_suitability(species) as f64, weight(weights.cleanliness)),
+                (self.get_tank_salinity_suitability(species) as f64, weight(weights.salinity)),
+                (self.get_object_suitability(species) as f64, weight(weights.object)),
+                (self.get_foliage_density_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_FOLIAGE)),
+                (self.get_rock_density_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_ROCK)),
+                (self.get_elevation_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_ELEVATION)),
+                (self.get_shelter_suitability(species) as f64, weight(RVA_SUITABILITY_WEIGHT_SHELTER)),
+                (self.get_toy_suitability(species) as f64, weight(weights.toy)),
             ];
             x87_weighted_sum(&terms)
         };
@@ -6554,6 +6654,7 @@ impl ZTHabitat {
 
         unsafe { MSVC_TREE36_CLEAR.original()((self_addr + 0x16c) as *const u32) };
         Self::free_pool_block(get_from_memory(self_addr + 0x16c), 0x24);
+        support::remove_suitability_cache(self_addr + 0x148);
         unsafe {
             MSVC_BASIC_STRING_DTOR.original()((self_addr + 0x154) as *const std::ffi::c_void);
             SPECIES_SUITABILITY_CACHE_CLEAR.original()((self_addr + 0x148) as *const std::ffi::c_void);

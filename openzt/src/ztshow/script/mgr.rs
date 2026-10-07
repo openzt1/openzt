@@ -120,7 +120,7 @@ pub fn remove_item(this_ptr: u32, index: u16) -> bool {
 pub fn item_snapshot_by_id(id: u16, index: u16) -> Option<ItemSnapshot> {
     let state = STATE.lock().unwrap();
     let item = state.scripts.get(&id)?.items.get(index as usize)?;
-    Some(ItemSnapshot { id: item.id, item_type: item.item_type, satisfaction: item.satisfaction, satisfaction_mirror: item.satisfaction_mirror })
+    Some(ItemSnapshot { id: item.id, item_type: item.sentinel, satisfaction: item.satisfaction, satisfaction_mirror: item.satisfaction_mirror })
 }
 
 pub fn script_item_count_by_id(id: u16) -> usize {

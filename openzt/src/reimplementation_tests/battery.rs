@@ -678,6 +678,18 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_habitat_get_nearest_dirt_pile_matches_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITAT_SUITABILITY_GETTERS_MATCH_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_suitability_getters_match_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_SPECIES_RATING_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_species_rating_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_SUITABILITY_STORE_HAS_NO_STALE_ENTRIES",
+                run: tests::zthabitatmgr::run_habitat_suitability_store_has_no_stale_entries_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_NEEDS_SHOW_KEEPER_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_needs_show_keeper_matches_real_live_test,
             },

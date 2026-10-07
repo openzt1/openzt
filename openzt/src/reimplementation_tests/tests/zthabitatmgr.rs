@@ -6,7 +6,6 @@ use openzt_detour::generated::{
     bfentity,
     bfentity::GET_TILE as BFENTITY_GET_TILE,
     bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE},
-    msvc_std_mapint_habitatsuitability::{TREE as MSVC_MAP_INT_HABITATSUITABILITY_TREE, TREE_DTOR as MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR},
     standalone::OPERATOR_NEW,
     ztanimal::CAN_SERVICE as ZTANIMAL_CAN_SERVICE,
     zthabitat, zthabitatmgr, ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW, ztviewingarea,
@@ -27,7 +26,8 @@ use crate::ztshow::{call_entity_vtable_noargs, call_entity_vtable_u32_noargs, RV
 use crate::ztshowinfo::needs_keeper;
 use crate::zthabitatmgr::{
     animal_food_target, call_bfunit_tile_cost_vtable_slot, call_vtable_slot_noargs_ret_bool, entity_name_bytes, free_event_vector_buffer,
-    hooks_zthabitatmgr, map_int_habitatsuitability_find_or_insert, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr, ZTTankExhibit,
+    destroy_suitability_scratch_tree, suitability_store_handles, hooks_zthabitatmgr, init_suitability_scratch_tree, map_int_habitatsuitability_find_or_insert,
+    suitability_cache_keys, suitability_cache_len, with_vanilla_suitability_maps, walk_neighbor_tree, walk_tile_list, TileListNode, ZTHabitat, ZTHabitatMgr, ZTTankExhibit,
     MAX_PATH_COST_RVA, MORPH_EXHIBIT_CALL_LOG, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
 };
 use crate::zthabitatmgr::tank_exhibit::detours;
@@ -827,40 +827,41 @@ pub(crate) fn run_habitat_additional_scenery_suitability_change_matches_real_liv
         let species_vector = [*habitat.species_list_begin(), *habitat.species_list_end()];
         let species_vector_ptr = species_vector.as_ptr() as u32;
 
-        let comparator_byte: i32 = 0;
-        let allocator_byte: i8 = 0;
         let mut real_map: [u32; 4] = [0; 4];
         let mut reimpl_map: [u32; 4] = [0; 4];
-        unsafe {
-            MSVC_MAP_INT_HABITATSUITABILITY_TREE.original()(real_map.as_mut_ptr() as *const i32, &comparator_byte as *const i32, &allocator_byte as *const i8);
-            MSVC_MAP_INT_HABITATSUITABILITY_TREE.original()(
-                reimpl_map.as_mut_ptr() as *const i32,
-                &comparator_byte as *const i32,
-                &allocator_byte as *const i8,
-            );
-        }
-        let real_map_ptr = real_map.as_ptr() as u32;
-        let reimpl_map_ptr = reimpl_map.as_ptr() as u32;
+        let real_map_ptr = real_map.as_mut_ptr() as u32;
+        let reimpl_map_ptr = reimpl_map.as_mut_ptr() as u32;
 
-        hooks_zthabitatmgr::additional_scenery_suitability_change_real(
-            habitat_ptr as *const u32,
-            species_vector_ptr as *const i32,
-            real_map_ptr as *const i32,
-        );
+        // The real side fills a vanilla-allocated tree (vanilla backend); the port fills the Rust store.
+        let real_values: Vec<(u32, i32, Vec<u32>)> = with_vanilla_suitability_maps(|| {
+            init_suitability_scratch_tree(real_map_ptr);
+            hooks_zthabitatmgr::additional_scenery_suitability_change_real(
+                habitat_ptr as *const u32,
+                species_vector_ptr as *const i32,
+                real_map_ptr as *const i32,
+            );
+            let values = species
+                .iter()
+                .filter(|&&species_ptr| unsafe { call_entity_vtable_noargs(species_ptr, 0xcc) })
+                .map(|&species_ptr| {
+                    let key: i32 = get_from_memory(species_ptr + 0x1ec);
+                    let record = map_int_habitatsuitability_find_or_insert(real_map_ptr, key);
+                    (species_ptr, key, [0x0u32, 0x10, 0x14, 0x1c].iter().map(|&off| get_from_memory::<u32>(record + off)).collect())
+                })
+                .collect();
+            destroy_suitability_scratch_tree(real_map_ptr);
+            values
+        });
+        init_suitability_scratch_tree(reimpl_map_ptr);
         habitat.additional_scenery_suitability_change(species_vector_ptr, reimpl_map_ptr);
 
-        let mut any_species_compared = false;
-        for &species_ptr in &species {
-            if !unsafe { call_entity_vtable_noargs(species_ptr, 0xcc) } {
-                continue;
-            }
-            any_species_compared = true;
+        if !real_values.is_empty() {
+            compared_habitats += 1;
+        }
+        for (species_ptr, key, real_fields) in &real_values {
             compared_species += 1;
-            let key: i32 = get_from_memory(species_ptr + 0x1ec);
-            let real_record = map_int_habitatsuitability_find_or_insert(real_map_ptr, key);
-            let reimpl_record = map_int_habitatsuitability_find_or_insert(reimpl_map_ptr, key);
-            for &field_offset in &[0x0u32, 0x10, 0x14, 0x1c] {
-                let real_val: u32 = get_from_memory(real_record + field_offset);
+            let reimpl_record = map_int_habitatsuitability_find_or_insert(reimpl_map_ptr, *key);
+            for (&field_offset, &real_val) in [0x0u32, 0x10, 0x14, 0x1c].iter().zip(real_fields) {
                 let reimpl_val: u32 = get_from_memory(reimpl_record + field_offset);
                 if real_val != reimpl_val {
                     failures.push(format!(
@@ -870,14 +871,7 @@ pub(crate) fn run_habitat_additional_scenery_suitability_change_matches_real_liv
                 }
             }
         }
-        if any_species_compared {
-            compared_habitats += 1;
-        }
-
-        unsafe {
-            MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR.original()(real_map.as_mut_ptr() as *const i32);
-            MSVC_MAP_INT_HABITATSUITABILITY_TREE_DTOR.original()(reimpl_map.as_mut_ptr() as *const i32);
-        }
+        destroy_suitability_scratch_tree(reimpl_map_ptr);
     }
 
     if compared_species == 0 {
@@ -9499,6 +9493,193 @@ pub(crate) fn run_habitat_get_nearest_dirt_pile_matches_real_live_test(failure_l
     }
 }
 
+/// `ZTHABITAT_SUITABILITY_STORE_HAS_NO_STALE_ENTRIES`: every map in the Rust suitability store is some live
+/// habitat's `+0x148` cache. A leftover handle means a habitat was freed without `ZTHabitat::destruct` (a
+/// stale cache a later habitat at the same address would inherit) or a scratch map was never destroyed.
+pub(crate) fn run_habitat_suitability_store_has_no_stale_entries_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_SUITABILITY_STORE_HAS_NO_STALE_ENTRIES";
+    let habitat_mgr = globals().zthabitatmgr();
+    let live: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).map(|p| p + 0x148).collect();
+    let stale: Vec<String> = suitability_store_handles().into_iter().filter(|handle| !live.contains(handle)).map(|handle| format!("{handle:#010x}")).collect();
+    let failures = if stale.is_empty() { Vec::new() } else { vec![format!("store handles that are not a live habitat's cache: {}", stale.join(", "))] };
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Rebuilds a habitat's suitability cache on both backends from the same dirty state: once into vanilla's own
+/// trees (the real pole's data, see [`with_vanilla_suitability_maps`]) and once into the Rust store (what the
+/// port reads). `unknown_flag_0x30` is reset first since it is both an output and `checkEscapability`'s
+/// rate-limit input.
+fn settle_suitability_caches(ptr: u32) {
+    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+    for vanilla in [true, false] {
+        save_to_memory::<u8>(ptr + 0x30, 0);
+        save_to_memory::<u8>(ptr + 0x2d, 1);
+        if vanilla {
+            with_vanilla_suitability_maps(|| habitat.recalculate_characteristics());
+        } else {
+            habitat.recalculate_characteristics();
+        }
+    }
+}
+
+/// The ten per-factor suitability getters plus `getCompatibleAnimalRating`, real (release-safe `suitability_getter_real` trampoline) vs port,
+/// per live habitat and per key already in its `+0x148` cache plus two absent keys. Compares the returned `f32`
+/// bit patterns and the cache's size: the first absent key goes real-first, the second port-first, and each
+/// must grow the cache by exactly one (the default-insert side effect), with the other side then seeing the
+/// already-inserted key.
+pub(crate) fn run_habitat_suitability_getters_match_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_SUITABILITY_GETTERS_MATCH_REAL_LIVE";
+    const NAMES: [&str; 11] = [
+        "terrain", "object", "foliage", "rock", "elevation", "shelter", "toy", "tank_depth", "tank_cleanliness", "tank_salinity",
+        "compatible_animal_rating",
+    ];
+    const ABSENT_KEY: i32 = -12345;
+    let port = |habitat: &ZTHabitat, index: usize, species: i32| -> f32 {
+        match index {
+            0 => habitat.get_terrain_suitability(species),
+            1 => habitat.get_object_suitability(species),
+            2 => habitat.get_foliage_density_suitability(species),
+            3 => habitat.get_rock_density_suitability(species),
+            4 => habitat.get_elevation_suitability(species),
+            5 => habitat.get_shelter_suitability(species),
+            6 => habitat.get_toy_suitability(species),
+            7 => habitat.get_tank_depth_suitability(species),
+            8 => habitat.get_tank_cleanliness_suitability(species),
+            9 => habitat.get_tank_salinity_suitability(species),
+            _ => habitat.get_compatible_animal_rating(species),
+        }
+    };
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut tanks_checked = 0;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        if unsafe { call_vtable_slot_noargs_ret_bool(ptr, 0x20) } {
+            tanks_checked += 1;
+        }
+        settle_suitability_caches(ptr);
+        let keys = suitability_cache_keys(ptr + 0x148);
+        if keys.is_empty() {
+            failures.push(format!("habitat {i} ({ptr:#010x}): suitability cache empty after recalculation"));
+        }
+        for &key in &keys {
+            for (index, name) in NAMES.iter().enumerate() {
+                let real = with_vanilla_suitability_maps(|| hooks_zthabitatmgr::suitability_getter_real(index, ptr as *const u32, key));
+                let reimpl = port(habitat, index, key);
+                if real.to_bits() != reimpl.to_bits() {
+                    failures.push(format!("habitat {i} ({ptr:#010x}) {name}({key}): real={real}, reimpl={reimpl}"));
+                }
+            }
+        }
+        for (index, name) in NAMES.iter().enumerate() {
+            let absent = ABSENT_KEY.wrapping_sub(index as i32 * 1000);
+            let real_len = || with_vanilla_suitability_maps(|| suitability_cache_len(ptr + 0x148));
+            let port_len = || suitability_cache_len(ptr + 0x148);
+            let (real_before, port_before) = (real_len(), port_len());
+            let real_call = || with_vanilla_suitability_maps(|| hooks_zthabitatmgr::suitability_getter_real(index, ptr as *const u32, absent));
+            let (real, reimpl) = (real_call(), port(habitat, index, absent));
+            let (real_after, port_after) = (real_len(), port_len());
+            let (real_again, reimpl_again) = (real_call(), port(habitat, index, absent));
+            if real_after != real_before + 1 || port_after != port_before + 1 || real_len() != real_after || port_len() != port_after {
+                failures.push(format!(
+                    "habitat {i} ({ptr:#010x}) {name}: cache sizes real {real_before}->{real_after}, port {port_before}->{port_after} not +1 once per new key"
+                ));
+            }
+            if real.to_bits() != reimpl.to_bits() || real_again.to_bits() != reimpl_again.to_bits() {
+                failures.push(format!("habitat {i} ({ptr:#010x}) {name} absent key: real={real}/{real_again}, reimpl={reimpl}/{reimpl_again}"));
+            }
+        }
+    }
+    if failures.is_empty() {
+        if tanks_checked == 0 {
+            write_success_line(failure_log, &format!("{} (note: no tank habitat in live zoo, tank branch not exercised)", test_name));
+        } else {
+            write_success_line(failure_log, test_name);
+        }
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// `getSpeciesRating`, real (release-safe `species_rating_real` trampoline) vs port, per live habitat and per key
+/// already in its `+0x148` cache plus two absent keys (one per side going first). Compares the `f32` bit pattern
+/// and that each new key grows the cache by exactly one (the default-insert side effect). Reports tank vs land
+/// habitats exercised, since the two branches sum different factors.
+pub(crate) fn run_habitat_species_rating_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_SPECIES_RATING_MATCHES_REAL_LIVE";
+    const ABSENT_KEY: i32 = -7_000_000;
+
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let (mut tanks_checked, mut land_checked) = (0, 0);
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        if unsafe { call_vtable_slot_noargs_ret_bool(ptr, 0x20) } {
+            tanks_checked += 1;
+        } else {
+            land_checked += 1;
+        }
+        settle_suitability_caches(ptr);
+        let keys = suitability_cache_keys(ptr + 0x148);
+        for &key in &keys {
+            let real = with_vanilla_suitability_maps(|| hooks_zthabitatmgr::species_rating_real(ptr as *const u32, key));
+            let reimpl = habitat.get_species_rating(key);
+            if real.to_bits() != reimpl.to_bits() {
+                failures.push(format!("habitat {i} ({ptr:#010x}) species {key}: real={real}, reimpl={reimpl}"));
+            }
+        }
+        let real_len = || with_vanilla_suitability_maps(|| suitability_cache_len(ptr + 0x148));
+        let port_len = || suitability_cache_len(ptr + 0x148);
+        let (real_before, port_before) = (real_len(), port_len());
+        let real_call = || with_vanilla_suitability_maps(|| hooks_zthabitatmgr::species_rating_real(ptr as *const u32, ABSENT_KEY));
+        let (real, reimpl) = (real_call(), habitat.get_species_rating(ABSENT_KEY));
+        let (real_after, port_after) = (real_len(), port_len());
+        let (real_again, reimpl_again) = (real_call(), habitat.get_species_rating(ABSENT_KEY));
+        if real_after != real_before + 1 || port_after != port_before + 1 || real_len() != real_after || port_len() != port_after {
+            failures.push(format!("habitat {i} ({ptr:#010x}): cache sizes real {real_before}->{real_after}, port {port_before}->{port_after} not +1 once per new key"));
+        }
+        if real.to_bits() != reimpl.to_bits() || real_again.to_bits() != reimpl_again.to_bits() {
+            failures.push(format!("habitat {i} ({ptr:#010x}) absent key: real={real}/{real_again}, reimpl={reimpl}/{reimpl_again}"));
+        }
+    }
+    if failures.is_empty() {
+        if tanks_checked == 0 || land_checked == 0 {
+            write_success_line(
+                failure_log,
+                &format!("{} (note: {tanks_checked} tank / {land_checked} land habitats, one branch not exercised)", test_name),
+            );
+        } else {
+            write_success_line(failure_log, test_name);
+        }
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}
+", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Same "find a live `ZTKeeper`, compare over every habitat" shape, for `needsShowKeeper`'s own boolean
 /// result. Real vanilla's return is low-byte-only meaningful, so the real side is masked with
 /// `low_byte_bool` before comparing.
@@ -10290,7 +10471,8 @@ pub(crate) fn run_habitat_get_random_underwater_tile_live_test(failure_log: &mut
 
 /// Everything `ZTHabitat::recalculateCharacteristics` writes that a comparison can read back without
 /// following allocator-owned pointers: the counters/flags/food tally, every persisted suitability record
-/// (`+0x148` tree, key plus all `0x70` record bytes), and the condition words of every census animal.
+/// (the `+0x148` suitability map of whichever backend is active, key plus all `0x70` record bytes), and the
+/// condition words of every census animal.
 fn recalculate_characteristics_snapshot(ptr: u32) -> Vec<(String, u32)> {
     let mut out: Vec<(String, u32)> = Vec::new();
     for off in [0x2d_u32, 0x2e, 0x2f, 0x30, 0x130, 0x131, 0x132] {
@@ -10314,10 +10496,10 @@ fn recalculate_characteristics_snapshot(ptr: u32) -> Vec<(String, u32)> {
             out.push((format!("animal {animal:#010x}+{off:#x}"), get_from_memory::<u32>(animal + off)));
         }
     }
-    for node in walk_neighbor_tree(get_from_memory::<u32>(ptr + 0x148)) {
-        let key: i32 = get_from_memory(node + 0x10);
+    for key in suitability_cache_keys(ptr + 0x148) {
+        let record = map_int_habitatsuitability_find_or_insert(ptr + 0x148, key);
         for off in (0..0x70_u32).step_by(4) {
-            let raw = get_from_memory::<u32>(node + 0x14 + off);
+            let raw = get_from_memory::<u32>(record + off);
             // Bytes 0x6e/0x6f are struct padding.
             out.push((format!("record[{key}]+{off:#x}"), if off == 0x6c { raw & 0xffff } else { raw }));
         }
@@ -10364,8 +10546,10 @@ pub(crate) fn run_habitat_recalculate_characteristics_matches_real_live_test(fai
         seed_stale_category_condition_bits(ptr);
         save_to_memory::<u8>(ptr + 0x30, 0);
         save_to_memory::<u8>(ptr + 0x2d, 1);
-        hooks_zthabitatmgr::recalculate_characteristics_real(ptr as *const u32);
-        let real = recalculate_characteristics_snapshot(ptr);
+        let real = with_vanilla_suitability_maps(|| {
+            hooks_zthabitatmgr::recalculate_characteristics_real(ptr as *const u32);
+            recalculate_characteristics_snapshot(ptr)
+        });
 
         seed_stale_category_condition_bits(ptr);
         save_to_memory::<u8>(ptr + 0x30, 0);
@@ -11244,12 +11428,13 @@ pub(crate) fn run_get_num_animals_by_species_matches_real_live_test(failure_log:
     let test_name = "ZTHABITAT_GET_NUM_ANIMALS_BY_SPECIES_MATCHES_REAL_LIVE";
     let habitat_mgr = globals().zthabitatmgr();
     let habitat_ptrs: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+    habitat_ptrs.iter().for_each(|&p| settle_suitability_caches(p));
 
     let mut failures: Vec<String> = Vec::new();
     let (mut calls, mut nonzero) = (0u32, 0u32);
     let mut compare = |habitat_ptr: u32, species_id: i32, include_neighbors: bool, context: &str, failures: &mut Vec<String>| {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
-        let real = hooks_zthabitatmgr::get_num_animals_by_species_real(habitat_ptr as *const u32, species_id, include_neighbors);
+        let real = with_vanilla_suitability_maps(|| hooks_zthabitatmgr::get_num_animals_by_species_real(habitat_ptr as *const u32, species_id, include_neighbors));
         let port = habitat.get_num_animals_by_species(species_id, include_neighbors);
         if real != port {
             failures.push(format!("{context} habitat {habitat_ptr:#010x} species {species_id} neighbors={include_neighbors}: real {real} != port {port}"));
@@ -11271,7 +11456,7 @@ pub(crate) fn run_get_num_animals_by_species_matches_real_live_test(failure_log:
         ids.push(i32::MAX);
         ids
     };
-    let cache_size = |habitat_ptr: u32| -> u32 { get_from_memory(habitat_ptr + 0x14c) };
+    let cache_size = |habitat_ptr: u32| -> usize { suitability_cache_len(habitat_ptr + 0x148) };
 
     for &habitat_ptr in &habitat_ptrs {
         for species_id in species_for(habitat_ptr) {
@@ -11498,12 +11683,13 @@ pub(crate) fn run_get_habitat_rating_matches_real_live_test(failure_log: &mut Op
     if animals.is_empty() {
         return finish_test(test_name, vec!["no live animals found".to_string()], failure_log);
     }
+    habitat_ptrs.iter().for_each(|&p| settle_suitability_caches(p));
 
     let mut failures: Vec<String> = Vec::new();
     let mut calls = 0u32;
     let mut compare = |habitat_ptr: u32, animal: u32, include_neighbors: bool, context: &str, failures: &mut Vec<String>| {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
-        let real = hooks_zthabitatmgr::get_habitat_rating_real(habitat_ptr as *const u32, animal as i32, include_neighbors as i8);
+        let real = with_vanilla_suitability_maps(|| hooks_zthabitatmgr::get_habitat_rating_real(habitat_ptr as *const u32, animal as i32, include_neighbors as i8));
         let port = habitat.get_habitat_rating(animal, include_neighbors);
         if real.to_bits() != port.to_bits() {
             failures.push(format!(
@@ -11565,12 +11751,13 @@ pub(crate) fn run_most_suitable_habitat_matches_real_live_test(failure_log: &mut
         return finish_test(test_name, vec!["no live animals found".to_string()], failure_log);
     }
 
+    habitat_ptrs.iter().for_each(|&p| settle_suitability_caches(p));
     let mut failures: Vec<String> = Vec::new();
     let (mut neighbor_results, mut most_suitable_calls) = (0u32, 0u32);
     for &habitat_ptr in &habitat_ptrs {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
         for &animal in &animals {
-            let real = hooks_zthabitatmgr::get_most_suitable_habitat_real(habitat_ptr as *const u32, animal as *const u32) as u32;
+            let real = with_vanilla_suitability_maps(|| hooks_zthabitatmgr::get_most_suitable_habitat_real(habitat_ptr as *const u32, animal as *const u32)) as u32;
             let port = habitat.get_most_suitable_habitat(animal);
             if real != port {
                 failures.push(format!("habitat {habitat_ptr:#010x} animal {animal:#010x}: getMostSuitableHabitat real={real:#x} port={port:#x}"));
@@ -11593,7 +11780,7 @@ pub(crate) fn run_most_suitable_habitat_matches_real_live_test(failure_log: &mut
         }
         for &animal in &animals {
             for is_show_set in [false, true] {
-                let real = hooks_zthabitatmgr::find_best_rating_real(animal as *const u32, set.container_addr() as *const i32, is_show_set) as u32;
+                let real = with_vanilla_suitability_maps(|| hooks_zthabitatmgr::find_best_rating_real(animal as *const u32, set.container_addr() as *const i32, is_show_set)) as u32;
                 let port = ZTHabitat::find_best_rating(animal, set.container_addr(), is_show_set);
                 if real != port {
                     failures.push(format!("set of {} animal {animal:#010x} show={is_show_set}: findBestRating real={real:#x} port={port:#x}", subset.len()));

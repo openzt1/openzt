@@ -313,21 +313,24 @@ pub fn calculate_percent_adjustment(this: u32) -> i32 {
     0
 }
 
-pub fn start(this: u32) {
+/// Returns the status code vanilla's `ZTShow::start` leaves in `EAX` (`0` = started; `1` no units, `2` failed
+/// validation, `4` no script, `10` tank without water, otherwise `createShowScriptState`'s/`gatherUnits`'
+/// own non-zero code). `ZTShow::update` treats any non-zero value as "abort the show".
+pub fn start(this: u32) -> u32 {
     let script_id = unsafe { RESOLVE_NEXT_SCHEDULED_SCRIPT_ID.original()(this as *const u32) as u16 };
-    let Some(script_type) = super::script::script_type_by_id(script_id) else { return };
+    let Some(script_type) = super::script::script_type_by_id(script_id) else { return 4 };
     if script_type == 0 {
-        return;
+        return 4;
     }
 
     let show_info = get_from_memory::<u32>(this + 0x10);
     let unit_count = unsafe { GET_NUM_UNITS.hooked()(show_info as *const u32, script_type) };
     if unit_count < 1 {
-        return;
+        return 1;
     }
 
     if check_owning_habitat(show_info) {
-        return;
+        return 10;
     }
 
     save_to_memory(this + 0x8, script_type);
@@ -340,7 +343,7 @@ pub fn start(this: u32) {
     stop_with_id(this, script_id);
 
     if validate(this, true) != 0 {
-        return;
+        return 2;
     }
     unsafe { CLEAR_SHOW_SCRIPT_STATES.original()(this as *const u32) };
 
@@ -364,7 +367,7 @@ pub fn start(this: u32) {
                 let show_id = get_from_memory::<u16>(this + 0x6);
                 let result = crate::ztshowscriptstate::create_show_script_state(this, unit_id);
                 if result != 0 {
-                    return;
+                    return result;
                 }
                 save_to_memory(unit_ptr + 0x254, show_id);
             }
@@ -372,16 +375,18 @@ pub fn start(this: u32) {
         node = next_node;
     }
 
-    let gather_result = unsafe { GATHER_UNITS.original()(this as *const u32) };
-    if !gather_result {
-        save_to_memory(this + 0x1e, 0u8);
-        save_to_memory(this + 0x1f, 1u8);
-        save_to_memory(this + 0x20, 0u8);
-        let show_info = get_from_memory::<u32>(this + 0x10);
-        unsafe { send_event(show_info, 0x2713, 0, 0x57, 0, 0, 1) };
-        let habitat = get_from_memory::<u32>(show_info + 0xa0);
-        unsafe { PLAY_SHOW_START_SOUND.original()(habitat as *const u32) };
+    if unsafe { GATHER_UNITS.original()(this as *const u32) } {
+        return 1;
     }
+    save_to_memory(this + 0x1e, 0u8);
+    save_to_memory(this + 0x1f, 1u8);
+    save_to_memory(this + 0x20, 0u8);
+    save_to_memory(this + 0x24, get_from_memory::<u32>(globals().ztaimgr_ptr() as u32 + 0xec));
+    let show_info = get_from_memory::<u32>(this + 0x10);
+    unsafe { send_event(show_info, 0x2713, 0, 0x57, 0, 0, 1) };
+    let habitat = get_from_memory::<u32>(show_info + 0xa0);
+    unsafe { PLAY_SHOW_START_SOUND.original()(habitat as *const u32) };
+    0
 }
 
 #[detour_mod]
@@ -419,8 +424,8 @@ mod detours {
     }
 
     #[detour(START)]
-    unsafe extern "thiscall" fn start_detour(this: *const u32) {
-        start(this as u32);
+    unsafe extern "thiscall" fn start_detour(this: *const u32) -> i32 {
+        start(this as u32) as i32
     }
 
     #[detour(CHECK_SCRIPT)]
