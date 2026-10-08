@@ -269,6 +269,12 @@ pub fn walk_neighbor_tree(head_ptr: u32) -> impl Iterator<Item = u32> {
     })
 }
 
+/// Payloads (`ZTHabitat*` values, node `+0x10`) of the `std::set` whose head is `head_ptr`, in
+/// [`walk_neighbor_tree`]'s order. Reads node memory lazily, one step per `next()`.
+pub fn neighbor_set_members(head_ptr: u32) -> impl Iterator<Item = u32> {
+    walk_neighbor_tree(head_ptr).map(|node| get_from_memory::<u32>(node + 0x10))
+}
+
 /// Size of a `std::set<ZTHabitat*>` node (`color`, `parent`, `left`, `right`, `key`), allocated from
 /// `PoolAlloc`'s size-class-2 freelist.
 const RB_SET_NODE_SIZE: u32 = 0x14;

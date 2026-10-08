@@ -583,6 +583,17 @@ pub(crate) struct PortalDispatch {
 }
 
 impl ZTHabitat {
+    /// `ZTHabitat*` members of the amphibious-neighbor set (`+0x8`), in vanilla's in-order traversal order.
+    /// Reads the set lazily, so callers that mutate neighbors while iterating should collect first.
+    pub fn amphibious_neighbors(&self) -> impl Iterator<Item = u32> {
+        neighbor_set_members(self.amphibious_neighbors_head)
+    }
+
+    /// `ZTHabitat*` members of the show-neighbor set (`+0x14`), in vanilla's in-order traversal order.
+    pub fn show_neighbors(&self) -> impl Iterator<Item = u32> {
+        neighbor_set_members(self.show_neighbors_head)
+    }
+
     pub(crate) const TANK_VTABLE_PTR: u32 = 0x006312bc;
 
     /// Sets [`Self::species_list_dirty`], the flag `update` checks before calling `reviseSpeciesList`.
@@ -1062,8 +1073,7 @@ impl ZTHabitat {
         }
         let mut total = self.num_animals;
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_animals(false);
             }
         }
@@ -1084,8 +1094,7 @@ impl ZTHabitat {
         let record_ptr = map_int_habitatsuitability_find_or_insert(self as *const Self as u32 + 0x148, species_id);
         let mut total: i32 = get_from_memory(record_ptr);
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_animals_by_species(species_id, false);
             }
         }
@@ -1222,8 +1231,7 @@ impl ZTHabitat {
             }
         }
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_adult_animals(false);
             }
         }
@@ -1260,8 +1268,7 @@ impl ZTHabitat {
             }
         }
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_adult_animals_by_species(species_id, false);
             }
             free_event_vector_buffer(scratch_vector[0], scratch_vector[2] - scratch_vector[0]);
@@ -1403,8 +1410,7 @@ impl ZTHabitat {
     pub fn get_size(&self, subhabs: bool) -> i32 {
         let mut total = walk_tile_list(self.owned_tiles_ptr).count() as i32;
         if subhabs {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_size(false);
             }
         }
@@ -1658,8 +1664,7 @@ impl ZTHabitat {
         let mut scratch_vector = [0u32; 3];
         self.add_clear_tiles(scratch_vector.as_mut_ptr() as u32, animal_ptr, check_path);
         if subhabs {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }
                     .add_clear_tiles(scratch_vector.as_mut_ptr() as u32, animal_ptr, check_path);
             }
@@ -2172,8 +2177,7 @@ impl ZTHabitat {
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
     fn get_tiles_aggregating(&self, out_vector_ptr: u32, add_tiles: impl Fn(&Self, u32)) {
         add_tiles(self, out_vector_ptr);
-        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.amphibious_neighbors() {
             add_tiles(unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }, out_vector_ptr);
         }
     }
@@ -2434,8 +2438,7 @@ impl ZTHabitat {
             .wrapping_add(category.wrapping_mul(4));
         let mut total = get_from_memory::<i32>(entry_addr);
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total = total.wrapping_add(unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_amount_keeper_food(category, false));
             }
         }
@@ -2473,8 +2476,7 @@ impl ZTHabitat {
             }
         }
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_food_to_leave(category, false);
             }
             total -= self.get_amount_keeper_food(category as u32, include_neighbors);
@@ -2662,8 +2664,7 @@ impl ZTHabitat {
             return best_entity;
         }
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 let candidate =
                     unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_smallest_keeper_food(tile_ptr, category, false);
                 if candidate != 0 {
@@ -2717,8 +2718,7 @@ impl ZTHabitat {
             return best_entity;
         }
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 let candidate =
                     unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_nearest_keeper_food(tile_ptr, category, false);
                 if candidate != 0 {
@@ -2756,8 +2756,7 @@ impl ZTHabitat {
         let count = self.get_num_keeper_food_tiles(category);
         if count < 1 {
             if include_neighbors {
-                for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                    let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+                for neighbor_ptr in self.amphibious_neighbors() {
                     let hit =
                         unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_random_keeper_food(tile_ptr, category, false);
                     if hit != 0 {
@@ -2883,8 +2882,7 @@ impl ZTHabitat {
             }
         }
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_hungry_foodless_animals(false);
             }
         }
@@ -2935,8 +2933,7 @@ impl ZTHabitat {
             total += 1;
         }
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_sickly_animals(keeper_ptr, false);
             }
         }
@@ -2964,8 +2961,7 @@ impl ZTHabitat {
         }
         let mut total = self.num_angry_animals;
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_angry_animals(false);
             }
         }
@@ -2983,8 +2979,7 @@ impl ZTHabitat {
         }
         let mut total = self.num_sick_animals;
         if include_neighbors {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_sick_animals(false);
             }
         }
@@ -3601,8 +3596,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as
     /// [`Self::get_attractiveness`].
     pub(crate) fn recalc_phase_3(&self, found_species_vec: &mut VanillaVector<u32>, old_species_found_count: u32, old_num_animals: i32) {
-        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.amphibious_neighbors() {
             unsafe {
                 ADD_FOUND_SPECIES.original()(
                     neighbor_ptr as *const u32,
@@ -3612,8 +3606,7 @@ impl ZTHabitat {
             };
 
             let neighbor_show_neighbors_head: u32 = get_from_memory(neighbor_ptr + 0x14);
-            for inner_node in walk_neighbor_tree(neighbor_show_neighbors_head) {
-                let inner_neighbor_ptr: u32 = get_from_memory(inner_node + 0x10);
+            for inner_neighbor_ptr in neighbor_set_members(neighbor_show_neighbors_head) {
                 unsafe {
                     ADD_FOUND_SPECIES.original()(
                         inner_neighbor_ptr as *const u32,
@@ -3624,8 +3617,7 @@ impl ZTHabitat {
             }
         }
 
-        for node in walk_neighbor_tree(self.show_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.show_neighbors() {
             unsafe {
                 ADD_FOUND_SPECIES.original()(
                     neighbor_ptr as *const u32,
@@ -3710,8 +3702,7 @@ impl ZTHabitat {
     pub(crate) fn recalc_phase_5(&self, map_ptr: u32, found_species_vec: &mut VanillaVector<u32>) -> RecalcPhase5Summary {
         let mut summary = RecalcPhase5Summary::default();
 
-        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.amphibious_neighbors() {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
 
             if neighbor.is_tank() {
@@ -3913,12 +3904,9 @@ impl ZTHabitat {
             let record_ptr = map_int_habitatsuitability_find_or_insert(map_ptr, get_from_memory(animal_type_ptr + 0x1ec));
 
             if is_animal_type && is_tank {
-                let has_neighbors = walk_neighbor_tree(self.amphibious_neighbors_head).next().is_some();
+                let has_neighbors = self.amphibious_neighbors().next().is_some();
                 let all_neighbors_are_tanks = has_neighbors
-                    && walk_neighbor_tree(self.amphibious_neighbors_head).all(|node| {
-                        let neighbor_ptr: u32 = get_from_memory(node + 0x10);
-                        unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.is_tank()
-                    });
+                    && self.amphibious_neighbors().all(|neighbor_ptr| unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.is_tank());
                 save_to_memory::<u8>(record_ptr + 0x6d, u8::from(all_neighbors_are_tanks));
             }
 
@@ -4709,8 +4697,7 @@ impl ZTHabitat {
         }
 
         if !self.is_tank() {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
                 for species_ptr in neighbor.species_list() {
                     if !unsafe { call_entity_vtable_noargs(species_ptr, 0xcc) } {
@@ -4723,8 +4710,7 @@ impl ZTHabitat {
             }
         }
 
-        for node in walk_neighbor_tree(self.show_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.show_neighbors() {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             for species_ptr in neighbor.species_list() {
                 if !self.surrounding_species_contains(species_ptr) {
@@ -5215,12 +5201,10 @@ impl ZTHabitat {
             return;
         }
         write_live!(self, characteristics_dirty, 1u8);
-        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.amphibious_neighbors() {
             unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.set_dirty_characteristics();
         }
-        for node in walk_neighbor_tree(self.show_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.show_neighbors() {
             unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.set_dirty_characteristics();
         }
     }
@@ -5252,8 +5236,7 @@ impl ZTHabitat {
     pub fn set_time_last_serviced(&self, time: u32, propagate: bool) {
         write_live!(self, time_last_serviced, time);
         if propagate {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.set_time_last_serviced(time, false);
             }
         }
@@ -5304,8 +5287,7 @@ impl ZTHabitat {
             unsafe { SET_KEEPER_ARRIVES.original()(animal_ptr as *const u32, keeper_ptr as *const u32) };
         }
         if scheduled {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.trigger_keeper_arrived(keeper_ptr, false);
             }
         }
@@ -5452,8 +5434,7 @@ impl ZTHabitat {
                 }
             }
 
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 let neighbor = unsafe { ref_from_memory::<Self>(neighbor_ptr) };
                 for addr in (neighbor.all_animals_begin..neighbor.all_animals_end).step_by(4) {
                     let animal_ptr: u32 = get_from_memory(addr);
@@ -5834,7 +5815,7 @@ impl ZTHabitat {
     /// *neighbour's* set, not this one), then frees the whole tree.
     pub fn clear_amphibious_neighbors(&self) {
         let self_addr = self as *const Self as u32;
-        let neighbors: Vec<u32> = walk_neighbor_tree(self.amphibious_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+        let neighbors: Vec<u32> = self.amphibious_neighbors().collect();
         for neighbor in neighbors {
             unsafe { ref_from_memory::<ZTHabitat>(neighbor) }.remove_amphibious_neighbor(self_addr);
         }
@@ -5909,8 +5890,8 @@ impl ZTHabitat {
         let self_addr = self as *const Self as u32;
         let mut animals: Vec<u32> = (self.all_animals_begin..self.all_animals_end).step_by(4).map(get_from_memory::<u32>).collect();
         if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor = unsafe { ref_from_memory::<ZTHabitat>(get_from_memory::<u32>(node + 0x10)) };
+            for neighbor_ptr in self.amphibious_neighbors() {
+                let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
                 let vector_addr = neighbor.get_animals();
                 let (begin, end): (u32, u32) = (get_from_memory(vector_addr), get_from_memory(vector_addr + 4));
                 let neighbor_animals: Vec<u32> = (begin..end).step_by(4).map(get_from_memory::<u32>).collect();
@@ -5952,7 +5933,7 @@ impl ZTHabitat {
                 }
             };
             register_show_units(self);
-            let neighbors: Vec<u32> = walk_neighbor_tree(self.amphibious_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+            let neighbors: Vec<u32> = self.amphibious_neighbors().collect();
             for neighbor in neighbors {
                 register_show_units(unsafe { ref_from_memory::<ZTHabitat>(neighbor) });
             }
@@ -5966,7 +5947,7 @@ impl ZTHabitat {
     /// show-portal map ([`Self::show_portal_map_head`], size at `+0x24`, `0x18`-byte nodes).
     pub fn clear_show_neighbors(&self) {
         let self_addr = self as *const Self as u32;
-        let neighbors: Vec<u32> = walk_neighbor_tree(self.show_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+        let neighbors: Vec<u32> = self.show_neighbors().collect();
         for neighbor in neighbors {
             let neighbor_habitat = unsafe { ref_from_memory::<ZTHabitat>(neighbor) };
             neighbor_habitat.remove_show_neighbor(self_addr);
@@ -5992,7 +5973,7 @@ impl ZTHabitat {
         }
         let self_addr = self as *const Self as u32;
         let forward = |head: u32| -> u32 {
-            let neighbors: Vec<u32> = walk_neighbor_tree(head).map(|node| get_from_memory(node + 0x10)).collect();
+            let neighbors: Vec<u32> = neighbor_set_members(head).collect();
             let mut result = 0;
             for neighbor in neighbors {
                 if neighbor != 0 {
@@ -6027,7 +6008,7 @@ impl ZTHabitat {
         }
         let self_addr = self as *const Self as u32;
         let forward = |head: u32| -> u8 {
-            let neighbors: Vec<u32> = walk_neighbor_tree(head).map(|node| get_from_memory(node + 0x10)).collect();
+            let neighbors: Vec<u32> = neighbor_set_members(head).collect();
             let mut result = 0;
             for neighbor in neighbors {
                 // A null neighbour reads its `+0x4` in vanilla; neighbour sets never hold one.
@@ -6065,7 +6046,7 @@ impl ZTHabitat {
                 }
             };
             remove_show_units(self);
-            let neighbors: Vec<u32> = walk_neighbor_tree(self.amphibious_neighbors_head).map(|node| get_from_memory(node + 0x10)).collect();
+            let neighbors: Vec<u32> = self.amphibious_neighbors().collect();
             for neighbor in neighbors {
                 remove_show_units(unsafe { ref_from_memory::<ZTHabitat>(neighbor) });
             }
@@ -6092,7 +6073,7 @@ impl ZTHabitat {
         let weight = |rva: u32| get_from_memory::<f32>(module_base + rva) as f64;
 
         let members: Vec<u32> =
-            walk_neighbor_tree(get_from_memory::<u32>(set_container_ptr)).map(|node| get_from_memory(node + 0x10)).collect();
+            neighbor_set_members(get_from_memory::<u32>(set_container_ptr)).collect();
         let mut best_rating: f32 = -1.0;
         let mut best: u32 = 0;
         for habitat_ptr in members {
@@ -6220,7 +6201,7 @@ impl ZTHabitat {
         }
         if include_neighbors {
             let neighbors: Vec<u32> =
-                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
             for neighbor_ptr in neighbors {
                 if unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.needs_service(keeper_ptr, false) {
                     return true;
@@ -6283,7 +6264,7 @@ impl ZTHabitat {
         }
         if include_neighbors {
             let neighbors: Vec<u32> =
-                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
             for neighbor_ptr in neighbors {
                 let found = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.get_random_hungry_animal(keeper_ptr, false, self_addr);
                 if found != 0 {
@@ -6332,7 +6313,7 @@ impl ZTHabitat {
             && unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) }
         {
             let neighbors: Vec<u32> =
-                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
             for neighbor_ptr in neighbors {
                 any_matched |= unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.generate_faces(species_type_ptr, smile, self_addr);
             }
@@ -6412,7 +6393,7 @@ impl ZTHabitat {
         }
         if include_neighbors && get_from_memory::<u32>(self_addr + 0xc) != 0 {
             let neighbors: Vec<u32> =
-                walk_neighbor_tree(get_from_memory::<u32>(self_addr + 0x8)).map(|node| get_from_memory(node + 0x10)).collect();
+                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
             let mut best = NEIGHBOR_RATING_SEED;
             for neighbor_ptr in neighbors {
                 let rating = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.habitat_rating_unrounded(animal_ptr, false);
@@ -6497,10 +6478,7 @@ impl ZTHabitat {
             let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
 
             let mut animals: Vec<u32> = habitat.get_all_animals(false).collect();
-            let neighbors: std::collections::BTreeSet<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head)
-                .chain(walk_neighbor_tree(habitat.show_neighbors_head))
-                .map(|node| get_from_memory::<u32>(node + 0x10))
-                .collect();
+            let neighbors: std::collections::BTreeSet<u32> = habitat.amphibious_neighbors().chain(habitat.show_neighbors()).collect();
             for neighbor in neighbors {
                 let neighbor_animals: Vec<u32> = unsafe { ref_from_memory::<ZTHabitat>(neighbor) }.get_all_animals(false).collect();
                 animals.extend(neighbor_animals);
@@ -6748,8 +6726,7 @@ impl ZTHabitat {
                 0
             }
         } else {
-            for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-                let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+            for neighbor_ptr in self.amphibious_neighbors() {
                 let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
                 let result = neighbor.get_show_portal(other_ptr);
                 if result != 0 {
@@ -7068,8 +7045,7 @@ impl ZTHabitat {
             return plan;
         }
         let self_ptr = self as *const Self as u32;
-        for node in walk_neighbor_tree(self.show_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.show_neighbors() {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             let mut has_portal = self.has_portal_animal(neighbor_ptr);
             if !has_portal {
@@ -7174,8 +7150,7 @@ impl ZTHabitat {
     /// real vanilla's own `addAmphibiousNeighbor`/`clearAmphibiousNeighbors` (left un-ported) produced -
     /// no allocation, no mutation of the tree itself.
     pub fn hilite_amphibious_neighbors(&self, hilite: bool) {
-        for node in walk_neighbor_tree(self.amphibious_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.amphibious_neighbors() {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             if hilite {
                 neighbor.highlight(true);
@@ -7188,8 +7163,7 @@ impl ZTHabitat {
     /// Ports `ZTHabitat::hiliteShowNeighbors` (`ZTHabitat_hiliteShowNeighbors.c`) - identical shape to
     /// [`Self::hilite_amphibious_neighbors`], walking [`Self::show_neighbors_head`] instead.
     pub fn hilite_show_neighbors(&self, hilite: bool) {
-        for node in walk_neighbor_tree(self.show_neighbors_head) {
-            let neighbor_ptr: u32 = get_from_memory(node + 0x10);
+        for neighbor_ptr in self.show_neighbors() {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             if hilite {
                 neighbor.highlight(true);

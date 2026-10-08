@@ -435,21 +435,19 @@ pub mod hooks_zthabitatmgr {
 
     /// The three biome-tile count getters share one `fastcall` shape (`ECX = this`, bare `RET`, no
     /// stack args) and each is a thin scratch-vector wrapper over the matching aggregator above -
-    /// see [`ZTHabitat::get_num_land_tiles`]'s own doc comment. `generated.rs`'s u32-vs-c_void
-    /// `this` spread across the three entries is a regeneration wart; each detour matches its own
-    /// `FunctionDef`'s declared type verbatim (same precedent as `get_random_animal` above).
+    /// see [`ZTHabitat::get_num_land_tiles`]'s own doc comment.
     #[detour(GET_NUM_LAND_TILES)]
     unsafe extern "fastcall" fn get_num_land_tiles(this: *const u32) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_land_tiles()
     }
 
     #[detour(GET_NUM_WATER_TILES)]
-    unsafe extern "fastcall" fn get_num_water_tiles(this: *const std::ffi::c_void) -> i32 {
+    unsafe extern "fastcall" fn get_num_water_tiles(this: *const u32) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_water_tiles()
     }
 
     #[detour(GET_NUM_UNDERWATER_TILES)]
-    unsafe extern "fastcall" fn get_num_underwater_tiles(this: *const std::ffi::c_void) -> i32 {
+    unsafe extern "fastcall" fn get_num_underwater_tiles(this: *const u32) -> i32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_underwater_tiles()
     }
 

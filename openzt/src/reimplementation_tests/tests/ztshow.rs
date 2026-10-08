@@ -847,7 +847,9 @@ pub(crate) fn run_ztshow_group3_trick_live_test(failure_log: &mut Option<std::fs
             // own `item.item_type == 3` check at all.
             let script_id = ztshowscriptmgr::register_script(0x8000_0000 | case_index as u32, case.item_type)
                 .expect("register_script should never reject a non-null ctor_ptr");
-            let item = ztshowscriptmgr::live_support::raw_item_with_mirror(case.item_type, 1, case.satisfaction, case.satisfaction_mirror);
+            let mut item = ztshowscriptmgr::live_support::raw_item_with_mirror(case.item_type, 1, case.satisfaction, case.satisfaction_mirror);
+            // `do_trick_event` short-circuits on the item's `+0xc` trick kind, not its `+8` unit-type id.
+            item.sentinel = case.item_type;
             ztshowscriptmgr::add_item(0x8000_0000 | case_index as u32, &item);
 
             save_to_memory(real_show + 0x4, script_id);

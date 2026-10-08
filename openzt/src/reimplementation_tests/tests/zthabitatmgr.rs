@@ -9997,8 +9997,8 @@ impl BiomeTileKind {
     fn num_real(self, habitat_ptr: u32) -> i32 {
         match self {
             BiomeTileKind::Land => unsafe { zthabitat::GET_NUM_LAND_TILES.original()(habitat_ptr as *const u32) },
-            BiomeTileKind::Water => unsafe { zthabitat::GET_NUM_WATER_TILES.original()(habitat_ptr as *const std::ffi::c_void) },
-            BiomeTileKind::Underwater => unsafe { zthabitat::GET_NUM_UNDERWATER_TILES.original()(habitat_ptr as *const std::ffi::c_void) },
+            BiomeTileKind::Water => unsafe { zthabitat::GET_NUM_WATER_TILES.original()(habitat_ptr as *const u32) },
+            BiomeTileKind::Underwater => unsafe { zthabitat::GET_NUM_UNDERWATER_TILES.original()(habitat_ptr as *const u32) },
         }
     }
 

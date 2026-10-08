@@ -976,7 +976,7 @@ impl ZTHabitatMgr {
 
         if old_habitat.is_tank() {
             let split_ok = low_byte_bool(unsafe {
-                SPLIT_TANK.original()(mgr_ptr, old_habitat_ptr as *const i32, tile_ptr as *const u32, neighbour_ptr as *const u32)
+                SPLIT_TANK.original()(mgr_ptr, old_habitat_ptr as *const i32, tile_ptr as *const u32, neighbour_ptr as *const u32, tile_ptr as *const u32)
             });
             if !split_ok {
                 unsafe {
@@ -2467,7 +2467,7 @@ impl ZTHabitatMgr {
         if !is_scenery_or_animal {
             return;
         }
-        let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        let neighbors: Vec<u32> = habitat.amphibious_neighbors().collect();
         for neighbor_ptr in neighbors {
             Self::before_entity_change(neighbor_ptr);
         }
@@ -2503,7 +2503,7 @@ impl ZTHabitatMgr {
         if !is_scenery_or_animal {
             return;
         }
-        let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        let neighbors: Vec<u32> = habitat.amphibious_neighbors().collect();
         for neighbor_ptr in neighbors {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             neighbor.set_dirty_characteristics();
@@ -2535,7 +2535,7 @@ impl ZTHabitatMgr {
         if !is_scenery_or_animal {
             return;
         }
-        let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        let neighbors: Vec<u32> = habitat.amphibious_neighbors().collect();
         for neighbor_ptr in neighbors {
             Self::before_entity_change(neighbor_ptr);
         }
@@ -2576,7 +2576,7 @@ impl ZTHabitatMgr {
         if !is_scenery_or_animal {
             return;
         }
-        let neighbors: Vec<u32> = walk_neighbor_tree(habitat.amphibious_neighbors_head).map(|node| get_from_memory::<u32>(node + 0x10)).collect();
+        let neighbors: Vec<u32> = habitat.amphibious_neighbors().collect();
         for neighbor_ptr in neighbors {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
             neighbor.set_dirty_characteristics();
