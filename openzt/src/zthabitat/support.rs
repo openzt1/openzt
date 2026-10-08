@@ -165,6 +165,41 @@ pub fn lcg_next(state: u32) -> u32 {
     state.wrapping_mul(0x343fd).wrapping_add(0x269ec3)
 }
 
+/// Biome predicates shared by the `add*Tiles`/`get*Tiles`/`getNum*Tiles`/`getRandom*Tile` families: a tile
+/// is land when `+0x85 & 0x20` is set, water when the water-class flags `+0x83 & 3` are set, and underwater
+/// when it is neither.
+pub fn is_land_tile(tile: u32) -> bool {
+    get_from_memory::<u8>(tile + 0x85) & 0x20 != 0
+}
+
+pub fn is_water_tile(tile: u32) -> bool {
+    get_from_memory::<u8>(tile + 0x83) & 3 != 0
+}
+
+pub fn is_underwater_tile(tile: u32) -> bool {
+    get_from_memory::<u8>(tile + 0x83) & 3 == 0 && get_from_memory::<u8>(tile + 0x85) & 0x20 == 0
+}
+
+/// Whether the `BFTile` at `tile` holds no entities: its four occupant-pointer fields (`+0x4..=+0x10`) are all null
+/// and its entity list (the node chain headed by the pointer at `+0x0`) is empty, i.e. the head's first link points
+/// back at the head. Pure reads, no allocation.
+pub fn tile_is_unoccupied(tile: u32) -> bool {
+    if [0x4, 0x8, 0xc, 0x10].iter().any(|offset| get_from_memory::<u32>(tile + offset) != 0) {
+        return false;
+    }
+    let list_head: u32 = get_from_memory(tile);
+    get_from_memory::<u32>(list_head) == list_head
+}
+
+/// Advances the shared game RNG and returns the 15-bit draw vanilla's `rand()`-style call sites take: `(state >> 16) & 0x7fff`
+/// of the new state. Callers reduce it with `% count`; consumption order is observable, so each call advances exactly once.
+pub fn next_game_random() -> u32 {
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let state = lcg_next(get_from_memory::<u32>(rng_addr));
+    save_to_memory(rng_addr, state);
+    (state >> 0x10) & 0x7fff
+}
+
 /// The per-habitat field rotation [`ZTHabitatMgr::enter_new_month`] applies identically to every
 /// `exhibit_array` entry and to [`ZTHabitatMgr::pending_habitat_ptr`]: `current_donations` (`+0xfc`) ->
 /// `last_donations` (`+0x100`), `unknown_u32_2` (`+0x114`) -> `unknown_u32_3` (`+0x118`), and
@@ -1592,33 +1627,7 @@ pub fn vector_push_pool_alloc4_pool_dealloc(vector_ptr: u32, value: u32) {
 /// [`vector_push_pool_alloc4`]'s own body, parameterized over the old buffer's teardown - the two
 /// shapes above are the only variants this corpus's push-back sites use.
 fn vector_push_pool_alloc4_with_dealloc(vector_ptr: u32, value: u32, dealloc_old_buffer: fn(u32, u32)) {
-    let begin = get_from_memory::<u32>(vector_ptr);
-    let end = get_from_memory::<u32>(vector_ptr + 4);
-    let cap_end = get_from_memory::<u32>(vector_ptr + 8);
-
-    if end == cap_end {
-        let old_len = (end - begin) / 4;
-        let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
-        let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 4) } as u32;
-
-        for i in 0..old_len {
-            let v: u32 = get_from_memory(begin + i * 4);
-            if new_buf != 0 {
-                save_to_memory(new_buf + i * 4, v);
-            }
-        }
-        if new_buf != 0 {
-            save_to_memory(new_buf + old_len * 4, value);
-        }
-        dealloc_old_buffer(begin, cap_end - begin);
-
-        save_to_memory(vector_ptr, new_buf);
-        save_to_memory(vector_ptr + 4, new_buf + (old_len + 1) * 4);
-        save_to_memory(vector_ptr + 8, new_buf + new_cap * 4);
-    } else {
-        save_to_memory(end, value);
-        save_to_memory(vector_ptr + 4, end + 4);
-    }
+    crate::vanilla_vector::push_word(vector_ptr, value, dealloc_old_buffer);
 }
 
 /// Allocates and constructs a real vanilla `SNDSound` (`operator_new(8)`, `mbr_0x4 = 0`, real vanilla

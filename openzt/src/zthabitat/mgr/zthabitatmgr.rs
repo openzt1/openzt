@@ -366,31 +366,11 @@ impl ZTHabitatMgr {
             return;
         }
 
-        let (start, end, buffer_end) = self.exhibit_array.raw_parts();
-        if end == buffer_end {
-            let old_len = self.exhibit_array.len() as u32;
-            let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
-            let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 4) } as u32;
-
-            for i in 0..old_len {
-                let value = get_from_memory::<u32>(start + i * 4);
-                if new_buf != 0 {
-                    save_to_memory(new_buf + i * 4, value);
-                }
-            }
-            if new_buf != 0 {
-                save_to_memory(new_buf + old_len * 4, habitat_ptr);
-            }
-            // Real vanilla calls `PoolAlloc::deallocate_n_4` unconditionally here, even for
-            // old_len==0 (freeing a null pointer with count 0) - matched as-is rather than skipped,
-            // since PoolAlloc's real deallocate is expected to no-op on an empty range and this keeps
-            // the call-through byte-for-byte faithful to `ZTHabitatMgr_addHabitat.asm`.
-            unsafe { POOLALLOC_DEALLOCATE_N_4.original()(start as *const u32, old_len as i32) };
-            self.exhibit_array.set_raw_parts(new_buf, new_buf + (old_len + 1) * 4, new_buf + new_cap * 4);
-        } else {
-            save_to_memory(end, habitat_ptr);
-            self.exhibit_array.set_raw_parts(start, end + 4, buffer_end);
-        }
+        // Real vanilla calls `PoolAlloc::deallocate_n_4` unconditionally on the old buffer, even for an
+        // empty vector (null pointer, count 0), so the shared push frees through it the same way.
+        crate::vanilla_vector::push_word(std::ptr::addr_of!(self.exhibit_array) as u32, habitat_ptr, |old_buf, byte_capacity| unsafe {
+            POOLALLOC_DEALLOCATE_N_4.original()(old_buf as *const u32, (byte_capacity / 4) as i32);
+        });
 
         unsafe { ZTUI_HABITATINFO_ADD_HABITAT.original()(habitat_ptr as *const i32) };
         let base = get_module_base("zoo.exe") as u32;

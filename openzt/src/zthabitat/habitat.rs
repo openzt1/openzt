@@ -11,7 +11,7 @@ use openzt_detour::generated::{
         msvc_std_listuint::{INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE, LIST as MSVC_LIST_UINT_DTOR},
         msvc_std_vector_t_4::VECTOR_T_4 as MSVC_VECTOR_T_4_DTOR,
         msvc_std_tree36::{CLEAR as MSVC_TREE36_CLEAR, OPERATOR_INDEX as MSVC_TREE36_OPERATOR_INDEX},
-        poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
+        poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
         ztanimal::{
             CAN_SERVICE, IS_HUNGRY as ZTANIMAL_IS_HUNGRY, IS_HUNGRY_AND_FOODLESS, IS_SICKLY,
@@ -1256,11 +1256,8 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
     pub fn get_num_adult_animals_by_species(&self, species_id: i32, include_neighbors: bool) -> i32 {
-        let mut scratch_vector = [0u32; 3];
-        self.get_species_animals(species_id, scratch_vector.as_mut_ptr() as u32);
         let mut total = 0i32;
-        for addr in (scratch_vector[0]..scratch_vector[1]).step_by(4) {
-            let animal_ptr: u32 = get_from_memory(addr);
+        for animal_ptr in self.species_animals(species_id) {
             let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
             let gender: u8 = get_from_memory(get_from_memory::<u32>(animal_type_ptr + 0xa4));
             if gender == b'm' || gender == b'f' {
@@ -1271,14 +1268,6 @@ impl ZTHabitat {
             for neighbor_ptr in self.amphibious_neighbors() {
                 total += unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.get_num_adult_animals_by_species(species_id, false);
             }
-            free_event_vector_buffer(scratch_vector[0], scratch_vector[2] - scratch_vector[0]);
-        } else {
-            unsafe {
-                POOLALLOC_DEALLOCATE_N_4.original()(
-                    scratch_vector[0] as *const u32,
-                    ((scratch_vector[2] - scratch_vector[0]) >> 2) as i32,
-                )
-            };
         }
         total
     }
@@ -1295,16 +1284,26 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_species_animals(&self, species_id: i32, out_vector_ptr: u32) {
+        for animal_ptr in self.species_animals(species_id) {
+            vector_push_pool_alloc4(out_vector_ptr, animal_ptr);
+        }
+    }
+
+    /// The direct-occupant animals whose species id matches `species_id`, in `all_animals` order - the
+    /// Rust-side form of [`Self::get_species_animals`] for callers that only read the result back, so no
+    /// vanilla-allocated scratch vector is needed.
+    pub fn species_animals(&self, species_id: i32) -> Vec<u32> {
         if self.characteristics_dirty != 0 {
             self.recalculate_characteristics();
         }
-        for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
-            let animal_ptr: u32 = get_from_memory(addr);
-            let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
-            if get_from_memory::<i32>(animal_type_ptr + 0x1ec) == species_id {
-                vector_push_pool_alloc4(out_vector_ptr, animal_ptr);
-            }
-        }
+        (self.all_animals_begin..self.all_animals_end)
+            .step_by(4)
+            .map(get_from_memory::<u32>)
+            .filter(|&animal_ptr| {
+                let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+                get_from_memory::<i32>(animal_type_ptr + 0x1ec) == species_id
+            })
+            .collect()
     }
 
     /// Ports `ZTHabitat::getAdultGenderSpeciesAnimals` (`ZTHabitat_getAdultGenderSpeciesAnimals.c`/`.asm`,
@@ -1386,10 +1385,8 @@ impl ZTHabitat {
         if count == 0 {
             return 0;
         }
-        let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-        let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-        save_to_memory(rng_addr, rng);
-        let index = ((rng >> 0x10) & 0x7fff) % count;
+        let draw = next_game_random();
+        let index = draw % count;
         get_from_memory(begin + index * 4)
     }
 
@@ -1438,10 +1435,8 @@ impl ZTHabitat {
         if count <= 0 {
             return 0;
         }
-        let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-        let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-        save_to_memory(rng_addr, rng);
-        let index = ((rng >> 0x10) & 0x7fff) % count as u32;
+        let draw = next_game_random();
+        let index = draw % count as u32;
         for (i, node) in walk_tile_list(self.owned_tiles_ptr).enumerate() {
             if i == index as usize {
                 return get_from_memory::<TileListNode>(node).payload;
@@ -1459,10 +1454,8 @@ impl ZTHabitat {
         if candidates.is_empty() {
             return self.get_random_tile();
         }
-        let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-        let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-        save_to_memory(rng_addr, rng);
-        let index = ((rng >> 0x10) & 0x7fff) % candidates.len() as u32;
+        let draw = next_game_random();
+        let index = draw % candidates.len() as u32;
         candidates[index as usize]
     }
 
@@ -1567,7 +1560,8 @@ impl ZTHabitat {
     /// read once before the walk - nothing in the loop can move the animal or swap the global.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
-    pub fn add_clear_tiles(&self, out_vector_ptr: u32, animal_ptr: u32, check_path: bool) {
+    pub fn clear_tiles(&self, animal_ptr: u32, check_path: bool) -> Vec<u32> {
+        let mut tiles = Vec::new();
         let max_cost: i32 = get_from_memory(get_module_base("zoo.exe") as u32 + MAX_PATH_COST_RVA);
         let animal_tile = if animal_ptr != 0 {
             (unsafe { BFENTITY_GET_TILE.original()(animal_ptr as *const u32) }) as u32
@@ -1577,15 +1571,7 @@ impl ZTHabitat {
         let ai_mgr_ptr = globals().ztaimgr_ptr() as u32;
         for node in walk_tile_list(self.owned_tiles_ptr) {
             let tile: u32 = get_from_memory(node + 0x8);
-            if get_from_memory::<u32>(tile + 0x4) != 0
-                || get_from_memory::<u32>(tile + 0x8) != 0
-                || get_from_memory::<u32>(tile + 0xc) != 0
-                || get_from_memory::<u32>(tile + 0x10) != 0
-            {
-                continue;
-            }
-            let list_head: u32 = get_from_memory(tile);
-            if get_from_memory::<u32>(list_head) != list_head {
+            if !tile_is_unoccupied(tile) {
                 continue;
             }
             if animal_ptr != 0 && unsafe { call_bfunit_tile_cost_vtable_slot(animal_ptr, tile) } == max_cost {
@@ -1604,6 +1590,15 @@ impl ZTHabitat {
                     continue;
                 }
             }
+            tiles.push(tile);
+        }
+        tiles
+    }
+
+    /// Appends [`Self::clear_tiles`] onto the vanilla `std::vector<BFTile*>` out-param at `out_vector_ptr`
+    /// ([`vector_push_pool_alloc4`]) - the entry point vanilla callers reach through the detour.
+    pub fn add_clear_tiles(&self, out_vector_ptr: u32, animal_ptr: u32, check_path: bool) {
+        for tile in self.clear_tiles(animal_ptr, check_path) {
             vector_push_pool_alloc4(out_vector_ptr, tile);
         }
     }
@@ -1661,27 +1656,16 @@ impl ZTHabitat {
         if world == 0 {
             return 0;
         }
-        let mut scratch_vector = [0u32; 3];
-        self.add_clear_tiles(scratch_vector.as_mut_ptr() as u32, animal_ptr, check_path);
+        let mut candidates = self.clear_tiles(animal_ptr, check_path);
         if subhabs {
             for neighbor_ptr in self.amphibious_neighbors() {
-                unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }
-                    .add_clear_tiles(scratch_vector.as_mut_ptr() as u32, animal_ptr, check_path);
+                candidates.extend(unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.clear_tiles(animal_ptr, check_path));
             }
         }
-        let begin = scratch_vector[0];
-        let picked = if scratch_vector[1] != begin {
-            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-            save_to_memory(rng_addr, rng);
-            let count = (scratch_vector[1] - begin) >> 2;
-            let index = ((rng >> 0x10) & 0x7fff) % count;
-            get_from_memory::<u32>(begin + index * 4)
-        } else {
-            0
-        };
-        free_event_vector_buffer(begin, scratch_vector[2].wrapping_sub(begin));
-        picked
+        if candidates.is_empty() {
+            return 0;
+        }
+        candidates[(next_game_random() % candidates.len() as u32) as usize]
     }
 
     /// Ports `ZTHabitat::getAdjacentClearTile` (`ZTHabitat_getAdjacentClearTile.c`/`.asm`, `generated.rs`'s
@@ -1758,10 +1742,8 @@ impl ZTHabitat {
         if candidates.is_empty() {
             return base_tile_ptr;
         }
-        let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-        let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-        save_to_memory(rng_addr, rng);
-        let index = ((rng >> 0x10) & 0x7fff) % candidates.len() as u32;
+        let draw = next_game_random();
+        let index = draw % candidates.len() as u32;
         candidates[index as usize]
     }
 
@@ -1845,15 +1827,7 @@ impl ZTHabitat {
             if dist >= best_dist {
                 continue;
             }
-            if get_from_memory::<u32>(tile + 0x4) != 0
-                || get_from_memory::<u32>(tile + 0x8) != 0
-                || get_from_memory::<u32>(tile + 0xc) != 0
-                || get_from_memory::<u32>(tile + 0x10) != 0
-            {
-                continue;
-            }
-            let list_head: u32 = get_from_memory(tile);
-            if get_from_memory::<u32>(list_head) != list_head {
+            if !tile_is_unoccupied(tile) {
                 continue;
             }
             if unsafe { call_bfunit_tile_cost_vtable_slot(unit_ptr, tile) } >= max_cost {
@@ -1956,7 +1930,7 @@ impl ZTHabitat {
         };
         let invalid_begin: u32 = get_from_memory(unit_ptr + 0x27c);
         let invalid_end: u32 = get_from_memory(unit_ptr + 0x280);
-        let mut scratch_vector = [0u32; 3];
+        let mut candidates: Vec<u32> = Vec::new();
         for node in walk_tile_list(self.owned_tiles_ptr) {
             let tile: u32 = get_from_memory(node + 0x8);
             let mut reserved = false;
@@ -1971,15 +1945,7 @@ impl ZTHabitat {
             if reserved {
                 continue;
             }
-            if get_from_memory::<u32>(tile + 0x4) != 0
-                || get_from_memory::<u32>(tile + 0x8) != 0
-                || get_from_memory::<u32>(tile + 0xc) != 0
-                || get_from_memory::<u32>(tile + 0x10) != 0
-            {
-                continue;
-            }
-            let list_head: u32 = get_from_memory(tile);
-            if get_from_memory::<u32>(list_head) != list_head {
+            if !tile_is_unoccupied(tile) {
                 continue;
             }
             if unsafe { call_bfunit_tile_cost_vtable_slot(unit_ptr, tile) } == max_cost {
@@ -2014,19 +1980,9 @@ impl ZTHabitat {
             if get_from_memory::<u8>(tile + 0x85) & 4 != 0 {
                 continue;
             }
-            vector_push_pool_alloc4(scratch_vector.as_mut_ptr() as u32, tile);
+            candidates.push(tile);
         }
-        let begin = scratch_vector[0];
-        let mut picked = 0u32;
-        if scratch_vector[1] != begin {
-            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-            save_to_memory(rng_addr, rng);
-            let count = (scratch_vector[1] - begin) >> 2;
-            let index = ((rng >> 0x10) & 0x7fff) % count;
-            picked = get_from_memory::<u32>(begin + index * 4);
-        }
-        free_event_vector_buffer(begin, scratch_vector[2].wrapping_sub(begin));
+        let picked = if candidates.is_empty() { 0 } else { candidates[(next_game_random() % candidates.len() as u32) as usize] };
         if picked != 0 {
             return picked;
         }
@@ -2105,12 +2061,28 @@ impl ZTHabitat {
     /// `PoolAlloc::deallocate`-teardown shape all three decompiles' own inlined push-backs use).
     /// Deterministic on all three: no RNG draw, no `characteristics_dirty` recalculate.
     fn add_tiles_matching(&self, out_vector_ptr: u32, tile_qualifies: impl Fn(u32) -> bool) {
-        for node in walk_tile_list(self.owned_tiles_ptr) {
-            let tile: u32 = get_from_memory(node + 0x8);
-            if tile_qualifies(tile) {
-                vector_push_pool_alloc4_pool_dealloc(out_vector_ptr, tile);
-            }
+        for tile in self.tiles_matching(tile_qualifies) {
+            vector_push_pool_alloc4_pool_dealloc(out_vector_ptr, tile);
         }
+    }
+
+    /// Owned tiles ([`walk_tile_list`] order) whose `tile_qualifies` predicate passes - the Rust-side form of
+    /// [`Self::add_tiles_matching`] for callers that read the result back.
+    fn tiles_matching(&self, tile_qualifies: impl Fn(u32) -> bool) -> Vec<u32> {
+        walk_tile_list(self.owned_tiles_ptr)
+            .map(|node| get_from_memory::<u32>(node + 0x8))
+            .filter(|&tile| tile_qualifies(tile))
+            .collect()
+    }
+
+    /// [`Self::tiles_matching`] over `self` then each amphibious neighbor, the order
+    /// [`Self::get_tiles_aggregating`] appends in.
+    fn aggregated_tiles_matching(&self, tile_qualifies: fn(u32) -> bool) -> Vec<u32> {
+        let mut tiles = self.tiles_matching(tile_qualifies);
+        for neighbor_ptr in self.amphibious_neighbors() {
+            tiles.extend(unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }.tiles_matching(tile_qualifies));
+        }
+        tiles
     }
 
     /// Ports `ZTHabitat::addLandTiles` (`ZTHabitat_addLandTiles.c`/`.asm`, `generated.rs`'s
@@ -2129,7 +2101,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn add_land_tiles(&self, out_vector_ptr: u32) {
-        self.add_tiles_matching(out_vector_ptr, |tile| get_from_memory::<u8>(tile + 0x85) & 0x20 != 0);
+        self.add_tiles_matching(out_vector_ptr, is_land_tile);
     }
 
     /// Ports `ZTHabitat::addWaterTiles` (`ZTHabitat_addWaterTiles.c`/`.asm`, `generated.rs`'s
@@ -2142,7 +2114,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn add_water_tiles(&self, out_vector_ptr: u32) {
-        self.add_tiles_matching(out_vector_ptr, |tile| get_from_memory::<u8>(tile + 0x83) & 3 != 0);
+        self.add_tiles_matching(out_vector_ptr, is_water_tile);
     }
 
     /// Ports `ZTHabitat::addUnderwaterTiles` (`ZTHabitat_addUnderwaterTiles.c`/`.asm`,
@@ -2157,9 +2129,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn add_underwater_tiles(&self, out_vector_ptr: u32) {
-        self.add_tiles_matching(out_vector_ptr, |tile| {
-            get_from_memory::<u8>(tile + 0x83) & 3 == 0 && get_from_memory::<u8>(tile + 0x85) & 0x20 == 0
-        });
+        self.add_tiles_matching(out_vector_ptr, is_underwater_tile);
     }
 
     /// Shared recursive aggregation behind the three biome-tile getters below
@@ -2175,10 +2145,9 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
-    fn get_tiles_aggregating(&self, out_vector_ptr: u32, add_tiles: impl Fn(&Self, u32)) {
-        add_tiles(self, out_vector_ptr);
-        for neighbor_ptr in self.amphibious_neighbors() {
-            add_tiles(unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }, out_vector_ptr);
+    fn get_tiles_aggregating(&self, out_vector_ptr: u32, tile_qualifies: fn(u32) -> bool) {
+        for tile in self.aggregated_tiles_matching(tile_qualifies) {
+            vector_push_pool_alloc4_pool_dealloc(out_vector_ptr, tile);
         }
     }
 
@@ -2190,7 +2159,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
     pub fn get_land_tiles(&self, out_vector_ptr: u32) {
-        self.get_tiles_aggregating(out_vector_ptr, Self::add_land_tiles);
+        self.get_tiles_aggregating(out_vector_ptr, is_land_tile);
     }
 
     /// Ports `ZTHabitat::getWaterTiles` (`ZTHabitat_getWaterTiles.c`/`.asm`, `generated.rs`'s
@@ -2200,7 +2169,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
     pub fn get_water_tiles(&self, out_vector_ptr: u32) {
-        self.get_tiles_aggregating(out_vector_ptr, Self::add_water_tiles);
+        self.get_tiles_aggregating(out_vector_ptr, is_water_tile);
     }
 
     /// Ports `ZTHabitat::getUnderwaterTiles` (`ZTHabitat_getUnderwaterTiles.c`/`.asm`,
@@ -2210,7 +2179,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
     pub fn get_underwater_tiles(&self, out_vector_ptr: u32) {
-        self.get_tiles_aggregating(out_vector_ptr, Self::add_underwater_tiles);
+        self.get_tiles_aggregating(out_vector_ptr, is_underwater_tile);
     }
 
     /// Shared count-only wrapper behind the three biome-tile count getters below
@@ -2230,12 +2199,8 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
-    fn get_num_tiles_aggregating(&self, get_tiles: impl Fn(&Self, u32)) -> i32 {
-        let mut scratch_vector = [0u32; 3];
-        get_tiles(self, scratch_vector.as_mut_ptr() as u32);
-        let count = (scratch_vector[1] as i32).wrapping_sub(scratch_vector[0] as i32) >> 2;
-        free_event_vector_buffer(scratch_vector[0], scratch_vector[2].wrapping_sub(scratch_vector[0]));
-        count
+    fn get_num_tiles_aggregating(&self, tile_qualifies: fn(u32) -> bool) -> i32 {
+        self.aggregated_tiles_matching(tile_qualifies).len() as i32
     }
 
     /// Ports `ZTHabitat::getNumLandTiles` (`ZTHabitat_getNumLandTiles.c`/`.asm`, `generated.rs`'s
@@ -2245,7 +2210,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_num_land_tiles(&self) -> i32 {
-        self.get_num_tiles_aggregating(Self::get_land_tiles)
+        self.get_num_tiles_aggregating(is_land_tile)
     }
 
     /// Ports `ZTHabitat::getNumWaterTiles` (`ZTHabitat_getNumWaterTiles.c`/`.asm`, `generated.rs`'s
@@ -2254,7 +2219,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_num_water_tiles(&self) -> i32 {
-        self.get_num_tiles_aggregating(Self::get_water_tiles)
+        self.get_num_tiles_aggregating(is_water_tile)
     }
 
     /// Ports `ZTHabitat::getNumUnderwaterTiles` (`ZTHabitat_getNumUnderwaterTiles.c`/`.asm`,
@@ -2263,7 +2228,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_num_underwater_tiles(&self) -> i32 {
-        self.get_num_tiles_aggregating(Self::get_underwater_tiles)
+        self.get_num_tiles_aggregating(is_underwater_tile)
     }
 
     /// Shared random-draw wrapper behind the three biome-tile random getters below
@@ -2289,21 +2254,12 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
     /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
-    fn get_random_tiles_aggregating(&self, get_tiles: impl Fn(&Self, u32)) -> u32 {
-        let mut scratch_vector = [0u32; 3];
-        get_tiles(self, scratch_vector.as_mut_ptr() as u32);
-        let count = (scratch_vector[1] as i32).wrapping_sub(scratch_vector[0] as i32) >> 2;
-        let picked = if count > 0 {
-            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-            save_to_memory(rng_addr, rng);
-            let index = ((rng >> 0x10) & 0x7fff) % count as u32;
-            get_from_memory(scratch_vector[0] + index * 4) // pick BEFORE teardown: the freelist push overwrites begin
-        } else {
-            0
-        };
-        free_event_vector_buffer(scratch_vector[0], scratch_vector[2].wrapping_sub(scratch_vector[0]));
-        picked
+    fn get_random_tiles_aggregating(&self, tile_qualifies: fn(u32) -> bool) -> u32 {
+        let tiles = self.aggregated_tiles_matching(tile_qualifies);
+        if tiles.is_empty() {
+            return 0;
+        }
+        tiles[(next_game_random() % tiles.len() as u32) as usize]
     }
 
     /// Ports `ZTHabitat::getRandomLandTile` (`ZTHabitat_getRandomLandTile.c`/`.asm`, `generated.rs`'s
@@ -2312,7 +2268,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_random_land_tile(&self) -> u32 {
-        self.get_random_tiles_aggregating(Self::get_land_tiles)
+        self.get_random_tiles_aggregating(is_land_tile)
     }
 
     /// Ports `ZTHabitat::getRandomWaterTile` (`ZTHabitat_getRandomWaterTile.c`/`.asm`,
@@ -2321,7 +2277,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_random_water_tile(&self) -> u32 {
-        self.get_random_tiles_aggregating(Self::get_water_tiles)
+        self.get_random_tiles_aggregating(is_water_tile)
     }
 
     /// Ports `ZTHabitat::getRandomUnderwaterTile` (`ZTHabitat_getRandomUnderwaterTile.c`/`.asm`,
@@ -2330,7 +2286,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn get_random_underwater_tile(&self) -> u32 {
-        self.get_random_tiles_aggregating(Self::get_underwater_tiles)
+        self.get_random_tiles_aggregating(is_underwater_tile)
     }
 
     /// Ports `ZTHabitat::addBabyBornBonus` (`ZTHabitat_addBabyBornBonus.c`/`.asm`, `generated.rs`'s
@@ -2355,14 +2311,10 @@ impl ZTHabitat {
     pub fn add_baby_born_bonus(&self, species_type_ptr: u32) {
         let species_id: i32 = get_from_memory(species_type_ptr + 0x1ec);
         let bonus: i32 = get_from_memory(species_type_ptr + 0x31c);
-        let mut scratch_vector = [0u32; 3];
-        self.get_species_animals(species_id, scratch_vector.as_mut_ptr() as u32);
-        for addr in (scratch_vector[0]..scratch_vector[1]).step_by(4) {
-            let animal_ptr: u32 = get_from_memory(addr);
+        for animal_ptr in self.species_animals(species_id) {
             let pending: i32 = get_from_memory(animal_ptr + 0x2ac);
             save_to_memory(animal_ptr + 0x2ac, pending.wrapping_add(bonus));
         }
-        free_event_vector_buffer(scratch_vector[0], scratch_vector[2] - scratch_vector[0]);
     }
 
     /// Ports `ZTHabitat::getAllAnimals` (`ZTHabitat_getAllAnimals.c`/`.asm`): same
@@ -2766,10 +2718,8 @@ impl ZTHabitat {
             }
             return 0;
         }
-        let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-        let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-        save_to_memory(rng_addr, rng);
-        let target = ((rng >> 0x10) & 0x7fff) % count as u32;
+        let draw = next_game_random();
+        let target = draw % count as u32;
         let mut counter: u32 = 0;
         for node in walk_tile_list(self.owned_tiles_ptr) {
             let candidate_tile = get_from_memory::<TileListNode>(node).payload;
@@ -5166,15 +5116,7 @@ impl ZTHabitat {
                     unsafe { OPERATOR_DELETE.original()(ambients_ptr) };
                 }
 
-                let mut src = p + 0x8;
-                let mut dst = p;
-                while src != self.ambients_end {
-                    save_to_memory(dst, get_from_memory::<u32>(src));
-                    save_to_memory(dst + 0x4, get_from_memory::<u32>(src + 0x4));
-                    src += 0x8;
-                    dst += 0x8;
-                }
-                write_live!(self, ambients_end, self.ambients_end - 0x8);
+                crate::vanilla_vector::erase_element(std::ptr::addr_of!(self.ambients_begin) as u32, p, 0x8);
                 return;
             }
             p += 0x8;
@@ -6257,10 +6199,8 @@ impl ZTHabitat {
         }
 
         if !candidates.is_empty() {
-            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-            let state = lcg_next(get_from_memory::<u32>(rng_addr));
-            save_to_memory(rng_addr, state);
-            return candidates[((state >> 16) & 0x7fff) as usize % candidates.len()];
+            let draw = next_game_random();
+            return candidates[draw as usize % candidates.len()];
         }
         if include_neighbors {
             let neighbors: Vec<u32> =
@@ -6976,10 +6916,8 @@ impl ZTHabitat {
             write_live!(self, species_list_dirty, 1u8);
         }
         if self.species_list_dirty != 0 {
-            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-            save_to_memory(rng_addr, rng);
-            write_live!(self, species_list_timer, (rng >> 0x10 & 0x7fff) % 200);
+            let draw = next_game_random();
+            write_live!(self, species_list_timer, draw % 200);
             unsafe { REVISE_SPECIES_LIST.original()(self as *const Self as *const u32) };
         }
 
@@ -6987,10 +6925,8 @@ impl ZTHabitat {
             write_live!(self, characteristics_dirty, 1u8);
         }
         if self.characteristics_dirty != 0 {
-            let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
-            let rng = lcg_next(get_from_memory::<u32>(rng_addr));
-            save_to_memory(rng_addr, rng);
-            write_live!(self, characteristics_timer, (rng >> 0x10 & 0x7fff) % 200);
+            let draw = next_game_random();
+            write_live!(self, characteristics_timer, draw % 200);
             self.recalculate_characteristics();
         }
 
@@ -7292,33 +7228,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn add_viewing_area(&self, va_ptr: u32) {
         let self_addr = self as *const Self as u32;
-        let begin = self.viewing_areas_begin;
-        let end = self.viewing_areas_end;
-        let cap_end = self.viewing_areas_cap_end;
-
-        if end == cap_end {
-            let old_len = (end - begin) / 4;
-            let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
-            let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 4) } as u32;
-
-            for i in 0..old_len {
-                let value: u32 = get_from_memory(begin + i * 4);
-                if new_buf != 0 {
-                    save_to_memory(new_buf + i * 4, value);
-                }
-            }
-            if new_buf != 0 {
-                save_to_memory(new_buf + old_len * 4, va_ptr);
-            }
-            free_event_vector_buffer(begin, cap_end - begin);
-
-            save_to_memory(self_addr + 0x34, new_buf);
-            save_to_memory(self_addr + 0x38, new_buf + (old_len + 1) * 4);
-            save_to_memory(self_addr + 0x3c, new_buf + new_cap * 4);
-        } else {
-            save_to_memory(end, va_ptr);
-            save_to_memory(self_addr + 0x38, end + 4);
-        }
+        vector_push_pool_alloc4(self_addr + 0x34, va_ptr);
         save_to_memory::<u8>(self_addr + 0x2d, 1);
     }
 
@@ -7350,15 +7260,7 @@ impl ZTHabitat {
             }
         }
 
-        let mut write = cursor;
-        let mut read = cursor + 4;
-        while read != end {
-            let value: u32 = get_from_memory(read);
-            save_to_memory(write, value);
-            write += 4;
-            read += 4;
-        }
-        save_to_memory(self_addr + 0x38, end - 4);
+        crate::vanilla_vector::erase_element(self_addr + 0x34, cursor, 4);
         save_to_memory::<u8>(self_addr + 0x2d, 1);
     }
 
