@@ -257,6 +257,34 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_zthabitatmgr_get_num_non_show_non_world_habitats_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITATMGR_GET_NONEMPTY_NON_WORLD_HABITATS_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_nonempty_non_world_habitats_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_GET_NEXT_NUM_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_next_num_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_GET_GRANDSTANDS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_grandstands_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_EMPTY_GRANDSTANDS_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_empty_grandstands_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_IS_SHOW_TANK_AND_SPECIES_LIST_MATCH_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_is_show_tank_and_species_list_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NUM_DIRT_TILES_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_num_dirt_tiles_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_CONSTRUCT_SURROUNDING_SPECIES_LIST_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_construct_surrounding_species_list_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_HIGHLIGHT_UNHIGHLIGHT_ROUNDTRIP_LIVE",
                 run: tests::zthabitatmgr::run_habitat_highlight_unhighlight_roundtrip_live_test,
             },
@@ -918,6 +946,15 @@ pub(super) mod detour_zoo_main {
             // fully-populated real ZTGameMgr to load into instead) - run genuinely last so nothing above
             // depends on those fields being untouched afterward.
             RegisteredTest { name: "ZTGAMEMGR_REAL_ZOO_SAVE_LOAD_ROUNDTRIP_LIVE", run: tests::ztgamemgr::run_ztgamemgr_real_zoo_save_load_roundtrip_live_test },
+            // Restores staff assignments after each pole; kept at the end because it frees and re-allocates
+            // vanilla freelist nodes and temporarily empties every staff member's assigned-habitat list.
+            RegisteredTest { name: "ZTHABITATMGR_CLEAR_ALL_STAFF_HABITATS_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_clear_all_staff_habitats_live_test },
+            // Destroys every habitat in the live zoo and reloads the test save between poles and at the end, so it
+            // must run after every other live test.
+            RegisteredTest { name: "ZTSHOWINFO_SAVE_IGNORES_STALE_COUNTS_LIVE", run: tests::zthabitatmgr::run_ztshowinfo_save_ignores_stale_counts_live_test },
+            RegisteredTest { name: "ZTWORLDMGR_SAVE_FILE_ROUNDTRIP_LIVE", run: tests::zthabitatmgr::run_ztworldmgr_save_file_roundtrip_live_test },
+            RegisteredTest { name: "ZTWORLDMGR_SIMULATED_PLAY_THEN_SAVE_LIVE", run: tests::zthabitatmgr::run_ztworldmgr_simulated_play_then_save_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_REMOVE_ALL_HABITATS_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_remove_all_habitats_live_test },
         ]
     }
 
@@ -1065,7 +1102,7 @@ pub(super) mod detour_zoo_main {
     /// handlers, neither of which touches `GLOBAL_ZTWorldMgr`/`GLOBAL_ZTHabitatMgr`.
     ///
     /// Returns `true` only on a real load success (`LOAD_FILE`'s low byte non-zero).
-    fn run_load_live_zoo(failure_log: &mut Option<std::fs::File>) -> bool {
+    pub(in crate::reimplementation_tests) fn run_load_live_zoo(failure_log: &mut Option<std::fs::File>) -> bool {
         let test_name = "LOAD_LIVE_ZOO";
         let path = std::env::var("OPENZT_TEST_ZOO").unwrap_or_else(|_| DEFAULT_TEST_ZOO_PATH.to_string());
 

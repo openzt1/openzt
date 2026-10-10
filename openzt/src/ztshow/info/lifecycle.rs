@@ -279,13 +279,14 @@ pub fn show_info_save(this: u32, file: *const i8) -> bool {
         cursor += 4;
     }
 
-    let node_count = get_from_memory::<u32>(this + 0x48);
-    ok &= write_field(&node_count as *const u32 as u32, 4, file);
-
+    // Count the nodes actually in the tree rather than trusting the raw `+0x48` field (see
+    // `show_state_save`): a count that differs from the records written misaligns the rest of the file.
     let header = get_from_memory::<u32>(this + 0x44);
     let root = get_from_memory::<u32>(header + 4);
     let mut nodes = Vec::new();
     collect_pending_script_nodes(root, &mut nodes);
+    let node_count = nodes.len() as u32;
+    ok &= write_field(&node_count as *const u32 as u32, 4, file);
     for node in nodes {
         ok &= write_field(node + 0x10, 4, file);
         ok &= write_field(node + 0x1c, 2, file);

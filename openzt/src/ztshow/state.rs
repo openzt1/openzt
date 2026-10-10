@@ -344,15 +344,20 @@ pub fn show_state_save(this: u32, file: *const i8) -> bool {
     ok &= write_field(this + 0x10, 4, file);
     ok &= write_field(this + 0x14, 4, file);
     ok &= write_field(this + 0x18, 4, file);
-    ok &= write_field(this + 0x20, 4, file);
-    if !ok {
-        return false;
-    }
 
+    // The count written is the number of entries actually in the tree, not the raw `+0x20` field: that field
+    // is only kept in step by `show_state_load`, so after a `clear` or a play-time `create_show_script_state`
+    // it can disagree with the tree, and a count that differs from the records written misaligns every byte
+    // after it (the loader reads `count` script-state records).
     let header = get_from_memory::<u32>(this + 0x1c);
     let root = get_from_memory::<u32>(header + 0x4);
     let mut nodes = Vec::new();
     collect_tree_nodes(root, &mut nodes);
+    let entry_count = nodes.len() as u32;
+    ok &= write_field(&entry_count as *const u32 as u32, 4, file);
+    if !ok {
+        return false;
+    }
 
     for node in nodes {
         let value = get_from_memory::<u32>(node + 0x14);

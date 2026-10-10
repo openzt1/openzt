@@ -74,11 +74,12 @@ pub mod hooks_zthabitatmgr {
             MOVE_GATE_TO_1, MOVE_GATE_TO_0,
             GET_TERRAIN_SUITABILITY, GET_OBJECT_SUITABILITY, GET_FOLIAGE_DENSITY_SUITABILITY, GET_ROCK_DENSITY_SUITABILITY,
             GET_ELEVATION_SUITABILITY, GET_SHELTER_SUITABILITY, GET_TOY_SUITABILITY, GET_TANK_DEPTH_SUITABILITY,
-            GET_TANK_CLEANLINESS_SUITABILITY, GET_TANK_SALINITY_SUITABILITY, GET_COMPATIBLE_ANIMAL_RATING,
+            GET_TANK_CLEANLINESS_SUITABILITY, GET_TANK_SALINITY_SUITABILITY, GET_COMPATIBLE_ANIMAL_RATING, CONSTRUCT_SURROUNDING_SPECIES_LIST,
+            IS_SHOW_TANK, GET_SPECIES_LIST, GET_NUM_DIRT_TILES,
         },
         zthabitatmgr::{
             DO_TANK_CHECK, ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES,
-            GET_NUM_NON_SHOW_NON_WORLD_HABITATS, HABITAT_TILE_CHANGED,
+            GET_NUM_NON_SHOW_NON_WORLD_HABITATS, GET_NONEMPTY_NON_WORLD_HABITATS, GET_NEXT_NUM, GET_GRANDSTANDS, EMPTY_GRANDSTANDS, CLEAR_ALL_STAFF_HABITATS, REMOVE_ALL_HABITATS, HABITAT_TILE_CHANGED,
             HIGHLIGHT_HABITAT, REPLACE_FENCE_WITH_GATE, REPLACE_GATE, REPLACE_GATE_WITH_FENCE, SCENERY_ENTITY_CHANGE, TERRAIN_TILE_CHANGED,
             UNHIGHLIGHT_HABITAT, PATH_PLACED as ZTHABITATMGR_PATH_PLACED, PATH_REMOVED as ZTHABITATMGR_PATH_REMOVED, CHECK_ENTER_HABITAT,
             GET_OUTERMOST_TANK, GET_NEEDY_NESTED_TANK, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
@@ -313,6 +314,19 @@ pub mod hooks_zthabitatmgr {
     unsafe extern "thiscall" fn get_adult_gender_species_animals(this: *const u32, gender_str: *const i8, species_id: i32, out_vector: *const i32) -> *const u32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_adult_gender_species_animals(gender_str as u32, species_id, out_vector as u32);
         this
+    }
+
+    /// `generated.rs`'s own entry is `fastcall` (`ECX = this`, no stack args, no return).
+    #[detour(CONSTRUCT_SURROUNDING_SPECIES_LIST)]
+    unsafe extern "fastcall" fn construct_surrounding_species_list(this: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this as u32) }.construct_surrounding_species_list()
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn construct_surrounding_species_list_real(this: *const i32) {
+        unsafe { CONSTRUCT_SURROUNDING_SPECIES_LIST_DETOUR.call(this) }
     }
 
     /// `generated.rs`'s own entry is `fastcall` (`ECX = this`) returning the picked `ZTAnimal*`
@@ -1192,6 +1206,103 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_num_non_show_non_world_habitats_real(this: *const u32) -> i32 {
         unsafe { GET_NUM_NON_SHOW_NON_WORLD_HABITATS_DETOUR.call(this) }
+    }
+
+    #[detour(REMOVE_ALL_HABITATS)]
+    unsafe extern "thiscall" fn remove_all_habitats(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.remove_all_habitats()
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn remove_all_habitats_real(this: *const u32) {
+        unsafe { REMOVE_ALL_HABITATS_DETOUR.call(this) }
+    }
+
+    #[detour(CLEAR_ALL_STAFF_HABITATS)]
+    unsafe extern "stdcall" fn clear_all_staff_habitats() {
+        ZTHabitatMgr::clear_all_staff_habitats()
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn clear_all_staff_habitats_real() {
+        unsafe { CLEAR_ALL_STAFF_HABITATS_DETOUR.call() }
+    }
+
+    #[detour(GET_NEXT_NUM)]
+    unsafe extern "thiscall" fn get_next_num(this: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_next_num()
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_next_num_real(this: *const u32) -> u32 {
+        unsafe { GET_NEXT_NUM_DETOUR.call(this) }
+    }
+
+    /// Free `stdcall` helper in vanilla (`generated.rs` files it under `ZTHabitatMgr`); takes the show id
+    /// and the caller's `list<uint>` object.
+    #[detour(GET_GRANDSTANDS)]
+    unsafe extern "stdcall" fn get_grandstands(show_id: u16, out_list: *const i32) {
+        ZTHabitatMgr::get_grandstands(show_id, out_list as u32)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_grandstands_real(show_id: u16, out_list: u32) {
+        unsafe { GET_GRANDSTANDS_DETOUR.call(show_id, out_list as *const i32) }
+    }
+
+    #[detour(EMPTY_GRANDSTANDS)]
+    unsafe extern "thiscall" fn empty_grandstands(this: *const u32, show_id: u16) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.empty_grandstands(show_id)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn empty_grandstands_real(this: *const u32, show_id: u16) {
+        unsafe { EMPTY_GRANDSTANDS_DETOUR.call(this, show_id) }
+    }
+
+    #[detour(IS_SHOW_TANK)]
+    unsafe extern "thiscall" fn is_show_tank(this: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.is_show_tank_dispatched() as u32
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn is_show_tank_real(this: *const u32) -> u32 {
+        unsafe { IS_SHOW_TANK_DETOUR.call(this) }
+    }
+
+    /// Returns the address of the embedded species vector (`this+0x60`) after the lazy recalculate.
+    #[detour(GET_SPECIES_LIST)]
+    unsafe extern "thiscall" fn get_species_list(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.species_list_address() as i32
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_species_list_real(this: *const u32) -> i32 {
+        unsafe { GET_SPECIES_LIST_DETOUR.call(this) }
+    }
+
+    #[detour(GET_NUM_DIRT_TILES)]
+    unsafe extern "thiscall" fn get_num_dirt_tiles(this: *const u32, keeper: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_num_dirt_tiles(keeper as u32)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_num_dirt_tiles_real(this: *const u32, keeper: *const u32) -> i32 {
+        unsafe { GET_NUM_DIRT_TILES_DETOUR.call(this, keeper) }
+    }
+
+    #[detour(GET_NONEMPTY_NON_WORLD_HABITATS)]
+    unsafe extern "thiscall" fn get_nonempty_non_world_habitats(this: *const u32, out_vector: *const std::ffi::c_void) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_nonempty_non_world_habitats(out_vector as u32)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_nonempty_non_world_habitats_real(this: *const u32, out_vector: u32) {
+        unsafe { GET_NONEMPTY_NON_WORLD_HABITATS_DETOUR.call(this, out_vector as *const std::ffi::c_void) }
     }
 
     /// Real vanilla is a free `stdcall` helper taking a `ZTHabitat*` directly, not a `ZTHabitatMgr`

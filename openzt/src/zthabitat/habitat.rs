@@ -1033,6 +1033,49 @@ impl ZTHabitat {
         (begin..end).step_by(4).map(get_from_memory::<u32>)
     }
 
+    /// Ports `ZTHabitat::getSpeciesList`'s raw return (`GET_SPECIES_LIST`, `0x00410f26`): the same lazy
+    /// recalculate as [`Self::species_list`], then the address of the embedded `std::vector` (`this+0x60`,
+    /// `&this->field_0x60`) that vanilla callers read through directly.
+    pub fn species_list_address(&self) -> u32 {
+        if self.characteristics_dirty != 0 {
+            self.recalculate_characteristics();
+        }
+        self as *const Self as u32 + 0x60
+    }
+
+    /// Ports `ZTHabitat::isShowTank` (`IS_SHOW_TANK`, `0x0040fba2`): `isTank()` by real vtable dispatch
+    /// (slot `+0x20`, which `ZTTankExhibit` overrides) and a non-null show-info pointer. Unlike
+    /// [`Self::is_show_tank`], which callers pair with their own [`Self::is_tank`] check, this is the full
+    /// vanilla predicate for the detour.
+    pub fn is_show_tank_dispatched(&self) -> bool {
+        Self::is_show_tank_by_vtable(self as *const Self as u32)
+    }
+
+    /// Ports `ZTHabitat::getNumDirtTiles` (`GET_NUM_DIRT_TILES`, `0x004a8940`): counts the owned tiles
+    /// (`+0x40` list, tile in the node's `+0x8` payload) that are not in `keeper_ptr`'s reserved-tile vector
+    /// ([`Self::keeper_has_invalid_tile`]), have bit `4` of `tile+0x85` clear, and whose occupant pointer
+    /// (`tile+0x10`, passed unchecked, null included) the keeper's vtable `+0x324` filter accepts - the same
+    /// per-tile test [`Self::get_nearest_dirt_pile`] applies, minus its null-occupant skip.
+    ///
+    /// A null `keeper_ptr` returns `0` (vanilla would dereference it).
+    pub fn get_num_dirt_tiles(&self, keeper_ptr: u32) -> i32 {
+        if keeper_ptr == 0 {
+            return 0;
+        }
+        let mut count = 0;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+            if Self::keeper_has_invalid_tile(keeper_ptr, tile_ptr) || get_from_memory::<u8>(tile_ptr + 0x85) & 4 != 0 {
+                continue;
+            }
+            let entity_ptr: u32 = get_from_memory(tile_ptr + 0x10);
+            if unsafe { call_vtable_slot_with_ptr_ret_bool(keeper_ptr, 0x324, entity_ptr) } {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Ports `ZTHabitat::getSurroundingSpecies` (`ZTHabitat_getSurroundingSpecies.c`/`.asm`): same
     /// `characteristics_dirty`-gated lazy-recalculate shape as [`Self::species_list`], yielding raw
     /// catalog-entry pointers from `surrounding_species_begin`/`_end` (`&this->field_0x13c`,
@@ -2988,10 +3031,8 @@ impl ZTHabitat {
     ///
     /// Otherwise builds a scratch `std::vector<ZTAnimal*>` via [`Self::get_sickly_animals`] (real vanilla's
     /// own stack-local out-param, zero-initialized here identically), then scans it for the closest animal
-    /// for which all of the following hold: the animal is not itself a `ZTKeeper` (vtable `+0x110`-style
-    /// slot the decompile mislabels `virt_meth_0x401115_272` - the `_N` suffix is the decompiler's own
-    /// resolved byte offset per `private/docs/vtables/README.md`, not independently identified further this
-    /// pass, kept as a raw vtable dispatch); its own tile doesn't have the unconfirmed `+0x85 & 4` flag set
+    /// for which all of the following hold: the animal's vtable `+0x22c` predicate (`.asm`: `CALL [EAX + 0x22c]`; the decompile's
+    /// `vftptr_0x0[1].virt_meth_0x401115_272` is array-indexing, so its `_272` suffix is not the byte offset) returns false; its own tile doesn't have the unconfirmed `+0x85 & 4` flag set
     /// (same check [`Self::get_num_sickly_animals`] uses); [`Self::keeper_assigned_to_animal`]; and real
     /// vanilla `ZTAnimal::canService(animal, keeper_ptr)` (masked via [`low_byte_bool`]). When
     /// `check_can_see` is set, additionally requires the shared `GLOBAL_ZTAIMgr` vtable `+0x1c`
@@ -3027,7 +3068,7 @@ impl ZTHabitat {
         let mut best_dist = i32::MAX;
         for addr in (scratch_vector[0]..scratch_vector[1]).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
-            let is_keeper = unsafe { call_entity_vtable_noargs(animal_ptr, 0x110) };
+            let is_keeper = unsafe { call_entity_vtable_noargs(animal_ptr, 0x22c) };
             if is_keeper {
                 continue;
             }

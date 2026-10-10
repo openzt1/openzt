@@ -10,7 +10,10 @@ use openzt_detour::generated::{
         bfunit::GET_PATH_COST as BFUNIT_GET_PATH_COST,
         bfworldmgr::{ADD_ENTITY as BFWORLDMGR_ADD_ENTITY, GET_TYPE as BFWORLDMGR_GET_TYPE, REMOVE_ENTITY as BFWORLDMGR_REMOVE_ENTITY, VERIFY_ENTITY_0 as BFWORLDMGR_VERIFY_ENTITY_0},
         gxmixer::SET_SET as GXMIXER_SET_SET,
+        msvc_std_listuint::{ERASE as MSVC_LIST_UINT_ERASE_NODES, INSERT as MSVC_LIST_UINT_INSERT_NODE, LIST as MSVC_LIST_UINT_DTOR_NODE, LIST_UINT_CTOR as MSVC_LIST_UINT_CTOR},
         msvc_std_vectorbyte::VECTORBYTE,
+        ztbuilding::{REMOVE_ALL_USERS as ZTBUILDING_REMOVE_ALL_USERS, USER_DATA_CHANGED as ZTBUILDING_USER_DATA_CHANGED},
+        ztshowmgr::GET_SHOW_INFO as ZTSHOWMGR_GET_SHOW_INFO,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
@@ -28,12 +31,12 @@ use openzt_detour::generated::{
         zttankwall::SET_IS_COMBINED_CONNECTOR,
         ztui_buyh::REFRESH as ZTUI_BUYH_REFRESH,
         ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
-        ztui_habitatinfo::ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT,
+        ztui_habitatinfo::{ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT, REMOVE_ALL_HABITATS as ZTUI_HABITATINFO_REMOVE_ALL_HABITATS},
         ztviewingarea::REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
         ztvisibilitytesting::TEST_LOS,
         ztworldmgr::{
             PLAY_FROWN_SOUND as ZTWORLDMGR_PLAY_FROWN_SOUND, PLAY_SMILE_SOUND as ZTWORLDMGR_PLAY_SMILE_SOUND,
-            UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS,
+            GET_BUILDING_LIST as ZTWORLDMGR_GET_BUILDING_LIST, UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS,
         },
     };
 use std::{
@@ -53,6 +56,9 @@ use crate::{
 use super::super::habitat::ZTHabitat;
 use super::super::support::*;
 use crate::write_live;
+
+/// `DAT_0063b988`: the vanilla `std::string` tag `ZTWorldMgr::getBuildingList` filters grandstand buildings by.
+const RVA_GRANDSTAND_TAG_STRING: u32 = 0x0063_b988 - 0x0040_0000;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -280,6 +286,26 @@ impl ZTHabitatMgr {
         count
     }
 
+    /// Ports `ZTHabitatMgr::getNonemptyNonWorldHabitats` (`ZTHabitatMgr_getNonemptyNonWorldHabitats.c`/`.asm`,
+    /// `generated.rs`'s `GET_NONEMPTY_NON_WORLD_HABITATS`): appends, in `exhibit_array` order, every habitat
+    /// whose own direct occupant count ([`ZTHabitat::get_num_animals`] with `include_neighbors = false`) is
+    /// non-zero onto the caller's vanilla `std::vector<ZTHabitat*>` at `out_vector_ptr`
+    /// ([`vector_push_pool_alloc4`] - the `.asm`'s inlined `PoolAlloc::allocate` doubling growth, old buffer
+    /// freed by capacity through the small-object freelist / `operator_delete` split above `0x80`, which is
+    /// [`free_event_vector_buffer`]'s exact shape). The vector is only appended to, never cleared. Every
+    /// `exhibit_array` entry is a non-world habitat (the world habitat lives in `pending_habitat_ptr`).
+    ///
+    /// The output buffer belongs to vanilla's allocator and the caller (a vanilla stack-local vector) frees
+    /// it, so it must be grown through `PoolAlloc`, never a Rust `Vec`.
+    pub fn get_nonempty_non_world_habitats(&self, out_vector_ptr: u32) {
+        for i in 0..self.exhibit_array.len() {
+            let habitat_ptr = self.exhibit_array.get_ptr(i);
+            if unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_num_animals(false) != 0 {
+                vector_push_pool_alloc4(out_vector_ptr, habitat_ptr);
+            }
+        }
+    }
+
     /// Ports `ZTHabitatMgr::enterNewMonth` (`ZTHabitatMgr_enterNewMonth.c`): for every `exhibit_array`
     /// entry, and finally for [`Self::pending_habitat_ptr`] itself (real vanilla reads it unconditionally,
     /// no null check - see that field's own doc comment for why this is confidently the always-present
@@ -393,6 +419,81 @@ impl ZTHabitatMgr {
         if mapview_ptr == 0 || get_from_memory::<u8>(mapview_ptr + 0x378) == 0 {
             write_live!(self, habitat_num, self.habitat_num.wrapping_sub(1));
         }
+    }
+
+    /// Ports `ZTHabitatMgr::getGrandstands` (`GET_GRANDSTANDS`, `0x0050c783`; a free `stdcall` helper despite
+    /// its namespace, taking `(show_id, out_list)`): appends to the caller's vanilla `std::list<uint>` (the
+    /// list object at `out_list_ptr`, whose first word is the header node) every building from
+    /// `ZTWorldMgr::getBuildingList` for the grandstand tag string (`DAT_0063b988`) that can see the show's
+    /// habitat ([`Self::can_see_habitat_from_building`]), in building-list order at the end of the list.
+    ///
+    /// Does nothing without a `ZTWorldMgr`, or when the show exists but has no habitat (`ZTShowInfo+0xa0`
+    /// is `0`). An unknown show id is not an early-out: it proceeds with a null habitat, as vanilla does.
+    ///
+    /// The temporary building list is built and torn down through vanilla's own `list<uint>`
+    /// constructor/destructor so its header node comes from and returns to the same small-object freelist;
+    /// the output list's nodes are likewise allocated by vanilla's `insert`.
+    pub fn get_grandstands(show_id: u16, out_list_ptr: u32) {
+        let world_mgr = globals().ztworldmgr_ptr() as u32;
+        if world_mgr == 0 {
+            return;
+        }
+        let show_info = unsafe { ZTSHOWMGR_GET_SHOW_INFO.hooked()(globals().ztshowmgr_ptr() as *const u32, show_id) } as u32;
+        let habitat_ptr = if show_info == 0 { 0 } else { get_from_memory::<u32>(show_info + 0xa0) };
+        if show_info != 0 && habitat_ptr == 0 {
+            return;
+        }
+
+        let grandstand_tag = get_module_base("zoo.exe") as u32 + RVA_GRANDSTAND_TAG_STRING;
+        let mut temp_list: u32 = 0;
+        let temp_list_ptr = &mut temp_list as *mut u32 as u32;
+        unsafe {
+            MSVC_LIST_UINT_CTOR.original()(temp_list_ptr as *const std::ffi::c_void, 0);
+            ZTWORLDMGR_GET_BUILDING_LIST.original()(world_mgr as *const u32, grandstand_tag as *const i32, temp_list_ptr as *const i32);
+        }
+        for node in walk_tile_list(get_from_memory::<u32>(temp_list_ptr)) {
+            let building_ptr = get_from_memory::<u32>(node + 8);
+            if building_ptr != 0 && low_byte_bool(unsafe { Self::can_see_habitat_from_building(habitat_ptr, building_ptr) }) {
+                let out_header: u32 = get_from_memory(out_list_ptr);
+                let mut insert_result: i32 = 0;
+                let value = building_ptr as i32;
+                unsafe { MSVC_LIST_UINT_INSERT_NODE.original()(&mut insert_result as *mut i32 as *const i32, out_header as i32, &value as *const i32) };
+            }
+        }
+        unsafe { MSVC_LIST_UINT_DTOR_NODE.original()(temp_list_ptr as *const std::ffi::c_void) };
+    }
+
+    /// Ports `ZTHabitatMgr::emptyGrandstands` (`EMPTY_GRANDSTANDS`, `0x0050c813`): for every building
+    /// [`Self::get_grandstands`] returns for `show_id`, in list order, kicks out its users
+    /// (`ZTBuilding::removeAllUsers`), clears the building's `+0x19c` dword, and notifies it
+    /// (`ZTBuilding::userDataChanged`). The temporary list is torn down through vanilla's destructor.
+    pub fn empty_grandstands(&self, show_id: u16) {
+        let mut grandstands: u32 = 0;
+        let list_ptr = &mut grandstands as *mut u32 as u32;
+        unsafe { MSVC_LIST_UINT_CTOR.original()(list_ptr as *const std::ffi::c_void, 0) };
+        Self::get_grandstands(show_id, list_ptr);
+        for node in walk_tile_list(get_from_memory::<u32>(list_ptr)) {
+            let building_ptr = get_from_memory::<u32>(node + 8);
+            if building_ptr != 0 {
+                unsafe { ZTBUILDING_REMOVE_ALL_USERS.original()(building_ptr as *const u32) };
+                save_to_memory::<u32>(building_ptr + 0x19c, 0);
+                unsafe { ZTBUILDING_USER_DATA_CHANGED.original()(building_ptr as *const u32) };
+            }
+        }
+        unsafe { MSVC_LIST_UINT_DTOR_NODE.original()(list_ptr as *const std::ffi::c_void) };
+    }
+
+    /// Ports `ZTHabitatMgr::getNextNum` (`GET_NEXT_NUM`, `0x0044e9f9`): returns the running exhibit-number
+    /// counter ([`Self::habitat_num`]) and steps it forward, skipping the step while the live `ZTMapView` is
+    /// undoing - the mirror of [`Self::decrement_habitat_num`], with the same null-mapview treatment. The
+    /// step wraps like vanilla's plain `ADD`.
+    pub fn get_next_num(&self) -> u32 {
+        let current = self.habitat_num;
+        let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+        if mapview_ptr == 0 || get_from_memory::<u8>(mapview_ptr + 0x378) == 0 {
+            write_live!(self, habitat_num, current.wrapping_add(1));
+        }
+        current
     }
 
     /// Ports `ZTHabitatMgr::createHabitat` (`ZTHabitatMgr_createHabitat.c`/`.asm`) as an orchestrator:
@@ -3500,6 +3601,78 @@ impl ZTHabitatMgr {
                 unsafe { ZTSTAFF_REMOVE_ASSIGNED_HABITAT.original()(entity_ptr as *const u32, habitat_ptr as *const u32) };
             }
         }
+    }
+
+    /// Ports `ZTHabitatMgr::clearAllStaffHabitats` (`CLEAR_ALL_STAFF_HABITATS`, `0x005b121b`; a free `stdcall`
+    /// helper with no arguments, like [`Self::clear_staff_habitat`]): for every `ZTStaff` in the live world
+    /// manager's entity array, empties the assigned-habitat `list<uint>` at `staff+0x260`. Nodes go back to the
+    /// vanilla freelist and the list header is kept (self-linked), which is exactly what vanilla's
+    /// `list<uint>::erase(begin, end)` does, so that is what this calls.
+    pub fn clear_all_staff_habitats() {
+        let world = globals().ztworldmgr();
+        for entity_ptr in world.entity_array() {
+            if entity_ptr == 0 || !unsafe { entity_type_matches(entity_ptr, RVA_STAFF_TYPE_CHECK_ARG) } {
+                continue;
+            }
+            let list_ptr = entity_ptr + 0x260;
+            let header: u32 = get_from_memory(list_ptr);
+            if header == 0 {
+                continue;
+            }
+            let first: u32 = get_from_memory(header);
+            let mut erase_result: i32 = 0;
+            unsafe {
+                MSVC_LIST_UINT_ERASE_NODES.original()(
+                    list_ptr as *const std::ffi::c_void,
+                    &mut erase_result as *mut i32 as *const i32,
+                    first as *const i32,
+                    header as *const i32,
+                )
+            };
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::removeAllHabitats` (`REMOVE_ALL_HABITATS`, `0x005b11d2`; the macOS
+    /// `ZTHabitatMgr_removeAllHabitats.c` has the identical step sequence):
+    /// 1. [`Self::clear_all_staff_habitats`].
+    /// 2. For every `exhibit_array` entry, in order: `ZTThoughtMgr::removeThoughtsByHabitat(habitat, force)`,
+    ///    then (non-null) the habitat's scalar-deleting destructor through **vtable slot `+0x18`** with flag
+    ///    `1`, so a `ZTTankExhibit` runs its own destructor and the object is freed by vanilla's `delete`
+    ///    (habitats are always allocated through vanilla's `operator new`). The array's end pointer is
+    ///    re-read after each destruction, and the entries stay in the array (and the tile grid / neighbour
+    ///    sets of habitats not yet destroyed) until step 4, exactly as vanilla - [`ZTHabitat::destruct`]
+    ///    runs inside that window.
+    /// 3. The pending ("world") habitat, if any, is destroyed the same way and nulled.
+    /// 4. The array is emptied (`end = start`, buffer kept; the `.asm`'s copy-down loop has a zero count).
+    /// 5. `ZTUI::habitatinfo::removeAllHabitats` (un-ported UI list teardown) and the shared "habitat list
+    ///    changed" byte is set.
+    ///
+    /// Destructive on the live zoo: callers are world teardown paths. Never call on a fixture whose habitats
+    /// were not allocated by vanilla's allocator.
+    pub fn remove_all_habitats(&self) {
+        Self::clear_all_staff_habitats();
+
+        let thought_mgr = globals().ztthoughtmgr();
+        let mut cursor = self.exhibit_array.raw_parts().0;
+        let end_addr = self as *const Self as u32 + 0x20;
+        while cursor < get_from_memory::<u32>(end_addr) {
+            let habitat_ptr: u32 = get_from_memory(cursor);
+            thought_mgr.remove_thoughts_by_habitat(habitat_ptr, true);
+            if habitat_ptr != 0 {
+                unsafe { call_vtable_slot_with_u8(habitat_ptr, 0x18, 1) };
+            }
+            cursor += 4;
+        }
+
+        if self.pending_habitat_ptr != 0 {
+            unsafe { call_vtable_slot_with_u8(self.pending_habitat_ptr, 0x18, 1) };
+            write_live!(self, pending_habitat_ptr, 0);
+        }
+
+        let (start, _, buffer_end) = self.exhibit_array.raw_parts();
+        self.exhibit_array.set_raw_parts(start, start, buffer_end);
+        unsafe { ZTUI_HABITATINFO_REMOVE_ALL_HABITATS.original()() };
+        save_to_memory::<u8>(get_module_base("zoo.exe") as u32 + HABITAT_LIST_DIRTY_RVA, 1);
     }
 
     /// Ports `ZTHabitatMgr::getTank` (`ZTHabitatMgr_getTank.c`/`.asm`): the habitat occupying `tile_ptr`

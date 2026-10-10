@@ -92,6 +92,115 @@ fn compare_over_live_habitats<T: PartialEq + Debug>(
     fail_flag
 }
 
+/// `ZTHABITATMGR_GET_NONEMPTY_NON_WORLD_HABITATS_LIVE`: real vanilla vs `get_nonempty_non_world_habitats`
+/// over the live zoo, each filling its own fresh `{begin, end, cap_end}` header. Both buffers come from
+/// vanilla's `PoolAlloc`, so [`free_event_vector_buffer`] releases either safely. The independent oracle is a
+/// raw-field walk: a habitat is non-empty when its `all_animals` vector (`+0x6c`/`+0x70`, settled by the
+/// real `getNumAnimals` call that precedes it) has entries.
+pub(crate) fn run_zthabitatmgr_get_nonempty_non_world_habitats_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_GET_NONEMPTY_NON_WORLD_HABITATS_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let mgr = globals().zthabitatmgr();
+    let exhibit_len = mgr.exhibit_array().len();
+    if exhibit_len == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no habitats loaded)", test_name));
+        return false;
+    }
+
+    let read_vector = |header: &[u32; 3]| -> Vec<u32> { (header[0]..header[1]).step_by(4).map(get_from_memory::<u32>).collect() };
+
+    let mut real_header = [0u32; 3];
+    hooks_zthabitatmgr::get_nonempty_non_world_habitats_real(mgr_ptr, real_header.as_mut_ptr() as u32);
+    let real = read_vector(&real_header);
+
+    let mut reimpl_header = [0u32; 3];
+    mgr.get_nonempty_non_world_habitats(reimpl_header.as_mut_ptr() as u32);
+    let reimpl = read_vector(&reimpl_header);
+
+    let oracle: Vec<u32> = (0..exhibit_len)
+        .map(|i| mgr.exhibit_array().get_ptr(i))
+        .filter(|&habitat_ptr| get_from_memory::<u32>(habitat_ptr + 0x70) != get_from_memory::<u32>(habitat_ptr + 0x6c))
+        .collect();
+
+    let mut failures: Vec<String> = Vec::new();
+    if real != reimpl {
+        failures.push(format!("real={:x?}, reimpl={:x?}", real, reimpl));
+    }
+    if oracle != reimpl {
+        failures.push(format!("reimpl={:x?}, raw-field oracle={:x?}", reimpl, oracle));
+    }
+    // Growth contract: capacity is a power of two (1, 2, 4, ...) and covers the contents.
+    let capacity = (reimpl_header[2] - reimpl_header[0]) / 4;
+    if !reimpl.is_empty() && (!capacity.is_power_of_two() || capacity < reimpl.len() as u32) {
+        failures.push(format!("capacity {} is not a doubling-growth size for {} entries", capacity, reimpl.len()));
+    }
+
+    free_event_vector_buffer(real_header[0], real_header[2].wrapping_sub(real_header[0]));
+    free_event_vector_buffer(reimpl_header[0], reimpl_header[2].wrapping_sub(reimpl_header[0]));
+
+    if failures.is_empty() {
+        write_success_line(failure_log, &format!("{} (habitats scanned: {}, non-empty: {})", test_name, exhibit_len, reimpl.len()));
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
+/// `ZTHABITAT_CONSTRUCT_SURROUNDING_SPECIES_LIST_MATCHES_REAL_LIVE`: for every habitat in the live zoo, real
+/// vanilla `constructSurroundingSpeciesList` vs the port, each rebuilding the habitat's own
+/// `surrounding_species` vector (`+0x13c`..) in place. A first real call settles lazy recalculation of the
+/// neighbours' species lists, so the captured real and port results read the same settled state. Both
+/// grow the buffer through vanilla's `PoolAlloc` family, so the in-place rebuild stays allocator-consistent.
+pub(crate) fn run_habitat_construct_surrounding_species_list_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_CONSTRUCT_SURROUNDING_SPECIES_LIST_MATCHES_REAL_LIVE";
+    let mgr = globals().zthabitatmgr();
+    let exhibit_len = mgr.exhibit_array().len();
+    if exhibit_len == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no habitats loaded)", test_name));
+        return false;
+    }
+    let read_surrounding = |habitat_ptr: u32| -> Vec<u32> {
+        (get_from_memory::<u32>(habitat_ptr + 0x13c)..get_from_memory::<u32>(habitat_ptr + 0x140))
+            .step_by(4)
+            .map(get_from_memory::<u32>)
+            .collect()
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut total_entries = 0usize;
+    for i in 0..exhibit_len {
+        let habitat_ptr = mgr.exhibit_array().get_ptr(i);
+        hooks_zthabitatmgr::construct_surrounding_species_list_real(habitat_ptr as *const i32);
+        hooks_zthabitatmgr::construct_surrounding_species_list_real(habitat_ptr as *const i32);
+        let real = read_surrounding(habitat_ptr);
+        unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.construct_surrounding_species_list();
+        let reimpl = read_surrounding(habitat_ptr);
+        total_entries += reimpl.len();
+        if real != reimpl {
+            failures.push(format!("habitat {} ({:#010x}): real={:x?}, reimpl={:x?}", i, habitat_ptr, real, reimpl));
+        }
+    }
+
+    if failures.is_empty() {
+        write_success_line(failure_log, &format!("{} (habitats: {}, surrounding entries: {})", test_name, exhibit_len, total_entries));
+        false
+    } else {
+        for msg in &failures {
+            error!("{}: {}", test_name, msg);
+        }
+        if let Some(log_file) = failure_log {
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
+        }
+        true
+    }
+}
+
 /// Real called before reimpl deliberately: real `getAttractiveness`/`hasKeeperAssigned` clear
 /// `characteristics_dirty` as a side effect of the lazy recalculate, so calling real first and then
 /// reimpl (which reads the same, now-clean live memory) compares the same settled state rather than
@@ -9493,6 +9602,585 @@ pub(crate) fn run_habitat_get_nearest_dirt_pile_matches_real_live_test(failure_l
     }
 }
 
+/// `ZTHabitat::getNumDirtTiles` against real vanilla for every live habitat and a live keeper.
+pub(crate) fn run_habitat_get_num_dirt_tiles_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_NUM_DIRT_TILES_MATCHES_REAL_LIVE";
+    let keeper_ptr = globals().ztworldmgr().entity_array().find(|&ptr| unsafe { entity_type_matches(ptr, RVA_KEEPER_TYPE_CHECK_ARG) });
+    let Some(keeper_ptr) = keeper_ptr else {
+        write_success_line(failure_log, &format!("{} (skipped: no live ZTKeeper found)", test_name));
+        return false;
+    };
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let real = hooks_zthabitatmgr::get_num_dirt_tiles_real(ptr as *const u32, keeper_ptr as *const u32);
+        let reimpl = unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_num_dirt_tiles(keeper_ptr);
+        if real != reimpl {
+            failures.push(format!("habitat {} ({:#010x}): real={}, reimpl={}", i, ptr, real, reimpl));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTHabitat::isShowTank` and `getSpeciesList` against real vanilla for every live habitat.
+pub(crate) fn run_habitat_is_show_tank_and_species_list_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_IS_SHOW_TANK_AND_SPECIES_LIST_MATCH_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let real_show = hooks_zthabitatmgr::is_show_tank_real(ptr as *const u32);
+        let reimpl_show = habitat.is_show_tank_dispatched() as u32;
+        if real_show != reimpl_show {
+            failures.push(format!("habitat {} ({:#010x}): isShowTank real={}, reimpl={}", i, ptr, real_show, reimpl_show));
+        }
+        let real_list = hooks_zthabitatmgr::get_species_list_real(ptr as *const u32) as u32;
+        let reimpl_list = habitat.species_list_address();
+        if real_list != reimpl_list || reimpl_list != ptr + 0x60 {
+            failures.push(format!("habitat {} ({:#010x}): getSpeciesList real={:#010x}, reimpl={:#010x}", i, ptr, real_list, reimpl_list));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Builds an empty vanilla `std::list<uint>` object (header node from the vanilla freelist) and returns the
+/// address of the one-word list object.
+fn new_vanilla_uint_list() -> Box<u32> {
+    use openzt_detour::generated::msvc_std_listuint::LIST_UINT_CTOR;
+    let mut list = Box::new(0u32);
+    unsafe { LIST_UINT_CTOR.original()(&mut *list as *mut u32 as *const std::ffi::c_void, 0) };
+    list
+}
+
+/// Reads a vanilla `list<uint>` object's payloads (`node+8`) in order, then tears it down through vanilla's
+/// destructor so its nodes return to the vanilla freelist.
+fn drain_vanilla_uint_list(list: Box<u32>) -> Vec<u32> {
+    use openzt_detour::generated::msvc_std_listuint::LIST;
+    let mut list = list;
+    let list_ptr = &mut *list as *mut u32 as u32;
+    let payloads = crate::zthabitat::support::walk_tile_list(get_from_memory::<u32>(list_ptr)).map(|node| get_from_memory::<u32>(node + 8)).collect();
+    unsafe { LIST.original()(list_ptr as *const std::ffi::c_void) };
+    payloads
+}
+
+/// Show ids to probe `getGrandstands`/`emptyGrandstands` with: every live habitat's show id, plus an id no show
+/// has (vanilla then proceeds with a null habitat).
+fn grandstand_probe_show_ids() -> Vec<u16> {
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut ids: Vec<u16> = (0..habitat_mgr.exhibit_array().len())
+        .map(|i| habitat_mgr.exhibit_array().get_ptr(i))
+        .filter(|&ptr| ptr != 0)
+        .map(|ptr| get_from_memory::<u32>(ptr + 0x4))
+        .filter(|&show_info| show_info != 0)
+        .map(|show_info| get_from_memory::<u16>(show_info + 0x70))
+        .collect();
+    ids.push(0xfffe);
+    ids
+}
+
+/// `ZTHabitatMgr::getGrandstands` against real vanilla for every show id in [`grandstand_probe_show_ids`]:
+/// the resulting building lists must match in content and order.
+pub(crate) fn run_zthabitatmgr_get_grandstands_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_GET_GRANDSTANDS_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let mut non_empty = 0;
+    for show_id in grandstand_probe_show_ids() {
+        let mut real_list = new_vanilla_uint_list();
+        hooks_zthabitatmgr::get_grandstands_real(show_id, &mut *real_list as *mut u32 as u32);
+        let mut port_list = new_vanilla_uint_list();
+        crate::zthabitatmgr::ZTHabitatMgr::get_grandstands(show_id, &mut *port_list as *mut u32 as u32);
+        let real = drain_vanilla_uint_list(real_list);
+        let port = drain_vanilla_uint_list(port_list);
+        non_empty += (!real.is_empty()) as u32;
+        if real != port {
+            failures.push(format!("show {:#06x}: real={:x?}, port={:x?}", show_id, real, port));
+        }
+    }
+    let label = format!("{} ({} probed show ids had grandstands)", test_name, non_empty);
+    finish_test(&label, failures, failure_log)
+}
+
+/// `ZTHabitatMgr::emptyGrandstands` against real vanilla. The call mutates buildings, so it only runs for show
+/// ids whose grandstand list is currently empty (a no-op on both poles, checked for crashes and for the vanilla
+/// freelist head returning to where it started); ids with real grandstands are counted and left alone.
+pub(crate) fn run_zthabitatmgr_empty_grandstands_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_EMPTY_GRANDSTANDS_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+    let freelist_head_addr = get_module_base("zoo.exe") as u32 + crate::zthabitat::support::TILE_LIST_NODE_FREELIST_HEAD_RVA;
+    let mut failures: Vec<String> = Vec::new();
+    for show_id in grandstand_probe_show_ids() {
+        let mut probe = new_vanilla_uint_list();
+        hooks_zthabitatmgr::get_grandstands_real(show_id, &mut *probe as *mut u32 as u32);
+        if !drain_vanilla_uint_list(probe).is_empty() {
+            continue;
+        }
+        let head_before: u32 = get_from_memory(freelist_head_addr);
+        hooks_zthabitatmgr::empty_grandstands_real(mgr_ptr as *const u32, show_id);
+        let head_after_real: u32 = get_from_memory(freelist_head_addr);
+        globals().zthabitatmgr().empty_grandstands(show_id);
+        let head_after_port: u32 = get_from_memory(freelist_head_addr);
+        if head_after_real != head_before || head_after_port != head_before {
+            failures.push(format!(
+                "show {:#06x}: freelist head before={:#x}, after real={:#x}, after port={:#x}",
+                show_id, head_before, head_after_real, head_after_port
+            ));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Length of the vanilla small-object freelist chain at `DAT_00638004` (the 16-byte size class `list<uint>`
+/// nodes use), counted by walking it. Bounded so a corrupted chain fails the test instead of hanging.
+fn vanilla_node_freelist_len() -> usize {
+    let head_addr = get_module_base("zoo.exe") as u32 + crate::zthabitat::support::TILE_LIST_NODE_FREELIST_HEAD_RVA;
+    let mut node: u32 = get_from_memory(head_addr);
+    let mut len = 0;
+    while node != 0 && len < 1_000_000 {
+        node = get_from_memory(node);
+        len += 1;
+    }
+    len
+}
+
+/// Every live staff member's assigned-habitat list (`staff+0x260`), as `(staff, payloads in order)`.
+fn snapshot_staff_habitat_lists() -> Vec<(u32, Vec<u32>)> {
+    use crate::zthabitat::support::{walk_tile_list, RVA_STAFF_TYPE_CHECK_ARG};
+    globals()
+        .ztworldmgr()
+        .entity_array()
+        .filter(|&ptr| ptr != 0 && unsafe { entity_type_matches(ptr, RVA_STAFF_TYPE_CHECK_ARG) })
+        .map(|staff| {
+            let header: u32 = get_from_memory(staff + 0x260);
+            (staff, walk_tile_list(header).map(|node| get_from_memory::<u32>(node + 8)).collect())
+        })
+        .collect()
+}
+
+/// Re-appends `snapshot`'s payloads to each staff list through vanilla's `list<uint>::insert` (at the end,
+/// preserving order), leaving the live zoo's staff assignments as they were.
+fn restore_staff_habitat_lists(snapshot: &[(u32, Vec<u32>)]) {
+    use openzt_detour::generated::msvc_std_listuint::INSERT;
+    for (staff, payloads) in snapshot {
+        for &payload in payloads {
+            let header: u32 = get_from_memory(staff + 0x260);
+            let mut result: i32 = 0;
+            let value = payload as i32;
+            unsafe { INSERT.original()(&mut result as *mut i32 as *const i32, header as i32, &value as *const i32) };
+        }
+    }
+}
+
+/// `ZTHabitatMgr::clearAllStaffHabitats` against real vanilla. Mutates staff assignments, so each staff list is
+/// first seeded with synthetic entries (the test save may have none assigned), each pole runs from that same
+/// seeded snapshot, and the original assignments are restored at the end. Checks per pole, independently of the
+/// other: every staff list is empty with a self-linked header, and the vanilla node freelist grew by exactly the
+/// number of nodes that were freed.
+pub(crate) fn run_zthabitatmgr_clear_all_staff_habitats_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_CLEAR_ALL_STAFF_HABITATS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let original = snapshot_staff_habitat_lists();
+    let seeds: Vec<(u32, Vec<u32>)> = original.iter().map(|(staff, _)| (*staff, vec![0xaaaa_0001, 0xaaaa_0002, 0xaaaa_0003])).collect();
+    restore_staff_habitat_lists(&seeds);
+    let snapshot = snapshot_staff_habitat_lists();
+    let total_nodes: usize = snapshot.iter().map(|(_, payloads)| payloads.len()).sum();
+
+    let poles: [(&str, fn()); 2] = [
+        ("real", hooks_zthabitatmgr::clear_all_staff_habitats_real),
+        ("port", crate::zthabitatmgr::ZTHabitatMgr::clear_all_staff_habitats),
+    ];
+    for (pole, run) in poles {
+        let free_before = vanilla_node_freelist_len();
+        run();
+        let free_after = vanilla_node_freelist_len();
+        if free_after != free_before + total_nodes {
+            failures.push(format!("{}: freelist grew by {}, expected {}", pole, free_after as i64 - free_before as i64, total_nodes));
+        }
+        for (staff, _) in &snapshot {
+            let header: u32 = get_from_memory(staff + 0x260);
+            let (next, prev): (u32, u32) = (get_from_memory(header), get_from_memory(header + 4));
+            if next != header || prev != header {
+                failures.push(format!("{}: staff {:#010x} list not empty/self-linked (next={:#x}, prev={:#x})", pole, staff, next, prev));
+            }
+        }
+        restore_staff_habitat_lists(&snapshot);
+        if snapshot_staff_habitat_lists() != snapshot {
+            failures.push(format!("{}: staff lists differ from the seeded snapshot after restore", pole));
+        }
+    }
+
+    // Leave the zoo as found: drop the seeded entries, then put back the original assignments.
+    hooks_zthabitatmgr::clear_all_staff_habitats_real();
+    restore_staff_habitat_lists(&original);
+    if snapshot_staff_habitat_lists() != original {
+        failures.push("staff lists differ from the original snapshot after cleanup".to_string());
+    }
+    let label = format!("{} ({} staff, {} seeded + original assignments)", test_name, snapshot.len(), total_nodes);
+    finish_test(&label, failures, failure_log)
+}
+
+/// Reproduces `ZTUI::gameopts::saveGame`'s write sequence (minus the file dialog) on the freshly loaded test zoo:
+/// header, `removeTransients`, `ZTWorldMgr::save`, `restoreAllTankOwnedTransients`, close - into a real file - then
+/// loads that file back. Both the save and the reload must succeed. This is the "load, then save" flow.
+pub(crate) fn run_ztworldmgr_save_file_roundtrip_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::battery::detour_zoo_main::run_load_live_zoo;
+    use crate::zthabitat::support::write_raw_bytes;
+    use openzt_detour::generated::{
+        standalone::{FCLOSE, FOPEN},
+        ztui_gameopts::LOAD_FILE,
+        ztworldmgr::{REMOVE_TRANSIENTS, RESTORE_ALL_TANK_OWNED_TRANSIENTS, SAVE as ZTWORLDMGR_SAVE},
+    };
+
+    let test_name = "ZTWORLDMGR_SAVE_FILE_ROUNDTRIP_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let source = std::env::var("OPENZT_TEST_ZOO")
+        .unwrap_or_else(|_| r"C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Saved Games\reimplementation-test-zoo.zoo".to_string());
+    let out_path = std::env::temp_dir().join("openzt-save-roundtrip.zoo");
+    let out_cstr = std::ffi::CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
+
+    if !run_load_live_zoo(&mut None) {
+        failures.push("initial load failed".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    // First 16 bytes of a real save: "TZFB", format version, `DAT_00638614`, expansion id (what saveGame writes first).
+    let header: Vec<u8> = std::fs::read(&source).map(|bytes| bytes.into_iter().take(16).collect()).unwrap_or_default();
+    if header.len() != 16 {
+        failures.push(format!("could not read the 16-byte header from {}", source));
+        return finish_test(test_name, failures, failure_log);
+    }
+
+    // Regression: the show state's script-state count (`ZTShow+0x18+0x20`) and the show info's pending-script count
+    // (`+0x48`) are bookkeeping fields that go stale during play (a `clear` or a play-time insert does not update them).
+    // A save that wrote the stale count instead of the real entry count produced a file whose later records the loader
+    // misread. The loader does not reject every such file, so compare each show tank's tree keys before the save and
+    // after the reload instead of only checking that the reload succeeds.
+    fn tree_keys(node: u32, out: &mut Vec<u32>) {
+        if node == 0 {
+            return;
+        }
+        tree_keys(get_from_memory::<u32>(node + 0x8), out);
+        out.push(get_from_memory::<u32>(node + 0x10));
+        tree_keys(get_from_memory::<u32>(node + 0xc), out);
+    }
+    fn show_tree_keys() -> Vec<(usize, Vec<u32>, Vec<u32>)> {
+        let habitat_mgr = globals().zthabitatmgr();
+        let mut result = Vec::new();
+        for i in 0..habitat_mgr.exhibit_array().len() {
+            let show_info: u32 = get_from_memory(habitat_mgr.exhibit_array().get_ptr(i) + 0x4);
+            if show_info == 0 {
+                continue;
+            }
+            let (mut state_keys, mut pending_keys) = (Vec::new(), Vec::new());
+            let state_header: u32 = get_from_memory(show_info + 0x38);
+            tree_keys(get_from_memory(state_header + 4), &mut state_keys);
+            let pending_header: u32 = get_from_memory(show_info + 0x44);
+            tree_keys(get_from_memory(pending_header + 4), &mut pending_keys);
+            result.push((i, state_keys, pending_keys));
+        }
+        result
+    }
+    let keys_before = show_tree_keys();
+    if keys_before.is_empty() {
+        failures.push("the test zoo has no show tank to stale the counts on".to_string());
+    }
+    for (i, _, _) in &keys_before {
+        let show_info: u32 = get_from_memory(globals().zthabitatmgr().exhibit_array().get_ptr(*i) + 0x4);
+        save_to_memory(show_info + 0x3c, 2u32);
+        save_to_memory(show_info + 0x48, 5u32);
+    }
+    let world = globals().ztworldmgr_ptr() as *const u32;
+    let file = unsafe { FOPEN.original()(out_cstr.as_ptr() as u32, c"wb".as_ptr()) };
+    if file.is_null() {
+        failures.push(format!("fopen(wb) failed for {}", out_path.display()));
+        return finish_test(test_name, failures, failure_log);
+    }
+    let mut ok = write_raw_bytes(header.as_ptr() as u32, 16, file as *const i8);
+    unsafe { REMOVE_TRANSIENTS.original()(world as i32) };
+    let saved = unsafe { ZTWORLDMGR_SAVE.original()(world, file) };
+    unsafe { RESTORE_ALL_TANK_OWNED_TRANSIENTS.original()(world as i32) };
+    unsafe { FCLOSE.original()(file) };
+    ok &= saved;
+    let size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    if !ok {
+        failures.push(format!("save sequence reported failure (world save returned {}), file is {} bytes", saved, size));
+    }
+
+    let file = unsafe { FOPEN.original()(out_cstr.as_ptr() as u32, c"rb".as_ptr()) };
+    if file.is_null() {
+        failures.push("could not reopen the saved file".to_string());
+    } else {
+        let loaded = unsafe { LOAD_FILE.original()(file as *const u8) } & 0xff != 0;
+        unsafe { FCLOSE.original()(file) };
+        if !loaded {
+            failures.push(format!("loading the just-saved file failed ({} bytes)", size));
+        }
+        let keys_after = show_tree_keys();
+        if keys_after != keys_before {
+            failures.push(format!("show tree keys changed across save/load: before {:?}, after {:?}", keys_before, keys_after));
+        }
+    }
+    let _ = std::fs::remove_file(&out_path);
+    if !run_load_live_zoo(&mut None) {
+        failures.push("could not reload the test zoo afterwards".to_string());
+    }
+    finish_test(&format!("{} ({} bytes)", test_name, size), failures, failure_log)
+}
+
+/// `ZTShowInfo::save` (and the `ZTShowState::save` inside it) must write the real number of entries in each tree, not
+/// the stored bookkeeping counts (`ZTShowInfo+0x3c`, the show state's script-state count, and `+0x48`, the pending-script
+/// count). Those fields go stale during play, and a count that differs from the records written misaligns everything
+/// after it in the file - the "save corrupts the savegame" bug. Captures every show tank's save bytes, makes both counts
+/// stale, captures again, and requires the two byte streams to be identical.
+pub(crate) fn run_ztshowinfo_save_ignores_stale_counts_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTSHOWINFO_SAVE_IGNORES_STALE_COUNTS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut checked = 0;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let show_info: u32 = get_from_memory(habitat_mgr.exhibit_array().get_ptr(i) + 0x4);
+        if show_info == 0 {
+            continue;
+        }
+        let capture = || {
+            io_redirect::begin_capture();
+            let ok = crate::ztshowinfo::show_info_save(show_info, 1 as *const i8);
+            (ok, io_redirect::end_capture())
+        };
+        let (ok_before, bytes_before) = capture();
+        let original_state_count: u32 = get_from_memory(show_info + 0x3c);
+        let original_pending_count: u32 = get_from_memory(show_info + 0x48);
+        save_to_memory(show_info + 0x3c, original_state_count + 2);
+        save_to_memory(show_info + 0x48, original_pending_count + 5);
+        let (ok_after, bytes_after) = capture();
+        save_to_memory(show_info + 0x3c, original_state_count);
+        save_to_memory(show_info + 0x48, original_pending_count);
+        checked += 1;
+        if !ok_before || !ok_after {
+            failures.push(format!("habitat {}: show_info_save reported failure (before {}, after {})", i, ok_before, ok_after));
+        }
+        if bytes_before != bytes_after {
+            failures.push(format!(
+                "habitat {}: save bytes depend on the stored counts ({} bytes with the real counts, {} with stale ones)",
+                i,
+                bytes_before.len(),
+                bytes_after.len()
+            ));
+        }
+    }
+    if checked == 0 {
+        failures.push("the test zoo has no show tank".to_string());
+    }
+    finish_test(&format!("{} ({} show tanks)", test_name, checked), failures, failure_log)
+}
+
+/// Loads the test zoo, steps `ZTWorldMgr::update` for `SIM_TICKS` frames (the closest the harness gets to play),
+/// logging a flushed checkpoint every 50 ticks so a crash pinpoints its tick, then runs the same save-to-file and
+/// reload as [`run_ztworldmgr_save_file_roundtrip_live_test`] on the simulated state.
+pub(crate) fn run_ztworldmgr_simulated_play_then_save_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::battery::detour_zoo_main::run_load_live_zoo;
+    use crate::zthabitat::support::write_raw_bytes;
+    use openzt_detour::generated::{
+        standalone::{FCLOSE, FOPEN},
+        ztui_gameopts::LOAD_FILE,
+        ztworldmgr::{REMOVE_TRANSIENTS, RESTORE_ALL_TANK_OWNED_TRANSIENTS, SAVE as ZTWORLDMGR_SAVE, UPDATE as ZTWORLDMGR_UPDATE},
+    };
+    const SIM_TICKS: u32 = 600;
+    const TICK_MS: u32 = 55;
+
+    let test_name = "ZTWORLDMGR_SIMULATED_PLAY_THEN_SAVE_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let source = std::env::var("OPENZT_TEST_ZOO")
+        .unwrap_or_else(|_| r"C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\Saved Games\reimplementation-test-zoo.zoo".to_string());
+    if !run_load_live_zoo(&mut None) {
+        failures.push("initial load failed".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let world = globals().ztworldmgr_ptr() as *const u32;
+    for tick in 0..SIM_TICKS {
+        if tick % 50 == 0 {
+            if let Some(log_file) = failure_log {
+                let _ = log_file.write_all(format!("CHECKPOINT {} tick {}\n", test_name, tick).as_bytes());
+                let _ = log_file.flush();
+            }
+        }
+        unsafe { ZTWORLDMGR_UPDATE.hooked()(world, TICK_MS) };
+    }
+
+    let out_path = std::env::temp_dir().join("openzt-sim-save.zoo");
+    let out_cstr = std::ffi::CString::new(out_path.to_string_lossy().as_bytes()).unwrap();
+    let header: Vec<u8> = std::fs::read(&source).map(|bytes| bytes.into_iter().take(16).collect()).unwrap_or_default();
+    let file = unsafe { FOPEN.original()(out_cstr.as_ptr() as u32, c"wb".as_ptr()) };
+    if header.len() != 16 || file.is_null() {
+        failures.push("could not prepare the output file".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let mut ok = write_raw_bytes(header.as_ptr() as u32, 16, file as *const i8);
+    unsafe { REMOVE_TRANSIENTS.original()(world as i32) };
+    let saved = unsafe { ZTWORLDMGR_SAVE.original()(world, file) };
+    unsafe { RESTORE_ALL_TANK_OWNED_TRANSIENTS.original()(world as i32) };
+    unsafe { FCLOSE.original()(file) };
+    ok &= saved;
+    let size = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    if !ok {
+        failures.push(format!("save after {} ticks reported failure ({} bytes)", SIM_TICKS, size));
+    }
+    let file = unsafe { FOPEN.original()(out_cstr.as_ptr() as u32, c"rb".as_ptr()) };
+    if !file.is_null() {
+        let loaded = unsafe { LOAD_FILE.original()(file as *const u8) } & 0xff != 0;
+        unsafe { FCLOSE.original()(file) };
+        if !loaded {
+            failures.push(format!("loading the file saved after {} ticks failed ({} bytes)", SIM_TICKS, size));
+        }
+    }
+    let _ = std::fs::remove_file(&out_path);
+    if !run_load_live_zoo(&mut None) {
+        failures.push("could not reload the test zoo afterwards".to_string());
+    }
+    finish_test(&format!("{} ({} bytes)", test_name, size), failures, failure_log)
+}
+
+/// `ZTHabitatMgr::removeAllHabitats` against real vanilla. Destructive, so it runs last: each pole starts from a
+/// fresh load of the test save (`run_load_live_zoo` - itself a vanilla world-clear path that reaches the detour),
+/// records an address-independent picture of the habitats, runs the pole, and checks independent post-conditions:
+/// `exhibit_array` empty, `pending_habitat_ptr` null, the habitat-list dirty byte set, no tile-ownership grid
+/// cell of a former habitat tile still pointing at a habitat, and no thought left for a removed habitat. Each pole
+/// first runs `BFWorldMgr::clear`, as `ZTWorldMgr::clear` does (so staff lists are not checked here; see
+/// `ZTHABITATMGR_CLEAR_ALL_STAFF_HABITATS_LIVE`). The two poles' pictures must agree. The zoo is reloaded at the end.
+pub(crate) fn run_zthabitatmgr_remove_all_habitats_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::battery::detour_zoo_main::run_load_live_zoo;
+    use crate::zthabitat::support::{walk_tile_list, HABITAT_LIST_DIRTY_RVA};
+
+    let test_name = "ZTHABITATMGR_REMOVE_ALL_HABITATS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let mut summaries: Vec<(&str, String)> = Vec::new();
+
+    let poles: [(&str, fn(u32)); 2] = [
+        ("real", |mgr| hooks_zthabitatmgr::remove_all_habitats_real(mgr as *const u32)),
+        ("port", |mgr| { let _ = mgr; globals().zthabitatmgr().remove_all_habitats() }),
+    ];
+    for (pole, run) in poles {
+        if !run_load_live_zoo(&mut None) {
+            failures.push(format!("{}: could not (re)load the test zoo", pole));
+            break;
+        }
+        let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+        let habitat_mgr = globals().zthabitatmgr();
+        let habitats: Vec<u32> = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).filter(|&p| p != 0).collect();
+        let tank_count = habitats.iter().filter(|&&p| unsafe { ref_from_memory::<ZTHabitat>(p) }.is_tank()).count();
+        let owned_positions: Vec<(i32, i32)> = habitats
+            .iter()
+            .flat_map(|&p| {
+                walk_tile_list(unsafe { ref_from_memory::<ZTHabitat>(p) }.owned_tiles_ptr)
+                    .map(|node| {
+                        let tile = get_from_memory::<BFTile>(get_from_memory::<u32>(node + 8));
+                        (tile.pos.x, tile.pos.y)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        // The test DLL does not install the thought manager's detours, so real vanilla's thought step cannot see the
+        // Rust store: seed and check thoughts on the port pole only (one per habitat).
+        if pole == "port" {
+            for &habitat in &habitats {
+                globals().ztthoughtmgr().add_thought(1, 0, 0, habitat);
+            }
+        }
+        let pending_before: u32 = get_from_memory(mgr_ptr + 0x18);
+
+        // Vanilla's own order (`ZTWorldMgr::clear`): entities and the tile map go first, habitats second. Skipping
+        // this leaves tank filters pointing at freed tanks, and the next load's entity removal crashes in
+        // `ZTTankFilter::removeFromMap`.
+        unsafe { openzt_detour::generated::bfworldmgr::CLEAR.original()(globals().ztworldmgr_ptr() as *const u32) };
+        run(mgr_ptr);
+
+        let habitat_mgr = globals().zthabitatmgr();
+        if habitat_mgr.exhibit_array().len() != 0 {
+            failures.push(format!("{}: exhibit_array still has {} entries", pole, habitat_mgr.exhibit_array().len()));
+        }
+        if get_from_memory::<u32>(mgr_ptr + 0x18) != 0 {
+            failures.push(format!("{}: pending_habitat_ptr not nulled", pole));
+        }
+        if get_from_memory::<u8>(get_module_base("zoo.exe") as u32 + HABITAT_LIST_DIRTY_RVA) != 1 {
+            failures.push(format!("{}: habitat-list dirty byte not set", pole));
+        }
+        let stale_cells = owned_positions.iter().filter(|&&(x, y)| habitat_mgr.get_habitat_ptr(x, y) != 0).count();
+        if stale_cells != 0 {
+            failures.push(format!("{}: {} former habitat tiles still map to a habitat", pole, stale_cells));
+        }
+        if pole == "port" {
+            let stale_thoughts: usize = habitats.iter().map(|&h| globals().ztthoughtmgr().get_thoughts_by_habitat(h, usize::MAX).len()).sum();
+            if stale_thoughts != 0 {
+                failures.push(format!("{}: {} thoughts still reference removed habitats", pole, stale_thoughts));
+            }
+        }
+        summaries.push((
+            pole,
+            format!(
+                "habitats={} tanks={} owned_tiles={} pending_before_nonnull={}",
+                habitats.len(),
+                tank_count,
+                owned_positions.len(),
+                pending_before != 0
+
+            ),
+        ));
+    }
+    if let [(_, a), (_, b)] = summaries.as_slice() {
+        if a != b {
+            failures.push(format!("pole summaries differ: real [{}] vs port [{}]", a, b));
+        }
+    }
+    if !run_load_live_zoo(&mut None) {
+        failures.push("could not reload the test zoo after the destructive phase".to_string());
+    }
+    let label = format!("{} ({})", test_name, summaries.first().map(|(_, s)| s.as_str()).unwrap_or("not run"));
+    finish_test(&label, failures, failure_log)
+}
+
+/// `ZTHabitatMgr::getNextNum` against real vanilla: each pole's return and the counter's delta are checked
+/// against the `ZTMapView` `+0x378` undoing gate, and the counter is restored after each call.
+pub(crate) fn run_zthabitatmgr_get_next_num_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_GET_NEXT_NUM_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+    let gate_set = mapview_ptr != 0 && get_from_memory::<u8>(mapview_ptr + 0x378) != 0;
+    let expected_delta: u32 = if gate_set { 0 } else { 1 };
+    let before: u32 = get_from_memory(mgr_ptr + 0x68);
+
+    let ret_reimpl = habitat_mgr.get_next_num();
+    let after_reimpl: u32 = get_from_memory(mgr_ptr + 0x68);
+    save_to_memory(mgr_ptr + 0x68, before);
+
+    let ret_real = hooks_zthabitatmgr::get_next_num_real(mgr_ptr as *const u32);
+    let after_real: u32 = get_from_memory(mgr_ptr + 0x68);
+    save_to_memory(mgr_ptr + 0x68, before);
+
+    for (pole, ret, after) in [("reimpl", ret_reimpl, after_reimpl), ("real", ret_real, after_real)] {
+        if ret != before || after.wrapping_sub(before) != expected_delta {
+            failures.push(format!(
+                "{}: gate_set={} expected ret {} delta {}, got ret {} delta {}",
+                pole,
+                gate_set,
+                before,
+                expected_delta,
+                ret,
+                after.wrapping_sub(before)
+            ));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
 /// `ZTHABITAT_SUITABILITY_STORE_HAS_NO_STALE_ENTRIES`: every map in the Rust suitability store is some live
 /// habitat's `+0x148` cache. A leftover handle means a habitat was freed without `ZTHabitat::destruct` (a
 /// stale cache a later habitat at the same address would inherit) or a scratch map was never destroyed.
@@ -9673,8 +10361,7 @@ pub(crate) fn run_habitat_species_rating_matches_real_live_test(failure_log: &mu
             error!("{}: {}", test_name, msg);
         }
         if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}
-", test_name, failures.join("; ")).as_bytes());
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
         }
         true
     }
@@ -10577,8 +11264,7 @@ pub(crate) fn run_habitat_recalculate_characteristics_matches_real_live_test(fai
             error!("{}: {}", test_name, msg);
         }
         if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: {}
-", test_name, failures.join("; ")).as_bytes());
+            let _ = log_file.write_all(format!("Test Failed {}: {}\n", test_name, failures.join("; ")).as_bytes());
         }
         true
     }
@@ -12688,3 +13374,4 @@ pub(crate) fn run_habitat_destructor_reached_test(failure_log: &mut Option<std::
     tracing::info!("{}: destruct ran {} time(s)", test_name, calls);
     finish_test(test_name, failures, failure_log)
 }
+
