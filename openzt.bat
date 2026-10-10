@@ -484,7 +484,7 @@ echo.
 echo Launching Zoo Tycoon under cdb - the window is fully playable, cdb watches silently.
 echo Reproduce the bug now; a crash will symbolize automatically and quit cdb.
 echo Output: !CRASH_LOG!
-"!CDB_EXE!" -G -y "!SYM_PATH!" -c "sxe ld:res-openzt;g;.reload /f res-openzt.dll;g;kv;r;q" "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\zoo.exe" > "!CRASH_LOG!" 2>&1
+"!CDB_EXE!" -G -y "!SYM_PATH!" -c "sxe ld:res-openzt;g;.reload /f res-openzt.dll;sxd av;g;kv;r;dds esp L80;q" "C:\Program Files (x86)\Microsoft Games\Zoo Tycoon\zoo.exe" > "!CRASH_LOG!" 2>&1
 
 echo.
 echo Done. Full output written to !CRASH_LOG!
