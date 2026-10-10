@@ -10144,6 +10144,71 @@ pub(crate) fn run_zthabitatmgr_remove_all_habitats_live_test(failure_log: &mut O
     finish_test(&label, failures, failure_log)
 }
 
+/// `ZTHabitatMgr::clear` against real vanilla. Destructive (runs after the `removeAllHabitats` test): each pole
+/// reloads the test save, runs `BFWorldMgr::clear` first (vanilla's order), records the loaded-habitat-record vector's
+/// record count, runs the pole, and checks the vector is emptied with its buffer kept (`begin` unchanged), plus
+/// `removeAllHabitats`'s post-conditions (empty `exhibit_array`, null pending habitat, dirty byte). The poles'
+/// summaries must agree. The vector's records are whatever the save's load left behind (not seeded: a fabricated
+/// record would need a validly constructed `std::string`/`ZTShowInfo`).
+pub(crate) fn run_zthabitatmgr_clear_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::battery::detour_zoo_main::run_load_live_zoo;
+    use crate::zthabitat::support::{HABITAT_LIST_DIRTY_RVA, RVA_LOADED_HABITAT_RECORDS_BEGIN, RVA_LOADED_HABITAT_RECORDS_END};
+
+    let test_name = "ZTHABITATMGR_CLEAR_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let mut summaries: Vec<(&str, String)> = Vec::new();
+    let base = get_module_base("zoo.exe") as u32;
+
+    let poles: [(&str, fn(u32)); 2] = [
+        ("real", |mgr| hooks_zthabitatmgr::clear_real(mgr as *const u32)),
+        ("port", |mgr| { let _ = mgr; globals().zthabitatmgr().clear() }),
+    ];
+    for (pole, run) in poles {
+        if !run_load_live_zoo(&mut None) {
+            failures.push(format!("{}: could not (re)load the test zoo", pole));
+            break;
+        }
+        let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+        let habitat_count = globals().zthabitatmgr().exhibit_array().len();
+
+        unsafe { openzt_detour::generated::bfworldmgr::CLEAR.original()(globals().ztworldmgr_ptr() as *const u32) };
+        // Pin the vector's own bounds only after the world clear, which does not touch them.
+        let begin_before: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN);
+        let end_before: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END);
+        let records = (end_before.wrapping_sub(begin_before)) / 0x128;
+        run(mgr_ptr);
+
+        let begin_after: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN);
+        let end_after: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END);
+        if end_after != begin_after || begin_after != begin_before {
+            failures.push(format!(
+                "{}: gate vector not emptied in place (begin {:#x}->{:#x}, end {:#x}->{:#x})",
+                pole, begin_before, begin_after, end_before, end_after
+            ));
+        }
+        if globals().zthabitatmgr().exhibit_array().len() != 0 {
+            failures.push(format!("{}: exhibit_array still has {} entries", pole, globals().zthabitatmgr().exhibit_array().len()));
+        }
+        if get_from_memory::<u32>(mgr_ptr + 0x18) != 0 {
+            failures.push(format!("{}: pending_habitat_ptr not nulled", pole));
+        }
+        if get_from_memory::<u8>(base + HABITAT_LIST_DIRTY_RVA) != 1 {
+            failures.push(format!("{}: habitat-list dirty byte not set", pole));
+        }
+        summaries.push((pole, format!("habitats={} gate_records={}", habitat_count, records)));
+    }
+    if let [(_, a), (_, b)] = summaries.as_slice() {
+        if a != b {
+            failures.push(format!("pole summaries differ: real [{}] vs port [{}]", a, b));
+        }
+    }
+    if !run_load_live_zoo(&mut None) {
+        failures.push("could not reload the test zoo after the destructive phase".to_string());
+    }
+    let label = format!("{} ({})", test_name, summaries.first().map(|(_, s)| s.as_str()).unwrap_or("not run"));
+    finish_test(&label, failures, failure_log)
+}
+
 /// `ZTHabitatMgr::getNextNum` against real vanilla: each pole's return and the counter's delta are checked
 /// against the `ZTMapView` `+0x378` undoing gate, and the counter is restored after each call.
 pub(crate) fn run_zthabitatmgr_get_next_num_live_test(failure_log: &mut Option<std::fs::File>) -> bool {

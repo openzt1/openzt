@@ -1150,22 +1150,22 @@ pub const RVA_APP_INIT_SUCCESS_BASE: u32 = 0x0023_8148;
 
 /// `DAT_00639188`'s RVA - the currently-loading save file's own format version (`ZTUI::gameopts::
 /// getFileVersion`'s backing store, set once by `gameopts_loadFile.c`'s own `deallocate(&DAT_00639188,...)`
-/// read). [`ZTHabitatMgr::place_gate`]'s own load-time fast path only consults the candidate-placement
+/// read). [`ZTHabitatMgr::place_gate`]'s own load-time fast path only consults the loaded-habitat-record
 /// table below once this exceeds `0x14` (20) - real vanilla's own save-format-version gate for whether the
 /// table was even populated by whatever earlier load step fills it. RVA = `0x00639188 - 0x400000`.
 pub const RVA_SAVE_FILE_VERSION: u32 = 0x0023_9188;
 
-/// `DAT_00639178`/`DAT_0063917c`'s RVAs - the begin/end of a load-time table of already-decided gate
-/// placements (each record `0x128` bytes: tile `x`/`y` at `+0x0`/`+0x4`, a validity flag at `+0x14`,
-/// content beyond that not read by this port). [`ZTHabitatMgr::place_gate`]'s own fast path walks this
-/// table first (only once [`RVA_GLOBAL_ZTAPP`]'s `+0x441` load-in-progress flag is set and
-/// [`RVA_SAVE_FILE_VERSION`] is new enough) and returns `true` immediately if a record's tile resolves
-/// (via [`ZTHabitatMgr::get_habitat_ptr`]) to the habitat being placed and its validity flag is
-/// non-negative - real vanilla treats a gate already recorded this way as already placed, skipping the
-/// rest of the function entirely. Purpose/producer of this table not otherwise identified; only its shape
-/// matters here. RVAs = `0x00639178 - 0x400000` / `0x0063917c - 0x400000`.
-pub const RVA_LOAD_CANDIDATE_GATES_BEGIN: u32 = 0x0023_9178;
-pub const RVA_LOAD_CANDIDATE_GATES_END: u32 = 0x0023_917c;
+/// `DAT_00639178`/`DAT_0063917c`'s RVAs - the begin/end of the vector of per-habitat records
+/// `ZTHabitatMgr::load` reads from a save (each record `0x128` bytes: tile `x`/`y` at `+0x0`/`+0x4`, the habitat's
+/// name string at `+0x8`, a validity flag at `+0x14`, an optional `ZTShowInfo` at `+0x60`). `nameLoadedHabitats`
+/// applies the records to their habitats and destroys them at the end of the load, so the vector is empty outside
+/// a load. [`ZTHabitatMgr::place_gate`]'s fast path walks it first (only once [`RVA_GLOBAL_ZTAPP`]'s `+0x441`
+/// load-in-progress flag is set and [`RVA_SAVE_FILE_VERSION`] is new enough) and returns `true` immediately if a
+/// record's tile resolves (via [`ZTHabitatMgr::get_habitat_ptr`]) to the habitat being placed and its validity
+/// flag is non-negative: a habitat already recorded this way is treated as already placed.
+/// RVAs = `0x00639178 - 0x400000` / `0x0063917c - 0x400000`.
+pub const RVA_LOADED_HABITAT_RECORDS_BEGIN: u32 = 0x0023_9178;
+pub const RVA_LOADED_HABITAT_RECORDS_END: u32 = 0x0023_917c;
 
 /// `DAT_006351a4`'s RVA - a single byte flag [`ZTHabitatMgr::temp_keeper_for_pathfinding`] forwards
 /// verbatim as the "create" argument to the temporary keeper's own entity-type vtable slot `+0x24`

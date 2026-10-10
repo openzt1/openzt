@@ -955,6 +955,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTWORLDMGR_SAVE_FILE_ROUNDTRIP_LIVE", run: tests::zthabitatmgr::run_ztworldmgr_save_file_roundtrip_live_test },
             RegisteredTest { name: "ZTWORLDMGR_SIMULATED_PLAY_THEN_SAVE_LIVE", run: tests::zthabitatmgr::run_ztworldmgr_simulated_play_then_save_live_test },
             RegisteredTest { name: "ZTHABITATMGR_REMOVE_ALL_HABITATS_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_remove_all_habitats_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_CLEAR_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_clear_live_test },
         ]
     }
 

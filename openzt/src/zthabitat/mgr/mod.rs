@@ -79,7 +79,7 @@ pub mod hooks_zthabitatmgr {
         },
         zthabitatmgr::{
             DO_TANK_CHECK, ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES,
-            GET_NUM_NON_SHOW_NON_WORLD_HABITATS, GET_NONEMPTY_NON_WORLD_HABITATS, GET_NEXT_NUM, GET_GRANDSTANDS, EMPTY_GRANDSTANDS, CLEAR_ALL_STAFF_HABITATS, REMOVE_ALL_HABITATS, HABITAT_TILE_CHANGED,
+            GET_NUM_NON_SHOW_NON_WORLD_HABITATS, GET_NONEMPTY_NON_WORLD_HABITATS, GET_NEXT_NUM, GET_GRANDSTANDS, EMPTY_GRANDSTANDS, CLEAR, CLEAR_ALL_STAFF_HABITATS, REMOVE_ALL_HABITATS, HABITAT_TILE_CHANGED,
             HIGHLIGHT_HABITAT, REPLACE_FENCE_WITH_GATE, REPLACE_GATE, REPLACE_GATE_WITH_FENCE, SCENERY_ENTITY_CHANGE, TERRAIN_TILE_CHANGED,
             UNHIGHLIGHT_HABITAT, PATH_PLACED as ZTHABITATMGR_PATH_PLACED, PATH_REMOVED as ZTHABITATMGR_PATH_REMOVED, CHECK_ENTER_HABITAT,
             GET_OUTERMOST_TANK, GET_NEEDY_NESTED_TANK, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
@@ -1216,6 +1216,16 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn remove_all_habitats_real(this: *const u32) {
         unsafe { REMOVE_ALL_HABITATS_DETOUR.call(this) }
+    }
+
+    #[detour(CLEAR)]
+    unsafe extern "thiscall" fn clear(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.clear()
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn clear_real(this: *const u32) {
+        unsafe { CLEAR_DETOUR.call(this) }
     }
 
     #[detour(CLEAR_ALL_STAFF_HABITATS)]

@@ -13,6 +13,8 @@ use openzt_detour::generated::{
         msvc_std_listuint::{ERASE as MSVC_LIST_UINT_ERASE_NODES, INSERT as MSVC_LIST_UINT_INSERT_NODE, LIST as MSVC_LIST_UINT_DTOR_NODE, LIST_UINT_CTOR as MSVC_LIST_UINT_CTOR},
         msvc_std_vectorbyte::VECTORBYTE,
         ztbuilding::{REMOVE_ALL_USERS as ZTBUILDING_REMOVE_ALL_USERS, USER_DATA_CHANGED as ZTBUILDING_USER_DATA_CHANGED},
+        msvc_std_basic_string::BASIC_STRING_0 as MSVC_BASIC_STRING_DTOR,
+        ztshowinfo::DESTRUCTOR_0 as ZTSHOWINFO_DESTRUCTOR_0,
         ztshowmgr::GET_SHOW_INFO as ZTSHOWMGR_GET_SHOW_INFO,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
@@ -691,8 +693,8 @@ impl ZTHabitatMgr {
     ///
     /// Real body, in order:
     /// 1. **Load-time fast path**: if a save is currently loading ([`RVA_APP_INIT_SUCCESS_BASE`]'s `+0x441` byte)
-    ///    at format version > `0x14` ([`RVA_SAVE_FILE_VERSION`]), walks the load-time candidate-gate table
-    ///    ([`RVA_LOAD_CANDIDATE_GATES_BEGIN`]/`_END`) for a record whose tile resolves to `habitat_ptr`
+    ///    at format version > `0x14` ([`RVA_SAVE_FILE_VERSION`]), walks the load-time loaded-habitat-record table
+    ///    ([`RVA_LOADED_HABITAT_RECORDS_BEGIN`]/`_END`) for a record whose tile resolves to `habitat_ptr`
     ///    with a non-negative validity flag - returns `true` immediately if found, skipping everything
     ///    else (real vanilla treats an already-recorded gate as already placed).
     /// 2. **Undo-replay fast path**: if the live `ZTMapView` (`ZTUI_GENERAL_GET_MAPVIEW`) is currently
@@ -731,8 +733,8 @@ impl ZTHabitatMgr {
         let load_in_progress: u8 = get_from_memory(base + RVA_APP_INIT_SUCCESS_BASE + 0x441);
         let file_version: u32 = get_from_memory(base + RVA_SAVE_FILE_VERSION);
         if load_in_progress != 0 && file_version > 0x14 {
-            let begin: u32 = get_from_memory(base + RVA_LOAD_CANDIDATE_GATES_BEGIN);
-            let end: u32 = get_from_memory(base + RVA_LOAD_CANDIDATE_GATES_END);
+            let begin: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN);
+            let end: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END);
             let mut record = begin;
             while record != end {
                 let x: i32 = get_from_memory(record);
@@ -3673,6 +3675,27 @@ impl ZTHabitatMgr {
         self.exhibit_array.set_raw_parts(start, start, buffer_end);
         unsafe { ZTUI_HABITATINFO_REMOVE_ALL_HABITATS.original()() };
         save_to_memory::<u8>(get_module_base("zoo.exe") as u32 + HABITAT_LIST_DIRTY_RVA, 1);
+    }
+
+    /// Ports `ZTHabitatMgr::clear` (`CLEAR`, `0x004c6b2c`): destroys every record of the global load-time
+    /// loaded-habitat-record vector (`RVA_LOADED_HABITAT_RECORDS_BEGIN`/`_END`, element stride `0x128`) in order -
+    /// the `ZTShowInfo` at `+0x60` first (non-deleting `DESTRUCTOR_0`), then the string at `+0x8` - sets
+    /// `end = begin` (the buffer is kept), then [`Self::remove_all_habitats`]. The `.asm`'s copy-down loop
+    /// (`std::vector::erase(begin, end)`) has a zero element count and is not ported.
+    pub fn clear(&self) {
+        let base = get_module_base("zoo.exe") as u32;
+        let begin: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN);
+        let end: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END);
+        let mut record = begin;
+        while record != end {
+            unsafe {
+                ZTSHOWINFO_DESTRUCTOR_0.original()((record + 0x60) as *const u32);
+                MSVC_BASIC_STRING_DTOR.original()((record + 0x8) as *const std::ffi::c_void);
+            }
+            record += 0x128;
+        }
+        save_to_memory::<u32>(base + RVA_LOADED_HABITAT_RECORDS_END, begin);
+        self.remove_all_habitats();
     }
 
     /// Ports `ZTHabitatMgr::getTank` (`ZTHabitatMgr_getTank.c`/`.asm`): the habitat occupying `tile_ptr`
