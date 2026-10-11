@@ -928,15 +928,14 @@ impl ZTHabitatMgr {
     ///    ([`Self::update_amphibious_neighbors_from_tile`]/[`Self::update_show_neighbors_from_tile`]), then
     ///    returns.
     /// 4. Otherwise (no wall directly between the two tiles) takes the **long branch**: computes 4 more
-    ///    tiles (`tile_ptr`/the neighbour, each stepped ±90° from `direction` ([`rotate_cardinal_direction`]))
-    ///    plus 14 fence-passability checks ([`fence_wall_at`]) spread across them, split into two
-    ///    7-term sets (one per side of the wall). Bails unless **both** sets have at least one true term -
-    ///    real vanilla's own way of asking "does this new fence actually close off a boundary on both
-    ///    sides," not just a single mid-wall segment with open ends. One term per side (`local_24`) is a
-    ///    genuine `AND` of two sibling checks already covered separately by another term in the same set
-    ///    (`local_28`) - confirmed via `.asm` register/stack-slot reuse (an init-from-sibling-then-
-    ///    conditionally-clear pattern), making it logically redundant in the final `OR`, but reproduced
-    ///    faithfully rather than simplified away, matching real vanilla exactly.
+    ///    tiles (`tile_ptr`/the neighbour, each stepped ±90° from `direction` through vanilla's two direction
+    ///    tables ([`direction_table_plus`]/[`direction_table_minus`]; a `-1` entry steps by `(0, 0)`, so the
+    ///    "side" tile is then the base tile itself)) plus 14 fence-passability checks ([`fence_wall_at`]) spread
+    ///    across them, split into two 7-term sets (one per side of the wall). Bails unless **both** sets have at
+    ///    least one true term - real vanilla's own way of asking "does this new fence actually close off a
+    ///    boundary on both sides," not just a single mid-wall segment with open ends. All 14 terms are
+    ///    independent; in particular the far neighbour's `r2`-slot and opposite-slot walls are separate terms
+    ///    (`.asm` keeps them in two distinct stack slots).
     /// 5. If `tile_ptr` and the neighbour can already reach each other ([`Self::can_find_path`]), nothing
     ///    to do - returns. Otherwise checks whether either side can reach the zoo entrance
     ///    ([`Self::get_zoo_entrance_tile_ptr`]); whichever can becomes the seed for a brand new habitat via
@@ -973,7 +972,9 @@ impl ZTHabitatMgr {
         if neighbour_ptr == 0 {
             return;
         }
-        let opposite = rotate_cardinal_direction(direction, 4);
+        // Vanilla's `local_34`: the opposite direction for any direction (odd ones included), unchanged for the sentinel.
+        let opposite_raw = if direction == 0xffff_ffff { 0xffff_ffff } else { direction.wrapping_sub(4) & 7 };
+        let opposite = direction_slot(opposite_raw);
         let central_is_wall = fence_wall_at(neighbour_ptr, opposite);
 
         if central_is_wall {
@@ -998,14 +999,18 @@ impl ZTHabitatMgr {
             return;
         }
 
-        let r1 = rotate_cardinal_direction(direction, 2);
-        let r2 = rotate_cardinal_direction(direction, -2);
-        let d_opt = if direction == 0xffff_ffff { None } else { Some(direction) };
+        let r1 = direction_slot(direction_table_plus(direction));
+        let r2 = direction_slot(direction_table_minus(direction));
+        let d_opt = direction_slot(direction);
 
-        let n_r1_ptr = r1.map(|d| get_neighbour_raw(world, neighbour_ptr, d)).unwrap_or(0);
-        let n_r2_ptr = r2.map(|d| get_neighbour_raw(world, neighbour_ptr, d)).unwrap_or(0);
-        let t_r1_ptr = r1.map(|d| get_neighbour_raw(world, tile_ptr, d)).unwrap_or(0);
-        let t_r2_ptr = r2.map(|d| get_neighbour_raw(world, tile_ptr, d)).unwrap_or(0);
+        // The four side tiles are stepped by the tables' value for the opposite direction; a `-1` entry steps by
+        // `(0, 0)`, so the "side" tile is the base tile itself rather than absent.
+        let side_plus = direction_table_plus(opposite_raw);
+        let side_minus = direction_table_minus(opposite_raw);
+        let n_r2_ptr = get_neighbour_raw(world, neighbour_ptr, side_plus);
+        let n_r1_ptr = get_neighbour_raw(world, neighbour_ptr, side_minus);
+        let t_r2_ptr = get_neighbour_raw(world, tile_ptr, side_plus);
+        let t_r1_ptr = get_neighbour_raw(world, tile_ptr, side_minus);
 
         let side_a_any = (t_r2_ptr == 0 && n_r2_ptr == 0)
             || fence_wall_at(t_r2_ptr, r1)
@@ -1018,12 +1023,15 @@ impl ZTHabitatMgr {
             return;
         }
 
-        let local_28 = fence_wall_at(n_r1_ptr, r2);
+        // Two independent flags in vanilla (`.asm` stores each in its own stack slot): a wall on the far
+        // neighbour's `r2` slot, and a wall on its opposite slot.
+        let far_neighbour_r2_wall = fence_wall_at(n_r1_ptr, r2);
+        let far_neighbour_opposite_wall = fence_wall_at(n_r1_ptr, opposite);
         let side_b_any = (t_r1_ptr == 0 && n_r1_ptr == 0)
             || fence_wall_at(t_r1_ptr, r2)
             || fence_wall_at(t_r1_ptr, d_opt)
-            || (fence_wall_at(n_r1_ptr, opposite) && local_28)
-            || local_28
+            || far_neighbour_opposite_wall
+            || far_neighbour_r2_wall
             || fence_wall_at(neighbour_ptr, r1)
             || fence_wall_at(tile_ptr, r1);
         if !side_b_any {
@@ -1104,6 +1112,15 @@ impl ZTHabitatMgr {
         unsafe { ref_from_memory::<ZTHabitat>(old_habitat_ptr) }.resize(tile_ptr);
         unsafe { ref_from_memory::<ZTHabitat>(old_habitat_ptr) }.set_dirty_characteristics();
 
+        // The undo action takes ownership of its name buffer, so it gets its own copy; `name_buf` stays ours for
+        // `setName` and the free below.
+        let undo_name_len = name_len;
+        let undo_name_buf = unsafe { POOLALLOC_ALLOCATE.original()(undo_name_len + 1) } as u32;
+        for i in 0..undo_name_len {
+            save_to_memory::<u8>(undo_name_buf + i, get_from_memory::<u8>(name_buf_begin + i));
+        }
+        save_to_memory::<u8>(undo_name_buf + undo_name_len, 0);
+
         let tile = get_from_memory::<BFTile>(tile_ptr);
         let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() };
         unsafe {
@@ -1119,9 +1136,9 @@ impl ZTHabitatMgr {
                 tile.pos.y as u32,
                 undo_x as u32,
                 undo_y as *const i32,
-                name_buf[0] as *const u32,
-                name_buf[1] as i32,
-                name_buf[2] as i32,
+                undo_name_buf as *const u32,
+                (undo_name_buf + undo_name_len) as i32,
+                (undo_name_buf + undo_name_len + 1) as i32,
             )
         };
 

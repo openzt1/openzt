@@ -1359,6 +1359,32 @@ pub fn rotate_cardinal_direction(direction: u32, steps: i32) -> Option<u32> {
     Some(((direction as i32 + steps).rem_euclid(8)) as u32)
 }
 
+/// `DAT_00634fd4[direction]` - the "+90 degrees" direction table as vanilla reads it: `(i+2)&7` for even
+/// `i`, `-1` for odd `i`, and `0` for the `0xffffffff` sentinel (the table is read one dword *before* its
+/// start there, landing on a zero dword). Returns `0xffffffff` for `-1`.
+pub fn direction_table_plus(direction: u32) -> u32 {
+    match direction {
+        0xffff_ffff => 0,
+        0 | 2 | 4 | 6 => (direction + 2) & 7,
+        _ => 0xffff_ffff,
+    }
+}
+
+/// `DAT_00634ff4[direction]` - the "-90 degrees" table: `(i-2)&7` for even `i`, `-1` for odd `i` and for the
+/// `0xffffffff` sentinel (that read lands on the last, `-1`, dword of the preceding table). Returns
+/// `0xffffffff` for `-1`.
+pub fn direction_table_minus(direction: u32) -> u32 {
+    match direction {
+        0 | 2 | 4 | 6 => (direction + 6) & 7,
+        _ => 0xffff_ffff,
+    }
+}
+
+/// `Some(direction)` unless it is the `0xffffffff` "no direction" value that [`fence_wall_at`] treats as no fence.
+pub fn direction_slot(direction: u32) -> Option<u32> {
+    (direction != 0xffff_ffff).then_some(direction)
+}
+
 /// `is_wall`([`ZTHabitat::fence_slot_by_index`]`(tile, direction/2))` - `false` for a null `tile_ptr` or a
 /// `None` direction (the non-cardinal/sentinel case [`rotate_cardinal_direction`] already filters), the
 /// same "guard rather than index -1" shape [`ZTHabitatMgr::fence_placed`]'s own dozen near-identical
