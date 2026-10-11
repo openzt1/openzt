@@ -57,6 +57,11 @@ struct BFResource {
     bf_resource_ptr_ptr: u32,
 }
 
+/// Reached at an address handed out by `get_file_ptr`/`LazyResourceMap` - sometimes a genuine vanilla
+/// resource pointer, sometimes one `Box`-allocated by openzt's own resource injection (`ztfile.rs`'s
+/// `ztfile_to_raw_resource`). Both are read live via `ref_from_memory` elsewhere (`get_file`), so this
+/// carries the [`crate::util::LiveMemory`] marker unconditionally - sound either way, since marking a
+/// Rust-owned instance `!Freeze` only forgoes an optimization the compiler wasn't entitled to make.
 #[public]
 #[derive(Debug, Clone)]
 #[repr(C)]
@@ -66,6 +71,7 @@ struct BFResourcePtr {
     bf_resource_name: ZTStringPtr,
     data_ptr: u32,
     content_size: u32,
+    _live: crate::util::LiveMemory,
 }
 
 #[derive(Debug)]

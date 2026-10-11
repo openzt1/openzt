@@ -55,12 +55,13 @@ pub fn set_fields(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         impl field_accessor_as_string_trait::FieldAccessorAsStringTrait for #struct_name {
-            fn set_field(&mut self, field_name: &str, value: &str) -> Result<(), String> {
+            fn set_field(&self, field_name: &str, value: &str) -> Result<(), String> {
                 match field_name {
                     #(stringify!(#field_names) => {
                         match value.parse() {
                             Ok(value) => {
-                                self.#field_names = value;
+                                let field = ::core::ptr::addr_of!(self.#field_names);
+                                unsafe { field.cast_mut().write_volatile(value) };
                                 Ok(())
                             },
                             Err(err) => Err(format!("Failed to parse value: {}", err)),

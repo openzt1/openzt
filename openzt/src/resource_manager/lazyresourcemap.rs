@@ -654,6 +654,7 @@ pub fn create_empty_resource(filename: String, file_type: ZTFileType) -> anyhow:
         bf_resource_name: bf_resource_name.into(),
         data_ptr,
         content_size: 0,
+        _live: Default::default(),
     }));
 
     // Use LazyResourceMap::insert_custom to add the empty resource

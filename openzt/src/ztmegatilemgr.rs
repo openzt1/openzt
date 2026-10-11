@@ -30,7 +30,8 @@ use tracing::error;
 
 use crate::{
     globals::{get_module_base, globals},
-    util::get_from_memory,
+    util::{get_from_memory, write_live_ptr},
+    write_live,
     ztworldmgr::IVec3,
 };
 
@@ -53,6 +54,7 @@ pub struct ZTMegatileMgr {
     row_start: *mut MegatileRow, // 0x18 - outer vector<vector<ZTMegatile>> begin
     row_end: *mut MegatileRow,   // 0x1c - outer vector end
     row_capacity_end: *mut MegatileRow, // 0x20 - outer vector end-of-storage
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(mem::size_of::<ZTMegatileMgr>() == 0x24);
@@ -88,6 +90,7 @@ pub struct ZTMegatile {
     category_map: MapHeader, // 0x4-0xf - std::map<int,float>, see MapHeader/TreeNode below
     stink: f32,              // 0x10 - running per-tile stink accumulator; the "esthetic" data is
                               // `category_map`, read via `category_value()`
+    pub _live: crate::util::LiveMemory,
 }
 
 const _: () = assert!(mem::size_of::<ZTMegatile>() == 0x14);
@@ -240,10 +243,10 @@ impl ZTMegatileMgr {
     }
 
     /// Reimplementation of `OOAnalyzer::ZTMegatileMgr::update`, per `ZTMegatileMgr_update.c`.
-    pub fn update(&mut self, delta_ticks: u32) {
+    pub fn update(&self, delta_ticks: u32) {
         let (new_accumulator, new_dirty, should_recalculate) = Self::compute_update_state(self.tick_accumulator, self.dirty != 0, delta_ticks);
-        self.tick_accumulator = new_accumulator;
-        self.dirty = new_dirty as u8;
+        write_live!(self, tick_accumulator, new_accumulator);
+        write_live!(self, dirty, new_dirty as u8);
         if should_recalculate {
             self.recalculate_characteristics();
         }
@@ -268,14 +271,14 @@ impl ZTMegatileMgr {
     /// Only the not-found branch of the per-category accumulation calls through to vanilla (the
     /// find-or-insert helper, [`accumulate_category_value`]) - once a node exists, writing its `value`
     /// field is a plain memory write, safe regardless of allocator (see the module doc comment).
-    pub fn recalculate_characteristics(&mut self) {
+    pub fn recalculate_characteristics(&self) {
         for column in 0..self.megatile_columns() {
             let row = unsafe { &*self.row_start.add(column) };
             for i in 0..row.len() {
-                let megatile = unsafe { &mut *row.start.add(i) };
-                megatile.guest_count = 0;
-                unsafe { category_map_clear(&mut megatile.category_map) };
-                megatile.stink = 0.0;
+                let megatile = unsafe { &*row.start.add(i) };
+                write_live!(megatile, guest_count, 0);
+                unsafe { category_map_clear(core::ptr::addr_of!(megatile.category_map).cast_mut()) };
+                write_live!(megatile, stink, 0.0);
             }
         }
 
@@ -289,7 +292,7 @@ impl ZTMegatileMgr {
                     continue;
                 };
                 let tile_addr = world.get_ptr_from_bftile(&tile);
-                let Some(megatile) = self.megatile_mut((x / 5) as usize, (y / 5) as usize) else {
+                let Some(megatile) = self.megatile((x / 5) as usize, (y / 5) as usize) else {
                     continue;
                 };
 
@@ -299,7 +302,7 @@ impl ZTMegatileMgr {
                     while node != sentinel {
                         let entity_ptr = get_from_memory::<u32>(node + 0x8);
                         if entity_ptr != 0 && unsafe { entity_type_matches(entity_ptr, RVA_GUEST_TYPE_CHECK_ARG) } {
-                            megatile.guest_count += 1;
+                            write_live!(megatile, guest_count, megatile.guest_count + 1);
                         }
                         node = get_from_memory::<u32>(node);
                     }
@@ -324,25 +327,14 @@ impl ZTMegatileMgr {
                         // site), not from the (less reliable) decompiled C's `piVar11+0x55` rendering.
                         let raw_value = unsafe { GET_VALUE.original()((entity_type_ptr + 0x154) as *const u32, category_id) };
                         let delta = raw_value as f32 / divisor;
-                        unsafe { accumulate_category_value(&mut megatile.category_map, category_id, delta) };
+                        unsafe { accumulate_category_value(core::ptr::addr_of!(megatile.category_map).cast_mut(), category_id, delta) };
                     }
-                    megatile.stink += get_from_memory::<i32>(entity_type_ptr + 0x11c) as f32 / divisor;
+                    write_live!(megatile, stink, megatile.stink + get_from_memory::<i32>(entity_type_ptr + 0x11c) as f32 / divisor);
                 }
             }
         }
 
-        self.dirty = 0;
-    }
-
-    fn megatile_mut(&mut self, column: usize, row: usize) -> Option<&mut ZTMegatile> {
-        if column >= self.megatile_columns() {
-            return None;
-        }
-        let r = unsafe { &*self.row_start.add(column) };
-        if row >= r.len() {
-            return None;
-        }
-        Some(unsafe { &mut *r.start.add(row) })
+        write_live!(self, dirty, 0);
     }
 
     /// Reimplementation of `OOAnalyzer::ZTMegatileMgr::init`, per `ZTMegatileMgr_init.c`. Resizes the
@@ -357,7 +349,7 @@ impl ZTMegatileMgr {
     /// [`inner_vector_insert_n`]) have calling conventions reconstructed from a decompile that reuses
     /// the same stack slots for multiple, logically-unrelated purposes across the function - see each
     /// helper's own doc comment for specifics.
-    pub fn init(&mut self, tile_x_count: i32, tile_y_count: i32) {
+    pub fn init(&self, tile_x_count: i32, tile_y_count: i32) {
         let outer_target = tile_y_count.max(0) as usize;
         let current_outer = self.megatile_columns();
         if outer_target < current_outer {
@@ -377,17 +369,18 @@ impl ZTMegatileMgr {
         // inner-vector resize even when `tile_y_count >= 1`, leaving stale inner vectors behind -
         // vanilla only skips it when there are no columns to resize in the first place.
         if tile_y_count < 1 {
-            self.dirty = 1;
+            write_live!(self, dirty, 1);
             return;
         }
 
         let inner_target = tile_x_count as usize;
         for column in 0..self.megatile_columns() {
-            let row = unsafe { &mut *self.row_start.add(column) };
+            let row_ptr = unsafe { self.row_start.add(column) };
+            let row = unsafe { &*row_ptr };
             let current_inner = row.len();
             if inner_target < current_inner {
                 unsafe {
-                    inner_vector_erase_tail(row, inner_target);
+                    inner_vector_erase_tail(row_ptr, inner_target);
                 }
             } else if inner_target > current_inner {
                 // A null value pointer here makes the callee skip per-element construction entirely,
@@ -397,14 +390,14 @@ impl ZTMegatileMgr {
                 // construct-from-value call. A `category_map.head: null` within that value isn't safe
                 // either - see [`empty_category_map_sentinel`]'s own doc comment. The fill value needs a
                 // real empty-tree sentinel for `head` (`parent: null`, `left`/`right` self-referential).
-                let fill = ZTMegatile { guest_count: 0, category_map: MapHeader { head: empty_category_map_sentinel(), size: 0, _reserved: 0 }, stink: 0.0 };
+                let fill = ZTMegatile { guest_count: 0, category_map: MapHeader { head: empty_category_map_sentinel(), size: 0, _reserved: 0 }, stink: 0.0, _live: Default::default() };
                 unsafe {
-                    inner_vector_insert_n(row, (inner_target - current_inner) as u32, &fill);
+                    inner_vector_insert_n(row_ptr, (inner_target - current_inner) as u32, &fill);
                 }
             }
         }
 
-        self.dirty = 1;
+        write_live!(self, dirty, 1);
     }
 }
 
@@ -416,7 +409,7 @@ const RVA_GUEST_TYPE_CHECK_ARG: u32 = 0x0023_8700;
 
 /// Same mechanism as [`RVA_GUEST_TYPE_CHECK_ARG`], for the "corner entity" scenery-type check
 /// (`&DAT_00638670` in the decompile). RVA = `0x00638670 - 0x400000`.
-const RVA_SCENERY_TYPE_CHECK_ARG: u32 = 0x0023_8670;
+pub(crate) const RVA_SCENERY_TYPE_CHECK_ARG: u32 = 0x0023_8670;
 
 /// Shared "does this entity's type pass vanilla's isKindOf-style check" helper, used for both the
 /// guest-occupant check and the corner-entity scenery check in `recalculateCharacteristics` - both call
@@ -440,9 +433,9 @@ pub(crate) unsafe fn entity_type_matches(entity_ptr: u32, type_check_arg_rva: u3
 /// `0x0041e7f6 - 0x400000`.
 const RVA_CATEGORY_MAP_CLEAR: u32 = 0x0001_e7f6;
 
-unsafe fn category_map_clear(map: &mut MapHeader) {
+unsafe fn category_map_clear(map: *mut MapHeader) {
     let clear_fn = unsafe { mem::transmute::<u32, extern "thiscall" fn(*mut MapHeader)>(get_module_base("zoo.exe") as u32 + RVA_CATEGORY_MAP_CLEAR) };
-    clear_fn(map as *mut MapHeader);
+    clear_fn(map);
 }
 
 /// A `head: null` `MapHeader` is *not* a safe "empty map" to hand to vanilla's own map/tree code as a
@@ -486,8 +479,8 @@ const RVA_CATEGORY_MAP_FIND_OR_INSERT: u32 = 0x0000_a01d;
 /// ([`RVA_CATEGORY_MAP_FIND_OR_INSERT`]) when the key doesn't already exist. Writing an existing node's
 /// `value` field is a plain memory write regardless of which branch found it - safe against either
 /// allocator, per the module doc comment.
-unsafe fn accumulate_category_value(map: &mut MapHeader, category_id: i32, delta: f32) {
-    let head = map.head;
+unsafe fn accumulate_category_value(map: *mut MapHeader, category_id: i32, delta: f32) {
+    let head = unsafe { (*map).head };
     if head.is_null() {
         return;
     }
@@ -515,7 +508,7 @@ unsafe fn accumulate_category_value(map: &mut MapHeader, category_id: i32, delta
                 get_module_base("zoo.exe") as u32 + RVA_CATEGORY_MAP_FIND_OR_INSERT,
             )
         };
-        find_or_insert_fn(map as *mut MapHeader, sret_buf.as_mut_ptr(), candidate, &kv as *const CategoryKv);
+        find_or_insert_fn(map, sret_buf.as_mut_ptr(), candidate, &kv as *const CategoryKv);
         sret_buf[0] as *mut TreeNode
     } else {
         candidate
@@ -534,11 +527,11 @@ unsafe fn accumulate_category_value(map: &mut MapHeader, category_id: i32, delta
 /// manager pointer directly makes the callee read/write `vtable`/`flag`/`dirty`/`tick_accumulator` as if
 /// they were `begin`/`end`/`capacity_end`, corrupting the manager without touching the real vector
 /// header. Address `0x0047cea0`, RVA `0x0007cea0`.
-unsafe fn outer_vector_erase(mgr: &mut ZTMegatileMgr, first: *mut MegatileRow, last: *mut MegatileRow) {
+unsafe fn outer_vector_erase(mgr: &ZTMegatileMgr, first: *mut MegatileRow, last: *mut MegatileRow) {
     let erase_fn = unsafe {
         mem::transmute::<u32, extern "thiscall" fn(*mut *mut MegatileRow, *mut MegatileRow, *mut MegatileRow)>(get_module_base("zoo.exe") as u32 + 0x0007_cea0)
     };
-    erase_fn(&mut mgr.row_start as *mut *mut MegatileRow, first, last);
+    erase_fn(core::ptr::addr_of!(mgr.row_start).cast_mut(), first, last);
 }
 
 /// Outer `vector<MegatileRow>::insert(pos, n, value)`, called by `init()`'s grow branch. Thiscall member
@@ -547,13 +540,13 @@ unsafe fn outer_vector_erase(mgr: &mut ZTMegatileMgr, first: *mut MegatileRow, l
 /// [`outer_vector_erase`], confirmed in the same `.asm` block (`MOV ECX,ESI` immediately before the
 /// call, `ESI` still holding `ECX_orig+0x18` from the shared prologue). Address `0x0058e9a0`, RVA
 /// `0x0018e9a0`.
-unsafe fn outer_vector_insert_n(mgr: &mut ZTMegatileMgr, pos: *mut MegatileRow, n: u32, value: &MegatileRow) {
+unsafe fn outer_vector_insert_n(mgr: &ZTMegatileMgr, pos: *mut MegatileRow, n: u32, value: &MegatileRow) {
     let insert_fn = unsafe {
         mem::transmute::<u32, extern "thiscall" fn(*mut *mut MegatileRow, *mut MegatileRow, u32, *const MegatileRow)>(
             get_module_base("zoo.exe") as u32 + 0x0018_e9a0,
         )
     };
-    insert_fn(&mut mgr.row_start as *mut *mut MegatileRow, pos, n, value as *const MegatileRow);
+    insert_fn(core::ptr::addr_of!(mgr.row_start).cast_mut(), pos, n, value as *const MegatileRow);
 }
 
 /// Inner `vector<ZTMegatile>` tail-erase (shrink to `new_len`), reassembled from
@@ -563,7 +556,7 @@ unsafe fn outer_vector_insert_n(mgr: &mut ZTMegatileMgr, pos: *mut MegatileRow, 
 /// value as the destroy-loop start), then destroys each trailing element via `FUN_0047cda7(elem, 0)`
 /// (confirmed live at `0x14`-byte/one-`ZTMegatile` stride in the same loop), then updates `row.end`
 /// directly. Addresses `0x0047cdfe`/`0x0047cda7`, RVAs `0x0007cdfe`/`0x0007cda7`.
-unsafe fn inner_vector_erase_tail(row: &mut MegatileRow, new_len: usize) {
+unsafe fn inner_vector_erase_tail(row: *mut MegatileRow, new_len: usize) {
     let copy_backward_fn = unsafe {
         mem::transmute::<u32, extern "cdecl" fn(*mut ZTMegatile, *mut ZTMegatile, *mut ZTMegatile) -> *mut ZTMegatile>(
             get_module_base("zoo.exe") as u32 + 0x0007_cdfe,
@@ -571,14 +564,15 @@ unsafe fn inner_vector_erase_tail(row: &mut MegatileRow, new_len: usize) {
     };
     let destroy_fn = unsafe { mem::transmute::<u32, extern "thiscall" fn(*mut ZTMegatile, i32)>(get_module_base("zoo.exe") as u32 + 0x0007_cda7) };
 
-    let new_end = unsafe { row.start.add(new_len) };
-    let erase_start = copy_backward_fn(row.end, row.end, new_end);
+    let (start, end) = unsafe { ((*row).start, (*row).end) };
+    let new_end = unsafe { start.add(new_len) };
+    let erase_start = copy_backward_fn(end, end, new_end);
     let mut elem = erase_start;
-    while elem != row.end {
+    while elem != end {
         destroy_fn(elem, 0);
         elem = unsafe { elem.add(1) };
     }
-    row.end = erase_start;
+    unsafe { write_live_ptr(core::ptr::addr_of!((*row).end), erase_start) };
 }
 
 /// Inner `vector<ZTMegatile>::insert(end(), n, value)`. `ZTMegatileMgr_init.c` renders the value
@@ -591,31 +585,32 @@ unsafe fn inner_vector_erase_tail(row: &mut MegatileRow, new_len: usize) {
 /// adjacent to it on the stack for the trailing bytes; this reimplementation instead passes a genuinely
 /// valid, correctly-sized, zeroed `ZTMegatile` (`category_map` `head: null, size: 0`) so the
 /// copy-construct path sees a well-defined empty source. Address `0x004c8489`, RVA `0x000c8489`.
-unsafe fn inner_vector_insert_n(row: &mut MegatileRow, n: u32, value: &ZTMegatile) {
+unsafe fn inner_vector_insert_n(row: *mut MegatileRow, n: u32, value: &ZTMegatile) {
     let insert_fn = unsafe {
         mem::transmute::<u32, extern "thiscall" fn(*mut MegatileRow, *mut ZTMegatile, u32, *const ZTMegatile)>(get_module_base("zoo.exe") as u32 + 0x000c_8489)
     };
-    insert_fn(row as *mut MegatileRow, row.end, n, value as *const ZTMegatile);
+    let end = unsafe { (*row).end };
+    insert_fn(row, end, n, value as *const ZTMegatile);
 }
 
 #[detour_mod]
 mod megatilemgr_detours {
     use super::*;
-    use crate::util::mut_from_memory;
+    use crate::util::ref_from_memory;
 
     #[detour(UPDATE)]
     unsafe extern "thiscall" fn update(this: *const u32, delta_ticks: i32) {
-        unsafe { mut_from_memory::<ZTMegatileMgr>(this) }.update(delta_ticks as u32);
+        unsafe { ref_from_memory::<ZTMegatileMgr>(this) }.update(delta_ticks as u32);
     }
 
     #[detour(RECALCULATE_CHARACTERISTICS)]
     unsafe extern "thiscall" fn recalculate_characteristics(this: *const u32) {
-        unsafe { mut_from_memory::<ZTMegatileMgr>(this) }.recalculate_characteristics();
+        unsafe { ref_from_memory::<ZTMegatileMgr>(this) }.recalculate_characteristics();
     }
 
     #[detour(INIT)]
     unsafe extern "thiscall" fn init(this: *const u32, tile_x_count: u32, tile_y_count: u32) {
-        unsafe { mut_from_memory::<ZTMegatileMgr>(this) }.init(tile_x_count as i32, tile_y_count as i32);
+        unsafe { ref_from_memory::<ZTMegatileMgr>(this) }.init(tile_x_count as i32, tile_y_count as i32);
     }
 }
 
@@ -639,9 +634,9 @@ pub(crate) mod live_support {
 
     /// Restores the live singleton's `dirty`/`tick_accumulator` scalars - used by
     /// `ZTMEGATILEMGR_UPDATE` to reset state between the real and reimplemented calls under test.
-    pub(crate) fn restore_scalars(mgr: &mut ZTMegatileMgr, dirty: bool, tick_accumulator: u32) {
-        mgr.dirty = dirty as u8;
-        mgr.tick_accumulator = tick_accumulator;
+    pub(crate) fn restore_scalars(mgr: &ZTMegatileMgr, dirty: bool, tick_accumulator: u32) {
+        write_live!(mgr, dirty, dirty as u8);
+        write_live!(mgr, tick_accumulator, tick_accumulator);
     }
 
     /// A snapshot of every currently-allocated megatile's `guest_count`/`stink`, plus the grid's own
@@ -735,6 +730,7 @@ mod tests {
             row_start: std::ptr::null_mut(),
             row_end: std::ptr::null_mut(),
             row_capacity_end: std::ptr::null_mut(),
+            _live: Default::default(),
         }
     }
 
@@ -751,8 +747,8 @@ mod tests {
     /// short-lived unit tests).
     fn fixture_mgr() -> ZTMegatileMgr {
         let megatiles: &'static mut [ZTMegatile] = Box::leak(Box::new([
-            ZTMegatile { guest_count: 3, category_map: MapHeader { head: std::ptr::null_mut(), size: 0, _reserved: 0 }, stink: 1.5 },
-            ZTMegatile { guest_count: 7, category_map: MapHeader { head: std::ptr::null_mut(), size: 0, _reserved: 0 }, stink: 2.5 },
+            ZTMegatile { guest_count: 3, category_map: MapHeader { head: std::ptr::null_mut(), size: 0, _reserved: 0 }, stink: 1.5, _live: Default::default() },
+            ZTMegatile { guest_count: 7, category_map: MapHeader { head: std::ptr::null_mut(), size: 0, _reserved: 0 }, stink: 2.5, _live: Default::default() },
         ]));
         let start = megatiles.as_mut_ptr();
         let end = unsafe { start.add(megatiles.len()) };
@@ -779,7 +775,7 @@ mod tests {
 
     #[test]
     fn category_value_on_empty_map_is_none() {
-        let mt = ZTMegatile { guest_count: 0, category_map: MapHeader { head: std::ptr::null_mut(), size: 0, _reserved: 0 }, stink: 0.0 };
+        let mt = ZTMegatile { guest_count: 0, category_map: MapHeader { head: std::ptr::null_mut(), size: 0, _reserved: 0 }, stink: 0.0, _live: Default::default() };
         assert_eq!(mt.category_value(9503), None);
     }
 
@@ -793,7 +789,7 @@ mod tests {
         root.right = &mut right as *mut TreeNode;
         let mut header = TreeNode { _color_isnil: 0, parent: &mut root as *mut TreeNode, left: std::ptr::null_mut(), right: std::ptr::null_mut(), key: 0, value: 0.0 };
         let map = MapHeader { head: &mut header as *mut TreeNode, size: 3, _reserved: 0 };
-        let mt = ZTMegatile { guest_count: 0, category_map: map, stink: 0.0 };
+        let mt = ZTMegatile { guest_count: 0, category_map: map, stink: 0.0, _live: Default::default() };
 
         assert_eq!(mt.category_value(9503), Some(1.0));
         assert_eq!(mt.category_value(9504), Some(2.0));

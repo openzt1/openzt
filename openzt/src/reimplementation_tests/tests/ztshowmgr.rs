@@ -228,8 +228,7 @@ pub(crate) fn run_ztshowmgr_init_show_params_test(failure_log: &mut Option<std::
     // no-shared-consts convention.
     let global_ztapp_rva: u32 = 0x00638154 - 0x400000;
     let ztapp_ptr: u32 = get_from_memory(get_module_base("zoo.exe") as u32 + global_ztapp_rva);
-    let expansion_2_installed = ztapp_ptr != 0
-        && unsafe { BFAPP_GET_INSTALLED_EXPANSION.original()(ztapp_ptr as *const u32, 2) } != 0;
+    let expansion_2_installed = ztapp_ptr != 0 && unsafe { BFAPP_GET_INSTALLED_EXPANSION.original()(ztapp_ptr as *const u32, 2) };
     let threshold_names = [
         ("badTrick", 0x8),
         ("goodTrick", 0xc),
@@ -361,9 +360,9 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     // installed by `reimplementation_tests::init`'s `crate::ztshowmgr::init()`), so what is
     // exercised is the promoted live path, not a test-side shortcut.
     let register =
-        |show: u32, force: bool| -> u32 { unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show as *const u32, force) } };
+        |show: u32, force: bool| -> bool { unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show as *const u32, force) } };
     let unregister =
-        |id: u16, show: u32, clear: bool| -> u32 { unsafe { ZTSHOWMGR_UNREGISTER_SHOW.hooked()(mgr as *const u32, id, show as *const u32, clear) } };
+        |id: u16, show: u32, clear: bool| -> bool { unsafe { ZTSHOWMGR_UNREGISTER_SHOW.hooked()(mgr as *const u32, id, show as *const u32, clear) } };
 
     // Stage 9 pin: the standalone vanilla tree stays inert under hooked writes. Nothing in this
     // test plants through the raw trampoline, so every id must read back empty through the real
@@ -371,7 +370,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     // ever came back, this is where it shows.
     let assert_tree_inert = |step: &str, ids: &[u16], failures: &mut Vec<String>| {
         for id in ids {
-            if showmgr_live_support::call_real_get_show_info(mgr_addr as *const u32, *id) != 0 {
+            if !showmgr_live_support::call_real_get_show_info(mgr_addr as *const u32, *id).is_null() {
                 failures.push(format!("{step}: id {id:#06x} - the standalone vanilla tree should be inert (stage 9 dropped the writer call-throughs), but the real getShowInfo walk found an entry"));
             }
         }
@@ -382,14 +381,14 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     let counter_start = showmgr_live_support::show_id_counter();
 
     // Null-show register: vanilla's AL=0 early return, nothing written.
-    if register(0, false) != 0 {
+    if register(0, false) {
         failures.push("register(null, false) should return 0".to_string());
     }
 
     // Preset-id register - the no-force reuse path: the id is kept and the counter is left
     // untouched (the complementary pin to the force-fresh split below).
     let counter_before = showmgr_live_support::show_id_counter();
-    if register(show_a, false) != 1 {
+    if !register(show_a, false) {
         failures.push("register(A, false) with preset id should return 1".to_string());
     }
     if ztshowmgr::registered_show_for_id(PRESET_ID_A) != Some(show_a) {
@@ -402,10 +401,10 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     // Already-registered early return - vanilla's find on the *current* field_0x70 hits,
     // nothing written, with or without force (the force flag is only read after the miss), and
     // the counter is never consumed.
-    if register(show_a, false) != 0 {
+    if register(show_a, false) {
         failures.push("re-register(A, false) should return 0 (already registered)".to_string());
     }
-    if register(show_a, true) != 0 {
+    if register(show_a, true) {
         failures.push("re-register(A, true) should return 0 (already registered; force must not reach the counter)".to_string());
     }
     if get_from_memory::<u16>(show_a + 0x70) != PRESET_ID_A {
@@ -419,7 +418,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     // Id-0 fresh-id assignment, made deterministic by seeding the counter: the assigned id is
     // the post-increment counter, exactly 0x0101 here - no wrap ambiguity.
     showmgr_live_support::set_show_id_counter(0x0100);
-    if register(show_b, false) != 1 {
+    if !register(show_b, false) {
         failures.push("register(B, false) with id 0 should return 1".to_string());
     }
     let id_b = get_from_memory::<u16>(show_b + 0x70);
@@ -446,7 +445,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
 
     // Force over an unregistered preset id: a fresh counter id is assigned even though C's
     // field_0x70 was non-zero, and the preset value itself never enters the store.
-    if register(show_c, true) != 1 {
+    if !register(show_c, true) {
         failures.push("register(C, true) should return 1".to_string());
     }
     let id_c = get_from_memory::<u16>(show_c + 0x70);
@@ -465,7 +464,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     // on A's registered key. Vanilla's tree write overwrites the existing entry's value in
     // place - D steals A's slot; A keeps its stale field_0x70 but is unreachable by id.
     showmgr_live_support::set_show_id_counter(PRESET_ID_A - 1);
-    if register(show_d, true) != 1 {
+    if !register(show_d, true) {
         failures.push("register(D, true) should return 1".to_string());
     }
     if get_from_memory::<u16>(show_d + 0x70) != PRESET_ID_A {
@@ -488,7 +487,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     }
 
     // Path A (show == null, id != 0): erase by id alone, using B's id read back above.
-    if unregister(id_b, 0, false) != 1 {
+    if !unregister(id_b, 0, false) {
         failures.push(format!("unregister({id_b:#06x}, null, false) should return 1"));
     }
 
@@ -496,28 +495,28 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     // off the store, where each op's id has already been removed by its preceding unregister -
     // so neither flag state reaches a real clearShowScriptStates; that stays exercised through
     // path C below.)
-    if unregister(PRESET_ID_A, show_a, false) != 1 {
+    if !unregister(PRESET_ID_A, show_a, false) {
         failures.push("unregister(A's id, A, false) should return 1".to_string());
     }
-    if unregister(PRESET_ID_A, show_a, true) != 1 {
+    if !unregister(PRESET_ID_A, show_a, true) {
         failures.push("unregister(A's id, A, true) should return 1 (absent-key erase is still success)".to_string());
     }
 
     // Absent-key id unregister: silent no-op success.
     const ABSENT_PROBE_ID: u16 = 0x0bb7;
-    if unregister(ABSENT_PROBE_ID, 0, false) != 1 {
+    if !unregister(ABSENT_PROBE_ID, 0, false) {
         failures.push(format!("unregister(absent id {ABSENT_PROBE_ID:#06x}, null, false) should return 1 (silent no-op)"));
     }
 
     // Path C (show != null, id == 0): the id is derived from the show's own field_0x70 -
     // deliberately stale after a prior unregister, since vanilla never zeroes that field.
-    if unregister(0, show_a, false) != 1 {
+    if !unregister(0, show_a, false) {
         failures.push("unregister(0, A, false) should return 1".to_string());
     }
 
     // Re-register A: with field_0x70 still carrying the stale preset id and that id no longer
     // in the store, the preset path re-registers under the very same id.
-    if register(show_a, false) != 1 {
+    if !register(show_a, false) {
         failures.push("re-register(A, false) after unregister should return 1 (stale field_0x70 is reusable)".to_string());
     }
     if get_from_memory::<u16>(show_a + 0x70) != PRESET_ID_A {
@@ -530,17 +529,17 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     // clear=true through path C: the one op that really executes the real
     // `clearShowScriptStates` (targeted directly at the show, no lookup), running it over the
     // pre-initialized empty header node at show+0x38.
-    if unregister(0, show_b, true) != 1 {
+    if !unregister(0, show_b, true) {
         failures.push("unregister(0, B, true) should return 1".to_string());
     }
 
     // Double unregister: absent-key silent success again, store unchanged.
-    if unregister(0, show_b, false) != 1 {
+    if !unregister(0, show_b, false) {
         failures.push("double unregister(0, B, false) should still return 1 (silent no-op)".to_string());
     }
 
     // Null show + null id: vanilla's AL=0 early return.
-    if unregister(0, 0, false) != 0 {
+    if unregister(0, 0, false) {
         failures.push("unregister(0, null, false) should return 0".to_string());
     }
     assert_tree_inert("after the unregister matrix", &[PRESET_ID_A, id_b, id_c, ABSENT_PROBE_ID], &mut failures);
@@ -561,7 +560,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     let show_x = ztshow_live_support::build_standalone_show_info();
     let show_y = ztshow_live_support::build_standalone_show_info();
     showmgr_live_support::set_show_id_counter(0xfffe);
-    if register(show_x, false) != 1 {
+    if !register(show_x, false) {
         failures.push("wrap: register(X, false) at counter 0xfffe should return 1".to_string());
     }
     if get_from_memory::<u16>(show_x + 0x70) != 0 || ztshowmgr::registered_show_for_id(0) != Some(show_x) {
@@ -573,17 +572,17 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
             showmgr_live_support::show_id_counter()
         ));
     }
-    if register(show_y, false) != 0 || register(show_y, true) != 0 {
+    if register(show_y, false) || register(show_y, true) {
         failures.push("wrap: an id-0 register while key 0 is held must early-return 0, with or without force".to_string());
     }
     if showmgr_live_support::show_id_counter() != 0xffff {
         failures.push("wrap: the early returns must not consume the counter".to_string());
     }
-    if unregister(0, show_x, false) != 1 {
+    if !unregister(0, show_x, false) {
         failures.push("wrap: unregister(0, X) should return 1".to_string());
     }
     showmgr_live_support::set_show_id_counter(0xffff);
-    if register(show_y, false) != 1 {
+    if !register(show_y, false) {
         failures.push("wrap: register(Y, false) at counter 0xffff should return 1".to_string());
     }
     if showmgr_live_support::show_id_counter() != 0 {
@@ -595,7 +594,7 @@ pub(crate) fn run_ztshowmgr_register_unregister_show_test(failure_log: &mut Opti
     if get_from_memory::<u16>(show_y + 0x70) != 0 || ztshowmgr::registered_show_for_id(0) != Some(show_y) {
         failures.push("wrap: the wrapped counter must assign id 0 - field_0x70 and store[0] should both say so".to_string());
     }
-    if unregister(0, show_y, false) != 1 {
+    if !unregister(0, show_y, false) {
         failures.push("wrap: unregister(0, Y) should return 1".to_string());
     }
     showmgr_live_support::set_show_id_counter(counter_start);
@@ -673,11 +672,11 @@ pub(crate) fn run_ztshowmgr_get_show_info_get_script_id_test(failure_log: &mut O
         for id in touched_ids {
             let store = ztshowmgr::registered_show_for_id(*id).unwrap_or(0);
             let hooked = unsafe { ZTSHOWMGR_GET_SHOW_INFO.hooked()(mgr_addr as *const u32, *id) };
-            if hooked != store {
-                failures.push(format!("{step}: id {id:#06x} - hooked={hooked:#010x}, store={store:#010x}"));
+            if hooked as u32 != store {
+                failures.push(format!("{step}: id {id:#06x} - hooked={:#010x}, store={store:#010x}", hooked as u32));
             }
             let hooked_script = unsafe { ZTSHOWMGR_GET_SCRIPT_ID.hooked()(mgr_addr as *const u32, *id) };
-            let real_script = showmgr_live_support::call_real_get_script_id(mgr_addr as *const u32, *id) & 0xffff;
+            let real_script = showmgr_live_support::call_real_get_script_id(mgr_addr as *const u32, *id);
             if hooked_script != real_script {
                 failures.push(format!(
                     "{step}: id {id:#06x} - getScriptId hooked={hooked_script:#010x}, real(trampoline)={real_script:#010x}"
@@ -708,8 +707,8 @@ pub(crate) fn run_ztshowmgr_get_show_info_get_script_id_test(failure_log: &mut O
 
     // All reads go through the hooked addresses (the promoted live path); the real-side poles
     // go through the stage-4 trampolines.
-    let get_show_info = |id: u16| -> u32 { unsafe { ZTSHOWMGR_GET_SHOW_INFO.hooked()(mgr as *const u32, id) } };
-    let get_script_id = |id: u16| -> u32 { unsafe { ZTSHOWMGR_GET_SCRIPT_ID.hooked()(mgr as *const u32, id) } };
+    let get_show_info = |id: u16| -> u32 { (unsafe { ZTSHOWMGR_GET_SHOW_INFO.hooked()(mgr as *const u32, id) }) as u32 };
+    let get_script_id = |id: u16| -> u16 { unsafe { ZTSHOWMGR_GET_SCRIPT_ID.hooked()(mgr as *const u32, id) } };
 
     // Everything both poles and the store must agree on, seeded with the boundary probes and
     // A's preset id; B's fresh id gets pushed as the test discovers it.
@@ -721,15 +720,15 @@ pub(crate) fn run_ztshowmgr_get_show_info_get_script_id_test(failure_log: &mut O
     // Null-manager read: pins the cutover's one deliberate benign divergence - vanilla's own
     // body faults here (unguarded `[ECX+0x28]`); the detour ignores `this` and answers from the
     // store, which is empty for this id.
-    if unsafe { ZTSHOWMGR_GET_SHOW_INFO.hooked()(std::ptr::null(), PRESET_ID_A) } != 0 {
+    if !unsafe { ZTSHOWMGR_GET_SHOW_INFO.hooked()(std::ptr::null(), PRESET_ID_A) }.is_null() {
         failures.push("hooked getShowInfo(null mgr, absent id) should return 0".to_string());
     }
 
     // Register A (preset id) and B (id-0 counter assignment) through the hooked REGISTER_SHOW.
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } {
         failures.push("register(A, false) with preset id should return 1".to_string());
     }
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } {
         failures.push("register(B, false) with id 0 should return 1".to_string());
     }
     let id_b = get_from_memory::<u16>(show_b + 0x70);
@@ -760,7 +759,7 @@ pub(crate) fn run_ztshowmgr_get_show_info_get_script_id_test(failure_log: &mut O
     }
 
     // Hooked getScriptID: A's +0x8 script id, zero-extended; B's is the found-but-zero case.
-    if get_script_id(PRESET_ID_A) != SCRIPT_ID_A as u32 {
+    if get_script_id(PRESET_ID_A) != SCRIPT_ID_A {
         failures.push(format!(
             "hooked getScriptId(A's id) should be {SCRIPT_ID_A:#06x} (zero-extended), got {:#010x}",
             get_script_id(PRESET_ID_A)
@@ -958,19 +957,19 @@ pub(crate) fn run_ztshowmgr_enter_new_month_test(failure_log: &mut Option<std::f
     // through the raw vanilla-body trampoline (hooked first: B's store-assigned id must be in
     // field_0x70 before the raw body reads it, so both stores key B identically); C plants into
     // the vanilla tree only - the store must never see it.
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } {
         failures.push("register(A, false) should return 1".to_string());
     }
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } {
         failures.push("register(B, false) should return 1".to_string());
     }
-    if (showmgr_live_support::call_real_register_show(mgr as *const u32, show_a as *const u32, false) & 0xff) != 1 {
+    if !showmgr_live_support::call_real_register_show(mgr as *const u32, show_a as *const u32, false) {
         failures.push("raw register(A, false) should return 1 (tree-side plant)".to_string());
     }
-    if (showmgr_live_support::call_real_register_show(mgr as *const u32, show_b as *const u32, false) & 0xff) != 1 {
+    if !showmgr_live_support::call_real_register_show(mgr as *const u32, show_b as *const u32, false) {
         failures.push("raw register(B, false) should return 1 (tree-side plant under B's already-assigned id)".to_string());
     }
-    if (showmgr_live_support::call_real_register_show(mgr as *const u32, show_c as *const u32, false) & 0xff) != 1 {
+    if !showmgr_live_support::call_real_register_show(mgr as *const u32, show_c as *const u32, false) {
         failures.push("raw register(C, false) should return 1".to_string());
     }
     let id_b = get_from_memory::<u16>(show_b + 0x70);
@@ -1114,19 +1113,19 @@ pub(crate) fn run_ztshowmgr_update_test(failure_log: &mut Option<std::fs::File>)
     // A and B through the hooked register (store) plus the raw trampoline plant (vanilla tree,
     // hooked first so B's store-assigned id keys both stores identically); C through the raw
     // vanilla-body trampoline only (vanilla tree).
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } {
         failures.push("register(A, false) should return 1".to_string());
     }
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } {
         failures.push("register(B, false) should return 1".to_string());
     }
-    if (showmgr_live_support::call_real_register_show(mgr as *const u32, show_a as *const u32, false) & 0xff) != 1 {
+    if !showmgr_live_support::call_real_register_show(mgr as *const u32, show_a as *const u32, false) {
         failures.push("raw register(A, false) should return 1 (tree-side plant)".to_string());
     }
-    if (showmgr_live_support::call_real_register_show(mgr as *const u32, show_b as *const u32, false) & 0xff) != 1 {
+    if !showmgr_live_support::call_real_register_show(mgr as *const u32, show_b as *const u32, false) {
         failures.push("raw register(B, false) should return 1 (tree-side plant under B's already-assigned id)".to_string());
     }
-    if (showmgr_live_support::call_real_register_show(mgr as *const u32, show_c as *const u32, false) & 0xff) != 1 {
+    if !showmgr_live_support::call_real_register_show(mgr as *const u32, show_c as *const u32, false) {
         failures.push("raw register(C, false) should return 1 (the raw body only guarantees AL; the hooked path returns the port's cleaned 0/1)".to_string());
     }
     let id_b = get_from_memory::<u16>(show_b + 0x70);
@@ -1290,8 +1289,8 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::begin_capture();
     let _real_save_ret = showmgr_live_support::call_real_save(mgr as *const u32, file_ptr as *const i8);
     let real_bytes = io_redirect::end_capture();
-    if rust_save_ret != 1 {
-        failures.push(format!("hooked save should return 1, got {rust_save_ret:#010x}"));
+    if !rust_save_ret {
+        failures.push(format!("hooked save should return true, got {rust_save_ret}"));
     }
     if real_bytes != rust_bytes {
         failures.push(format!(
@@ -1331,8 +1330,8 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::begin_replay(rust_bytes.clone());
     let rust_load_ret = unsafe { ZTSHOWMGR_LOAD.hooked()(mgr as *const u32, file_ptr, CURRENT_VERSION) };
     io_redirect::end_replay();
-    if rust_load_ret != 1 {
-        failures.push(format!("hooked load should return 1, got {rust_load_ret:#010x}"));
+    if !rust_load_ret {
+        failures.push(format!("hooked load should return true, got {rust_load_ret}"));
     }
     if !ztshowscriptmgr::script_exists_by_id(script_a) {
         failures.push("hooked load should have restored the seeded script".to_string());
@@ -1348,7 +1347,7 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     // the next id-0 register must continue from it - exactly SEEDED_COUNTER + 1 (no wrap at
     // this seed).
     let continuity_show = ztshow_live_support::build_standalone_show_info();
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, continuity_show as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, continuity_show as *const u32, false) } {
         failures.push("register after load should return 1".to_string());
     }
     if get_from_memory::<u16>(continuity_show + 0x70) != SEEDED_COUNTER + 1 {
@@ -1358,7 +1357,7 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
             get_from_memory::<u16>(continuity_show + 0x70)
         ));
     }
-    if unsafe { ZTSHOWMGR_UNREGISTER_SHOW.hooked()(mgr as *const u32, 0, continuity_show as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_UNREGISTER_SHOW.hooked()(mgr as *const u32, 0, continuity_show as *const u32, false) } {
         failures.push("unregistering the continuity show should return 1".to_string());
     }
 
@@ -1368,8 +1367,8 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::begin_replay(real_bytes.clone());
     let real_load_ret = showmgr_live_support::call_real_load(mgr as *const u32, file_ptr, CURRENT_VERSION);
     io_redirect::end_replay();
-    if (real_load_ret & 0xff) != 1 {
-        failures.push(format!("real load should return 1 in its low byte, got {real_load_ret:#010x}"));
+    if !real_load_ret {
+        failures.push(format!("real load should return true, got {real_load_ret}"));
     }
     if !ztshowscriptmgr::script_exists_by_id(script_a) {
         failures.push("real load should have restored the seeded script".to_string());
@@ -1388,8 +1387,8 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::begin_replay(rust_bytes.clone());
     let gated_ret = unsafe { ZTSHOWMGR_LOAD.hooked()(mgr as *const u32, file_ptr, GATED_VERSION) };
     io_redirect::end_replay();
-    if gated_ret != 1 {
-        failures.push(format!("hooked load at version 0x60 should still return 1, got {gated_ret:#010x}"));
+    if !gated_ret {
+        failures.push(format!("hooked load at version 0x60 should still return true, got {gated_ret}"));
     }
     if !ztshowscriptmgr::script_exists_by_id(script_a) {
         failures.push("hooked load at version 0x60 should still have restored the seeded script".to_string());
@@ -1404,8 +1403,8 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::begin_replay(real_bytes.clone());
     let real_gated_ret = showmgr_live_support::call_real_load(mgr as *const u32, file_ptr, GATED_VERSION);
     io_redirect::end_replay();
-    if (real_gated_ret & 0xff) != 1 {
-        failures.push(format!("real load at version 0x60 should still return 1 in its low byte, got {real_gated_ret:#010x}"));
+    if !real_gated_ret {
+        failures.push(format!("real load at version 0x60 should still return true, got {real_gated_ret}"));
     }
     if get_from_memory::<u16>(counter_addr) != 4 {
         failures.push("real load at version 0x60 must not touch the counter global (gate not passed)".to_string());
@@ -1421,8 +1420,8 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::begin_replay(stripped.clone());
     let short_ret = unsafe { ZTSHOWMGR_LOAD.hooked()(mgr as *const u32, file_ptr, CURRENT_VERSION) };
     io_redirect::end_replay();
-    if short_ret != 0 {
-        failures.push(format!("hooked load on a stream missing its counter bytes should return 0, got {short_ret:#010x}"));
+    if short_ret {
+        failures.push(format!("hooked load on a stream missing its counter bytes should return false, got {short_ret}"));
     }
     if showmgr_live_support::show_id_counter() != 5 {
         failures.push("a failed counter read must leave the store counter untouched".to_string());
@@ -1434,8 +1433,8 @@ pub(crate) fn run_ztshowmgr_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::begin_replay(stripped);
     let real_short_ret = showmgr_live_support::call_real_load(mgr as *const u32, file_ptr, CURRENT_VERSION);
     io_redirect::end_replay();
-    if (real_short_ret & 0xff) != 0 {
-        failures.push(format!("real load on a stream missing its counter bytes should return 0 in its low byte, got {real_short_ret:#010x}"));
+    if real_short_ret {
+        failures.push(format!("real load on a stream missing its counter bytes should return false, got {real_short_ret}"));
     }
     if get_from_memory::<u16>(counter_addr) != 6 {
         failures.push("a failed real counter read must leave the counter global untouched".to_string());
@@ -1498,14 +1497,14 @@ pub(crate) fn run_ztshowmgr_is_doing_show_test(failure_log: &mut Option<std::fs:
     /// (the port's clean 0/1); the real body defines only its `AL` byte (upper EAX holds the
     /// state pointer's high bits on a hit), so its return is compared through the low-byte
     /// mask.
-    fn check(label: &str, mgr: *mut ZTShowMgr, unit_id: u32, show_id: u16, expected: u32, failures: &mut Vec<String>) {
+    fn check(label: &str, mgr: *mut ZTShowMgr, unit_id: u32, show_id: u16, expected: bool, failures: &mut Vec<String>) {
         let rust_ret = unsafe { ZTSHOWMGR_IS_DOING_SHOW.hooked()(mgr as *const u32, unit_id, show_id) };
         if rust_ret != expected {
-            failures.push(format!("{label}: rust pole should return {expected}, got {rust_ret:#010x}"));
+            failures.push(format!("{label}: rust pole should return {expected}, got {rust_ret}"));
         }
-        let real_ret = showmgr_live_support::call_real_is_doing_show(mgr as *const u32, unit_id, show_id) & 0xff;
+        let real_ret = showmgr_live_support::call_real_is_doing_show(mgr as *const u32, unit_id, show_id);
         if real_ret != expected {
-            failures.push(format!("{label}: real pole should return {expected} (AL-masked), got {real_ret:#010x}"));
+            failures.push(format!("{label}: real pole should return {expected}, got {real_ret}"));
         }
     }
 
@@ -1539,10 +1538,10 @@ pub(crate) fn run_ztshowmgr_is_doing_show_test(failure_log: &mut Option<std::fs:
     const PRESET_ID_A: u16 = 0x1234;
     save_to_memory(show_a + 0x70, PRESET_ID_A);
     // show_b keeps its zero-init `field_0x70` (the counter-assignment case).
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } {
         failures.push("register(A, false) should return 1".to_string());
     }
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } {
         failures.push("register(B, false) should return 1".to_string());
     }
     let id_b = get_from_memory::<u16>(show_b + 0x70);
@@ -1552,18 +1551,18 @@ pub(crate) fn run_ztshowmgr_is_doing_show_test(failure_log: &mut Option<std::fs:
 
     // Unregistered probes: both poles miss on the store-backed lookup.
     for probe in [0x0000u16, 0x8000, 0xffff] {
-        check(&format!("unregistered id {probe:#06x}"), mgr, UNIT_A, probe, 0, &mut failures);
+        check(&format!("unregistered id {probe:#06x}"), mgr, UNIT_A, probe, false, &mut failures);
     }
     // The seeded hit: UNIT_A is doing show A through both poles.
-    check("seeded state hit", mgr, UNIT_A, PRESET_ID_A, 1, &mut failures);
+    check("seeded state hit", mgr, UNIT_A, PRESET_ID_A, true, &mut failures);
     // Misses against the seeded show: unknown unit, the unit-id-0 boundary, and a key that
     // matches only below bit 16 (the 32-bit key-compare pin).
-    check("unknown unit on seeded show", mgr, UNIT_A + 1, PRESET_ID_A, 0, &mut failures);
-    check("unit id 0 on seeded show", mgr, 0, PRESET_ID_A, 0, &mut failures);
-    check("key differing above bit 16", mgr, UNIT_A | 0x1_0000, PRESET_ID_A, 0, &mut failures);
+    check("unknown unit on seeded show", mgr, UNIT_A + 1, PRESET_ID_A, false, &mut failures);
+    check("unit id 0 on seeded show", mgr, 0, PRESET_ID_A, false, &mut failures);
+    check("key differing above bit 16", mgr, UNIT_A | 0x1_0000, PRESET_ID_A, false, &mut failures);
     // Registered but stateless: the walk runs over an empty map and misses for every unit.
-    check("stateless show, seeded unit", mgr, UNIT_A, id_b, 0, &mut failures);
-    check("stateless show, unit id 0", mgr, 0, id_b, 0, &mut failures);
+    check("stateless show, seeded unit", mgr, UNIT_A, id_b, false, &mut failures);
+    check("stateless show, unit id 0", mgr, 0, id_b, false, &mut failures);
 
     // Cleanup: drain both through the hooked unregister (clear=false - the clear path is the
     // stage-3 tests' concern), then the hit probe must miss through both poles.
@@ -1574,7 +1573,7 @@ pub(crate) fn run_ztshowmgr_is_doing_show_test(failure_log: &mut Option<std::fs:
     if remaining != 0 {
         failures.push(format!("store should be empty after cleanup, has {remaining} entries"));
     }
-    check("unregistered after cleanup", mgr, UNIT_A, PRESET_ID_A, 0, &mut failures);
+    check("unregistered after cleanup", mgr, UNIT_A, PRESET_ID_A, false, &mut failures);
 
     finish_test(test_name, failures, failure_log)
 }
@@ -1617,18 +1616,17 @@ pub(crate) fn run_ztshowmgr_is_show_script_done_test(failure_log: &mut Option<st
         return true;
     }
 
-    /// Both poles over one (script, show) probe. The Rust pole must return exactly `expected`
-    /// (the port's clean zero-extended byte); the real body defines only its `AL` byte (upper
-    /// EAX holds the state pointer's high bits on a hit), so its return is compared through the
-    /// low-byte mask.
-    fn check(label: &str, mgr: *mut ZTShowMgr, script_id: u32, show_id: u16, expected: u32, failures: &mut Vec<String>) {
+    /// Both poles return the raw done byte, zero-extended - not a normalized 0/1 (see
+    /// `ZTShowMgr::is_show_script_done`'s own doc comment: "the byte is the contract"). Compared
+    /// through truthiness, matching every real caller's own `TEST AL, AL`.
+    fn check(label: &str, mgr: *mut ZTShowMgr, script_id: u32, show_id: u16, expected: bool, failures: &mut Vec<String>) {
         let rust_ret = unsafe { ZTSHOWMGR_IS_SHOW_SCRIPT_DONE.hooked()(mgr as *const u32, script_id, show_id) };
-        if rust_ret != expected {
-            failures.push(format!("{label}: rust pole should return {expected}, got {rust_ret:#010x}"));
+        if (rust_ret != 0) != expected {
+            failures.push(format!("{label}: rust pole should return {expected}, got {rust_ret:#04x}"));
         }
-        let real_ret = showmgr_live_support::call_real_is_show_script_done(mgr as *const u32, script_id, show_id) & 0xff;
-        if real_ret != expected {
-            failures.push(format!("{label}: real pole should return {expected} (AL-masked), got {real_ret:#010x}"));
+        let real_ret = showmgr_live_support::call_real_is_show_script_done(mgr as *const u32, script_id, show_id);
+        if (real_ret != 0) != expected {
+            failures.push(format!("{label}: real pole should return {expected}, got {real_ret:#04x}"));
         }
     }
 
@@ -1662,10 +1660,10 @@ pub(crate) fn run_ztshowmgr_is_show_script_done_test(failure_log: &mut Option<st
     const PRESET_ID_A: u16 = 0x1234;
     save_to_memory(show_a + 0x70, PRESET_ID_A);
     // show_b keeps its zero-init `field_0x70` (the counter-assignment case).
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_a as *const u32, false) } {
         failures.push("register(A, false) should return 1".to_string());
     }
-    if unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } != 1 {
+    if !unsafe { ZTSHOWMGR_REGISTER_SHOW.hooked()(mgr as *const u32, show_b as *const u32, false) } {
         failures.push("register(B, false) should return 1".to_string());
     }
     let id_b = get_from_memory::<u16>(show_b + 0x70);
@@ -1675,22 +1673,21 @@ pub(crate) fn run_ztshowmgr_is_show_script_done_test(failure_log: &mut Option<st
 
     // Unregistered probes: both poles miss on the store-backed lookup.
     for probe in [0x0000u16, 0x8000, 0xffff] {
-        check(&format!("unregistered id {probe:#06x}"), mgr, UNIT_A, probe, 0, &mut failures);
+        check(&format!("unregistered id {probe:#06x}"), mgr, UNIT_A, probe, false, &mut failures);
     }
-    // The seeded hit, with the done byte swept: the raw byte must come back through both poles
-    // unchanged (0x37 would expose a wrongly normalized 0/1 on either side).
+    // The seeded hit, with the done byte swept: any nonzero byte must read as done on both poles.
     for byte in [0x00u8, 0x37, 0xff] {
         save_to_memory(fake_state + 0x13, byte);
-        check(&format!("done byte {byte:#04x}"), mgr, UNIT_A, PRESET_ID_A, byte as u32, &mut failures);
+        check(&format!("done byte {byte:#04x}"), mgr, UNIT_A, PRESET_ID_A, byte != 0, &mut failures);
     }
     // Misses against the seeded show: unknown unit, the unit-id-0 boundary, and a key that
     // matches only below bit 16 (the 32-bit key-compare pin).
-    check("unknown unit on seeded show", mgr, UNIT_A + 1, PRESET_ID_A, 0, &mut failures);
-    check("unit id 0 on seeded show", mgr, 0, PRESET_ID_A, 0, &mut failures);
-    check("key differing above bit 16", mgr, UNIT_A | 0x1_0000, PRESET_ID_A, 0, &mut failures);
+    check("unknown unit on seeded show", mgr, UNIT_A + 1, PRESET_ID_A, false, &mut failures);
+    check("unit id 0 on seeded show", mgr, 0, PRESET_ID_A, false, &mut failures);
+    check("key differing above bit 16", mgr, UNIT_A | 0x1_0000, PRESET_ID_A, false, &mut failures);
     // Registered but stateless: the walk runs over an empty map and misses for every unit.
-    check("stateless show, seeded unit", mgr, UNIT_A, id_b, 0, &mut failures);
-    check("stateless show, unit id 0", mgr, 0, id_b, 0, &mut failures);
+    check("stateless show, seeded unit", mgr, UNIT_A, id_b, false, &mut failures);
+    check("stateless show, unit id 0", mgr, 0, id_b, false, &mut failures);
 
     // Cleanup: drain both through the hooked unregister (clear=false - the clear path is the
     // stage-3 tests' concern), then the hit probe must miss through both poles.
@@ -1701,7 +1698,7 @@ pub(crate) fn run_ztshowmgr_is_show_script_done_test(failure_log: &mut Option<st
     if remaining != 0 {
         failures.push(format!("store should be empty after cleanup, has {remaining} entries"));
     }
-    check("unregistered after cleanup", mgr, UNIT_A, PRESET_ID_A, 0, &mut failures);
+    check("unregistered after cleanup", mgr, UNIT_A, PRESET_ID_A, false, &mut failures);
 
     finish_test(test_name, failures, failure_log)
 }

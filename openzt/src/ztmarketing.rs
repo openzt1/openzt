@@ -19,7 +19,8 @@ use crate::{
     bfconfigfile::BFConfigFile,
     globals::get_module_base,
     string_registry::load_string_by_id,
-    util::{get_from_memory, mut_from_memory, ref_from_memory},
+    util::{get_from_memory, ref_from_memory},
+    write_live,
     ztresearch::get_money_text,
 };
 
@@ -71,6 +72,7 @@ pub struct ZTMarketing {
     vector_start: u32, // 0x10 - inline ZTMarketingFundingLevel table start (stride 0xc), MSVC 3-pointer vector
     vector_end: u32,   // 0x14
     vector_capacity_end: u32, // 0x18 - destructor frees [vector_start, vector_capacity_end)
+    pub _live: crate::util::LiveMemory,
 }
 
 impl ZTMarketing {
@@ -126,40 +128,40 @@ impl ZTMarketing {
     /// An empty table always resets to index `0`; otherwise increments while there's room, else
     /// saturates at `count - 1`. Returns `true` iff the table was empty or the index is at/past the
     /// last entry after the operation.
-    pub fn increase_funding(&mut self) -> bool {
+    pub fn increase_funding(&self) -> bool {
         let count = self.funding_level_count() as u32;
         if count == 0 {
-            self.current_funding_level = 0;
+            write_live!(self, current_funding_level, 0);
             return true;
         }
         if self.current_funding_level.wrapping_add(1) < count {
-            self.current_funding_level = self.current_funding_level.wrapping_add(1);
+            write_live!(self, current_funding_level, self.current_funding_level.wrapping_add(1));
             false
         } else {
-            self.current_funding_level = count - 1;
+            write_live!(self, current_funding_level, count - 1);
             true
         }
     }
 
     /// Decrements only when the table is non-empty and the index isn't already `0`; otherwise resets
     /// to `0`. Returns `true` iff the index ended up (or already was) `0`.
-    pub fn decrease_funding(&mut self) -> bool {
+    pub fn decrease_funding(&self) -> bool {
         if self.funding_level_count() > 0 && self.current_funding_level != 0 {
-            self.current_funding_level -= 1;
+            write_live!(self, current_funding_level, self.current_funding_level - 1);
             false
         } else {
-            self.current_funding_level = 0;
+            write_live!(self, current_funding_level, 0);
             true
         }
     }
 
     /// Unlike `increase_funding`/`decrease_funding`, out-of-range input resets to `0` rather than
     /// saturating at the last entry.
-    pub fn set_funding_level(&mut self, level: u32) {
+    pub fn set_funding_level(&self, level: u32) {
         if level < self.funding_level_count() as u32 {
-            self.current_funding_level = level;
+            write_live!(self, current_funding_level, level);
         } else {
-            self.current_funding_level = 0;
+            write_live!(self, current_funding_level, 0);
         }
     }
 
@@ -177,7 +179,7 @@ impl ZTMarketing {
         }
         let level = self.funding_level(self.current_funding_level as usize);
         let cash_delta = days as f32 * level.cost() * DAYS_TO_FUNDING_SCALE;
-        let game_mgr = unsafe { &mut *global_ztgamemgr_ptr() };
+        let game_mgr = unsafe { &*global_ztgamemgr_ptr() };
         if cash_delta <= game_mgr.cash() {
             game_mgr.spend_marketing(cash_delta);
             game_mgr.subtract_cash(cash_delta);
@@ -195,6 +197,7 @@ pub struct ZTMarketingMgr {
     _pad: [u8; 3],         // 0x05
     tick_accumulator: u32, // 0x08 - accumulates ticks in ZTMarketingMgr::update, converted to an in-game day count once enough have accrued
     marketing_ptr: u32,    // 0x0c - pointer to the single owned ZTMarketing, null until loadConfigurations succeeds
+    pub _live: crate::util::LiveMemory,
 }
 
 /// Pure prediction for `ZTMarketingMgr::update`'s accumulator/day-count bookkeeping. Same shape as
@@ -240,10 +243,6 @@ impl ZTMarketingMgr {
         (self.marketing_ptr != 0).then(|| unsafe { ref_from_memory(self.marketing_ptr) })
     }
 
-    pub fn marketing_mut(&self) -> Option<&'static mut ZTMarketing> {
-        (self.marketing_ptr != 0).then(|| unsafe { mut_from_memory(self.marketing_ptr) })
-    }
-
     /// Exposed for the live `reimplementation_tests` comparison harness.
     pub(crate) fn tick_accumulator(&self) -> u32 {
         self.tick_accumulator
@@ -252,8 +251,8 @@ impl ZTMarketingMgr {
     /// Exposed for the live `reimplementation_tests` comparison harness, to seed a synthetic manager's
     /// accumulator before comparing `ZTMarketingMgr::update` against the reimplementation.
     #[cfg(feature = "reimplementation-tests")]
-    pub(crate) fn set_tick_accumulator(&mut self, value: u32) {
-        self.tick_accumulator = value;
+    pub(crate) fn set_tick_accumulator(&self, value: u32) {
+        write_live!(self, tick_accumulator, value);
     }
 
     /// Exposed for the live `reimplementation_tests` comparison harness, to check `marketing_ptr`'s raw
@@ -267,9 +266,9 @@ impl ZTMarketingMgr {
 
     /// Once enough ticks have accrued (`predict_mgr_update`), `tick_accumulator` resets to `0` and the
     /// owned `ZTMarketing` (if any) is advanced by the elapsed day count.
-    pub fn update(&mut self, delta_ticks: u32) {
+    pub fn update(&self, delta_ticks: u32) {
         let (new_tick_accumulator, days) = predict_mgr_update(self.tick_accumulator, delta_ticks);
-        self.tick_accumulator = new_tick_accumulator;
+        write_live!(self, tick_accumulator, new_tick_accumulator);
         if days > 0
             && let Some(marketing) = self.marketing()
         {
@@ -288,8 +287,8 @@ impl ZTMarketingMgr {
 
     /// Calls `ZTMarketingMgr::load` - the save-file counterpart to `save()`, with the same
     /// deliberate re-entry via `.hooked()`.
-    pub fn load(&mut self, file: *const u32, version: u32) -> bool {
-        unsafe { ztmarketingmgr::LOAD.hooked()((self as *mut Self) as *const u32, file, version) }
+    pub fn load(&self, file: *const u32, version: u32) -> bool {
+        unsafe { ztmarketingmgr::LOAD.hooked()((self as *const Self) as *const u32, file, version) }
     }
 }
 
@@ -310,13 +309,14 @@ mod tests {
             vector_start,
             vector_end,
             vector_capacity_end: vector_end,
+            _live: Default::default(),
         }
     }
 
     #[test]
     fn increase_funding_empty_table_always_resets_to_zero_and_reports_maxed() {
         for start in [0, 1, 5] {
-            let mut m = marketing_with(start, 0);
+            let m = marketing_with(start, 0);
             assert!(m.increase_funding());
             assert_eq!(m.current_funding_level(), 0);
         }
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn increase_funding_increments_while_below_top_index() {
-        let mut m = marketing_with(0, 3);
+        let m = marketing_with(0, 3);
         assert!(!m.increase_funding());
         assert_eq!(m.current_funding_level(), 1);
         assert!(!m.increase_funding());
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn increase_funding_saturates_at_top_index_once_reached() {
-        let mut m = marketing_with(2, 3);
+        let m = marketing_with(2, 3);
         assert!(m.increase_funding());
         assert_eq!(m.current_funding_level(), 2);
     }
@@ -342,14 +342,14 @@ mod tests {
     fn increase_funding_saturates_when_already_past_top_index() {
         // Not reachable via increase_funding/decrease_funding/set_funding_level alone, but confirm
         // this saturates rather than panicking/wrapping.
-        let mut m = marketing_with(10, 3);
+        let m = marketing_with(10, 3);
         assert!(m.increase_funding());
         assert_eq!(m.current_funding_level(), 2);
     }
 
     #[test]
     fn decrease_funding_decrements_while_above_zero() {
-        let mut m = marketing_with(2, 3);
+        let m = marketing_with(2, 3);
         assert!(!m.decrease_funding());
         assert_eq!(m.current_funding_level(), 1);
         assert!(!m.decrease_funding());
@@ -358,28 +358,28 @@ mod tests {
 
     #[test]
     fn decrease_funding_at_zero_resets_to_zero_and_reports_mined() {
-        let mut m = marketing_with(0, 3);
+        let m = marketing_with(0, 3);
         assert!(m.decrease_funding());
         assert_eq!(m.current_funding_level(), 0);
     }
 
     #[test]
     fn decrease_funding_empty_table_resets_to_zero_and_reports_mined() {
-        let mut m = marketing_with(5, 0);
+        let m = marketing_with(5, 0);
         assert!(m.decrease_funding());
         assert_eq!(m.current_funding_level(), 0);
     }
 
     #[test]
     fn set_funding_level_sets_in_range_index() {
-        let mut m = marketing_with(0, 3);
+        let m = marketing_with(0, 3);
         m.set_funding_level(2);
         assert_eq!(m.current_funding_level(), 2);
     }
 
     #[test]
     fn set_funding_level_out_of_range_resets_to_zero_not_saturate() {
-        let mut m = marketing_with(1, 3);
+        let m = marketing_with(1, 3);
         m.set_funding_level(3);
         assert_eq!(m.current_funding_level(), 0);
         m.set_funding_level(100);
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn set_funding_level_on_empty_table_always_resets_to_zero() {
-        let mut m = marketing_with(0, 0);
+        let m = marketing_with(0, 0);
         m.set_funding_level(0);
         assert_eq!(m.current_funding_level(), 0);
     }
@@ -477,7 +477,7 @@ pub(crate) mod marketing_save_reimplementation {
         };
 
         use super::*;
-        use crate::util::{mut_from_memory, ref_from_memory};
+        use crate::util::ref_from_memory;
 
         #[detour(SAVE)]
         unsafe extern "thiscall" fn save(this: *const u32, file: *const u32) -> bool {
@@ -503,8 +503,8 @@ pub(crate) mod marketing_save_reimplementation {
                 return false;
             }
 
-            let mgr = unsafe { mut_from_memory::<ZTMarketingMgr>(this) };
-            if let Some(marketing) = mgr.marketing_mut() {
+            let mgr = unsafe { ref_from_memory::<ZTMarketingMgr>(this) };
+            if let Some(marketing) = mgr.marketing() {
                 marketing.set_funding_level(buf);
             }
             true
@@ -530,13 +530,13 @@ pub(crate) mod marketing_update_reimplementation {
         use openzt_detour::generated::ztmarketingmgr::UPDATE;
 
         use super::*;
-        use crate::util::mut_from_memory;
+        use crate::util::ref_from_memory;
 
         /// Vanilla's own `int` return here is a decompiler artifact (leftover `EAX` from an
         /// intermediate multiply) - the function is logically `void`, so this always returns `0`.
         #[detour(UPDATE)]
         unsafe extern "thiscall" fn update(this: *const u32, delta_ticks: u32) -> i32 {
-            let mgr = unsafe { mut_from_memory::<ZTMarketingMgr>(this) };
+            let mgr = unsafe { ref_from_memory::<ZTMarketingMgr>(this) };
             mgr.update(delta_ticks);
             0
         }
@@ -726,21 +726,21 @@ mod marketing_config_reimplementation {
         /// first, then, if `path` opens and parses, reads the `[marketing] marketing=<block>` list and
         /// appends one `ZTMarketingFundingLevel` per named block. The old buffer is freed and replaced
         /// with a freshly built one rather than reusing its capacity in place.
-        pub(crate) fn load_configuration(&mut self, path: &str) -> bool {
-            self.current_funding_level = 0;
+        pub(crate) fn load_configuration(&self, path: &str) -> bool {
+            write_live!(self, current_funding_level, 0);
             free_funding_table(self);
-            self.vector_start = 0;
-            self.vector_end = 0;
-            self.vector_capacity_end = 0;
+            write_live!(self, vector_start, 0);
+            write_live!(self, vector_end, 0);
+            write_live!(self, vector_capacity_end, 0);
 
             let Some(ini) = read_cfg(path) else {
                 return false;
             };
             let levels = parse_funding_levels(&ini);
             let (start, end, capacity_end) = funding_table_from_vec(levels);
-            self.vector_start = start;
-            self.vector_end = end;
-            self.vector_capacity_end = capacity_end;
+            write_live!(self, vector_start, start);
+            write_live!(self, vector_end, end);
+            write_live!(self, vector_capacity_end, capacity_end);
             true
         }
     }
@@ -754,8 +754,8 @@ mod marketing_config_reimplementation {
         /// Resets the tick accumulator to `0` and, if a `ZTMarketing` exists, destroys and frees it, but
         /// deliberately does **not** null `marketing_ptr` afterward - a real vanilla quirk (the pointer
         /// is left dangling until a caller like `load_configurations` immediately overwrites it).
-        pub(crate) fn clear_configurations(&mut self) {
-            self.tick_accumulator = 0;
+        pub(crate) fn clear_configurations(&self) {
+            write_live!(self, tick_accumulator, 0);
             if self.marketing_ptr != 0 {
                 let ptr = self.marketing_ptr as *mut ZTMarketing;
                 free_funding_table(unsafe { &*ptr });
@@ -767,7 +767,7 @@ mod marketing_config_reimplementation {
         /// `clear_configurations`, since there's nothing left to tear down beyond what that method
         /// already does. Never frees `self` (`this`) itself - see `marketing_dtor_detour`'s doc comment
         /// for why.
-        pub(crate) fn destroy(&mut self) {
+        pub(crate) fn destroy(&self) {
             self.clear_configurations();
         }
 
@@ -777,7 +777,7 @@ mod marketing_config_reimplementation {
         /// `[marketing] marketing=<path>` value giving the actual funding `.cfg` file, and calls
         /// `ZTMarketing::load_configuration` on it. On failure, `set_funding_level(0)` is called on the
         /// already-attached `ZTMarketing` before returning `false`.
-        pub(crate) fn load_configurations(&mut self, path: &str) -> bool {
+        pub(crate) fn load_configurations(&self, path: &str) -> bool {
             self.clear_configurations();
             let Some(top_ini) = read_cfg(path) else {
                 return false;
@@ -789,15 +789,16 @@ mod marketing_config_reimplementation {
                 vector_start: 0,
                 vector_end: 0,
                 vector_capacity_end: 0,
+                _live: Default::default(),
             });
             let marketing_ptr = Box::into_raw(marketing);
-            self.marketing_ptr = marketing_ptr as u32;
+            write_live!(self, marketing_ptr, marketing_ptr as u32);
 
             let cfg_path = first(&top_ini, "marketing", "marketing").unwrap_or_default();
             info!("marketing-config-reimplementation: resolved funding cfg path '{cfg_path}' from top-level file");
-            let ok = unsafe { &mut *marketing_ptr }.load_configuration(&cfg_path);
+            let ok = unsafe { &*marketing_ptr }.load_configuration(&cfg_path);
             if !ok {
-                unsafe { &mut *marketing_ptr }.set_funding_level(0);
+                unsafe { &*marketing_ptr }.set_funding_level(0);
             }
             ok
         }
@@ -810,10 +811,10 @@ mod marketing_config_reimplementation {
         use openzt_detour::generated::ztmarketingmgr::{CLEAR_CONFIGURATIONS, LOAD_CONFIGURATIONS};
 
         use super::*;
-        use crate::util::mut_from_memory;
+        use crate::util::ref_from_memory;
 
         #[detour(LOAD_CONFIGURATIONS)]
-        unsafe extern "thiscall" fn load_configurations(this: *const u32, path: *const i8) -> u32 {
+        unsafe extern "thiscall" fn load_configurations(this: *const u32, path: *const i8) -> bool {
             let path_str = unsafe { std::ffi::CStr::from_ptr(path) }.to_string_lossy().into_owned();
 
             // Parse the top-level file independently before mutating anything; fall back to vanilla
@@ -823,16 +824,16 @@ mod marketing_config_reimplementation {
                 return unsafe { LOAD_CONFIGURATIONS_DETOUR.call(this, path) };
             }
 
-            let mgr = unsafe { mut_from_memory::<ZTMarketingMgr>(this) };
+            let mgr = unsafe { ref_from_memory::<ZTMarketingMgr>(this) };
             let ok = mgr.load_configurations(&path_str);
             let level_count = mgr.marketing().map(|m| m.funding_levels().len()).unwrap_or(0);
             info!("marketing-config-reimplementation: loadConfigurations(\"{path_str}\") replaced natively -> {ok} ({level_count} funding levels)");
-            ok as u32
+            ok
         }
 
         #[detour(CLEAR_CONFIGURATIONS)]
         unsafe extern "thiscall" fn clear_configurations(this: *const u32) {
-            let mgr = unsafe { mut_from_memory::<ZTMarketingMgr>(this) };
+            let mgr = unsafe { ref_from_memory::<ZTMarketingMgr>(this) };
             mgr.clear_configurations();
         }
     }
@@ -864,7 +865,7 @@ mod marketing_dtor_detour {
     use tracing::error;
 
     use super::*;
-    use crate::util::mut_from_memory;
+    use crate::util::ref_from_memory;
 
     #[detour_mod]
     mod detours {
@@ -872,7 +873,7 @@ mod marketing_dtor_detour {
 
         #[detour(ZTMARKETINGMGR_DESTRUCTOR)]
         unsafe extern "thiscall" fn ztmarketingmgr_dtor(this: *const u32, _flags: u8) -> *const u32 {
-            unsafe { mut_from_memory::<ZTMarketingMgr>(this) }.destroy();
+            unsafe { ref_from_memory::<ZTMarketingMgr>(this) }.destroy();
             this
         }
     }
@@ -930,6 +931,7 @@ pub(crate) mod live_support {
             vector_start,
             vector_end,
             vector_capacity_end,
+            _live: Default::default(),
         }))
     }
 
@@ -953,13 +955,14 @@ pub(crate) mod live_support {
             vector_start,
             vector_end,
             vector_capacity_end,
+            _live: Default::default(),
         }))
     }
 
     /// Builds a standalone `ZTMarketingMgr` - **not** the real live singleton - wired to own
     /// `marketing_ptr` (or none, if null).
     pub(crate) fn build_standalone_marketing_mgr(tick_accumulator: u32, marketing_ptr: *mut ZTMarketing) -> *mut ZTMarketingMgr {
-        Box::into_raw(Box::new(ZTMarketingMgr { vtable: 0, flag: 0, _pad: [0; 3], tick_accumulator, marketing_ptr: marketing_ptr as u32 }))
+        Box::into_raw(Box::new(ZTMarketingMgr { vtable: 0, flag: 0, _pad: [0; 3], tick_accumulator, marketing_ptr: marketing_ptr as u32, _live: Default::default() }))
     }
 
     pub(crate) fn destroy_standalone_marketing_mgr(ptr: *mut ZTMarketingMgr) {
@@ -972,13 +975,13 @@ pub(crate) mod live_support {
     /// Temporarily pins the real, live `ZTGameMgr` singleton's budget to `cash`, runs `f`, then
     /// restores whatever it held before this call.
     pub(crate) fn with_ztgamemgr_cash<R>(cash: f32, f: impl FnOnce() -> R) -> R {
-        let game_mgr = unsafe { &mut *global_ztgamemgr_ptr() };
+        let game_mgr = unsafe { &*global_ztgamemgr_ptr() };
         let original = game_mgr.cash();
         game_mgr.set_cash(cash);
 
         let result = f();
 
-        unsafe { &mut *global_ztgamemgr_ptr() }.set_cash(original);
+        unsafe { &*global_ztgamemgr_ptr() }.set_cash(original);
         result
     }
 

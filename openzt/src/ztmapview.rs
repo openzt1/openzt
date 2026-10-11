@@ -41,7 +41,14 @@ use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal};
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct BFTile {
-    padding: [u8; 0x10],
+    /// Pointer to the sentinel node of this tile's own occupant list - the exact same
+    /// [`crate::zthabitatmgr::TileListNode`] shape/pool `ZTHabitat::owned_tiles_ptr` (`+0x40`) uses, one
+    /// level more nested ("everything currently standing on this tile" vs. "every tile a habitat owns").
+    /// Confirmed directly against `ZTHabitat_resetUnitAI.asm` (`MOV EAX, dword ptr [EDI]` where `EDI` is
+    /// the tile pointer, then walked identically to `owned_tiles_ptr`, calling vtable slot `+0x100` on
+    /// each occupant's own payload) - see `ZTHabitat::reset_unit_ai`.
+    pub(crate) unit_list_ptr: u32,
+    padding: [u8; 0xc],
     pub entity_ptr: u32, // 0x10 Pointer to the entity on this tile, if any
     pub north_fence: u32, // 0x14 Change to &ZTFence when that type exists
     pub east_fence: u32,  // 0x18
@@ -73,7 +80,8 @@ impl fmt::Display for BFTile {
 impl BFTile {
     pub fn new(pos: IVec3, unknown_byte_2: u8) -> Self {
         BFTile {
-            padding: [0; 0x10],
+            unit_list_ptr: 0,
+            padding: [0; 0xc],
             entity_ptr: 0,
             north_fence: 0,
             east_fence: 0,
@@ -219,7 +227,7 @@ impl BFTile {
 pub mod zoo_ztmapview {
     use tracing::error;
 
-    use crate::util::{get_from_memory, ref_from_memory, save_to_memory};
+    use crate::util::{get_from_memory, save_to_memory};
     use crate::ztmapview::{BFTile, ZTMapView};
     use crate::ztworldmgr::IVec3;
     use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
@@ -238,12 +246,12 @@ pub mod zoo_ztmapview {
 
         // let entity = get_from_memory(temp_entity);
 
-        let bf_tile = unsafe { ref_from_memory::<BFTile>(tile) };
+        let bf_tile = get_from_memory::<BFTile>(tile);
 
         // let zt_map_view = get_from_memory::<ZTMapView>(_this);
 
         let zt_result = if response_ptr.is_null() { 0 } else { get_from_memory::<u32>(response_ptr) };
-        match ZTMapView::check_tank_placement(temp_entity_ptr, bf_tile) {
+        match ZTMapView::check_tank_placement(temp_entity_ptr, &bf_tile) {
             Err(reimplemented_result) => {
                 if zt_result != reimplemented_result.clone() as u32 {
                     error!("ZTMapView::checkTankPlacement mismatch between reimplementation and game result! Reimplementation: {:?}, Game: {:#x}", reimplemented_result, zt_result);
@@ -272,7 +280,7 @@ pub mod zoo_ztmapview {
     // 0040f24d int __thiscall OOAnalyzer::BFTile::getLocalElevation(BFTile *this,BFPos *param_1)
     #[detour(GET_LOCAL_ELEVATION)]
     unsafe extern "thiscall" fn get_local_elevation(_this: *const u32, pos: *const u32) -> i32 {
-        let tile = unsafe { ref_from_memory::<BFTile>(_this) };
+        let tile = get_from_memory::<BFTile>(_this);
         let pos_vec = get_from_memory::<IVec3>(pos);
         tile.get_local_elevation(pos_vec)
     }
@@ -351,16 +359,16 @@ impl ZTMapView {
             if *animal_entity.is_egg() && !animal_entity_type.underwater {
                 return Err(ErrorStringId::EggsMustBePlacedOnLand);
             }
-            if *tank.water_level() < animal_entity_type.ztunit_type.bfunit_type.depth {
-                // TODO: Add an extra message for animals rather than objects
-                return Err(ErrorStringId::ObjectMustBePlacedInADeeperTank);
-            }
             // TankWithWater check; onlyUnderwater?
             if animal_entity_type.underwater
                 && !animal_entity.is_boxed()
                 && (!tank.is_filled() || *tank.water_level() < 1)
             {
                 return Err(ErrorStringId::AnimalMustBePlacedInATankWithWater);
+            }
+            if *tank.water_level() < animal_entity_type.ztunit_type.bfunit_type.depth {
+                // TODO: Add an extra message for animals rather than objects
+                return Err(ErrorStringId::ObjectMustBePlacedInADeeperTank);
             }
         }
 
