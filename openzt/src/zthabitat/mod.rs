@@ -2,6 +2,7 @@ pub mod habitat;
 pub mod mgr;
 pub mod support;
 pub mod tank_exhibit;
+pub mod viewing_areas;
 
 pub use habitat::*;
 pub use mgr::*;

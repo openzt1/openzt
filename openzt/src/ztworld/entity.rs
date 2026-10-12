@@ -4,9 +4,10 @@ use std::cmp::max;
 use std::fmt;
 use std::mem;
 use tracing::error;
+use glam::i32::IVec3;
 
 use crate::bfentitytype::{read_zt_entity_type_from_memory, BFEntityType, ZTAnimalType, ZTEntityType, ZTEntityTypeClass, ZTUnitType};
-use crate::geom::{IVec3, Rectangle};
+use crate::geom::Rectangle;
 use crate::globals::globals;
 use crate::util::{get_from_memory, get_string_from_memory, ref_from_memory, ZTBufferString};
 use crate::ztmapview::BFTile;

@@ -4,7 +4,7 @@ use field_accessor_as_string::FieldAccessorAsString;
 use getset::{Getters, Setters};
 
 use super::base::{BFEntityType, EntityType};
-use crate::geom::IVec3;
+use glam::i32::IVec3;
 use crate::util::{get_from_memory, get_string_from_memory};
 
 // ------------ BFUnitType, Implementation, and Related Functions ------------ //

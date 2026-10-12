@@ -28,7 +28,7 @@ use crate::util::{get_from_memory, ZTBufferString, ZTString};
 use crate::ztmapview::BFTile;
 use crate::ztresearch::research_save_reimplementation::{self, live_support, SaveRecord};
 use crate::ztresearch::{predict_branch_progress, predict_update, ZTResearchBranch, ZTResearchEffectKind, ZTResearchMgr};
-use crate::ztworldmgr::IVec3;
+use glam::i32::IVec3;
 
 use super::ztmarketing::funding_level_case_strategy;
 
@@ -447,7 +447,7 @@ pub(crate) fn run_bftile_get_local_elevation_test(failure_log: &mut Option<std::
             let tile = BFTile::new(pos, unknown_byte_2);
             let reimplemented_result = tile.get_local_elevation(pos);
 
-            let result = unsafe { GET_LOCAL_ELEVATION.original()(&raw const tile as *const u32, &raw const pos as *const u32) };
+            let result = unsafe { GET_LOCAL_ELEVATION.original()(&raw const tile as *const u32, &raw const pos as *const IVec3) };
             assert_eq!(
                 result,
                 reimplemented_result,
@@ -469,7 +469,7 @@ pub(crate) fn run_bftile_get_local_elevation_test(failure_log: &mut Option<std::
                     let pos = IVec3::new(x, y, 0);
                     let tile = BFTile::new(pos, unknown_byte_2);
                     let reimplemented_result = tile.get_local_elevation(pos);
-                    let result = unsafe { GET_LOCAL_ELEVATION.original()(&raw const tile as *const u32, &raw const pos as *const u32) };
+                    let result = unsafe { GET_LOCAL_ELEVATION.original()(&raw const tile as *const u32, &raw const pos as *const IVec3) };
                     let failure_line = format!("unknown_byte_2: {}, x: {}, y: {}, real: {}, reimplemented: {}\n", unknown_byte_2, x, y, result, reimplemented_result);
 
                     if let Some(log_file) = failure_log

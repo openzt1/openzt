@@ -19,7 +19,7 @@ use openzt_detour::generated::{
         },
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            ADD_FOUND_SPECIES, CREATE_VIEWING_AREAS, GET_EVENTS,
+            ADD_FOUND_SPECIES, GET_EVENTS,
             REVISE_SPECIES_LIST, SEND_EVENT,
             SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
@@ -35,7 +35,7 @@ use openzt_detour::generated::{
         ztunit::GET_HABITAT as ZTUNIT_GET_HABITAT,
         ztviewingarea::{
             ADD_TILE as ZTVIEWINGAREA_ADD_TILE, CONSTRUCTOR as ZTVIEWINGAREA_CONSTRUCTOR, DESTRUCTOR as ZTVIEWINGAREA_DESTRUCTOR,
-            GET_EWEXTENT as ZTVIEWINGAREA_GET_EWEXTENT, GET_NSEXTENT as ZTVIEWINGAREA_GET_NSEXTENT,
+            GET_EWEXTENT as ZTVIEWINGAREA_GET_EWEXTENT, GET_NSEXTENT as ZTVIEWINGAREA_GET_NSEXTENT, HAS_OA as ZTVIEWINGAREA_HAS_OA,
             RECALCULATE_CHARACTERISTICS as ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS, REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
             UPDATE_AMBIENTS as ZTVIEWINGAREA_UPDATE_AMBIENTS,
         },
@@ -54,9 +54,10 @@ use crate::{
     ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG},
     ztshow::{call_entity_vtable_noargs, call_entity_vtable_u32_noargs, type_check, RVA_ANIMAL_TYPE_CHECK},
     ztshowinfo,
-    ztworldmgr::Direction,
+    geom::Direction,
 };
 use super::mgr::zthabitatmgr::ZTHabitatMgr;
+use super::viewing_areas;
 
 /// Number of times [`ZTHabitat::destruct`] has run - lets the live battery prove the destructor port was
 /// actually reached by vanilla teardown paths.
@@ -112,7 +113,7 @@ fn x87_weighted_sum(terms: &[(f64, f64)]) -> f64 {
     let mut sum = 0.0f32;
     for (value, weight) in terms {
         let product = *value as f32 * *weight as f32;
-        sum = product + sum;
+        sum += product;
     }
     sum as f64
 }
@@ -138,11 +139,11 @@ pub struct ZTHabitat {
     pub unknown_flag_0x30: u8,       // 0x030 // Set to `1` by `ZTHabitatMgr::fenceRemoved` (`Self::fence_removed`) on either side of a removed fence whenever that side's own `unknown_flag_0x2c` is clear (i.e. it's a real, non-"world" habitat) - a third distinct flag alongside `unknown_flag_0x2c`/`characteristics_dirty`, never cleared or read anywhere in this pass's own scope, so its real meaning/consumer is unconfirmed. `ZTHabitat::recalculateCharacteristics` is a second, independent writer of this same field - its own "characteristics changed" output flag, set (in [`Self::recalc_phase_3`]) when `species_found_count` changes across the function's species-propagation phase, and separately when `num_animals` changes across phases 1-3 (which also, if the new `num_animals` is `0`, triggers `sendMaintWorkerCleanupEvents` unless a save is loading, and zeroes `unknown_nt_time`).
     pub species_list_dirty: u8,      // 0x031 // Gates the lazy `reviseSpeciesList` call in update() once species_list_timer crosses its threshold - same dirty-flag/timer shape as characteristics_dirty/characteristics_timer, cleared by real vanilla reviseSpeciesList's own (still un-ported) body as a side effect.
     pub pad1b_b: [u8; 0x2],          // ----------------------- padding: 2 bytes
-    pub viewing_areas_begin: u32,    // 0x034 // Begin pointer of the real vanilla std::vector<ZTViewingArea*> update() walks to tick each entry's own ambient state.
+    pub viewing_areas_begin: u32,    // 0x034 // Vanilla's `std::vector<ZTViewingArea*>` begin/end/cap_end triple, zeroed by the vanilla constructor and never written by the reimplementation: the viewing areas live in a Rust-side store ([`viewing_areas`]). Real vanilla `addViewingArea`/`removeViewingArea` are the only writers (live tests only); `Self::destruct` frees any buffer it allocated.
     pub viewing_areas_end: u32,      // 0x038
-    pub viewing_areas_cap_end: u32,  // 0x03c // The vector's own capacity end - written by `ZTHabitat::addViewingArea`'s own growth path (see `Self::add_viewing_area`), previously undifferentiated padding.
+    pub viewing_areas_cap_end: u32,  // 0x03c
     pub owned_tiles_ptr: u32,        // 0x040 // Pointer to the sentinel node of this habitat's owned-tile list (see TileListNode below), not a BFTile* itself - see getSize/removeHabitatTiles/validatePositions/resetUnitAI/createEdgePairs, all of which walk it identically.
-    pub pad2a1: [u8; 0x4],            // ----------------------- padding: 4 bytes (0x044 - a real field per `ZTHabitat_createViewingAreas.c`'s own use of it as a second tile-list-shaped container, but that function is deferred - see `Self::create_viewing_areas`'s absence - so this stays unidentified padding rather than a guessed name/shape)
+    pub edge_tiles_sentinel: u32,    // 0x044 // Sentinel node of vanilla's `list<uint>` of edge tiles (`createViewingAreas`'s own output, read by `getCloseOutsideTile`), empty in vanilla memory: the edge tiles live in a Rust-side store ([`viewing_areas::edge_tiles`]). `Self::destruct` runs vanilla's `~list` on it.
     pub boundary_tile_pairs_begin: u32, // 0x048 // Vanilla's `std::vector<std::pair<BFTile*,BFTile*>>` begin/end/cap_end triple, zeroed by the vanilla constructor and never written by the reimplementation: the boundary pairs live in a Rust-side store ([`Self::boundary_tile_pairs`]). Real vanilla `createEdgePairs` is the only writer (live tests only); `Self::destruct` frees any buffer it allocated.
     pub boundary_tile_pairs_end: u32,   // 0x04c
     pub boundary_tile_pairs_cap_end: u32, // 0x050
@@ -3212,8 +3213,16 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference - `self`'s own address feeds the vector fields
     /// read directly off it.
     pub fn get_viewing_areas_with_guests(&self, out_vector_ptr: u32) {
-        for cursor in (self.viewing_areas_begin..self.viewing_areas_end).step_by(4) {
-            let va_ptr: u32 = get_from_memory(cursor);
+        for va_ptr in self.viewing_areas_with_guests() {
+            vector_push_pool_alloc4(out_vector_ptr, va_ptr);
+        }
+    }
+
+    /// [`Self::get_viewing_areas_with_guests`]'s own walk, returning the matches as a Rust `Vec` instead of
+    /// appending to a vanilla out-vector (the shape its in-Rust callers want).
+    fn viewing_areas_with_guests(&self) -> Vec<u32> {
+        let mut with_guests = Vec::new();
+        for va_ptr in viewing_areas::viewing_areas(self as *const Self as u32) {
             if va_ptr == 0 {
                 continue;
             }
@@ -3221,9 +3230,77 @@ impl ZTHabitat {
                 unsafe { ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS.original()(va_ptr as *const u32) };
             }
             if get_from_memory::<i32>(va_ptr + 0x54) > 0 {
-                vector_push_pool_alloc4(out_vector_ptr, va_ptr);
+                with_guests.push(va_ptr);
             }
         }
+        with_guests
+    }
+
+    /// The working copy `getNearestViewingArea`/`getRandomViewingArea` both start from: every viewing area
+    /// when `only_with_guests` is clear, else [`Self::viewing_areas_with_guests`]. Null entries (never
+    /// stored in practice) are skipped rather than handed to `ZTViewingArea::hasOA`.
+    fn viewing_area_candidates(&self, only_with_guests: bool) -> Vec<u32> {
+        if only_with_guests {
+            self.viewing_areas_with_guests()
+        } else {
+            viewing_areas::viewing_areas(self as *const Self as u32).into_iter().filter(|&va| va != 0).collect()
+        }
+    }
+
+    /// Ports `ZTHabitat::getNearestViewingArea` (`ZTHabitat_getNearestViewingArea.c`, `generated.rs`'s
+    /// `GET_NEAREST_VIEWING_AREA`): over every candidate viewing area ([`Self::viewing_area_candidates`])
+    /// that `hasOA`, draws one random tile of its own tile vector (one RNG step per such area, in order)
+    /// and keeps the area whose drawn tile is nearest `tile_ptr` by squared distance (strict `<`, so the
+    /// first of equals wins; a null drawn tile or a null `tile_ptr` counts as `i32::MAX`). `0` when none
+    /// qualifies. The leading guard is vanilla's own `GLOBAL_ZTWorldMgr + 8 == 0` test (never true for a
+    /// real or null world manager pointer).
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_nearest_viewing_area(&self, tile_ptr: u32, only_with_guests: bool) -> u32 {
+        if (globals().ztworldmgr_ptr() as u32).wrapping_add(8) == 0 {
+            return 0;
+        }
+        let mut best_area = 0u32;
+        let mut best_distance = 0i32;
+        for va_ptr in self.viewing_area_candidates(only_with_guests) {
+            if !unsafe { ZTVIEWINGAREA_HAS_OA.original()(va_ptr as *const u32) } {
+                continue;
+            }
+            let tiles_begin: u32 = get_from_memory(va_ptr + 0x40);
+            let tiles_end: u32 = get_from_memory(va_ptr + 0x44);
+            let tile_count = (tiles_end.wrapping_sub(tiles_begin) as i32 >> 2) as u32;
+            let draw = next_game_random();
+            let drawn_tile: u32 = get_from_memory(tiles_begin + (draw % tile_count) * 4);
+            let distance = if drawn_tile == 0 || tile_ptr == 0 {
+                i32::MAX
+            } else {
+                let dy = get_from_memory::<i32>(tile_ptr + 0x38).wrapping_sub(get_from_memory::<i32>(drawn_tile + 0x38));
+                let dx = get_from_memory::<i32>(tile_ptr + 0x34).wrapping_sub(get_from_memory::<i32>(drawn_tile + 0x34));
+                dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
+            };
+            if best_area == 0 || distance < best_distance {
+                best_area = va_ptr;
+                best_distance = distance;
+            }
+        }
+        best_area
+    }
+
+    /// Ports `ZTHabitat::getRandomViewingArea` (`ZTHabitat_getRandomViewingArea.c`, `generated.rs`'s
+    /// `GET_RANDOM_VIEWING_AREA`): a uniformly random choice (one RNG step, only when any exist) among the
+    /// candidate viewing areas ([`Self::viewing_area_candidates`]) that `hasOA`; `0` when none does.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn get_random_viewing_area(&self, only_with_guests: bool) -> u32 {
+        let with_oa: Vec<u32> = self
+            .viewing_area_candidates(only_with_guests)
+            .into_iter()
+            .filter(|&va_ptr| unsafe { ZTVIEWINGAREA_HAS_OA.original()(va_ptr as *const u32) })
+            .collect();
+        if with_oa.is_empty() {
+            return 0;
+        }
+        with_oa[next_game_random() as usize % with_oa.len()]
     }
 
     /// Ports `ZTHabitat::hasBldg` (`ZTHabitat_hasBldg.c`, `generated.rs`'s `HAS_BLDG`): membership test
@@ -3825,7 +3902,7 @@ impl ZTHabitat {
             0.0
         };
 
-        let scaled = deviation.min(30.0).max(0.0) * 20.0;
+        let scaled = deviation.clamp(0.0, 30.0) * 20.0;
         set_flag_if(record_ptr + 0x6c, scaled >= 50.0);
         save_to_memory::<f32>(record_ptr + 0x3c, (100.0 - scaled).min(100.0));
     }
@@ -4446,7 +4523,7 @@ impl ZTHabitat {
             .into_iter()
             .filter(|&side| (side_bits >> side) & 3 > 1)
             .filter(|&side| {
-                let neighbour_ptr = get_neighbour_raw(&world, tile_ptr, side);
+                let neighbour_ptr = get_neighbour_raw(world, tile_ptr, side);
                 neighbour_ptr != 0
                     && globals()
                         .zthabitatmgr()
@@ -5115,20 +5192,15 @@ impl ZTHabitat {
             return;
         }
         let self_addr = self as *const Self as u32;
-        let begin = self.viewing_areas_begin;
-        let end = self.viewing_areas_end;
-        let mut cursor = begin;
-        while cursor != end {
-            let va_ptr: u32 = get_from_memory(cursor);
+        for va_ptr in viewing_areas::viewing_areas(self_addr) {
             if va_ptr != 0 {
                 unsafe {
                     ZTVIEWINGAREA_DESTRUCTOR.original()(va_ptr as *const u32);
                     OPERATOR_DELETE.original()(va_ptr);
                 }
             }
-            cursor += 4;
         }
-        save_to_memory(self_addr + 0x38, begin);
+        viewing_areas::clear_viewing_areas(self_addr);
     }
 
     /// Ports `ZTHabitat::removeSpecies` (`ZTHabitat_removeSpecies.c`/`.asm`): scans the real vanilla
@@ -5843,11 +5915,9 @@ impl ZTHabitat {
     /// An empty candidate list returns null without touching the RNG; otherwise one LCG step picks the
     /// candidate at `(seed >> 0x10 & 0x7fff) % count` ([`Self::pick_random_candidate_tile`]).
     pub fn get_close_outside_tile(&self) -> u32 {
-        let sentinel: u32 = get_from_memory(self as *const Self as u32 + 0x44);
         let habitat_mgr = globals().zthabitatmgr();
         let mut candidates: Vec<u32> = Vec::new();
-        for node in walk_tile_list(sentinel) {
-            let tile = get_from_memory::<TileListNode>(node).payload;
+        for tile in viewing_areas::edge_tiles(self as *const Self as u32) {
             let owner = if tile == 0 {
                 0
             } else {
@@ -6610,6 +6680,8 @@ impl ZTHabitat {
             ZTHabitatMgr::break_amphibious_connection(tile_a, tile_b);
         }
         self.clear_show_neighbors();
+        viewing_areas::take_viewing_areas(self_addr);
+        viewing_areas::take_edge_tiles(self_addr);
 
         unsafe { MSVC_TREE36_CLEAR.original()((self_addr + 0x16c) as *const u32) };
         Self::free_pool_block(get_from_memory(self_addr + 0x16c), 0x24);
@@ -6622,8 +6694,9 @@ impl ZTHabitat {
                 MSVC_VECTOR_T_4_DTOR.original()((self_addr + vector_offset) as *const u32);
             }
         }
-        // `+0x54` (8-byte pairs) and `+0x48` (vanilla's boundary-pair vector, never allocated) free by capacity.
-        for vector_offset in [0x54, 0x48] {
+        // `+0x54` (8-byte pairs), `+0x48` (vanilla's boundary-pair vector) and `+0x34` (vanilla's viewing-area
+        // vector) free by capacity; the latter two are never allocated by the port.
+        for vector_offset in [0x54, 0x48, 0x34] {
             let begin: u32 = get_from_memory(self_addr + vector_offset);
             let cap_end: u32 = get_from_memory(self_addr + vector_offset + 8);
             Self::free_pool_block(begin, cap_end.wrapping_sub(begin));
@@ -6971,11 +7044,8 @@ impl ZTHabitat {
             self.recalculate_characteristics();
         }
 
-        let mut viewing_area_entry = self.viewing_areas_begin;
-        while viewing_area_entry != self.viewing_areas_end {
-            let viewing_area: u32 = get_from_memory(viewing_area_entry);
+        for viewing_area in viewing_areas::viewing_areas(self as *const Self as u32) {
             unsafe { ZTVIEWINGAREA_UPDATE_AMBIENTS.original()(viewing_area as *const u32, elapsed as i32) };
-            viewing_area_entry += 4;
         }
 
         self.update_portals();
@@ -7201,11 +7271,8 @@ impl ZTHabitat {
     /// (call-through - `ZTViewingArea` itself isn't reimplemented anywhere in this codebase) on every
     /// [`Self::viewing_areas_begin`]/`_end` entry.
     pub fn recalculate_viewing_areas(&self) {
-        let mut cursor = self.viewing_areas_begin;
-        while cursor != self.viewing_areas_end {
-            let va_ptr: u32 = get_from_memory(cursor);
+        for va_ptr in viewing_areas::viewing_areas(self as *const Self as u32) {
             unsafe { ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS.original()(va_ptr as *const u32) };
-            cursor += 4;
         }
     }
 
@@ -7226,8 +7293,7 @@ impl ZTHabitat {
     /// the base ports, exactly as real vanilla's dispatch does; the same dispatch on a base habitat
     /// reaches this codebase's own detoured ports. `createEdgePairs`/`recalculateViewingAreas` are direct
     /// calls to the already-ported [`Self::create_edge_pairs`]/[`Self::recalculate_viewing_areas`];
-    /// `createViewingAreas` stays a real-vanilla call-through (still un-ported - see `pad2a1`'s field doc
-    /// comment). Sets [`Self::characteristics_dirty`] unconditionally (the `.asm`'s own bare
+    /// `createViewingAreas` is the direct call to [`Self::create_viewing_areas`]. Sets [`Self::characteristics_dirty`] unconditionally (the `.asm`'s own bare
     /// `MOV byte ptr [ESI+0x2d], 1` - not the guarded neighbor walk [`Self::set_dirty_characteristics`]
     /// does). Finally, when the rebuilt owned-tile list is empty, destroys the habitat outright via
     /// `ZTHabitatMgr::removeHabitat` (`REMOVE_HABITAT_0`, un-ported, on the `GLOBAL_ZTHabitatMgr` global) -
@@ -7248,7 +7314,7 @@ impl ZTHabitat {
         unsafe { call_vtable_slot_noargs(self_addr, 0x3c) };
         unsafe { call_vtable_slot_with_ptr_ptr(self_addr, 0x38, tile_ptr, self_addr) };
         self.create_edge_pairs();
-        unsafe { CREATE_VIEWING_AREAS.original()(self_addr as *const u32) };
+        self.create_viewing_areas();
         self.recalculate_viewing_areas();
         write_live!(self, characteristics_dirty, 1u8);
         if self.get_size(false) == 0 {
@@ -7268,9 +7334,8 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn add_viewing_area(&self, va_ptr: u32) {
-        let self_addr = self as *const Self as u32;
-        vector_push_pool_alloc4(self_addr + 0x34, va_ptr);
-        save_to_memory::<u8>(self_addr + 0x2d, 1);
+        viewing_areas::push_viewing_area(self as *const Self as u32, va_ptr);
+        write_live!(self, characteristics_dirty, 1u8);
     }
 
     /// Ports `ZTHabitat::removeViewingArea` (`ZTHabitat_removeViewingArea.c`/`.asm`, `generated.rs`'s
@@ -7283,14 +7348,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn remove_viewing_area(&self, va_ptr: u32) {
         let self_addr = self as *const Self as u32;
-        let begin = self.viewing_areas_begin;
-        let end = self.viewing_areas_end;
-
-        let mut cursor = begin;
-        while cursor != end && get_from_memory::<u32>(cursor) != va_ptr {
-            cursor += 4;
-        }
-        if cursor == end {
+        if !viewing_areas::viewing_areas(self_addr).contains(&va_ptr) {
             return;
         }
 
@@ -7301,8 +7359,8 @@ impl ZTHabitat {
             }
         }
 
-        crate::vanilla_vector::erase_element(self_addr + 0x34, cursor, 4);
-        save_to_memory::<u8>(self_addr + 0x2d, 1);
+        viewing_areas::remove_viewing_area_entry(self_addr, va_ptr);
+        write_live!(self, characteristics_dirty, 1u8);
     }
 
     /// Ports `ZTHabitat::removeFromAllVAs` (`ZTHabitat_removeFromAllVAs.c`/`.asm`, `generated.rs`'s
@@ -7316,10 +7374,7 @@ impl ZTHabitat {
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
     pub fn remove_from_all_vas(&self, tile_ptr: u32) {
         'restart: loop {
-            let mut cursor = self.viewing_areas_begin;
-            let end = self.viewing_areas_end;
-            while cursor != end {
-                let va_ptr: u32 = get_from_memory(cursor);
+            for va_ptr in viewing_areas::viewing_areas(self as *const Self as u32) {
                 let vec_begin: u32 = get_from_memory(va_ptr + 0x40);
                 let vec_end: u32 = get_from_memory(va_ptr + 0x44);
                 let contains = (vec_begin..vec_end).step_by(4).any(|addr| get_from_memory::<u32>(addr) == tile_ptr);
@@ -7332,7 +7387,6 @@ impl ZTHabitat {
                         continue 'restart;
                     }
                 }
-                cursor += 4;
             }
             break;
         }
@@ -7343,11 +7397,8 @@ impl ZTHabitat {
     /// own `+0x25`, on a different struct, despite the coincidental shared offset) on every
     /// [`Self::viewing_areas_begin`]/`_end` entry.
     pub fn recreate_oas(&self) {
-        let mut cursor = self.viewing_areas_begin;
-        while cursor != self.viewing_areas_end {
-            let va_ptr: u32 = get_from_memory(cursor);
+        for va_ptr in viewing_areas::viewing_areas(self as *const Self as u32) {
             save_to_memory::<u8>(va_ptr + 0x25, 1);
-            cursor += 4;
         }
     }
 
@@ -7455,6 +7506,91 @@ impl ZTHabitat {
         if new_va != 0 {
             unsafe { ZTVIEWINGAREA_CONSTRUCTOR.original()(new_va as *const u32, self_addr as *const std::ffi::c_void, tile_ptr as *const std::ffi::c_void) };
             self.add_viewing_area(new_va);
+        }
+    }
+
+    /// Whether the fence slot `slot` of `tile_ptr` (`BFTile` `+0x14 + 4 * (direction / 2)`, one fence entity
+    /// per cardinal side) holds a fence whose type has the `+0x192` flag [`is_wall`] reads set.
+    fn tile_side_is_wall(tile_ptr: u32, direction: u32) -> bool {
+        is_wall(get_from_memory(tile_ptr + 0x14 + (direction / 2) * 4))
+    }
+
+    /// Ports `ZTHabitat::getEdgeTiles` (`ZTHabitat_getEdgeTiles.c`/`.asm`, `generated.rs`'s
+    /// `GET_EDGE_TILES`): the tiles within `radius` of any owned tile that has a wall ([`is_wall`]) on one
+    /// of its four sides - its own fence slot or the facing slot of the neighbour across that side - and
+    /// that this habitat does not own, de-duplicated in first-seen order. Owned tiles are walked in list
+    /// order; for each, the first walled direction (north, east, south, west) adds its whole
+    /// `(2 * radius + 1)`-square block, columns outermost, and the remaining directions are skipped.
+    /// Unlike vanilla this returns a plain `Vec` rather than building a vanilla `list<uint>`; the one real
+    /// caller ([`Self::create_viewing_areas`]) stores it in [`viewing_areas`]'s own edge-tile store.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn edge_tiles(&self, radius: i32) -> Vec<u32> {
+        let self_addr = self as *const Self as u32;
+        let world = globals().ztworldmgr();
+        let habitat_mgr = globals().zthabitatmgr();
+        let mut edge_tiles: Vec<u32> = Vec::new();
+
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+            if tile_ptr == 0 {
+                continue;
+            }
+            let walled = [0u32, 2, 4, 6].into_iter().any(|direction| {
+                if Self::tile_side_is_wall(tile_ptr, direction) {
+                    return true;
+                }
+                let neighbour_ptr = world.get_neighbour_ptr_raw(tile_ptr, direction);
+                neighbour_ptr != 0 && Self::tile_side_is_wall(neighbour_ptr, direction.wrapping_sub(4) & 7)
+            });
+            if !walled {
+                continue;
+            }
+
+            let tile_x: i32 = get_from_memory(tile_ptr + 0x34);
+            let tile_y: i32 = get_from_memory(tile_ptr + 0x38);
+            for x in (tile_x - radius)..=(tile_x + radius) {
+                for y in (tile_y - radius)..=(tile_y + radius) {
+                    if x < 0 || y < 0 || x >= world.map_x_size as i32 || y >= world.map_y_size as i32 {
+                        continue;
+                    }
+                    let candidate = world.get_tile_ptr(x as u32, y as u32);
+                    if candidate == 0 {
+                        continue;
+                    }
+                    let owner = habitat_mgr.get_habitat_ptr(get_from_memory(candidate + 0x34), get_from_memory(candidate + 0x38));
+                    if owner != self_addr && !edge_tiles.contains(&candidate) {
+                        edge_tiles.push(candidate);
+                    }
+                }
+            }
+        }
+        edge_tiles
+    }
+
+    /// Ports `ZTHabitat::createViewingAreas` (`ZTHabitat_createViewingAreas.c`/`.asm`, `generated.rs`'s
+    /// `CREATE_VIEWING_AREAS`): a no-op when [`Self::unknown_flag_0x2c`] is set. Otherwise replaces the
+    /// habitat's edge-tile list ([`viewing_areas::edge_tiles`]) with [`Self::edge_tiles`]`(2)`, then calls
+    /// [`Self::path_placed`] on every listed tile that is a path tile (`+0x83` bit `0x8`) not owned by this
+    /// habitat, in list order.
+    ///
+    /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`].
+    pub fn create_viewing_areas(&self) {
+        if self.unknown_flag_0x2c != 0 {
+            return;
+        }
+        let self_addr = self as *const Self as u32;
+        viewing_areas::set_edge_tiles(self_addr, self.edge_tiles(2));
+
+        let habitat_mgr = globals().zthabitatmgr();
+        for tile_ptr in viewing_areas::edge_tiles(self_addr) {
+            if tile_ptr == 0 {
+                continue;
+            }
+            let owner = habitat_mgr.get_habitat_ptr(get_from_memory(tile_ptr + 0x34), get_from_memory(tile_ptr + 0x38));
+            if owner != self_addr && get_from_memory::<u8>(tile_ptr + 0x83) & 8 != 0 {
+                self.path_placed(tile_ptr);
+            }
         }
     }
 }

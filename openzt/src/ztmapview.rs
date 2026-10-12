@@ -7,7 +7,8 @@ use crate::bfentitytype::{BFEntityType, ZTAnimalType, ZTEntityTypeClass, ZTScene
 use crate::globals::globals;
 use crate::util::{get_from_memory, ref_from_memory, MemAddr};
 use crate::zthabitatmgr::ZTTankExhibit;
-use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal};
+use glam::i32::IVec3;
+use crate::ztworldmgr::{BFEntity, ZTAnimal};
 // use crate::{
 //     util::get_from_memory,
 // };
@@ -229,7 +230,7 @@ pub mod zoo_ztmapview {
 
     use crate::util::{get_from_memory, save_to_memory};
     use crate::ztmapview::{BFTile, ZTMapView};
-    use crate::ztworldmgr::IVec3;
+    use glam::i32::IVec3;
     use openzt_detour::generated::bftile::GET_LOCAL_ELEVATION;
     use openzt_detour::generated::ztmapview::CHECK_TANK_PLACEMENT;
 
@@ -279,9 +280,9 @@ pub mod zoo_ztmapview {
 
     // 0040f24d int __thiscall OOAnalyzer::BFTile::getLocalElevation(BFTile *this,BFPos *param_1)
     #[detour(GET_LOCAL_ELEVATION)]
-    unsafe extern "thiscall" fn get_local_elevation(_this: *const u32, pos: *const u32) -> i32 {
+    unsafe extern "thiscall" fn get_local_elevation(_this: *const u32, pos: *const IVec3) -> i32 {
         let tile = get_from_memory::<BFTile>(_this);
-        let pos_vec = get_from_memory::<IVec3>(pos);
+        let pos_vec = get_from_memory::<IVec3>(pos as u32);
         tile.get_local_elevation(pos_vec)
     }
 }

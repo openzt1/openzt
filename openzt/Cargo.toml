@@ -38,6 +38,7 @@ mlua = { version = "0.12.1", features = ["luajit52", "vendored", "send"] }
 encoding_rs = "0.8"
 ratatui = { version = "0.30", optional = true }
 crossterm = { version = "0.29", optional = true }
+glam = "0.34.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_Globalization", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation", "Win32_System_Time"] }

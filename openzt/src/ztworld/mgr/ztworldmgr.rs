@@ -1,6 +1,7 @@
 use std::fmt;
+use glam::i32::IVec3;
 
-use crate::geom::{Direction, IVec3};
+use crate::geom::Direction;
 use crate::util::get_from_memory;
 use crate::write_live;
 use crate::ztmapview::BFTile;

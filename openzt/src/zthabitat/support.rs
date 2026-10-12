@@ -28,10 +28,12 @@ use crate::{
     ztmapview::BFTile,
     ztmegatilemgr::entity_type_matches,
     ztshow::call_entity_vtable_noargs,
-    ztworldmgr::{Direction, IVec3, ZTWorldMgr},
+    ztworldmgr::ZTWorldMgr,
+    geom::Direction,
 };
 use super::habitat::ZTHabitat;
 use super::mgr::zthabitatmgr::ZTHabitatMgr;
+use glam::i32::IVec3;
 
 /// `DAT_00639144`'s RVA - a shared "habitat list changed" dirty byte flag, set by
 /// `ZTHabitatMgr::addHabitat`/`removeHabitat_0`/`removeHabitat_1`/`nameLoadedHabitats` and cleared by
@@ -1166,6 +1168,8 @@ pub const RVA_SAVE_FILE_VERSION: u32 = 0x0023_9188;
 /// RVAs = `0x00639178 - 0x400000` / `0x0063917c - 0x400000`.
 pub const RVA_LOADED_HABITAT_RECORDS_BEGIN: u32 = 0x0023_9178;
 pub const RVA_LOADED_HABITAT_RECORDS_END: u32 = 0x0023_917c;
+/// `DAT_00639180`'s RVA - the end of the record vector's allocated buffer (capacity), next to the two above.
+pub const RVA_LOADED_HABITAT_RECORDS_CAP: u32 = 0x0023_9180;
 
 /// `DAT_006351a4`'s RVA - a single byte flag [`ZTHabitatMgr::temp_keeper_for_pathfinding`] forwards
 /// verbatim as the "create" argument to the temporary keeper's own entity-type vtable slot `+0x24`
@@ -1240,7 +1244,7 @@ pub fn swap_fence_positions(world_map_ptr: u32, fence_a: u32, fence_b: u32) {
     save_to_memory(fence_b + 0xb4, virtual_pos_for_b[0]);
     save_to_memory(fence_b + 0xb8, virtual_pos_for_b[1]);
     save_to_memory(fence_b + 0xbc, virtual_pos_for_b[2]);
-    unsafe { BFENTITY_SET_WORLD_POS.original()(fence_b as *const u32, &fence_a_pos as *const IVec3 as *const u32) };
+    unsafe { BFENTITY_SET_WORLD_POS.original()(fence_b as *const u32, &fence_a_pos as *const IVec3) };
     save_to_memory(fence_b + 0x12c, fence_a_rotation);
 
     let mut virtual_pos_for_a = [0i32; 3];
@@ -1250,7 +1254,7 @@ pub fn swap_fence_positions(world_map_ptr: u32, fence_a: u32, fence_b: u32) {
     save_to_memory(fence_a + 0xb4, virtual_pos_for_a[0]);
     save_to_memory(fence_a + 0xb8, virtual_pos_for_a[1]);
     save_to_memory(fence_a + 0xbc, virtual_pos_for_a[2]);
-    unsafe { BFENTITY_SET_WORLD_POS.original()(fence_a as *const u32, &fence_b_pos as *const IVec3 as *const u32) };
+    unsafe { BFENTITY_SET_WORLD_POS.original()(fence_a as *const u32, &fence_b_pos as *const IVec3) };
     save_to_memory(fence_a + 0x12c, fence_b_rotation);
 
     unsafe {

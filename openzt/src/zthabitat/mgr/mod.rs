@@ -1,3 +1,4 @@
+pub mod load;
 pub mod zthabitatmgr;
 pub use zthabitatmgr::*;
 
@@ -14,6 +15,7 @@ use openzt_detour::generated::{
     },
     zthabitatmgr::{
         SAVE as ZTHABITATMGR_SAVE,
+        LOAD as ZTHABITATMGR_LOAD,
         CREATE_HABITAT as ZTHABITATMGR_CREATE_HABITAT,
         ADD_HABITAT as ZTHABITATMGR_ADD_HABITAT,
         UPDATE as ZTHABITATMGR_UPDATE,
@@ -680,6 +682,38 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_viewing_areas_with_guests(out_vector as u32)
     }
 
+    #[detour(GET_NEAREST_VIEWING_AREA)]
+    unsafe extern "thiscall" fn get_nearest_viewing_area(this: *const u32, tile: *const u32, only_with_guests: bool) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_nearest_viewing_area(tile as u32, only_with_guests) as i32
+    }
+
+    #[detour(GET_RANDOM_VIEWING_AREA)]
+    unsafe extern "thiscall" fn get_random_viewing_area(this: *const u32, only_with_guests: bool) -> *const u32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_random_viewing_area(only_with_guests) as *const u32
+    }
+
+    #[detour(CREATE_VIEWING_AREAS)]
+    unsafe extern "thiscall" fn create_viewing_areas(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.create_viewing_areas()
+    }
+
+    /// Release-safe paths back to real vanilla for the viewing-area live comparison tests - see
+    /// [`get_size_real`] for why `.original()` cannot be used.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_nearest_viewing_area_real(this: *const u32, tile: *const u32, only_with_guests: bool) -> i32 {
+        unsafe { GET_NEAREST_VIEWING_AREA_DETOUR.call(this, tile, only_with_guests) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_random_viewing_area_real(this: *const u32, only_with_guests: bool) -> *const u32 {
+        unsafe { GET_RANDOM_VIEWING_AREA_DETOUR.call(this, only_with_guests) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn create_viewing_areas_real(this: *const u32) {
+        unsafe { CREATE_VIEWING_AREAS_DETOUR.call(this) }
+    }
+
     #[detour(HAS_BLDG)]
     unsafe extern "thiscall" fn has_bldg(this: *const u32, entity: *const u32) -> bool {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.has_bldg(entity as u32)
@@ -1166,6 +1200,18 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.save(file)
     }
 
+    #[detour(ZTHABITATMGR_LOAD)]
+    unsafe extern "thiscall" fn zthabitatmgr_load(this: *const u32, file: *const u32, version: u32) -> bool {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.load(file, version)
+    }
+
+    /// Release-safe path back to real vanilla for the live comparison test - see
+    /// [`get_size_real`]'s own doc comment for why `.original()` cannot be used here.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn zthabitatmgr_load_real(this: *const u32, file: *const u32, version: u32) -> bool {
+        unsafe { ZTHABITATMGR_LOAD_DETOUR.call(this, file, version) }
+    }
+
     #[detour(ZTHABITATMGR_ADD_HABITAT)]
     unsafe extern "thiscall" fn zthabitatmgr_add_habitat(this: *const u32, habitat_ptr: *const u32) {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.add_habitat(habitat_ptr as u32)
@@ -1226,6 +1272,16 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn clear_real(this: *const u32) {
         unsafe { CLEAR_DETOUR.call(this) }
+    }
+
+    #[detour(NAME_LOADED_HABITATS)]
+    unsafe extern "thiscall" fn name_loaded_habitats(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.name_loaded_habitats()
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn name_loaded_habitats_real(this: *const u32) {
+        unsafe { NAME_LOADED_HABITATS_DETOUR.call(this) }
     }
 
     #[detour(CLEAR_ALL_STAFF_HABITATS)]

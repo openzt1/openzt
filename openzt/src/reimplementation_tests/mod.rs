@@ -52,6 +52,11 @@ mod io_redirect;
 #[cfg(target_os = "windows")]
 pub(crate) mod portal_dispatch_recorder;
 
+/// Redirects `zttankexhibit::SET_BASE_TERRAIN_TYPE` into an in-memory call record - lets the live `doShowCheck`
+/// dispatch test observe the tank overrides' terrain swap without repainting a live tank.
+#[cfg(target_os = "windows")]
+pub(crate) mod base_terrain_recorder;
+
 /// Redirects `zthabitat::SEND_EVENT` into an in-memory call record - lets the live
 /// `sendMaintWorkerCleanupEvents` comparison observe real vanilla's sends without delivering them.
 #[cfg(target_os = "windows")]
@@ -79,6 +84,7 @@ pub fn init() {
 
         io_redirect::init();
         portal_dispatch_recorder::init();
+        base_terrain_recorder::init();
         send_event_recorder::init();
         generate_faces_recorder::init();
 

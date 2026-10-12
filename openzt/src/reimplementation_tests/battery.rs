@@ -217,6 +217,11 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTHABITAT_DO_TANK_CHECK_LIVE", run: tests::zthabitatmgr::run_habitat_do_tank_check_live_test },
             RegisteredTest { name: "ZTHABITAT_IS_RIGHT_SALINITY_LIVE", run: tests::zthabitatmgr::run_habitat_is_right_salinity_live_test },
             RegisteredTest { name: "ZTTANKEXHIBIT_IS_RIGHT_SALINITY_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_tankexhibit_is_right_salinity_matches_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_LEAF_GETTERS_MATCH_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_leaf_getters_match_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_POSITIONS_AND_MIN_DEPTH_MATCH_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_positions_and_min_depth_match_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_COSTS_MATCH_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_costs_match_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_CLEAN_WATER_AMOUNT_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_clean_water_amount_matches_real_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_DO_SHOW_CHECK_DISPATCHES_TANK_OVERRIDES_LIVE", run: tests::zttankexhibit::run_zthabitatmgr_do_show_check_dispatches_tank_overrides_live_test },
             RegisteredTest { name: "ZTHABITAT_LISTEN_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_listen_smoke_live_test },
             RegisteredTest {
                 name: "ZTHABITAT_SET_IS_SHOW_EXHIBIT_ROUNDTRIP_LIVE",
@@ -241,6 +246,8 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTTANKEXHIBIT_UPDATE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_tankexhibit_update_matches_real_live_test },
             RegisteredTest { name: "ZTHABITAT_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_habitat_save_matches_real_live_test },
             RegisteredTest { name: "ZTHABITATMGR_SAVE_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_save_matches_real_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_LOAD_MATCHES_REAL_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_load_matches_real_live_test },
+            RegisteredTest { name: "ZTHABITATMGR_NAME_LOADED_HABITATS_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_name_loaded_habitats_live_test },
             RegisteredTest { name: "ZTHABITATMGR_ADD_HABITAT_ROUNDTRIP_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_add_habitat_roundtrip_live_test },
             RegisteredTest { name: "ZTHABITATMGR_CREATE_HABITAT_SMOKE_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_create_habitat_smoke_live_test },
             RegisteredTest { name: "ZTHABITATMGR_GET_ZOO_ENTRANCE_TILE_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_get_zoo_entrance_tile_live_test },
@@ -712,6 +719,30 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_SPECIES_RATING_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_species_rating_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_CREATE_VIEWING_AREAS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_create_viewing_areas_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_EDGE_TILES_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_edge_tiles_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_NEAREST_VIEWING_AREA_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_nearest_viewing_area_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_RANDOM_VIEWING_AREA_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_random_viewing_area_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTTANKEXHIBIT_SET_TANK_HEIGHT_MARKS_VIEWING_AREAS_LIVE",
+                run: tests::zthabitatmgr::run_tank_set_tank_height_marks_viewing_areas_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_VIEWING_AREA_STORE_HAS_NO_STALE_ENTRIES",
+                run: tests::zthabitatmgr::run_habitat_viewing_area_store_has_no_stale_entries_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_SUITABILITY_STORE_HAS_NO_STALE_ENTRIES",

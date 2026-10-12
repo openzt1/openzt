@@ -31,6 +31,7 @@ use crate::zthabitatmgr::{
     MAX_PATH_COST_RVA, MORPH_EXHIBIT_CALL_LOG, RVA_KEEPER_TYPE_CHECK_ARG, RVA_ZTFOOD_TYPE_CHECK_ARG, TILE_LIST_NODE_FREELIST_HEAD_RVA,
 };
 use crate::zthabitatmgr::tank_exhibit::detours;
+use crate::zthabitat::viewing_areas::{self, with_vanilla_viewing_areas};
 
 /// `ZTHABITATMGR_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
 /// `zthabitatmgr::init()`, and this asserts all of its detours actually report enabled. Without
@@ -1880,8 +1881,8 @@ pub(crate) fn run_habitat_add_habitat_tiles_roundtrip_live_test(failure_log: &mu
 ///   test elsewhere in this file, so there's no independent "real" pole left to diff a return value
 ///   against without double-driving those side effects. Calls the reimplementation with a small,
 ///   realistic tick (`16` ms, one frame at 60Hz) on every real, non-tank habitat and only confirms the
-///   battery is still alive afterward - the `ambients_begin`/`_end` and `viewing_areas_begin`/`_end`
-///   vector walks are the two field offsets this test exists to exercise: a wrong offset there would
+///   battery is still alive afterward - the `ambients_begin`/`_end` vector walk and the viewing-area
+///   store walk are the two reads this test exists to exercise: a wrong offset there would
 ///   either read garbage pointers (likely crashing `Ambients::play`/`updateAmbients`) or, if the
 ///   begin/end pair happened to compare equal by coincidence, silently skip the walk entirely rather
 ///   than prove anything - so this is a real crash-or-hang check, not a no-op. Skips tanks, matching the
@@ -7759,7 +7760,7 @@ pub(crate) fn run_habitat_set_time_last_serviced_roundtrip_live_test(failure_log
 /// Fills `ptr`'s raw `+0x48`/`+0x4c` boundary-pair vector, which real vanilla readers
 /// (`doTankCheck`, `updateAmphibiousNeighbors`, ...) consume but the reimplementation leaves empty.
 /// Call before invoking a real reader on a live habitat.
-fn sync_real_boundary_pairs(ptr: u32) {
+pub(crate) fn sync_real_boundary_pairs(ptr: u32) {
     hooks_zthabitatmgr::create_edge_pairs_real(ptr as *const u32);
 }
 
@@ -7849,20 +7850,18 @@ pub(crate) fn run_habitat_add_remove_viewing_area_roundtrip_live_test(failure_lo
     }
     unsafe { ztviewingarea::CONSTRUCTOR.original()(new_va as *const u32, ptr as *const std::ffi::c_void, tile_ptr as *const std::ffi::c_void) };
 
-    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-    let before_len = (*habitat.viewing_areas_end() - *habitat.viewing_areas_begin()) / 4;
+    let before_len = viewing_areas::viewing_area_count(ptr);
 
     unsafe { mut_from_memory::<ZTHabitat>(ptr) }.add_viewing_area(new_va);
 
     let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-    let after_add_len = (*habitat.viewing_areas_end() - *habitat.viewing_areas_begin()) / 4;
-    let last_entry: u32 = get_from_memory(*habitat.viewing_areas_end() - 4);
+    let after_add_len = viewing_areas::viewing_area_count(ptr);
+    let last_entry: u32 = viewing_areas::viewing_areas(ptr).last().copied().unwrap_or(0);
     let dirty_after_add = *habitat.characteristics_dirty() != 0;
 
     unsafe { mut_from_memory::<ZTHabitat>(ptr) }.remove_viewing_area(new_va);
 
-    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-    let after_remove_len = (*habitat.viewing_areas_end() - *habitat.viewing_areas_begin()) / 4;
+    let after_remove_len = viewing_areas::viewing_area_count(ptr);
 
     let ok = after_add_len == before_len + 1 && last_entry == new_va && dirty_after_add && after_remove_len == before_len;
 
@@ -7891,10 +7890,7 @@ pub(crate) fn run_habitat_recreate_oas_smoke_live_test(failure_log: &mut Option<
     let habitat_mgr = globals().zthabitatmgr();
 
     let found = (0..habitat_mgr.exhibit_array().len()).map(|i| habitat_mgr.exhibit_array().get_ptr(i)).find(|&ptr| {
-        ptr != 0 && {
-            let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-            *habitat.viewing_areas_begin() != *habitat.viewing_areas_end()
-        }
+        ptr != 0 && viewing_areas::viewing_area_count(ptr) != 0
     });
 
     let Some(ptr) = found else {
@@ -7904,17 +7900,12 @@ pub(crate) fn run_habitat_recreate_oas_smoke_live_test(failure_log: &mut Option<
 
     unsafe { ref_from_memory::<ZTHabitat>(ptr) }.recreate_oas();
 
-    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-    let mut cursor = *habitat.viewing_areas_begin();
-    let end = *habitat.viewing_areas_end();
     let mut unset: Vec<u32> = Vec::new();
-    while cursor != end {
-        let va_ptr: u32 = get_from_memory(cursor);
+    for va_ptr in viewing_areas::viewing_areas(ptr) {
         let flag: u8 = get_from_memory(va_ptr + 0x25);
         if flag != 1 {
             unset.push(va_ptr);
         }
-        cursor += 4;
     }
 
     if unset.is_empty() {
@@ -9488,7 +9479,9 @@ pub(crate) fn run_habitat_get_viewing_areas_with_guests_live_test(failure_log: &
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
 
         let mut real_vector = [0u32; 3];
-        unsafe { zthabitat::GET_VIEWING_AREAS_WITH_GUESTS.original()(ptr as *const u32, real_vector.as_mut_ptr() as *const i32) };
+        viewing_areas::with_vanilla_mirror(ptr, || unsafe {
+            zthabitat::GET_VIEWING_AREAS_WITH_GUESTS.original()(ptr as *const u32, real_vector.as_mut_ptr() as *const i32)
+        });
         let mut real_vas: Vec<u32> = (real_vector[0]..real_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
         real_vas.sort_unstable();
         free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
@@ -10518,7 +10511,7 @@ pub(crate) fn run_habitat_get_nearest_sick_animal_matches_real_live_test(failure
 
 /// Roundtrip test for `ZTHabitat::removeViewingAreas`: same synthetic-`ZTViewingArea` construction as
 /// `run_habitat_add_remove_viewing_area_roundtrip_live_test`, but only on a habitat that starts with
-/// **no** existing viewing areas (`viewing_areas_begin == viewing_areas_end`) - `removeViewingAreas`
+/// **no** existing viewing areas (an empty viewing-area container) - `removeViewingAreas`
 /// empties the *entire* vector, not just one entry, so running it against a habitat with pre-existing
 /// real viewing areas would destroy live game state unrelated to this test. Only the synthetic area
 /// this test itself added is ever at risk.
@@ -10531,7 +10524,7 @@ pub(crate) fn run_habitat_remove_viewing_areas_roundtrip_live_test(failure_log: 
             return None;
         }
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-        if *habitat.unknown_flag_0x2c() != 0 || *habitat.viewing_areas_begin() != *habitat.viewing_areas_end() {
+        if *habitat.unknown_flag_0x2c() != 0 || viewing_areas::viewing_area_count(ptr) != 0 {
             return None;
         }
         walk_tile_list(*habitat.owned_tiles_ptr()).next().map(|node| get_from_memory::<u32>(node + 0x8)).filter(|&t| t != 0).map(|tile_ptr| (ptr, tile_ptr))
@@ -10552,17 +10545,15 @@ pub(crate) fn run_habitat_remove_viewing_areas_roundtrip_live_test(failure_log: 
     unsafe { mut_from_memory::<ZTHabitat>(ptr) }.add_viewing_area(new_va);
     unsafe { mut_from_memory::<ZTHabitat>(ptr) }.remove_viewing_areas();
 
-    let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
-    let ok = *habitat.viewing_areas_begin() == *habitat.viewing_areas_end();
+    let ok = viewing_areas::viewing_area_count(ptr) == 0;
 
     if ok {
         write_success_line(failure_log, test_name);
         false
     } else {
         let msg = format!(
-            "expected empty viewing area vector after remove_viewing_areas, begin={:#x} end={:#x}",
-            habitat.viewing_areas_begin(),
-            habitat.viewing_areas_end()
+            "expected empty viewing area vector after remove_viewing_areas, found {:x?}",
+            viewing_areas::viewing_areas(ptr)
         );
         error!("{}: {}", test_name, msg);
         if let Some(log_file) = failure_log {
@@ -11537,8 +11528,7 @@ pub(crate) fn run_habitat_send_maint_worker_cleanup_events_matches_real_live_tes
 // only through `remove_viewing_area` (real destructor + `operator_delete`) - no cross-allocator frees.
 // ---------------------------------------------------------------------------------------------------
 
-/// Per-habitat VA vectors (as `(normalized va id, tile vector, +0x25, +0x4c)`), per-habitat `+0x2d`, and
-/// each probe tile's 8 cached-VA cell slots plus `+0x85` flags. VA pointers not present in the baseline
+/// Per-habitat VA vectors (as `(normalized va id, tile vector, +0x25, +0x4c)`), per-habitat `+0x2d`, and each probe tile's 8 cached-VA cell slots plus `+0x85` flags. VA pointers not present in the baseline
 /// are normalised to `0xffff_ff00 + n` by order of appearance, so two runs that allocate at different
 /// addresses still compare equal.
 #[derive(PartialEq, Debug)]
@@ -11554,8 +11544,7 @@ fn va_tile_vec(va_ptr: u32) -> Vec<u32> {
 }
 
 fn habitat_va_list(habitat_ptr: u32) -> Vec<u32> {
-    let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
-    (*habitat.viewing_areas_begin()..*habitat.viewing_areas_end()).step_by(4).map(get_from_memory::<u32>).collect()
+    viewing_areas::viewing_areas(habitat_ptr)
 }
 
 fn all_habitat_ptrs() -> Vec<u32> {
@@ -11618,7 +11607,7 @@ fn find_va_fixture(tile_count: usize) -> Option<(u32, Vec<u32>)> {
     let referenced: Vec<u32> = all_habitat_ptrs().into_iter().flat_map(habitat_va_list).flat_map(va_tile_vec).collect();
     for habitat_ptr in all_habitat_ptrs() {
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
-        if *habitat.viewing_areas_begin() != *habitat.viewing_areas_end() {
+        if viewing_areas::viewing_area_count(habitat_ptr) != 0 {
             continue;
         }
         let tiles: Vec<u32> = walk_tile_list(*habitat.owned_tiles_ptr())
@@ -11652,6 +11641,7 @@ fn run_va_scenario(habitat_ptr: u32, tiles: &[u32], build_va: bool, act: &dyn Fn
     let baseline_world = snapshot_va_world(&baseline_vas, tiles);
     let saved_flags: Vec<(u32, u8)> = tiles.iter().map(|&t| (t, get_from_memory::<u8>(t + 0x85))).collect();
     let saved_dirty: Vec<(u32, u8)> = all_habitat_ptrs().into_iter().map(|h| (h, get_from_memory::<u8>(h + 0x2d))).collect();
+    let saved_edges: Vec<(u32, Vec<u32>)> = all_habitat_ptrs().into_iter().map(|h| (h, viewing_areas::edge_tiles(h))).collect();
 
     let va = if build_va {
         let va = unsafe { OPERATOR_NEW.original()(0x5c) } as u32;
@@ -11686,6 +11676,11 @@ fn run_va_scenario(habitat_ptr: u32, tiles: &[u32], build_va: bool, act: &dyn Fn
     for (h, dirty) in saved_dirty {
         save_to_memory::<u8>(h + 0x2d, dirty);
     }
+    for (h, edges) in saved_edges {
+        if viewing_areas::edge_tiles(h) != edges {
+            viewing_areas::set_edge_tiles(h, edges);
+        }
+    }
     let restored = snapshot_va_world(&baseline_vas, tiles);
     if restored != baseline_world {
         return Err(format!("baseline not restored after teardown: before={:x?}, after={:x?}", baseline_world, restored));
@@ -11710,7 +11705,12 @@ fn compare_va_scenario(
             continue;
         };
         ran += 1;
-        let real_after = run_va_scenario(habitat_ptr, &tiles, build_va, real);
+        // Real vanilla reads and writes the raw vanilla containers, so its whole run (fixture build, act,
+        // snapshots, teardown) goes through the vanilla backend; the port runs against the Rust store.
+        let real_after = with_vanilla_viewing_areas(|| run_va_scenario(habitat_ptr, &tiles, build_va, real));
+        for h in all_habitat_ptrs() {
+            viewing_areas::release_vanilla_containers(h);
+        }
         let port_after = run_va_scenario(habitat_ptr, &tiles, build_va, port);
         match (real_after, port_after) {
             (Ok((r, r_changed)), Ok((p, p_changed))) => {
@@ -12076,7 +12076,9 @@ pub(crate) fn run_habitat_neighbor_queries_match_real_live_test(failure_log: &mu
         }
 
         let seed: u32 = get_from_memory(rng_addr);
-        let real_tile = hooks_zthabitatmgr::get_close_outside_tile_real(habitat_ptr as *const std::ffi::c_void);
+        let real_tile = viewing_areas::with_vanilla_mirror(habitat_ptr, || {
+            hooks_zthabitatmgr::get_close_outside_tile_real(habitat_ptr as *const std::ffi::c_void)
+        });
         let real_seed: u32 = get_from_memory(rng_addr);
         save_to_memory(rng_addr, seed);
         let port_tile = habitat.get_close_outside_tile() as i32;
@@ -13440,3 +13442,590 @@ pub(crate) fn run_habitat_destructor_reached_test(failure_log: &mut Option<std::
     finish_test(test_name, failures, failure_log)
 }
 
+
+/// `ZTHabitatMgr::load` against real vanilla. The live manager's own `save` output is replayed into the real
+/// `load` and then into the port; each pole must return the same result, leave the same manager fields, and
+/// append identical loaded-habitat records (scalar fields, name bytes, and the embedded `ZTShowInfo` as
+/// serialised by `show_info_save`). The port is then loaded repeatedly until the record vector reallocates,
+/// and every earlier record must survive the move unchanged. Appended records are destroyed and the
+/// manager's fields restored afterwards; the vector keeps whatever buffer it grew into.
+pub(crate) fn run_zthabitatmgr_load_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::mgr::load::LOADED_HABITAT_RECORD_SIZE;
+    use crate::zthabitat::support::{RVA_LOADED_HABITAT_RECORDS_BEGIN, RVA_LOADED_HABITAT_RECORDS_CAP, RVA_LOADED_HABITAT_RECORDS_END};
+    use crate::ztshow::info::lifecycle::show_info_save;
+
+    const CURRENT_VERSION: u32 = 0x100;
+    let test_name = "ZTHABITATMGR_LOAD_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let base = get_module_base("zoo.exe") as u32;
+    let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+    let mgr = globals().zthabitatmgr();
+    let dummy_file: u32 = 0;
+
+    let vector_bounds = || -> (u32, u32, u32) {
+        (
+            get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN),
+            get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END),
+            get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_CAP),
+        )
+    };
+    let record_summary = |record: u32| -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        let scalar_offsets: Vec<u32> = [0x0u32, 0x4].into_iter().chain((0x14..=0x40).step_by(4)).chain([0x48, 0x4c, 0x50, 0x54, 0x58]).collect();
+        for offset in scalar_offsets {
+            out.extend_from_slice(&get_from_memory::<u32>(record + offset).to_le_bytes());
+        }
+        out.push(get_from_memory::<u8>(record + 0x5c));
+        let name_begin: u32 = get_from_memory(record + 0x8);
+        let name_end: u32 = get_from_memory(record + 0xc);
+        out.extend_from_slice(&(name_end - name_begin).to_le_bytes());
+        out.extend_from_slice(unsafe { std::slice::from_raw_parts(name_begin as *const u8, (name_end - name_begin) as usize) });
+        let extended = get_from_memory::<u8>(record + 0x108);
+        out.push(extended);
+        // Vanilla copies uninitialised stack bytes into these when the flag is clear.
+        if extended != 0 {
+            out.extend_from_slice(&get_from_memory::<u32>(record + 0x10c).to_le_bytes());
+            out.extend_from_slice(&get_from_memory::<u32>(record + 0x110).to_le_bytes());
+            out.push(get_from_memory::<u8>(record + 0x114));
+            for offset in [0x118u32, 0x11c, 0x120] {
+                out.extend_from_slice(&get_from_memory::<u32>(record + offset).to_le_bytes());
+            }
+        }
+        io_redirect::begin_capture();
+        show_info_save(record + 0x60, &dummy_file as *const u32 as *const i8);
+        out.extend_from_slice(&io_redirect::end_capture());
+        out
+    };
+    let summaries_from = |first: u32| -> Vec<Vec<u8>> {
+        let (begin, end, _) = vector_bounds();
+        let mut v = Vec::new();
+        let mut record = begin + first * LOADED_HABITAT_RECORD_SIZE;
+        while record < end {
+            v.push(record_summary(record));
+            record += LOADED_HABITAT_RECORD_SIZE;
+        }
+        v
+    };
+    let manager_fields = || -> [u32; 5] {
+        [
+            get_from_memory(mgr_ptr + 0x8),
+            get_from_memory(mgr_ptr + 0xc),
+            get_from_memory(mgr_ptr + 0x10),
+            get_from_memory(mgr_ptr + 0x14),
+            get_from_memory(mgr_ptr + 0x68),
+        ]
+    };
+
+    let original_fields = manager_fields();
+    let (begin0, end0, _) = vector_bounds();
+    let existing = (end0 - begin0) / LOADED_HABITAT_RECORD_SIZE;
+    let existing_summaries = summaries_from(0);
+
+    io_redirect::begin_capture();
+    let saved_ok = unsafe { zthabitatmgr::SAVE.original()(mgr_ptr as *const u32, &dummy_file as *const u32 as *const i8) };
+    let bytes = io_redirect::end_capture();
+    if !saved_ok {
+        failures.push("real save failed, cannot build the load fixture".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+
+    let mut outcomes: Vec<(bool, [u32; 5], Vec<Vec<u8>>)> = Vec::new();
+    for pole in ["real", "port"] {
+        io_redirect::begin_replay(bytes.clone());
+        let ok = if pole == "real" {
+            hooks_zthabitatmgr::zthabitatmgr_load_real(mgr_ptr as *const u32, &dummy_file as *const u32, CURRENT_VERSION)
+        } else {
+            mgr.load(&dummy_file as *const u32, CURRENT_VERSION)
+        };
+        io_redirect::end_replay();
+        outcomes.push((ok, manager_fields(), summaries_from(existing)));
+        restore_manager_fields(mgr_ptr, original_fields);
+        destroy_loaded_records_from(existing, base);
+    }
+    let (real_ok, real_fields, real_records) = &outcomes[0];
+    let (port_ok, port_fields, port_records) = &outcomes[1];
+    if !real_ok {
+        failures.push("real load rejected the replayed save".to_string());
+    }
+    if real_ok != port_ok {
+        failures.push(format!("return differs: real {}, port {}", real_ok, port_ok));
+    }
+    if real_fields != port_fields {
+        failures.push(format!("manager fields differ: real {:x?}, port {:x?}", real_fields, port_fields));
+    }
+    if real_records != port_records {
+        let detail = real_records
+            .iter()
+            .zip(port_records)
+            .enumerate()
+            .find(|(_, (a, b))| a != b)
+            .map(|(i, (a, b))| {
+                let at = a.iter().zip(b.iter()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+                format!("first at record {} byte {} (lengths {} vs {})", i, at, a.len(), b.len())
+            })
+            .unwrap_or_default();
+        failures.push(format!("appended records differ: real {} record(s), port {} record(s); {}", real_records.len(), port_records.len(), detail));
+    }
+
+    // Force the port to reallocate the record vector and check the earlier records move intact.
+    let per_load = port_records.len();
+    let mut loads = 0usize;
+    let mut reallocated = false;
+    if per_load != 0 {
+        let begin_before_growth = vector_bounds().0;
+        while loads < 64 && vector_bounds().0 == begin_before_growth {
+            io_redirect::begin_replay(bytes.clone());
+            let ok = mgr.load(&dummy_file as *const u32, CURRENT_VERSION);
+            io_redirect::end_replay();
+            loads += 1;
+            if !ok {
+                failures.push("port load failed during the growth loop".to_string());
+                break;
+            }
+        }
+        reallocated = vector_bounds().0 != begin_before_growth;
+        let after = summaries_from(0);
+        let expected_len = existing as usize + loads * per_load;
+        if after.len() != expected_len {
+            failures.push(format!("record count after growth loop: expected {}, got {}", expected_len, after.len()));
+        } else {
+            if after[..existing as usize] != existing_summaries[..] {
+                failures.push("pre-existing records changed across the vector reallocation".to_string());
+            }
+            if let Some(i) = (0..loads * per_load).find(|&i| after[existing as usize + i] != port_records[i % per_load]) {
+                failures.push(format!("grown record {} differs from the freshly loaded one", i));
+            }
+        }
+        restore_manager_fields(mgr_ptr, original_fields);
+        destroy_loaded_records_from(existing, base);
+    }
+
+    let (begin_final, end_final, _) = vector_bounds();
+    if (end_final - begin_final) / LOADED_HABITAT_RECORD_SIZE != existing {
+        failures.push("record vector not restored to its original length".to_string());
+    }
+    finish_test(
+        &format!("{} (existing records: {}, records per load: {}, growth loads: {}, reallocated: {})", test_name, existing, per_load, loads, reallocated),
+        failures,
+        failure_log,
+    )
+}
+
+fn restore_manager_fields(mgr_ptr: u32, fields: [u32; 5]) {
+    for (offset, value) in [0x8u32, 0xc, 0x10, 0x14, 0x68].into_iter().zip(fields) {
+        save_to_memory::<u32>(mgr_ptr + offset, value);
+    }
+}
+
+/// Destroys every loaded-habitat record from index `first` on (embedded `ZTShowInfo`, then the name string,
+/// both through vanilla's own destructors) and truncates the vector to `first` records, keeping its buffer.
+fn destroy_loaded_records_from(first: u32, base: u32) {
+    use crate::zthabitat::mgr::load::LOADED_HABITAT_RECORD_SIZE;
+    use crate::zthabitat::support::{RVA_LOADED_HABITAT_RECORDS_BEGIN, RVA_LOADED_HABITAT_RECORDS_END};
+    use openzt_detour::generated::{msvc_std_basic_string::BASIC_STRING_0 as STRING_DTOR, ztshowinfo::DESTRUCTOR_0 as SHOWINFO_DTOR};
+
+    let begin: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN);
+    let end: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END);
+    let new_end = begin + first * LOADED_HABITAT_RECORD_SIZE;
+    let mut record = new_end;
+    while record < end {
+        unsafe {
+            SHOWINFO_DTOR.original()((record + 0x60) as *const u32);
+            STRING_DTOR.original()((record + 0x8) as *const std::ffi::c_void);
+        }
+        record += LOADED_HABITAT_RECORD_SIZE;
+    }
+    save_to_memory::<u32>(base + RVA_LOADED_HABITAT_RECORDS_END, new_end);
+}
+
+/// `ZTHabitatMgr::nameLoadedHabitats` against real vanilla. The live manager's own `save` output is loaded
+/// into the record vector (through the port's `load`), the finance, entrance and tank-word fields of every
+/// habitat are overwritten with a sentinel, and one pole applies the records. The habitats' resulting fields
+/// (entrance, finance block, timestamps, exhibit name, tank fields) are snapshotted, the originals restored,
+/// and the other pole run the same way. Both snapshots must agree and must have undone the sentinel, and the
+/// record vector must be empty afterwards.
+pub(crate) fn run_zthabitatmgr_name_loaded_habitats_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::{RVA_LOADED_HABITAT_RECORDS_BEGIN, RVA_LOADED_HABITAT_RECORDS_END};
+
+    const CURRENT_VERSION: u32 = 0x100;
+    const SENTINEL: u32 = 0xdead_beef;
+    let test_name = "ZTHABITATMGR_NAME_LOADED_HABITATS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let base = get_module_base("zoo.exe") as u32;
+    let mgr_ptr = globals().zthabitatmgr_ptr() as u32;
+    let mgr = globals().zthabitatmgr();
+    let dummy_file: u32 = 0;
+
+    let records_present = || -> u32 {
+        let begin: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN);
+        let end: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END);
+        (end - begin) / 0x128
+    };
+    if records_present() != 0 {
+        write_success_line(failure_log, &format!("{} (skipped: record vector already holds records)", test_name));
+        return false;
+    }
+
+    let habitat_ptrs: Vec<u32> = (0..mgr.exhibit_array().len()).map(|i| mgr.exhibit_array().get_ptr(i)).collect();
+    let scalar_offsets: Vec<u32> = [0x8cu32, 0x90, 0xec].into_iter().chain((0xfc..=0x12c).step_by(4)).collect();
+    let is_tank = |habitat: u32| unsafe { crate::zthabitat::support::call_vtable_slot_noargs_ret_bool(habitat, 0x20) };
+    let snapshot = || -> Vec<Vec<u8>> {
+        habitat_ptrs
+            .iter()
+            .map(|&habitat| {
+                let mut out: Vec<u8> = Vec::new();
+                for &offset in &scalar_offsets {
+                    out.extend_from_slice(&get_from_memory::<u32>(habitat + offset).to_le_bytes());
+                }
+                let name_begin: u32 = get_from_memory(habitat + 0x154);
+                let name_end: u32 = get_from_memory(habitat + 0x158);
+                out.extend_from_slice(unsafe { std::slice::from_raw_parts(name_begin as *const u8, (name_end - name_begin) as usize) });
+                if is_tank(habitat) {
+                    for offset in [0x184u32, 0x188, 0x18c, 0x190, 0x198] {
+                        out.extend_from_slice(&get_from_memory::<u32>(habitat + offset).to_le_bytes());
+                    }
+                }
+                out
+            })
+            .collect()
+    };
+    let perturb = || {
+        for &habitat in &habitat_ptrs {
+            // 0x128/0x12c are only written for habitats that hold animals, and `setName` reads the live entrance
+            // tile (0x8c/0x90) before the record overwrites it, so those four keep their live values.
+            for &offset in scalar_offsets.iter().filter(|&&offset| !matches!(offset, 0x8c | 0x90 | 0x128 | 0x12c)) {
+                save_to_memory::<u32>(habitat + offset, SENTINEL);
+            }
+        }
+    };
+    let originals: Vec<Vec<u32>> = habitat_ptrs
+        .iter()
+        .map(|&habitat| scalar_offsets.iter().map(|&offset| get_from_memory::<u32>(habitat + offset)).collect())
+        .collect();
+    let restore = || {
+        for (&habitat, values) in habitat_ptrs.iter().zip(&originals) {
+            for (&offset, &value) in scalar_offsets.iter().zip(values) {
+                save_to_memory::<u32>(habitat + offset, value);
+            }
+        }
+    };
+    let original_snapshot = snapshot();
+
+    io_redirect::begin_capture();
+    let saved_ok = unsafe { zthabitatmgr::SAVE.original()(mgr_ptr as *const u32, &dummy_file as *const u32 as *const i8) };
+    let bytes = io_redirect::end_capture();
+    if !saved_ok {
+        failures.push("real save failed, cannot build the fixture".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let fields_before: [u32; 5] = [0x8u32, 0xc, 0x10, 0x14, 0x68].map(|offset| get_from_memory(mgr_ptr + offset));
+
+    let mut results: Vec<Vec<Vec<u8>>> = Vec::new();
+    for pole in ["real", "port"] {
+        io_redirect::begin_replay(bytes.clone());
+        let loaded = mgr.load(&dummy_file as *const u32, CURRENT_VERSION);
+        io_redirect::end_replay();
+        if !loaded {
+            failures.push(format!("{}: could not load the fixture records", pole));
+            break;
+        }
+        perturb();
+        if pole == "real" {
+            hooks_zthabitatmgr::name_loaded_habitats_real(mgr_ptr as *const u32);
+        } else {
+            mgr.name_loaded_habitats();
+        }
+        results.push(snapshot());
+        restore();
+        if records_present() != 0 {
+            failures.push(format!("{}: {} record(s) left in the vector", pole, records_present()));
+        }
+        if get_from_memory::<u8>(base + crate::zthabitat::support::HABITAT_LIST_DIRTY_RVA) != 1 {
+            failures.push(format!("{}: habitat-list dirty byte not set", pole));
+        }
+    }
+    for (&offset, value) in [0x8u32, 0xc, 0x10, 0x14, 0x68].iter().zip(fields_before) {
+        save_to_memory::<u32>(mgr_ptr + offset, value);
+    }
+
+    if let [real, port] = results.as_slice() {
+        if let Some(i) = (0..real.len()).find(|&i| real[i] != port[i]) {
+            failures.push(format!("habitat {} ({:#x}) differs between the poles", i, habitat_ptrs[i]));
+        }
+        // Applying the live zoo's own saved records must reproduce the live values it was saved from.
+        if real != &original_snapshot {
+            let differing = (0..real.len()).filter(|&i| real[i] != original_snapshot[i]).count();
+            failures.push(format!("{} habitat(s) did not return to their saved values after the real pole", differing));
+        }
+    }
+    finish_test(&format!("{} (habitats: {})", test_name, habitat_ptrs.len()), failures, failure_log)
+}
+
+/// `ZTHabitat::createViewingAreas`: rebuilds the edge-tile list from the habitat's own fences, then runs
+/// `pathPlaced` over every listed path tile it doesn't own. The fixture habitat has no viewing areas, so the
+/// scenario flags the first in-zoo edge tile as a path tile (restoring the byte afterwards) to make the
+/// `pathPlaced` arm fire; the edge list itself is compared too (the real pole's list is read through the
+/// vanilla backend, the port's from the store).
+pub(crate) fn run_habitat_create_viewing_areas_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let act = |call: &dyn Fn(u32), habitat_ptr: u32| {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let probe = habitat
+            .edge_tiles(2)
+            .into_iter()
+            .find(|&t| unsafe { openzt_detour::generated::bftile::IS_IN_ZOO.original()(t as *const u32, 1) } & 0xff != 0);
+        let saved_flags = probe.map(|t| (t, get_from_memory::<u8>(t + 0x83)));
+        if let Some((t, flags)) = saved_flags {
+            save_to_memory::<u8>(t + 0x83, flags | 8);
+        }
+        call(habitat_ptr);
+        if let Some((t, flags)) = saved_flags {
+            save_to_memory::<u8>(t + 0x83, flags);
+        }
+    };
+    let real_edges = std::cell::RefCell::new(Vec::new());
+    let port_edges = std::cell::RefCell::new(Vec::new());
+    let failed = compare_va_scenario(
+        failure_log,
+        "ZTHABITAT_CREATE_VIEWING_AREAS_MATCHES_REAL_LIVE",
+        &[("edge list rebuilt, flagged path tile", 1, false)],
+        &|h, _, _| {
+            act(&|h| hooks_zthabitatmgr::create_viewing_areas_real(h as *const u32), h);
+            *real_edges.borrow_mut() = viewing_areas::edge_tiles(h);
+        },
+        &|h, _, _| {
+            act(&|h| unsafe { ref_from_memory::<ZTHabitat>(h) }.create_viewing_areas(), h);
+            *port_edges.borrow_mut() = viewing_areas::edge_tiles(h);
+        },
+    );
+    let (real_edges, port_edges) = (real_edges.into_inner(), port_edges.into_inner());
+    let failures = if real_edges != port_edges {
+        vec![format!("edge-tile list: real={real_edges:x?} port={port_edges:x?}")]
+    } else if real_edges.is_empty() {
+        vec!["both poles left an empty edge-tile list (vacuous)".to_string()]
+    } else {
+        Vec::new()
+    };
+    let edge_failed = finish_test("ZTHABITAT_CREATE_VIEWING_AREAS_EDGE_LIST_MATCHES_REAL_LIVE", failures, failure_log);
+    failed || edge_failed
+}
+
+/// `ZTHabitat::getEdgeTiles` (not detoured; the port is `ZTHabitat::edge_tiles`): real vanilla's returned list
+/// against the port's `Vec` for every live habitat and radii 1-3, in order. Counts how many comparisons had a
+/// non-empty result so a vacuous pass is visible in the log.
+pub(crate) fn run_habitat_edge_tiles_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::msvc_std_listuint::LIST as MSVC_LIST_UINT_DTOR;
+    let test_name = "ZTHABITAT_EDGE_TILES_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let mut compared = 0;
+    let mut non_empty = 0;
+    for ptr in all_habitat_ptrs() {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for radius in 1..=3u32 {
+            let mut out_list: u32 = 0;
+            let out_ptr = &mut out_list as *mut u32;
+            unsafe { openzt_detour::generated::zthabitat::GET_EDGE_TILES.original()(ptr as *const u32, out_ptr as i32, radius) };
+            let real: Vec<u32> = walk_tile_list(out_list).map(|node| get_from_memory::<u32>(node + 8)).collect();
+            unsafe { MSVC_LIST_UINT_DTOR.original()(out_ptr as *const std::ffi::c_void) };
+            let port = habitat.edge_tiles(radius as i32);
+            compared += 1;
+            non_empty += !real.is_empty() as u32;
+            if real != port {
+                failures.push(format!("habitat {ptr:#010x} radius {radius}: real={real:x?} port={port:x?}"));
+            }
+        }
+    }
+    let summary = format!("{test_name} (comparisons: {compared}, non-empty: {non_empty})");
+    finish_test(&summary, failures, failure_log)
+}
+
+/// Shared driver for `getNearestViewingArea`/`getRandomViewingArea`: for every live habitat with viewing
+/// areas, runs real vanilla (store mirrored into vanilla memory) and the port from the same RNG seed and
+/// compares the result and the seed left behind. `tile_variants` adds probe tiles for the nearest-area
+/// variant (the random one ignores its tile argument).
+fn compare_viewing_area_pickers(
+    failure_log: &mut Option<std::fs::File>,
+    test_name: &str,
+    real: &dyn Fn(u32, u32, bool) -> u32,
+    port: &dyn Fn(&ZTHabitat, u32, bool) -> u32,
+    tile_variants: bool,
+) -> bool {
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let mut failures: Vec<String> = Vec::new();
+    let (mut habitats_with_areas, mut comparisons, mut non_null) = (0, 0, 0);
+
+    // The loaded zoo may have no viewing areas at all, so also build some on a VA-free fixture habitat: flag
+    // its first in-zoo edge tile as a path tile and run `createViewingAreas`, undone after the comparisons.
+    let fixture = find_va_fixture(1).and_then(|(habitat_ptr, _)| {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let probe = habitat
+            .edge_tiles(2)
+            .into_iter()
+            .find(|&t| unsafe { openzt_detour::generated::bftile::IS_IN_ZOO.original()(t as *const u32, 1) } & 0xff != 0)?;
+        Some((habitat_ptr, probe, get_from_memory::<u8>(probe + 0x83), get_from_memory::<u8>(habitat_ptr + 0x2d), viewing_areas::edge_tiles(habitat_ptr)))
+    });
+    if let Some((habitat_ptr, probe, probe_flags, _, _)) = &fixture {
+        save_to_memory::<u8>(probe + 0x83, probe_flags | 8);
+        unsafe { ref_from_memory::<ZTHabitat>(*habitat_ptr) }.create_viewing_areas();
+        save_to_memory::<u8>(probe + 0x83, *probe_flags);
+    }
+
+    for ptr in all_habitat_ptrs() {
+        let areas = viewing_areas::viewing_areas(ptr);
+        if areas.is_empty() {
+            continue;
+        }
+        habitats_with_areas += 1;
+        // `hasOA` lazily recalculates a dirty area, which can draw random numbers; settle that first so
+        // both poles see clean areas and the seed comparison only measures the picker itself.
+        let settle_seed: u32 = get_from_memory(rng_addr);
+        for &va in &areas {
+            unsafe { openzt_detour::generated::ztviewingarea::HAS_OA.original()(va as *const u32) };
+        }
+        save_to_memory(rng_addr, settle_seed);
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let mut tiles = vec![0u32];
+        if tile_variants {
+            tiles.extend(walk_tile_list(*habitat.owned_tiles_ptr()).map(|node| get_from_memory::<u32>(node + 8)).filter(|&t| t != 0).take(2));
+            tiles.extend(areas.iter().filter_map(|&va| {
+                let begin: u32 = get_from_memory(va + 0x40);
+                (begin != 0).then(|| get_from_memory::<u32>(begin))
+            }));
+        }
+        for &tile in &tiles {
+            for only_with_guests in [false, true] {
+                let seed: u32 = get_from_memory(rng_addr);
+                let real_result = viewing_areas::with_vanilla_mirror(ptr, || real(ptr, tile, only_with_guests));
+                let real_seed: u32 = get_from_memory(rng_addr);
+                save_to_memory(rng_addr, seed);
+                let port_result = port(habitat, tile, only_with_guests);
+                let port_seed: u32 = get_from_memory(rng_addr);
+                save_to_memory(rng_addr, seed);
+                comparisons += 1;
+                non_null += (real_result != 0) as u32;
+                if real_result != port_result || real_seed != port_seed {
+                    failures.push(format!(
+                        "habitat {ptr:#010x} tile {tile:#x} guests={only_with_guests}: real={real_result:#x} (seed {real_seed:#x}) port={port_result:#x} (seed {port_seed:#x})"
+                    ));
+                }
+            }
+        }
+    }
+    if let Some((habitat_ptr, _, _, dirty, edges)) = fixture {
+        for area in viewing_areas::viewing_areas(habitat_ptr) {
+            unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.remove_viewing_area(area);
+        }
+        viewing_areas::set_edge_tiles(habitat_ptr, edges);
+        save_to_memory::<u8>(habitat_ptr + 0x2d, dirty);
+    }
+    let summary = format!("{test_name} (habitats with viewing areas: {habitats_with_areas}, comparisons: {comparisons}, non-null results: {non_null})");
+    finish_test(&summary, failures, failure_log)
+}
+
+pub(crate) fn run_habitat_get_nearest_viewing_area_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_viewing_area_pickers(
+        failure_log,
+        "ZTHABITAT_GET_NEAREST_VIEWING_AREA_MATCHES_REAL_LIVE",
+        &|ptr, tile, guests| hooks_zthabitatmgr::get_nearest_viewing_area_real(ptr as *const u32, tile as *const u32, guests) as u32,
+        &|habitat, tile, guests| habitat.get_nearest_viewing_area(tile, guests),
+        true,
+    )
+}
+
+pub(crate) fn run_habitat_get_random_viewing_area_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    compare_viewing_area_pickers(
+        failure_log,
+        "ZTHABITAT_GET_RANDOM_VIEWING_AREA_MATCHES_REAL_LIVE",
+        &|ptr, _, guests| hooks_zthabitatmgr::get_random_viewing_area_real(ptr as *const u32, guests) as u32,
+        &|habitat, _, guests| habitat.get_random_viewing_area(guests),
+        false,
+    )
+}
+
+/// `ZTHABITAT_VIEWING_AREA_STORE_HAS_NO_STALE_ENTRIES`: every key in the viewing-area and edge-tile stores is a
+/// live habitat, and every live habitat's raw vanilla containers are still in the constructor's empty state
+/// (the port never writes them; anything there means a vanilla writer bypassed the store).
+pub(crate) fn run_habitat_viewing_area_store_has_no_stale_entries_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_VIEWING_AREA_STORE_HAS_NO_STALE_ENTRIES";
+    let live = all_habitat_ptrs();
+    let mut failures: Vec<String> = Vec::new();
+    for key in viewing_areas::store_keys() {
+        if !live.contains(&key) {
+            failures.push(format!("store key {key:#010x} is not a live habitat"));
+        }
+    }
+    for &ptr in &live {
+        let raw_vector: [u32; 3] = [get_from_memory(ptr + 0x34), get_from_memory(ptr + 0x38), get_from_memory(ptr + 0x3c)];
+        if raw_vector != [0; 3] {
+            failures.push(format!("habitat {ptr:#010x}: raw viewing-area vector {raw_vector:x?} is not empty"));
+        }
+        let sentinel: u32 = get_from_memory(ptr + 0x44);
+        if sentinel == 0 || get_from_memory::<u32>(sentinel) != sentinel {
+            failures.push(format!("habitat {ptr:#010x}: raw edge-tile list at {sentinel:#x} is not empty"));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTTankExhibit::setTankHeight`'s partial-override detour: on a live tank, a synthetic viewing area with its
+/// `+0x25` flag cleared must be marked (`1`) after a real height change and left alone by a no-op call. The
+/// height (and the water level the real function may lower) is restored afterwards. Tries raising the height
+/// first, which never touches the water level, and falls back to lowering it.
+pub(crate) fn run_tank_set_tank_height_marks_viewing_areas_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::zttankexhibit::{SET_TANK_HEIGHT, SET_WATER_LEVEL};
+    let test_name = "ZTTANKEXHIBIT_SET_TANK_HEIGHT_MARKS_VIEWING_AREAS_LIVE";
+    let fixture = all_habitat_ptrs().into_iter().find_map(|ptr| {
+        if !unsafe { call_vtable_slot_noargs_ret_bool(ptr, 0x20) } {
+            return None;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        walk_tile_list(*habitat.owned_tiles_ptr()).next().map(|node| get_from_memory::<u32>(node + 8)).filter(|&t| t != 0).map(|tile| (ptr, tile))
+    });
+    let Some((tank, tile)) = fixture else {
+        write_success_line(failure_log, &format!("{test_name} (skipped: no live tank with an owned tile)"));
+        return false;
+    };
+    let va = unsafe { OPERATOR_NEW.original()(0x5c) } as u32;
+    if va == 0 {
+        write_success_line(failure_log, &format!("{test_name} (skipped: operator_new failed)"));
+        return false;
+    }
+    unsafe { ztviewingarea::CONSTRUCTOR.original()(va as *const u32, tank as *const std::ffi::c_void, tile as *const std::ffi::c_void) };
+    let saved_dirty: u8 = get_from_memory(tank + 0x2d);
+    unsafe { ref_from_memory::<ZTHabitat>(tank) }.add_viewing_area(va);
+
+    let original_height: i32 = get_from_memory(tank + 0x184);
+    let original_water: i32 = get_from_memory(tank + 0x188);
+    let set_height = |h: i32| unsafe { SET_TANK_HEIGHT.hooked()(tank as *const u32, h) };
+    let mut failures: Vec<String> = Vec::new();
+
+    save_to_memory::<u8>(va + 0x25, 0);
+    set_height(original_height);
+    if get_from_memory::<u8>(va + 0x25) != 0 {
+        failures.push("a no-op height call marked the viewing area".to_string());
+    }
+
+    let mut changed = false;
+    for target in [original_height + 1, original_height - 1] {
+        save_to_memory::<u8>(va + 0x25, 0);
+        set_height(target);
+        if get_from_memory::<i32>(tank + 0x184) != original_height {
+            changed = true;
+            if get_from_memory::<u8>(va + 0x25) != 1 {
+                failures.push(format!("height {original_height} -> {target}: viewing area not marked"));
+            }
+            break;
+        }
+    }
+    if !changed {
+        failures.push("neither neighbouring height was accepted by the tank (clamped)".to_string());
+    }
+
+    set_height(original_height);
+    unsafe { SET_WATER_LEVEL.original()(tank as *const u32, original_water) };
+    unsafe { ref_from_memory::<ZTHabitat>(tank) }.remove_viewing_area(va);
+    save_to_memory::<u8>(tank + 0x2d, saved_dirty);
+    if get_from_memory::<i32>(tank + 0x184) != original_height {
+        failures.push("tank height not restored".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}

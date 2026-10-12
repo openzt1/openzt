@@ -28,6 +28,7 @@ use openzt_detour::generated::{
 use openzt_detour_macro::detour_mod;
 use tracing::{error, info};
 use windows::Win32::System::SystemInformation::GetTickCount;
+use glam::i32::IVec3;
 
 use crate::{
     command_console::CommandError,
@@ -35,7 +36,6 @@ use crate::{
     lua_fn,
     util::{get_from_memory, save_to_memory, ZTBufferString},
     write_live,
-    ztworldmgr::IVec3,
 };
 
 const BFTERRAINTYPEINFO_SIZE: usize = 0x30;

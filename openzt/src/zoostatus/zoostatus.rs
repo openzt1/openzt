@@ -38,6 +38,7 @@ use openzt_detour::generated::{
 };
 use openzt_configparser::ini::Ini;
 use tracing::error;
+use glam::i32::IVec3;
 
 use crate::{
     globals::{get_module_base, globals},
@@ -46,7 +47,6 @@ use crate::{
     write_live,
     zthabitatmgr::ZTHabitat,
     vanilla_vector::VanillaFloatVector,
-    ztworldmgr::IVec3,
 };
 
 /// Vanilla-layout-compatible view of `ZooStatus`, embedded inline inside `ZTGameMgr` at `+0x10`. Pure

@@ -1,25 +1,5 @@
 use num_enum::FromPrimitive;
-use std::fmt;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct IVec3 {
-    pub x: i32,
-    pub y: i32,
-    pub z: i32,
-}
-
-impl IVec3 {
-    pub fn new(x: i32, y: i32, z: i32) -> Self {
-        IVec3 { x, y, z }
-    }
-}
-
-impl fmt::Display for IVec3 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Vec3 {{ x: {}, y: {}, z: {} }}", self.x, self.y, self.z)
-    }
-}
+use glam::i32::IVec3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

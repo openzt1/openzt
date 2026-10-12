@@ -1150,6 +1150,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
+name = "glam"
+version = "0.34.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc148d4ddd3930c52f9e5ae79b89805c6f07e9ff417e7b083e0348cea60a5aba"
+
+[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2120,6 +2126,7 @@ dependencies = [
  "field_accessor_as_string",
  "field_accessor_as_string_trait",
  "getset",
+ "glam",
  "indexmap",
  "itertools 0.15.0",
  "maplit",
@@ -2163,6 +2170,7 @@ dependencies = [
 name = "openzt-detour"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "retour",
  "windows 0.62.2",
 ]

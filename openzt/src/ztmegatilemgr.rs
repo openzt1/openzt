@@ -27,12 +27,12 @@ use openzt_detour::generated::{
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
+use glam::i32::IVec3;
 
 use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, write_live_ptr},
     write_live,
-    ztworldmgr::IVec3,
 };
 
 /// The zoo's megatile manager - owns a `vector<vector<ZTMegatile>>` grid, one `ZTMegatile` per 5x5 tile

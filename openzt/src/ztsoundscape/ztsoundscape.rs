@@ -4,6 +4,7 @@ use crate::util::{get_from_memory, ref_from_memory, save_to_memory, write_live_p
 use crate::write_live;
 use openzt_detour::generated::bfconfigfile::{ATTEMPT_0, GET_INT, GET_STRING_1, RELEASE};
 use openzt_detour::generated::bfsndmgr::GET_SCREEN_CENTER;
+use glam::IVec3;
 use openzt_detour::generated::sndsound::{
     ATTEMPT as SNDSOUND_ATTEMPT, PLAY_LOOPED_1 as SNDSOUND_PLAY_LOOPED_1, RELEASE as SNDSOUND_RELEASE,
     SET_BASE_ATTENUATION as SNDSOUND_SET_BASE_ATTENUATION,
@@ -327,8 +328,8 @@ impl ZTSoundscape {
 
         // Step 3: screen center.
         let sndmgr: u32 = get_from_memory(base + GLOBAL_DX8SNDMGR_RVA);
-        let mut out = [0u32; 3];
-        let center = unsafe { GET_SCREEN_CENTER.original()(sndmgr as *const u32, out.as_mut_ptr()) };
+        let out = IVec3::ZERO;
+        let center = unsafe { GET_SCREEN_CENTER.original()(sndmgr as *const u32, &out as *const IVec3) };
         let (x, y, z) = (
             get_from_memory::<i32>(center as u32),
             get_from_memory::<i32>(center as u32 + 4),

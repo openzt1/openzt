@@ -13,8 +13,6 @@ use openzt_detour::generated::{
         msvc_std_listuint::{ERASE as MSVC_LIST_UINT_ERASE_NODES, INSERT as MSVC_LIST_UINT_INSERT_NODE, LIST as MSVC_LIST_UINT_DTOR_NODE, LIST_UINT_CTOR as MSVC_LIST_UINT_CTOR},
         msvc_std_vectorbyte::VECTORBYTE,
         ztbuilding::{REMOVE_ALL_USERS as ZTBUILDING_REMOVE_ALL_USERS, USER_DATA_CHANGED as ZTBUILDING_USER_DATA_CHANGED},
-        msvc_std_basic_string::BASIC_STRING_0 as MSVC_BASIC_STRING_DTOR,
-        ztshowinfo::DESTRUCTOR_0 as ZTSHOWINFO_DESTRUCTOR_0,
         ztshowmgr::GET_SHOW_INFO as ZTSHOWMGR_GET_SHOW_INFO,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
@@ -53,11 +51,13 @@ use crate::{
     ztmapview::BFTile,
     ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG},
     ztshow::{call_entity_vtable_u32_noargs, type_check, RVA_ANIMAL_TYPE_CHECK},
-    ztworldmgr::{Direction, IVec3},
+    geom::Direction,
+    write_live,
 };
 use super::super::habitat::ZTHabitat;
 use super::super::support::*;
-use crate::write_live;
+use super::super::viewing_areas;
+use glam::i32::IVec3;
 
 /// `DAT_0063b988`: the vanilla `std::string` tag `ZTWorldMgr::getBuildingList` filters grandstand buildings by.
 const RVA_GRANDSTAND_TAG_STRING: u32 = 0x0063_b988 - 0x0040_0000;
@@ -2404,7 +2404,7 @@ impl ZTHabitatMgr {
         save_to_memory(new_fence_ptr + 0xb4, virtual_pos[0]);
         save_to_memory(new_fence_ptr + 0xb8, virtual_pos[1]);
         save_to_memory(new_fence_ptr + 0xbc, virtual_pos[2]);
-        unsafe { BFENTITY_SET_WORLD_POS.original()(new_fence_ptr as *const u32, &world_pos as *const IVec3 as *const u32) };
+        unsafe { BFENTITY_SET_WORLD_POS.original()(new_fence_ptr as *const u32, &world_pos as *const IVec3) };
         save_to_memory(new_fence_ptr + 0x12c, direction);
 
         unsafe { BFWORLDMGR_ADD_ENTITY.original()(world_map_ptr as *const u32, new_fence_ptr as *const u32) };
@@ -2523,11 +2523,8 @@ impl ZTHabitatMgr {
             self.habitat_tile_changed(tile_ptr);
             return;
         }
-        let mut viewing_area_entry = habitat.viewing_areas_begin;
-        while viewing_area_entry != habitat.viewing_areas_end {
-            let viewing_area_ptr: u32 = get_from_memory(viewing_area_entry);
+        for viewing_area_ptr in viewing_areas::viewing_areas(habitat_ptr) {
             save_to_memory::<u8>(viewing_area_ptr + 0x25, 1);
-            viewing_area_entry += 4;
         }
     }
 
@@ -3399,12 +3396,13 @@ impl ZTHabitatMgr {
         }
 
         if still_valid {
-            unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.set_is_show_exhibit();
+            // Vtable `+0x2c`/`+0x30`, not the base ports: a tank's overrides also swap its base terrain.
+            unsafe { call_vtable_slot_noargs(habitat_ptr, 0x2c) };
             if remove_illegal && habitat.is_tank() {
                 unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(habitat_ptr as *const u32, 2, false) };
             }
         } else {
-            unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.set_is_not_show_exhibit();
+            unsafe { call_vtable_slot_noargs(habitat_ptr, 0x30) };
         }
 
         self.update_show_neighbors(habitat_ptr);
@@ -3700,18 +3698,7 @@ impl ZTHabitatMgr {
     /// `end = begin` (the buffer is kept), then [`Self::remove_all_habitats`]. The `.asm`'s copy-down loop
     /// (`std::vector::erase(begin, end)`) has a zero element count and is not ported.
     pub fn clear(&self) {
-        let base = get_module_base("zoo.exe") as u32;
-        let begin: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_BEGIN);
-        let end: u32 = get_from_memory(base + RVA_LOADED_HABITAT_RECORDS_END);
-        let mut record = begin;
-        while record != end {
-            unsafe {
-                ZTSHOWINFO_DESTRUCTOR_0.original()((record + 0x60) as *const u32);
-                MSVC_BASIC_STRING_DTOR.original()((record + 0x8) as *const std::ffi::c_void);
-            }
-            record += 0x128;
-        }
-        save_to_memory::<u32>(base + RVA_LOADED_HABITAT_RECORDS_END, begin);
+        super::load::destroy_loaded_records(get_module_base("zoo.exe") as u32);
         self.remove_all_habitats();
     }
 

@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 use crate::bfentitytype::{read_zt_entity_type_from_memory, ZTEntityTypeClass, ZTSceneryType};
 use crate::command_console::CommandError;
-use crate::geom::IVec3;
+use glam::i32::IVec3;
 use crate::globals::globals;
 use crate::lua_fn;
 use crate::util::{get_from_memory, ref_from_memory};
