@@ -57,6 +57,11 @@ pub(crate) mod portal_dispatch_recorder;
 #[cfg(target_os = "windows")]
 pub(crate) mod base_terrain_recorder;
 
+/// Redirects `BFUIMgr::displayMessage` into an in-memory record - lets the live tank tests compare the toasts
+/// real vanilla and the port would show.
+#[cfg(target_os = "windows")]
+pub(crate) mod display_message_recorder;
+
 /// Redirects `zthabitat::SEND_EVENT` into an in-memory call record - lets the live
 /// `sendMaintWorkerCleanupEvents` comparison observe real vanilla's sends without delivering them.
 #[cfg(target_os = "windows")]
@@ -84,8 +89,8 @@ pub fn init() {
 
         io_redirect::init();
         portal_dispatch_recorder::init();
-        base_terrain_recorder::init();
         send_event_recorder::init();
+        display_message_recorder::init();
         generate_faces_recorder::init();
 
         // Installs `resource_manager::init()`'s hooks so `LAZY_RESOURCE_MAP` is populated before

@@ -430,15 +430,15 @@ fn apply_record_to_habitat(base: u32, habitat_ptr: u32, record: u32) {
         let tank = habitat_ptr as *const u32;
         unsafe {
             ZTTANKEXHIBIT_SET_TANK_HEIGHT.hooked()(tank, get_from_memory::<i32>(record + 0x10c));
-            ZTTANKEXHIBIT_SET_WATER_LEVEL.original()(tank, get_from_memory::<i32>(record + 0x110));
+            ZTTANKEXHIBIT_SET_WATER_LEVEL.hooked()(tank, get_from_memory::<i32>(record + 0x110));
             if get_from_memory::<u8>(record + 0x114) == 0 {
-                ZTTANKEXHIBIT_DRAIN.original()(tank);
+                ZTTANKEXHIBIT_DRAIN.hooked()(tank);
             } else {
-                ZTTANKEXHIBIT_FILL.original()(tank);
+                ZTTANKEXHIBIT_FILL.hooked()(tank);
             }
         }
         save_to_memory::<u32>(habitat_ptr + 0x18c, get_from_memory::<u32>(record + 0x118));
         save_to_memory::<u32>(habitat_ptr + 0x190, get_from_memory::<u32>(record + 0x11c));
-        unsafe { ZTTANKEXHIBIT_SET_WATER_PURITY.original()(tank, get_from_memory::<i32>(record + 0x120)) };
+        unsafe { ZTTANKEXHIBIT_SET_WATER_PURITY.hooked()(tank, get_from_memory::<i32>(record + 0x120)) };
     }
 }

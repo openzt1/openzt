@@ -5764,6 +5764,7 @@ pub mod ztworldmgr {
     pub const TRANS_TO_VER20: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32, *const u32)> = FunctionDef{address: 0x0060d58f, function_type: PhantomData};
     pub const RUBBLE_ALL_CARS: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x0060d8e3, function_type: PhantomData};
     pub const BOX_UP_AND_FIND_APLACE_FOR_ANIMAL: FunctionDef<unsafe extern "stdcall" fn(*const u32, *const u32) -> u32> = FunctionDef{address: 0x0060da6b, function_type: PhantomData};
+    pub const FIND_APLACE_FOR_STAFF_MEMBER: FunctionDef<unsafe extern "stdcall" fn(*const u32, *const c_void) -> u32> = FunctionDef{address: 0x0060dd71, function_type: PhantomData};
 }
 
 // ZooStatus class functions

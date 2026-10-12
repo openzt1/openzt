@@ -45,6 +45,38 @@ pub fn push_word(vector_ptr: u32, value: u32, free_old_buffer: impl FnOnce(u32, 
     }
 }
 
+/// [`push_word`] for an 8-byte element (two words), the shape of vanilla's `vector<pair<int, T*>>` growth
+/// (`cls_0x43f6a9::meth_0x43f6a9`, `0x0043f6a9`): same doubling, same `PoolAlloc` buffer, same
+/// caller-supplied teardown of the old buffer.
+pub fn push_pair(vector_ptr: u32, first: u32, second: u32, free_old_buffer: impl FnOnce(u32, u32)) {
+    let begin = get_from_memory::<u32>(vector_ptr);
+    let end = get_from_memory::<u32>(vector_ptr + 4);
+    let cap_end = get_from_memory::<u32>(vector_ptr + 8);
+
+    if end == cap_end {
+        let old_len = (end - begin) / 8;
+        let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
+        let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 8) } as u32;
+
+        if new_buf != 0 {
+            for word in 0..old_len * 2 {
+                save_to_memory(new_buf + word * 4, get_from_memory::<u32>(begin + word * 4));
+            }
+            save_to_memory(new_buf + old_len * 8, first);
+            save_to_memory(new_buf + old_len * 8 + 4, second);
+        }
+        free_old_buffer(begin, cap_end - begin);
+
+        save_to_memory(vector_ptr, new_buf);
+        save_to_memory(vector_ptr + 4, new_buf + (old_len + 1) * 8);
+        save_to_memory(vector_ptr + 8, new_buf + new_cap * 8);
+    } else {
+        save_to_memory(end, first);
+        save_to_memory(end + 4, second);
+        save_to_memory(vector_ptr + 4, end + 8);
+    }
+}
+
 /// Removes the `element_size`-byte element at `element_ptr` from the vector header at `vector_ptr`: every later
 /// element shifts down one slot and `end` shrinks by `element_size` (vanilla's plain `memmove`-shaped erase; no
 /// reallocation, no element destruction - callers tear the element down first). `element_ptr` must lie in

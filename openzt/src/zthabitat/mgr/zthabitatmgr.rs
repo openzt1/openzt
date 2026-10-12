@@ -22,9 +22,8 @@ use openzt_detour::generated::{
         },
         zthabitatmgr::{MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
         zttankexhibit::{
-            ADD_TANK_WALL as ZTTANKEXHIBIT_ADD_TANK_WALL, CLEAR_WALL_VECTOR as ZTTANKEXHIBIT_CLEAR_WALL_VECTOR,
-            CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR, FILL as ZTTANKEXHIBIT_FILL,
-            REMOVE_ILLEGAL_ENTITIES as ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES, UPDATE_TANK_INFO as ZTTANKEXHIBIT_UPDATE_TANK_INFO,
+            CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR,
+            UPDATE_TANK_INFO as ZTTANKEXHIBIT_UPDATE_TANK_INFO,
         },
         ztmapview::ADD_UNDO_ACTION,
         ztstaff::REMOVE_ASSIGNED_HABITAT as ZTSTAFF_REMOVE_ASSIGNED_HABITAT,
@@ -577,7 +576,7 @@ impl ZTHabitatMgr {
             }
             self.do_show_check(tank_ptr, false);
             unsafe { ZTTANKEXHIBIT_UPDATE_TANK_INFO.original()(tank_ptr as *const u32) };
-            let has_illegal_entities = unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(tank_ptr as *const u32, 1, !show_active) };
+            let has_illegal_entities = unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(tank_ptr as *const u32) }.remove_illegal_entities(1, !show_active);
             if !has_illegal_entities {
                 self.add_habitat(tank_ptr);
                 let mapview_ptr3 = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
@@ -587,7 +586,7 @@ impl ZTHabitatMgr {
                 self.decrement_habitat_num();
                 return;
             }
-            unsafe { ZTTANKEXHIBIT_FILL.original()(tank_ptr as *const u32) };
+            unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(tank_ptr) }.fill();
         }
 
         if name_ptr == 0 {
@@ -1326,7 +1325,7 @@ impl ZTHabitatMgr {
             }
 
             if unsafe { ref_from_memory::<ZTHabitat>(absorbed_ptr) }.is_tank() {
-                unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(absorbed_ptr as *const u32, 0, false) };
+                unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(absorbed_ptr as *const u32) }.remove_illegal_entities(0, false);
             }
             unsafe { REMOVE_HABITAT_0.original()(mgr_ptr, absorbed_ptr as *const i32) };
             unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.resize(resize_tile_ptr);
@@ -1419,7 +1418,7 @@ impl ZTHabitatMgr {
     /// 3. If `habitat_ptr` currently has a gate, captures it ([`ZTHabitat::get_gate`]) to relocate onto
     ///    the new habitat afterward.
     /// 4. If the *original* habitat was a tank, removes its illegal entities
-    ///    ([`ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES`]) before destroying it.
+    ///    ([`ZTTankExhibit::remove_illegal_entities`](super::super::tank_exhibit::ZTTankExhibit::remove_illegal_entities)) before destroying it.
     /// 5. [`Self::replace_gate`], captures the current gate-tile-in/out pair, [`REMOVE_HABITAT_0`]s the
     ///    habitat, then [`Self::replace_gate`] again (matching real vanilla's own two calls either side
     ///    of the removal) - the same "capture then call twice" shape [`Self::fence_removed`]'s own merge
@@ -1503,7 +1502,7 @@ impl ZTHabitatMgr {
         let gate_fence_ptr = if entrance_tile_ptr != 0 { habitat.get_gate() } else { 0 };
 
         if was_tank {
-            unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(habitat_ptr as *const u32, 0, false) };
+            unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(habitat_ptr as *const u32) }.remove_illegal_entities(0, false);
         }
         self.replace_gate();
         let gate_tile_in_ptr = habitat.gate_tile_in_ptr();
@@ -2139,7 +2138,7 @@ impl ZTHabitatMgr {
     /// documents; [`is_wall`]'s/[`is_tank_wall`]'s existing `+0x192`/`+0x193` byte offsets on a fence's own
     /// `entity_type` are reused here, confirmed identical at the `.asm` level.
     ///
-    /// Clears `tank_ptr`'s own wall vector ([`ZTTANKEXHIBIT_CLEAR_WALL_VECTOR`]), then snapshots its
+    /// Clears `tank_ptr`'s own wall vector ([`ZTTankExhibit::clear_wall_vector`](super::super::tank_exhibit::ZTTankExhibit::clear_wall_vector)), then snapshots its
     /// [`ZTHabitat::boundary_tile_pairs`] (the same
     /// copy of/iterate shape [`Self::update_amphibious_neighbors`]/
     /// [`Self::update_show_neighbors`]/[`Self::do_show_check`] already use - real vanilla builds this same
@@ -2168,7 +2167,7 @@ impl ZTHabitatMgr {
     /// 5. Regardless of the above: re-resolves the fence on `tile_a`'s slot facing `tile_b` one more time
     ///    (a fresh lookup - real vanilla re-reads live tile memory here rather than reusing `fence_a`) and,
     ///    if it's both [`is_tank_wall`] and specifically tank-wall-typed
-    ///    ([`RVA_TANK_WALL_TYPE_CHECK_ARG`]), registers it via [`ZTTANKEXHIBIT_ADD_TANK_WALL`].
+    ///    ([`RVA_TANK_WALL_TYPE_CHECK_ARG`]), registers it via [`ZTTankExhibit::add_tank_wall`](super::super::tank_exhibit::ZTTankExhibit::add_tank_wall).
     ///
     /// **Live-testing note**: like `fence_placed`/`fence_removed`/`place_gate`, this mutates real fence/
     /// tank state (including the position swap and the live undo-action UI in step 3) with no known
@@ -2185,7 +2184,7 @@ impl ZTHabitatMgr {
         // habitat (empty boundary pairs, no resize/placeGate) - the exact "several duplicate tank
         // exhibits with no water/height controls" bug this fixes.
         save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 1);
-        unsafe { ZTTANKEXHIBIT_CLEAR_WALL_VECTOR.original()(tank_ptr as i32) };
+        unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(tank_ptr as *const u32) }.clear_wall_vector();
 
         let habitat = unsafe { ref_from_memory::<ZTHabitat>(tank_ptr) };
         let pairs = habitat.boundary_tile_pairs();
@@ -2283,7 +2282,7 @@ impl ZTHabitatMgr {
                 let tile_a_fresh = get_from_memory::<BFTile>(tile_a_ptr);
                 let wall = ZTHabitat::fence_slot_by_index(&tile_a_fresh, dir_ab2 / 2);
                 if wall != 0 && is_tank_wall(wall) && unsafe { entity_type_matches(wall, RVA_TANK_WALL_TYPE_CHECK_ARG) } {
-                    unsafe { ZTTANKEXHIBIT_ADD_TANK_WALL.original()(tank_ptr as *const u32, wall as *const u32) };
+                    unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(tank_ptr as *const u32) }.add_tank_wall(wall);
                 }
             }
         }
@@ -3399,7 +3398,7 @@ impl ZTHabitatMgr {
             // Vtable `+0x2c`/`+0x30`, not the base ports: a tank's overrides also swap its base terrain.
             unsafe { call_vtable_slot_noargs(habitat_ptr, 0x2c) };
             if remove_illegal && habitat.is_tank() {
-                unsafe { ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES.original()(habitat_ptr as *const u32, 2, false) };
+                unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(habitat_ptr as *const u32) }.remove_illegal_entities(2, false);
             }
         } else {
             unsafe { call_vtable_slot_noargs(habitat_ptr, 0x30) };

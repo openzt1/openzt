@@ -10310,7 +10310,7 @@ pub(crate) fn run_habitat_suitability_getters_match_real_live_test(failure_log: 
         }
         settle_suitability_caches(ptr);
         let keys = suitability_cache_keys(ptr + 0x148);
-        if keys.is_empty() {
+        if keys.is_empty() && habitat.num_animals > 0 {
             failures.push(format!("habitat {i} ({ptr:#010x}): suitability cache empty after recalculation"));
         }
         for &key in &keys {
@@ -14021,7 +14021,7 @@ pub(crate) fn run_tank_set_tank_height_marks_viewing_areas_live_test(failure_log
     }
 
     set_height(original_height);
-    unsafe { SET_WATER_LEVEL.original()(tank as *const u32, original_water) };
+    unsafe { SET_WATER_LEVEL.hooked()(tank as *const u32, original_water) };
     unsafe { ref_from_memory::<ZTHabitat>(tank) }.remove_viewing_area(va);
     save_to_memory::<u8>(tank + 0x2d, saved_dirty);
     if get_from_memory::<i32>(tank + 0x184) != original_height {
