@@ -1506,3 +1506,402 @@ pub(crate) fn run_tankexhibit_remove_illegal_entities_empty_set_matches_real_liv
     let label = format!("{test_name} (tanks: {}, runs: {runs}, modes skipped because they flag entities: {skipped})", tanks.len());
     finish_test(&label, failures, failure_log)
 }
+
+/// `ZTTankExhibit::save`'s raw byte stream and result, real against ported, on every live tank. Both
+/// poles run the base `ZTHabitat::save` through its detour, so this checks the tank's own six trailing
+/// writes (`tank_height`, `water_level`, `is_filled`, both water types, `water_purity`).
+pub(crate) fn run_tankexhibit_save_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::io_redirect;
+
+    let test_name = "ZTTANKEXHIBIT_SAVE_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let tanks = live_tank_ptrs();
+    if tanks.is_empty() {
+        failures.push("no tank exhibits found in the loaded save".to_string());
+    }
+    let dummy_file: u32 = 0;
+    let mut total_bytes = 0;
+    for &tank_ptr in &tanks {
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) };
+        io_redirect::begin_capture();
+        let real_ok = detours::save_real(tank_ptr as *const u32, &dummy_file as *const u32);
+        let real_bytes = io_redirect::end_capture();
+        io_redirect::begin_capture();
+        let port_ok = tank.save(&dummy_file as *const u32 as *const i8);
+        let port_bytes = io_redirect::end_capture();
+        total_bytes += real_bytes.len();
+        if real_ok != port_ok {
+            failures.push(format!("tank {tank_ptr:#010x}: save result real={real_ok}, port={port_ok}"));
+        }
+        if real_bytes != port_bytes {
+            failures.push(format!("tank {tank_ptr:#010x}: save bytes differ (real {} bytes, port {} bytes)", real_bytes.len(), port_bytes.len()));
+        }
+    }
+    let label = format!("{test_name} (tanks: {}, bytes: {total_bytes})", tanks.len());
+    finish_test(&label, failures, failure_log)
+}
+
+/// `setWaterClean` against real vanilla: from every purity probe, both poles must leave the same water
+/// state. Each pole starts from the probe and both are settled back through the real setter.
+pub(crate) fn run_tankexhibit_set_water_clean_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_SET_WATER_CLEAN_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let tanks = live_tank_ptrs();
+    if tanks.is_empty() {
+        failures.push("no tank exhibits found in the loaded save".to_string());
+    }
+    let probes = purity_probe_values();
+    let mut moved = 0;
+    for &tank_ptr in &tanks {
+        let this = tank_ptr as *const u32;
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) };
+        let original: i32 = get_from_memory(tank_ptr + TANK_WATER_PURITY_OFFSET);
+        for &probe in &probes {
+            detours::set_water_purity_real(this, probe);
+            let start = read_water_state(tank_ptr);
+            detours::set_water_clean_real(this as *const std::ffi::c_void);
+            let real = read_water_state(tank_ptr);
+            detours::set_water_purity_real(this, probe);
+            tank.set_water_clean();
+            let port = read_water_state(tank_ptr);
+            detours::set_water_purity_real(this, original);
+            if real != port {
+                failures.push(format!("tank {tank_ptr:#010x} setWaterClean from purity {probe}: real={real:?}, port={port:?}"));
+            }
+            if real != start {
+                moved += 1;
+            }
+        }
+    }
+    if moved == 0 {
+        failures.push("setWaterClean never changed any tank state (cannot detect a gap)".to_string());
+    }
+    let label = format!("{test_name} (tanks: {}, runs that changed state: {moved})", tanks.len());
+    finish_test(&label, failures, failure_log)
+}
+
+/// `tanks.cfg` settings globals `loadProperties` writes (`[cost]` floats, then `[tank]`/`[cost]` ints),
+/// plus `DAT_006390b0`, which it never writes.
+const LOAD_PROPERTIES_GLOBAL_RVAS: [u32; 20] = [
+    0x0023_af10, 0x0023_af40, 0x0023_af14, 0x0023_af38, 0x0023_af34, 0x0023_af20, 0x0023_af1c, 0x0023_af24, 0x0023_af28, 0x0023_af2c, 0x0023_af30,
+    0x0023_af18, 0x0023_90ac, 0x0023_af08, 0x0023_af3c, 0x0023_af00, 0x0023_90a4, 0x0023_af0c, 0x0023_af04, 0x0023_90b0,
+];
+
+fn read_load_properties_globals() -> Vec<u32> {
+    let base = get_module_base("zoo.exe") as u32;
+    LOAD_PROPERTIES_GLOBAL_RVAS.iter().map(|&rva| get_from_memory(base + rva)).collect()
+}
+
+fn write_load_properties_globals(values: &[u32]) {
+    let base = get_module_base("zoo.exe") as u32;
+    for (&rva, &value) in LOAD_PROPERTIES_GLOBAL_RVAS.iter().zip(values) {
+        save_to_memory(base + rva, value);
+    }
+}
+
+/// `loadProperties` against real vanilla: with every global poisoned first, both poles must leave the
+/// same values (so a key that is missing, or one that is only read from a different section, is caught as
+/// well as a wrong value), and `DAT_006390b0` must stay poisoned. The original values are restored.
+pub(crate) fn run_tankexhibit_load_properties_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    const POISON: u32 = 0xdead_beef;
+    let test_name = "ZTTANKEXHIBIT_LOAD_PROPERTIES_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let original = read_load_properties_globals();
+    let poison = vec![POISON; LOAD_PROPERTIES_GLOBAL_RVAS.len()];
+
+    write_load_properties_globals(&poison);
+    detours::load_properties_real();
+    let real = read_load_properties_globals();
+    write_load_properties_globals(&poison);
+    ZTTankExhibit::load_properties();
+    let port = read_load_properties_globals();
+    write_load_properties_globals(&original);
+
+    let written = real.iter().filter(|&&value| value != POISON).count();
+    if written == 0 {
+        failures.push("real loadProperties wrote nothing (cannot detect a gap)".to_string());
+    }
+    for (i, (&real_value, &port_value)) in real.iter().zip(&port).enumerate() {
+        if real_value != port_value {
+            failures.push(format!("global rva {:#x}: real={real_value:#x}, port={port_value:#x}", LOAD_PROPERTIES_GLOBAL_RVAS[i]));
+        }
+    }
+    let untouched_index = LOAD_PROPERTIES_GLOBAL_RVAS.len() - 1;
+    if real[untouched_index] != POISON || port[untouched_index] != POISON {
+        failures.push("DAT_006390b0 was written".to_string());
+    }
+    let label = format!("{test_name} (globals written by real: {written})");
+    finish_test(&label, failures, failure_log)
+}
+
+/// `confirmSellOff` while a load is in progress (`ZTApp +0x441` set): no dialog, both poles return true.
+/// The dialog branch needs a player and is not run.
+pub(crate) fn run_tankexhibit_confirm_sell_off_load_in_progress_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_CONFIRM_SELL_OFF_LOAD_IN_PROGRESS_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let flag_addr = get_module_base("zoo.exe") as u32 + 0x0023_8148 + 0x441;
+    let original: u8 = get_from_memory(flag_addr);
+    save_to_memory(flag_addr, 1u8);
+    let real = detours::confirm_sell_off_real();
+    let port = ZTTankExhibit::confirm_sell_off();
+    save_to_memory(flag_addr, original);
+    if !real || !port {
+        failures.push(format!("confirmSellOff with a load in progress: real={real}, port={port}, expected true"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `setIsShowExhibit` on every tank that already has show info (so the base habitat call is a no-op),
+/// real against ported, with `setBaseTerrainType` recorded rather than run: both must record the same
+/// calls and leave every wall with the same type.
+pub(crate) fn run_tankexhibit_set_is_show_exhibit_on_show_tanks_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::base_terrain_recorder;
+
+    let test_name = "ZTTANKEXHIBIT_SET_IS_SHOW_EXHIBIT_ON_SHOW_TANKS_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let show_tanks: Vec<u32> = live_tank_ptrs().into_iter().filter(|&ptr| unsafe { ref_from_memory::<ZTHabitat>(ptr) }.zt_show_info_ptr != 0).collect();
+    for &tank_ptr in &show_tanks {
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) };
+        let wall_types = || -> Vec<u32> {
+            read_id_vector(tank_ptr + TANK_WALL_IDS_OFFSET).into_iter().map(resolve_entity).filter(|&wall| wall != 0).map(|wall| get_from_memory::<u32>(wall + 0x128)).collect()
+        };
+        base_terrain_recorder::begin_capture();
+        detours::set_is_show_exhibit_real(tank_ptr as *const u32);
+        let real_calls = base_terrain_recorder::end_capture();
+        let real_types = wall_types();
+        base_terrain_recorder::begin_capture();
+        tank.set_is_show_exhibit();
+        let port_calls = base_terrain_recorder::end_capture();
+        let port_types = wall_types();
+        if real_calls.is_empty() {
+            failures.push(format!("tank {tank_ptr:#010x}: real setIsShowExhibit recorded no setBaseTerrainType call"));
+        }
+        if real_calls != port_calls {
+            failures.push(format!("tank {tank_ptr:#010x}: setBaseTerrainType calls real={real_calls:x?}, port={port_calls:x?}"));
+        }
+        if real_types != port_types {
+            failures.push(format!("tank {tank_ptr:#010x}: wall types real={real_types:x?}, port={port_types:x?}"));
+        }
+    }
+    let label = format!("{test_name} (show tanks: {})", show_tanks.len());
+    finish_test(&label, failures, failure_log)
+}
+
+/// `ZTTankWall`'s fence variant: `0` left edge, `1` right edge, `2` middle, `3` both edges.
+const WALL_FENCE_VARIANT_OFFSET: u32 = 0x468;
+
+fn wall_fence_types(tank_ptr: u32) -> Vec<u32> {
+    read_id_vector(tank_ptr + TANK_WALL_IDS_OFFSET)
+        .into_iter()
+        .map(resolve_entity)
+        .filter(|&wall| wall != 0)
+        .map(|wall| get_from_memory::<u32>(wall + WALL_FENCE_VARIANT_OFFSET))
+        .collect()
+}
+
+fn reset_walls_to_middle_fence(tank_ptr: u32) {
+    use openzt_detour::generated::zttankwall::SET_MIDDLE_FENCE;
+    for id in read_id_vector(tank_ptr + TANK_WALL_IDS_OFFSET) {
+        let wall = resolve_entity(id);
+        if wall != 0 {
+            unsafe { SET_MIDDLE_FENCE.original()(wall as *const u32) };
+        }
+    }
+}
+
+/// `updateTankInfo` against real vanilla on every live tank. Each pole starts with every wall forced to
+/// the middle fence variant (and with ripples removed, then present), so a pole that re-picks nothing
+/// cannot match; the fence variants, wall heights, cost fields and ripples are compared. The real
+/// function puts the tank back afterwards.
+pub(crate) fn run_tankexhibit_update_tank_info_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_UPDATE_TANK_INFO_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let tanks = live_tank_ptrs();
+    if tanks.is_empty() {
+        failures.push("no tank exhibits found in the loaded save".to_string());
+    }
+    let mut changed_walls = 0usize;
+    let mut walls_seen = 0usize;
+    let mut variants_seen = std::collections::BTreeSet::new();
+    let mut rotations_seen = std::collections::BTreeSet::new();
+    let mut ripples_seen = 0usize;
+    for &tank_ptr in &tanks {
+        let this = tank_ptr as *const u32;
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) };
+        let original_types = wall_fence_types(tank_ptr);
+        walls_seen += original_types.len();
+        for id in read_id_vector(tank_ptr + TANK_WALL_IDS_OFFSET) {
+            let wall = resolve_entity(id);
+            if wall != 0 {
+                rotations_seen.insert(get_from_memory::<u32>(wall + 0x12c));
+            }
+        }
+        let had_ripples = !read_id_vector(tank_ptr + TANK_RIPPLE_IDS_OFFSET).is_empty();
+        let original_ripple_type: u32 = get_from_memory(tank_ptr + TANK_RIPPLE_TYPE_OFFSET);
+
+        for start_with_ripples in [false, true] {
+            let mut results = Vec::new();
+            for port in [false, true] {
+                detours::remove_water_ripples_real(this);
+                if start_with_ripples {
+                    seed_game_rng();
+                    detours::add_water_ripples_real(this);
+                }
+                reset_walls_to_middle_fence(tank_ptr);
+                let middle_types = wall_fence_types(tank_ptr);
+                set_all_wall_heights(tank_ptr, WALL_HEIGHT_SENTINEL);
+                for offset in [0x19c, 0x1a0, 0x1a4] {
+                    save_to_memory(tank_ptr + offset, 0u32);
+                }
+                seed_game_rng();
+                if port {
+                    tank.update_tank_info();
+                } else {
+                    detours::update_tank_info_real(this);
+                }
+                let (ripples, _) = snapshot_ripples(tank_ptr);
+                results.push((wall_fence_types(tank_ptr), wall_states(tank_ptr), read_cost_fields(tank_ptr), ripples, middle_types));
+            }
+            if results[0].0 != results[1].0 || results[0].1 != results[1].1 || results[0].2 != results[1].2 || results[0].3 != results[1].3 {
+                failures.push(format!(
+                    "tank {tank_ptr:#010x} (start with ripples: {start_with_ripples}): updateTankInfo real={:x?}, port={:x?}",
+                    (&results[0].0, &results[0].1, &results[0].2, &results[0].3),
+                    (&results[1].0, &results[1].1, &results[1].2, &results[1].3)
+                ));
+            }
+            if results[0].1.iter().any(|&(height, _)| height != get_from_memory::<u32>(tank_ptr + TANK_HEIGHT_OFFSET) as i32) {
+                failures.push(format!("tank {tank_ptr:#010x}: real updateTankInfo left wall heights {:x?}", results[0].1));
+            }
+            if !start_with_ripples {
+                changed_walls += results[0].0.iter().zip(&results[0].4).filter(|(after, middle)| after != middle).count();
+                variants_seen.extend(results[0].0.iter().copied());
+                ripples_seen += results[0].3.ids_len;
+            }
+        }
+
+        detours::update_tank_info_real(this);
+        if wall_fence_types(tank_ptr) != original_types {
+            failures.push(format!("tank {tank_ptr:#010x}: real updateTankInfo did not restore the loaded fence variants"));
+        }
+        detours::remove_water_ripples_real(this);
+        if had_ripples {
+            detours::add_water_ripples_real(this);
+        }
+        save_to_memory(tank_ptr + TANK_RIPPLE_TYPE_OFFSET, original_ripple_type);
+    }
+    if walls_seen == 0 {
+        failures.push("no live tank had wall ids (cannot detect a gap)".to_string());
+    }
+    if changed_walls == 0 {
+        failures.push("real updateTankInfo never changed a wall from the middle fence (cannot detect a gap)".to_string());
+    }
+    if variants_seen.len() < 3 {
+        failures.push(format!("only {} fence variants seen (need at least 3) (cannot detect a gap)", variants_seen.len()));
+    }
+    let label = format!(
+        "{test_name} (tanks: {}, walls: {walls_seen}, changed: {changed_walls}, variants: {}, rotations: {rotations_seen:?}, ripples: {ripples_seen})",
+        tanks.len(),
+        variants_seen.len()
+    );
+    finish_test(&label, failures, failure_log)
+}
+
+/// `ZTTANKEXHIBIT_DESTRUCTOR_REACHED`: the `~ZTTankExhibit` port ([`ZTTankExhibit::destruct`]) has no
+/// standalone-fixture comparison (it tears the tank and its tiles down), so this guards against the
+/// detour silently never firing: vanilla's own habitat removal earlier in the battery must have run it.
+pub(crate) fn run_tankexhibit_destructor_reached_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_DESTRUCTOR_REACHED";
+    let calls = crate::zthabitat::tank_exhibit::DESTRUCT_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let mut failures = Vec::new();
+    if calls == 0 {
+        failures.push("ZTTankExhibit::destruct never ran during the battery".to_string());
+    }
+    finish_test(&format!("{test_name} (destruct ran {calls} time(s))"), failures, failure_log)
+}
+
+/// `ZTTANKEXHIBIT_CONSTRUCTOR_REACHED`: as above for [`ZTTankExhibit::construct`], which builds a tank
+/// from a seed tile and mutates the live map, so no synthetic comparison exists.
+pub(crate) fn run_tankexhibit_constructor_reached_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_CONSTRUCTOR_REACHED";
+    let calls = crate::zthabitat::tank_exhibit::CONSTRUCT_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    let mut failures = Vec::new();
+    if calls == 0 {
+        failures.push("ZTTankExhibit::construct never ran during the battery".to_string());
+    }
+    finish_test(&format!("{test_name} (construct ran {calls} time(s))"), failures, failure_log)
+}
+
+/// `setTankHeight` against real vanilla on every live tank: a no-op height, one step up and down, and
+/// heights far above and below the allowed range (so both clamps run). Each pole starts from the same
+/// saved tank (tiles' raw bytes, height, water level, the habitat's `+0x30` flag, wall and cost state)
+/// and the resulting height, water level, walls, costs, flags, owned-tile bytes and ripples must match.
+/// The tank is put back through the real functions afterwards.
+pub(crate) fn run_tankexhibit_set_tank_height_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTTANKEXHIBIT_SET_TANK_HEIGHT_MATCHES_REAL_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let tanks = live_tank_ptrs();
+    if tanks.is_empty() {
+        failures.push("no tank exhibits found in the loaded save".to_string());
+    }
+    let (mut changed_runs, mut lowered_water_runs, mut runs) = (0usize, 0usize, 0usize);
+    for &tank_ptr in &tanks {
+        let this = tank_ptr as *const u32;
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) };
+        let original_height: i32 = get_from_memory(tank_ptr + TANK_HEIGHT_OFFSET);
+        let original_water: i32 = get_from_memory(tank_ptr + TANK_WATER_LEVEL_OFFSET);
+        let original_flag: u8 = get_from_memory(tank_ptr + 0x30);
+        let tiles = snapshot_owned_tiles(tank_ptr);
+        let state = |tank_ptr: u32| {
+            let (ripples, _) = snapshot_ripples(tank_ptr);
+            (
+                get_from_memory::<i32>(tank_ptr + TANK_HEIGHT_OFFSET),
+                get_from_memory::<i32>(tank_ptr + TANK_WATER_LEVEL_OFFSET),
+                get_from_memory::<u8>(tank_ptr + 0x30),
+                wall_states(tank_ptr),
+                read_cost_fields(tank_ptr),
+                snapshot_owned_tiles(tank_ptr),
+                ripples,
+            )
+        };
+        for target in [original_height, original_height + 1, original_height - 1, original_height + 1000, original_height - 1000] {
+            let mut results = Vec::new();
+            // Vanilla's resetUnitAI re-seeds animal state the restore below does not cover, so the first
+            // run of a target draws the RNG differently; a discarded real run settles it for both poles.
+            for port in [None, Some(false), Some(true)] {
+                restore_owned_tiles(&tiles);
+                detours::set_tank_height_real(this, original_height);
+                unsafe { openzt_detour::generated::zttankexhibit::SET_WATER_LEVEL.hooked()(this, original_water) };
+                save_to_memory(tank_ptr + 0x30, original_flag);
+                restore_owned_tiles(&tiles);
+                seed_game_rng();
+                if port == Some(true) {
+                    tank.set_tank_height(target);
+                } else {
+                    detours::set_tank_height_real(this, target);
+                }
+                if port.is_some() {
+                    results.push(state(tank_ptr));
+                }
+            }
+            runs += 1;
+            if results[0] != results[1] {
+                failures.push(format!("tank {tank_ptr:#010x}: setTankHeight({target}) real={:x?}, port={:x?}", (&results[0].0, &results[0].1, &results[0].2, &results[0].3, &results[0].4, &results[0].6), (&results[1].0, &results[1].1, &results[1].2, &results[1].3, &results[1].4, &results[1].6)));
+            }
+            if results[0].0 != original_height {
+                changed_runs += 1;
+                if results[0].1 < original_water {
+                    lowered_water_runs += 1;
+                }
+            }
+        }
+        detours::set_tank_height_real(this, original_height);
+        unsafe { openzt_detour::generated::zttankexhibit::SET_WATER_LEVEL.hooked()(this, original_water) };
+        restore_owned_tiles(&tiles);
+        save_to_memory(tank_ptr + 0x30, original_flag);
+    }
+    if changed_runs == 0 {
+        failures.push("real setTankHeight never changed a height (cannot detect a gap)".to_string());
+    }
+    let label = format!("{test_name} (tanks: {}, runs: {runs}, changed: {changed_runs}, water lowered: {lowered_water_runs})", tanks.len());
+    finish_test(&label, failures, failure_log)
+}

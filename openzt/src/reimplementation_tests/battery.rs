@@ -235,6 +235,13 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTTANKEXHIBIT_LEVEL_ALL_TILES_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_level_all_tiles_matches_real_live_test },
             RegisteredTest { name: "ZTTANKEXHIBIT_REMOVE_ILLEGAL_ENTITIES_EMPTY_SET_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_remove_illegal_entities_empty_set_matches_real_live_test },
             RegisteredTest { name: "ZTHABITATMGR_DO_SHOW_CHECK_DISPATCHES_TANK_OVERRIDES_LIVE", run: tests::zttankexhibit::run_zthabitatmgr_do_show_check_dispatches_tank_overrides_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_SAVE_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_save_matches_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_SET_WATER_CLEAN_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_set_water_clean_matches_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_LOAD_PROPERTIES_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_load_properties_matches_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_CONFIRM_SELL_OFF_LOAD_IN_PROGRESS_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_confirm_sell_off_load_in_progress_matches_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_SET_IS_SHOW_EXHIBIT_ON_SHOW_TANKS_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_set_is_show_exhibit_on_show_tanks_matches_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_UPDATE_TANK_INFO_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_update_tank_info_matches_real_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_SET_TANK_HEIGHT_MATCHES_REAL_LIVE", run: tests::zttankexhibit::run_tankexhibit_set_tank_height_matches_real_live_test },
             RegisteredTest { name: "ZTHABITAT_LISTEN_SMOKE_LIVE", run: tests::zthabitatmgr::run_habitat_listen_smoke_live_test },
             RegisteredTest {
                 name: "ZTHABITAT_SET_IS_SHOW_EXHIBIT_ROUNDTRIP_LIVE",
@@ -479,6 +486,22 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITATMGR_RECALCULATE_DETERIORATION_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_zthabitatmgr_recalculate_deterioration_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_RECALCULATE_CHARACTERISTICS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_recalculate_characteristics_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_SPECIES_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_species_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_REVISE_SPECIES_LIST_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_revise_species_list_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_ADD_FOUND_SPECIES_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_add_found_species_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_SET_DETERIORATION_MATCHES_REAL_LIVE",
@@ -842,6 +865,14 @@ pub(super) mod detour_zoo_main {
                 run: tests::zthabitatmgr::run_zthabitatmgr_get_next_fence_pair_matches_real_live_test,
             },
             RegisteredTest {
+                name: "ZTHABITATMGR_GET_MERGE_TANK_WALLS_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_get_merge_tank_walls_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITATMGR_REMOVE_HABITAT_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_zthabitatmgr_remove_habitat_matches_real_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITATMGR_CHECK_GATE_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_zthabitatmgr_check_gate_matches_real_live_test,
             },
@@ -985,6 +1016,7 @@ pub(super) mod detour_zoo_main {
             // start() (see ZTGAMEMGR_START_STOP_SMOKE's own note above), so stays right after it.
             RegisteredTest { name: "ZTGAMEMGR_DESTRUCT", run: tests::ztgamemgr::run_gamemgr_destruct_test },
             RegisteredTest { name: "ZTHABITAT_DESTRUCTOR_REACHED", run: tests::zthabitatmgr::run_habitat_destructor_reached_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_CONSTRUCTOR_REACHED", run: tests::zttankexhibit::run_tankexhibit_constructor_reached_test },
             // openzt/plans/real-zoo-save-load-roundtrip-tests-plan.md's ZTGameMgr item: mutates the live
             // singleton's cash/date/elapsed_sim_ticks in place (there's no cheap standalone copy of a
             // fully-populated real ZTGameMgr to load into instead) - run genuinely last so nothing above
@@ -1000,6 +1032,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTWORLDMGR_SIMULATED_PLAY_THEN_SAVE_LIVE", run: tests::zthabitatmgr::run_ztworldmgr_simulated_play_then_save_live_test },
             RegisteredTest { name: "ZTHABITATMGR_REMOVE_ALL_HABITATS_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_remove_all_habitats_live_test },
             RegisteredTest { name: "ZTHABITATMGR_CLEAR_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_clear_live_test },
+            RegisteredTest { name: "ZTTANKEXHIBIT_DESTRUCTOR_REACHED", run: tests::zttankexhibit::run_tankexhibit_destructor_reached_test },
         ]
     }
 

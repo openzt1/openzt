@@ -2148,6 +2148,70 @@ pub(crate) fn run_zthabitatmgr_add_habitat_roundtrip_live_test(failure_log: &mut
     }
 }
 
+/// `ZTHABITATMGR_REMOVE_HABITAT_MATCHES_REAL_LIVE`: removes disposable habitats (real `operator_new` +
+/// real vanilla constructor at the zoo-entrance tile) through real vanilla `removeHabitat` and through
+/// the port, for three shapes: an array member, a habitat never added (both must return without
+/// touching anything, so the test frees it itself through its deleting destructor), and a pending
+/// ("world") habitat stashed by `add_habitat`. Compares the resulting exhibit array contents, the
+/// pending slot and the habitat-list dirty byte. Under the release profile `.original()` re-enters the
+/// detour, so only the debug battery compares two independent implementations.
+pub(crate) fn run_zthabitatmgr_remove_habitat_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_REMOVE_HABITAT_MATCHES_REAL_LIVE";
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+
+    let seed_tile_ptr = unsafe { zthabitatmgr::GET_ZOO_ENTRANCE_TILE.original()(mgr_ptr) } as u32;
+    if seed_tile_ptr == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no zoo entrance tile)", test_name));
+        return false;
+    }
+    let dirty_addr = get_module_base("zoo.exe") as u32 + crate::zthabitat::support::HABITAT_LIST_DIRTY_RVA;
+
+    #[derive(PartialEq, Debug)]
+    struct Outcome {
+        array_len: usize,
+        pending_set: bool,
+        dirty: u8,
+    }
+    let run = |add: bool, pending: bool, use_port: bool| -> Outcome {
+        let raw = unsafe { OPERATOR_NEW.original()(0x178) } as u32;
+        let habitat = unsafe { zthabitat::CONSTRUCTOR.original()(raw as *const u32, seed_tile_ptr as *const u32, false) } as u32;
+        if pending {
+            save_to_memory::<u8>(habitat + 0x2c, 1);
+        }
+        if add {
+            habitat_mgr.add_habitat(habitat);
+        }
+        save_to_memory::<u8>(dirty_addr, 0);
+        if use_port {
+            habitat_mgr.remove_habitat(habitat);
+        } else {
+            unsafe { zthabitatmgr::REMOVE_HABITAT_0.original()(mgr_ptr, habitat as *const i32) };
+        }
+        let outcome = Outcome {
+            array_len: habitat_mgr.exhibit_array().len(),
+            pending_set: get_from_memory::<u32>(mgr_ptr as u32 + 0x18) != 0,
+            dirty: get_from_memory::<u8>(dirty_addr),
+        };
+        // A habitat that was never added (non-pending) is left alive by an early return; free it here.
+        if !add {
+            unsafe { crate::zthabitat::support::call_vtable_slot_with_u8(habitat, 0x18, 1) };
+        }
+        outcome
+    };
+
+    for (label, add, pending) in [("array member", true, false), ("not added", false, false), ("pending", true, true)] {
+        let real = run(add, pending, false);
+        let port = run(add, pending, true);
+        if real != port {
+            failures.push(format!("{}: real={:?}, port={:?}", label, real, port));
+        }
+    }
+
+    finish_test(test_name, failures, failure_log)
+}
+
 /// Round-trips the reimplemented `ZTHabitatMgr::create_habitat` on a single, real, non-tank habitat
 /// seeded at the live zoo's own zoo-entrance tile, passing that same real tile as `resize_tile_ptr` and
 /// `gate_tile_ptr` too. Every real `createHabitat`/`placeGate` call site in the decompile corpus
@@ -8163,6 +8227,281 @@ pub(crate) fn run_zthabitatmgr_recalculate_deterioration_matches_real_live_test(
     finish_test(test_name, failures, failure_log)
 }
 
+/// Real-vs-port comparison of `ZTHabitatMgr::recalculate_characteristics` over the tick counter
+/// (`DAT_00641814`) and the manager's `+0x6c` flag: counter one short of a multiple of `0x3aa9` with the
+/// flag clear (deterioration skipped) and set (runs), an ordinary counter, and a negative one (signed
+/// `IDIV`). Each habitat's `deterioration` is seeded to a sentinel, so a skipped pass leaves it and a run
+/// zeroes/recomputes it. The per-habitat recalculation is the already-verified port on both sides (real
+/// vanilla's own loop reaches it through the detour). The counter is restored afterwards.
+pub(crate) fn run_zthabitatmgr_recalculate_characteristics_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_RECALCULATE_CHARACTERISTICS_MATCHES_REAL_LIVE";
+    const SENTINEL: u32 = 0xdead;
+    let habitat_mgr = globals().zthabitatmgr();
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let counter_addr = get_module_base("zoo.exe") as u32 + (0x0064_1814u32 - 0x0040_0000);
+    let original_counter: i32 = get_from_memory(counter_addr);
+    let original_flag: u8 = get_from_memory(mgr_ptr as u32 + 0x6c);
+
+    let record = || -> (i32, u8, Vec<(u32, u32)>) {
+        let levels = (0..habitat_mgr.exhibit_array().len())
+            .map(|i| habitat_mgr.exhibit_array().get_ptr(i))
+            .filter(|&ptr| ptr != 0)
+            .map(|ptr| (ptr, get_from_memory::<u32>(ptr + 0x134)))
+            .collect();
+        (get_from_memory(counter_addr), get_from_memory(mgr_ptr as u32 + 0x6c), levels)
+    };
+    let seed = |counter: i32, flag: u8| {
+        save_to_memory(counter_addr, counter);
+        save_to_memory::<u8>(mgr_ptr as u32 + 0x6c, flag);
+        for i in 0..habitat_mgr.exhibit_array().len() {
+            let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+            if ptr != 0 {
+                save_to_memory::<u32>(ptr + 0x134, SENTINEL);
+            }
+        }
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut skipped_runs = 0;
+    for (counter, flag) in [(0x3aa8, 0u8), (0x3aa8, 1), (5, 0), (-7, 0), (0x3aa8 * 2 + 1, 0)] {
+        seed(counter, flag);
+        hooks_zthabitatmgr::zthabitatmgr_recalculate_characteristics_real(mgr_ptr);
+        let real = record();
+        seed(counter, flag);
+        habitat_mgr.recalculate_characteristics();
+        let port = record();
+        if real != port {
+            failures.push(format!("counter={counter:#x}, flag={flag}: real={real:x?}, port={port:x?}"));
+        }
+        if real.2.iter().any(|&(_, level)| level == SENTINEL) {
+            skipped_runs += 1;
+        }
+    }
+
+    save_to_memory(counter_addr, original_counter);
+    save_to_memory::<u8>(mgr_ptr as u32 + 0x6c, original_flag);
+
+    if skipped_runs == 0 && habitat_mgr.exhibit_array().len() != 0 {
+        failures.push("no scenario skipped the deterioration pass; the multiple-of-0x3aa9 branch is untested".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Real-vs-port comparison of `ZTHabitat::add_found_species` over every live habitat, from two starting
+/// states: an empty found-species vector and one pre-seeded with the first species the empty run found
+/// (so the already-found branch and count suppression are exercised). Compares the resulting count and the
+/// vector's contents. The scratch vectors' final buffers are deliberately leaked (they were grown through
+/// vanilla's own allocator when the real side ran).
+pub(crate) fn run_habitat_add_found_species_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ADD_FOUND_SPECIES_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut species_found = 0usize;
+
+    let run = |ptr: u32, seed: Option<u32>, real: bool| -> (i32, Vec<u32>) {
+        let vec_cell = Box::new([0u32; 3]);
+        let vec_ptr = vec_cell.as_ptr() as u32;
+        let count_cell = Box::new(0i32);
+        let count_ptr = &*count_cell as *const i32 as u32;
+        if let Some(entity_type) = seed {
+            crate::zthabitat::support::vector_push_pool_alloc4(vec_ptr, entity_type);
+        }
+        if real {
+            hooks_zthabitatmgr::add_found_species_real(ptr as *const u32, vec_ptr as *const i32, count_ptr as *const i32);
+        } else {
+            unsafe { ref_from_memory::<ZTHabitat>(ptr) }.add_found_species(vec_ptr, count_ptr);
+        }
+        let begin = vec_cell[0];
+        let end = vec_cell[1];
+        let items = (begin..end).step_by(4).map(get_from_memory::<u32>).collect();
+        (*count_cell, items)
+    };
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let real_empty = run(ptr, None, true);
+        let port_empty = run(ptr, None, false);
+        if real_empty != port_empty {
+            failures.push(format!("habitat {} ({:#010x}) empty start: real={:x?}, port={:x?}", i, ptr, real_empty, port_empty));
+        }
+        species_found += real_empty.1.len();
+        if let Some(&first) = real_empty.1.first() {
+            let real_seeded = run(ptr, Some(first), true);
+            let port_seeded = run(ptr, Some(first), false);
+            if real_seeded != port_seeded {
+                failures.push(format!("habitat {} ({:#010x}) seeded start: real={:x?}, port={:x?}", i, ptr, real_seeded, port_seeded));
+            }
+        }
+    }
+    if species_found == 0 {
+        failures.push("no habitat produced a species; test would be vacuous".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Everything the species-ambients functions leave behind on a habitat that a comparison can read back
+/// without following allocator-owned pointers: the `species_list`, each `(species, Ambients)` pair as
+/// `(species, group count, world position)`, the `reviseSpeciesList` all-kinds global byte, the dirty byte
+/// and the game RNG state.
+type SpeciesAmbientsSnapshot = (Vec<u32>, Vec<(u32, u32, [u32; 3])>, u8, u8, u32);
+
+fn species_ambients_snapshot(ptr: u32) -> SpeciesAmbientsSnapshot {
+    let base = get_module_base("zoo.exe") as u32;
+    let list_begin: u32 = get_from_memory(ptr + 0x60);
+    let list_end: u32 = get_from_memory(ptr + 0x64);
+    let species = (list_begin..list_end).step_by(4).map(get_from_memory::<u32>).collect();
+    let ambients_begin: u32 = get_from_memory(ptr + 0x54);
+    let ambients_end: u32 = get_from_memory(ptr + 0x58);
+    let ambients = (ambients_begin..ambients_end)
+        .step_by(8)
+        .map(|pair| {
+            let key: u32 = get_from_memory(pair);
+            let ambients_ptr: u32 = get_from_memory(pair + 4);
+            if ambients_ptr == 0 {
+                return (key, u32::MAX, [0; 3]);
+            }
+            let groups = (get_from_memory::<u32>(ambients_ptr + 4) - get_from_memory::<u32>(ambients_ptr)) / 4;
+            (key, groups, [0xc, 0x10, 0x14].map(|off| get_from_memory::<u32>(ambients_ptr + off)))
+        })
+        .collect();
+    (
+        species,
+        ambients,
+        get_from_memory(base + (0x0063_cb35u32 - 0x0040_0000)),
+        get_from_memory(ptr + 0x31),
+        get_from_memory(base + GAME_RNG_RVA),
+    )
+}
+
+/// `ZTHABITAT_ADD_SPECIES_MATCHES_REAL_LIVE`: per habitat, runs real and port `addSpecies` from the same RNG
+/// seed for two keys - the habitat's first real species (whose ambients name is usually empty, so both
+/// early-return) and a synthetic entity-type stand-in whose `+0x3bc`/`+0x3c0` name span holds the scenario's
+/// real world-ambients name (so an `Ambients` is built at a randomly chosen owned tile) - and compares the
+/// snapshots. The key's existing pair is removed first and the pair is removed again afterwards. The
+/// synthetic key must append a pair on both sides.
+pub(crate) fn run_habitat_add_species_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_ADD_SPECIES_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let base = get_module_base("zoo.exe") as u32;
+    let rng_addr = base + GAME_RNG_RVA;
+    let original_rng: u32 = get_from_memory(rng_addr);
+
+    let scenariomgr_ptr: u32 = get_from_memory(base + (0x0063_8ff8u32 - 0x0040_0000));
+    if scenariomgr_ptr == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: ZTScenarioMgr not initialized)", test_name));
+        return false;
+    }
+    let name_ptr = unsafe { openzt_detour::generated::bfscenariomgr::GET_WORLD_AMBIENTS_NAME.original()(scenariomgr_ptr as i32) } as u32;
+    let name_bytes: Vec<u8> = (name_ptr..).map(get_from_memory::<u8>).take_while(|&b| b != 0).collect();
+    if name_bytes.is_empty() {
+        write_success_line(failure_log, &format!("{} (skipped: scenario has no world ambients name)", test_name));
+        return false;
+    }
+    let fake_name = name_bytes.clone();
+    let mut fake_species = Box::new([0u8; 0x400]);
+    let fake_key = fake_species.as_mut_ptr() as u32;
+    save_to_memory::<u32>(fake_key + 0x3bc, fake_name.as_ptr() as u32);
+    save_to_memory::<u32>(fake_key + 0x3c0, fake_name.as_ptr() as u32 + fake_name.len() as u32);
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut appended_runs = 0;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let list_begin: u32 = get_from_memory(ptr + 0x60);
+        let mut keys = vec![fake_key];
+        if list_begin != get_from_memory::<u32>(ptr + 0x64) {
+            keys.push(get_from_memory(list_begin));
+        }
+        for key in keys {
+            let run = |real: bool| {
+                habitat.remove_species(key);
+                save_to_memory::<u32>(rng_addr, 0x1234_5678 + i as u32);
+                let before = species_ambients_snapshot(ptr).1.len();
+                if real {
+                    hooks_zthabitatmgr::add_species_real(ptr as *const u32, key);
+                } else {
+                    habitat.add_species(key);
+                }
+                let snapshot = species_ambients_snapshot(ptr);
+                let appended = snapshot.1.len() == before + 1;
+                let new_pair = snapshot.1.last().copied();
+                habitat.remove_species(key);
+                (snapshot.4, appended, new_pair)
+            };
+            let real = run(true);
+            let port = run(false);
+            if key == fake_key {
+                if real.1 {
+                    appended_runs += 1;
+                } else {
+                    failures.push(format!("habitat {} ({:#010x}): real addSpecies appended nothing for the synthetic species", i, ptr));
+                }
+            }
+            if real != port {
+                failures.push(format!("habitat {} ({:#010x}) species {:#x}: real={:x?}, port={:x?}", i, ptr, key, real, port));
+            }
+        }
+    }
+    save_to_memory::<u32>(rng_addr, original_rng);
+    if appended_runs == 0 {
+        failures.push("no habitat exercised the append path; test would be vacuous".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTHABITAT_REVISE_SPECIES_LIST_MATCHES_REAL_LIVE`: per habitat, drops the last `species_list` entry (and
+/// its ambients pair) so `reviseSpeciesList` has to add it back, marks the list dirty, seeds the RNG, and
+/// compares real and port snapshots. The habitat is left fully revised.
+pub(crate) fn run_habitat_revise_species_list_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_REVISE_SPECIES_LIST_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let rng_addr = get_module_base("zoo.exe") as u32 + GAME_RNG_RVA;
+    let original_rng: u32 = get_from_memory(rng_addr);
+    let mut failures: Vec<String> = Vec::new();
+    let mut compared = 0;
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let run = |real: bool| {
+            let list_begin: u32 = get_from_memory(ptr + 0x60);
+            let list_end: u32 = get_from_memory(ptr + 0x64);
+            if list_end != list_begin {
+                habitat.remove_species(get_from_memory::<u32>(list_end - 4));
+                save_to_memory::<u32>(ptr + 0x64, list_end - 4);
+            }
+            save_to_memory::<u8>(ptr + 0x31, 1);
+            save_to_memory::<u32>(rng_addr, 0x2468_ace0 + i as u32);
+            if real {
+                hooks_zthabitatmgr::revise_species_list_real(ptr as *const u32);
+            } else {
+                habitat.revise_species_list();
+            }
+            species_ambients_snapshot(ptr)
+        };
+        let real = run(true);
+        let port = run(false);
+        compared += 1;
+        if real != port {
+            failures.push(format!("habitat {} ({:#010x}): real={:x?}, port={:x?}", i, ptr, real, port));
+        }
+    }
+    save_to_memory::<u32>(rng_addr, original_rng);
+    if compared == 0 {
+        failures.push("no habitats; test would be vacuous".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
 /// Real-vs-port comparison of `ZTHabitatMgr::mark_zoo_exterior`. The flood fill only clears the `0x40`
 /// ("in zoo") bit at tile `+0x83`, and a loaded save has already had its exterior cleared, so the test
 /// first sets `0x40` on every map tile (the pre-fill state), runs real, snapshots every tile's `+0x83`,
@@ -11369,6 +11708,82 @@ pub(crate) fn run_zthabitatmgr_get_next_fence_pair_matches_real_live_test(failur
     }
     if compared == 0 {
         write_success_line(failure_log, &format!("{} (skipped: no habitat boundary tile-pairs found)", test_name));
+        return false;
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTHABITATMGR_GET_MERGE_TANK_WALLS_LIVE`: real vanilla reads the habitat's own (empty, Rust-owned
+/// boundary pairs) vector, so there is no real result to compare. For every ordered pair of live tanks,
+/// runs the port through the installed detour (`.hooked()`) and directly, and checks that both agree, that
+/// at most two walls are produced per qualifying boundary pair, and that every wall is a real fence found
+/// in the fence slots of one of that pair's two tiles. Skips when no two tanks share a boundary pair.
+pub(crate) fn run_zthabitatmgr_get_merge_tank_walls_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_GET_MERGE_TANK_WALLS_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mgr_ptr = globals().zthabitatmgr_ptr() as *const u32;
+    let mut failures: Vec<String> = Vec::new();
+
+    let read_vector = |header: &[u32; 3]| -> Vec<u32> {
+        let (begin, end) = (header[0], header[1]);
+        (0..(end - begin) / 4).map(|i| get_from_memory::<u32>(begin + i * 4)).collect()
+    };
+
+    let tanks: Vec<u32> = (0..habitat_mgr.exhibit_array().len())
+        .map(|i| habitat_mgr.exhibit_array().get_ptr(i))
+        .filter(|&ptr| ptr != 0 && unsafe { ref_from_memory::<ZTHabitat>(ptr) }.is_tank())
+        .collect();
+    let mut total_walls = 0;
+    for &tank in &tanks {
+        let pairs = unsafe { ref_from_memory::<ZTHabitat>(tank) }.boundary_tile_pairs();
+        for &other in &tanks {
+            if other == tank {
+                continue;
+            }
+            let qualifying: Vec<(u32, u32)> = pairs.iter().copied().filter(|&(_, b)| habitat_mgr.get_tank(b) == other).collect();
+            if qualifying.is_empty() {
+                continue;
+            }
+            let mut hooked_header = [0u32; 3];
+            let mut direct_header = [0u32; 3];
+            unsafe {
+                zthabitatmgr::GET_MERGE_TANK_WALLS.hooked()(
+                    mgr_ptr,
+                    tank as *const u32,
+                    other as *const u32,
+                    hooked_header.as_mut_ptr() as *const std::ffi::c_void,
+                );
+            }
+            habitat_mgr.get_merge_tank_walls(tank, other, direct_header.as_mut_ptr() as u32);
+            let hooked = read_vector(&hooked_header);
+            let direct = read_vector(&direct_header);
+            total_walls += direct.len();
+            if hooked != direct {
+                failures.push(format!("tank {:#010x} -> {:#010x}: hooked {:x?} != direct {:x?}", tank, other, hooked, direct));
+            }
+            if direct.len() > qualifying.len() * 2 {
+                failures.push(format!("tank {:#010x} -> {:#010x}: {} walls for {} pairs", tank, other, direct.len(), qualifying.len()));
+            }
+            let candidates: Vec<u32> = qualifying
+                .iter()
+                .flat_map(|&(a, b)| [a, b])
+                .flat_map(|tile_ptr| {
+                    let tile = get_from_memory::<BFTile>(tile_ptr);
+                    (0..4).map(move |i| ZTHabitat::fence_slot_by_index(&tile, i))
+                })
+                .collect();
+            for &wall in &direct {
+                if wall == 0 || !candidates.contains(&wall) || !unsafe { entity_type_matches(wall, crate::zthabitatmgr::RVA_FENCE_TYPE_CHECK_ARG) } {
+                    failures.push(format!("tank {:#010x} -> {:#010x}: wall {:#010x} is not a fence on a pair tile", tank, other, wall));
+                }
+            }
+            for header in [hooked_header, direct_header] {
+                free_event_vector_buffer(header[0], header[2].wrapping_sub(header[0]));
+            }
+        }
+    }
+    if total_walls == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no two tanks share fenced boundary pairs)", test_name));
         return false;
     }
     finish_test(test_name, failures, failure_log)

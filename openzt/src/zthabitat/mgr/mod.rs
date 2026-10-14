@@ -19,6 +19,7 @@ use openzt_detour::generated::{
         CREATE_HABITAT as ZTHABITATMGR_CREATE_HABITAT,
         ADD_HABITAT as ZTHABITATMGR_ADD_HABITAT,
         UPDATE as ZTHABITATMGR_UPDATE,
+        RECALCULATE_CHARACTERISTICS as ZTHABITATMGR_RECALCULATE_CHARACTERISTICS,
     },
 };
 use tracing::error;
@@ -1646,6 +1647,31 @@ pub mod hooks_zthabitatmgr {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_tank(tile as u32) as *const i32
     }
 
+    #[detour(REMOVE_HABITAT_0)]
+    unsafe extern "thiscall" fn remove_habitat(this: *const u32, habitat: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.remove_habitat(habitat as u32)
+    }
+
+    #[detour(MERGE_TANKS)]
+    unsafe extern "thiscall" fn merge_tanks(this: *const u32, survivor: *const u32, absorbed: *const u32, resize_tile: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.merge_tanks(survivor as u32, absorbed as u32, resize_tile as u32)
+    }
+
+    #[detour(SPLIT_TANK)]
+    unsafe extern "thiscall" fn split_tank(this: *const u32, tank: *const i32, tile_a: *const u32, tile_b: *const u32, hint_tile: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.split_tank(tank as u32, tile_a as u32, tile_b as u32, hint_tile as u32) as u32
+    }
+
+    #[detour(SPLIT_TANK_INTO_LAND)]
+    unsafe extern "thiscall" fn split_tank_into_land(this: *const u32, tank: *const u32, tile_a: *const u32, tile_b: *const u32, hint_tile: *const u32) -> u32 {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.split_tank_into_land(tank as u32, tile_a as u32, tile_b as u32, hint_tile as u32) as u32
+    }
+
+    #[detour(GET_MERGE_TANK_WALLS)]
+    unsafe extern "thiscall" fn get_merge_tank_walls(this: *const u32, tank: *const u32, other: *const u32, out_vector: *const std::ffi::c_void) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.get_merge_tank_walls(tank as u32, other as u32, out_vector as u32)
+    }
+
     #[detour(ZTHABITAT_GET_OUTERMOST_TANK)]
     unsafe extern "thiscall" fn get_outermost_tank(this: *const u32) -> *const u32 {
         unsafe { ref_from_memory::<ZTHabitat>(this) }.get_outermost_tank() as *const u32
@@ -1713,6 +1739,46 @@ pub mod hooks_zthabitatmgr {
     #[detour(RECALCULATE_DETERIORATION)]
     unsafe extern "thiscall" fn recalculate_deterioration(this: *const u32) {
         unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.recalculate_deterioration()
+    }
+
+    #[detour(ADD_SPECIES)]
+    unsafe extern "thiscall" fn add_species(this: *const u32, species_key: u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_species(species_key)
+    }
+
+    #[detour(REVISE_SPECIES_LIST)]
+    unsafe extern "thiscall" fn revise_species_list(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.revise_species_list()
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn add_species_real(this: *const u32, species_key: u32) {
+        unsafe { ADD_SPECIES_DETOUR.call(this, species_key) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn revise_species_list_real(this: *const u32) {
+        unsafe { REVISE_SPECIES_LIST_DETOUR.call(this) }
+    }
+
+    #[detour(ADD_FOUND_SPECIES)]
+    unsafe extern "thiscall" fn add_found_species(this: *const u32, found_vec: *const i32, count: *const i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.add_found_species(found_vec as u32, count as u32)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn add_found_species_real(this: *const u32, found_vec: *const i32, count: *const i32) {
+        unsafe { ADD_FOUND_SPECIES_DETOUR.call(this, found_vec, count) }
+    }
+
+    #[detour(ZTHABITATMGR_RECALCULATE_CHARACTERISTICS)]
+    unsafe extern "thiscall" fn zthabitatmgr_recalculate_characteristics(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.recalculate_characteristics()
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn zthabitatmgr_recalculate_characteristics_real(this: *const u32) {
+        unsafe { ZTHABITATMGR_RECALCULATE_CHARACTERISTICS_DETOUR.call(this) }
     }
 
     #[detour(FILL_ZOO_EXTERIOR)]

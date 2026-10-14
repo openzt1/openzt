@@ -6,7 +6,7 @@
 //! vanilla reader sees, so the struct layout and vanilla's own teardown of those fields stay valid. Every
 //! vanilla reader of either container is ported (`getNearestViewingArea`/`getRandomViewingArea`/
 //! `getViewingAreasWithGuests`/`update`/`getCloseOutsideTile`/...), and `ZTTankExhibit::setTankHeight`'s
-//! own loop over the vector is covered by its partial-override detour.
+//! own loop over the vector is `ZTHabitat::recreate_oas` inside its full port.
 //!
 //! The `ZTViewingArea` objects themselves stay vanilla (constructed and destroyed through vanilla's own
 //! constructor/destructor); the store only holds their pointers. Nothing Rust-allocated is ever handed to

@@ -4970,7 +4970,7 @@ pub mod zttankexhibit {
     pub const IS_ILLEGAL_ENTITY: FunctionDef<unsafe extern "stdcall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x0045da65, function_type: PhantomData};
     pub const GET_ILLEGAL_ENTITIES: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void, i32)> = FunctionDef{address: 0x0045da8b, function_type: PhantomData};
     pub const LOAD_PROPERTIES: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00463a0e, function_type: PhantomData};
-    pub const CONFIRM_SELL_OFF: FunctionDef<unsafe extern "stdcall" fn() -> *const i8> = FunctionDef{address: 0x00485aa7, function_type: PhantomData};
+    pub const CONFIRM_SELL_OFF: FunctionDef<unsafe extern "stdcall" fn() -> bool> = FunctionDef{address: 0x00485aa7, function_type: PhantomData};
     pub const RECLAIM_TILES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00487a63, function_type: PhantomData};
     pub const REMOVE_HABITAT_TILES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00487ae3, function_type: PhantomData};
     pub const ADD_HABITAT_TILES: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32)> = FunctionDef{address: 0x00487b19, function_type: PhantomData};
@@ -5002,6 +5002,8 @@ pub mod zttankexhibit {
     pub const DO_DEPTH_SUITABILITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x005af4b9, function_type: PhantomData};
     pub const ADD_WATER_RIPPLES: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005af78f, function_type: PhantomData};
     pub const ADD_WATER_RIPPLE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32, *const u32)> = FunctionDef{address: 0x005af81a, function_type: PhantomData};
+    pub const IS_MURKY_WATER: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005b320b, function_type: PhantomData};
+    pub const IS_VERY_MURKY_WATER: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x005b32c7, function_type: PhantomData};
     pub const SAVE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x00606398, function_type: PhantomData};
     pub const SET_SALINITY: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x0060644b, function_type: PhantomData};
     pub const DRAIN: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x006064ed, function_type: PhantomData};

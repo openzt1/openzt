@@ -20,17 +20,14 @@ use openzt_detour::generated::{
         zthabitat::{
             CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
         },
-        zthabitatmgr::{MERGE_TANKS, NAME_HABITAT, REMOVE_HABITAT_0, SPLIT_TANK, SPLIT_TANK_INTO_LAND},
-        zttankexhibit::{
-            CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR,
-            UPDATE_TANK_INFO as ZTTANKEXHIBIT_UPDATE_TANK_INFO,
-        },
-        ztmapview::ADD_UNDO_ACTION,
+        zthabitatmgr::NAME_HABITAT,
+        ztmapview::{ADD_UNDO_ACTION, REMOVE_ENTITY as ZTMAPVIEW_REMOVE_ENTITY, SET_SELECTED_ENTITY_0 as ZTMAPVIEW_SET_SELECTED_ENTITY_0},
         ztstaff::REMOVE_ASSIGNED_HABITAT as ZTSTAFF_REMOVE_ASSIGNED_HABITAT,
         zttankwall::SET_IS_COMBINED_CONNECTOR,
         ztui_buyh::REFRESH as ZTUI_BUYH_REFRESH,
         ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
-        ztui_habitatinfo::{ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT, REMOVE_ALL_HABITATS as ZTUI_HABITATINFO_REMOVE_ALL_HABITATS},
+        ztui_tankmodify::FETCH_VALUES_FROM_TANK as ZTUI_TANKMODIFY_FETCH_VALUES_FROM_TANK,
+        ztui_habitatinfo::{ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT, REMOVE_ALL_HABITATS as ZTUI_HABITATINFO_REMOVE_ALL_HABITATS, REMOVE_HABITAT as ZTUI_HABITATINFO_REMOVE_HABITAT},
         ztviewingarea::REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
         ztvisibilitytesting::TEST_LOS,
         ztworldmgr::{
@@ -54,12 +51,20 @@ use crate::{
     write_live,
 };
 use super::super::habitat::ZTHabitat;
+use super::super::tank_exhibit::{plan_merge, ZTTankExhibit};
 use super::super::support::*;
 use super::super::viewing_areas;
 use glam::i32::IVec3;
 
 /// `DAT_0063b988`: the vanilla `std::string` tag `ZTWorldMgr::getBuildingList` filters grandstand buildings by.
+/// `ZTMapView`'s currently selected entity pointer.
+const MAPVIEW_SELECTED_ENTITY_OFFSET: u32 = 0x438;
 const RVA_GRANDSTAND_TAG_STRING: u32 = 0x0063_b988 - 0x0040_0000;
+
+/// `DAT_00641814`: the signed tick counter [`ZTHabitatMgr::recalculate_characteristics`] increments on every
+/// call; every `0x3aa9`th value skips the forced [`ZTHabitatMgr::recalculate_deterioration`].
+const RVA_RECALCULATE_TICK_COUNTER: u32 = 0x0064_1814 - 0x0040_0000;
+const DETERIORATION_SKIP_PERIOD: i32 = 0x3aa9;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -563,7 +568,7 @@ impl ZTHabitatMgr {
 
             let mut tank_ptr = unsafe { OPERATOR_NEW.original()(0x1e8) } as u32;
             if tank_ptr != 0 {
-                tank_ptr = unsafe { ZTTANKEXHIBIT_CONSTRUCTOR.original()(tank_ptr as *const u32, seed_tile_ptr as *const u32, false, start_filled) } as u32;
+                tank_ptr = super::super::tank_exhibit::ZTTankExhibit::construct(tank_ptr, seed_tile_ptr, false, start_filled);
             }
             habitat_ptr = tank_ptr;
 
@@ -575,7 +580,7 @@ impl ZTHabitatMgr {
                 self.find_better_gates_for_neighbors(tank_ptr);
             }
             self.do_show_check(tank_ptr, false);
-            unsafe { ZTTANKEXHIBIT_UPDATE_TANK_INFO.original()(tank_ptr as *const u32) };
+            unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(tank_ptr as *const u32) }.update_tank_info();
             let has_illegal_entities = unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(tank_ptr as *const u32) }.remove_illegal_entities(1, !show_active);
             if !has_illegal_entities {
                 self.add_habitat(tank_ptr);
@@ -670,7 +675,7 @@ impl ZTHabitatMgr {
             let tile = get_from_memory::<BFTile>(tile_ptr);
             let habitat_ptr = self.get_habitat_ptr(tile.pos.x, tile.pos.y);
             if habitat_ptr != 0 && get_from_memory::<u32>(habitat_ptr) == ZTHabitat::TANK_VTABLE_PTR {
-                unsafe { ZTTANKEXHIBIT_UPDATE_TANK_INFO.original()(habitat_ptr as *const u32) };
+                unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(habitat_ptr as *const u32) }.update_tank_info();
             }
         }
         save_to_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA, 0);
@@ -987,7 +992,7 @@ impl ZTHabitatMgr {
                         if tank_ptr != 0 {
                             self.snap_tank_walls_inward(tank_ptr);
                             self.do_show_check(tank_ptr, false);
-                            unsafe { ZTTANKEXHIBIT_UPDATE_TANK_INFO.original()(tank_ptr as *const u32) };
+                            unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(tank_ptr as *const u32) }.update_tank_info();
                         }
                     }
                 }
@@ -1065,13 +1070,8 @@ impl ZTHabitatMgr {
         let old_habitat = unsafe { ref_from_memory::<ZTHabitat>(old_habitat_ptr) };
 
         if old_habitat.is_tank() {
-            let split_ok = low_byte_bool(unsafe {
-                SPLIT_TANK.original()(mgr_ptr, old_habitat_ptr as *const i32, tile_ptr as *const u32, neighbour_ptr as *const u32, tile_ptr as *const u32)
-            });
-            if !split_ok {
-                unsafe {
-                    SPLIT_TANK_INTO_LAND.original()(mgr_ptr, old_habitat_ptr as *const u32, tile_ptr as *const u32, neighbour_ptr as *const u32, tile_ptr as *const u32)
-                };
+            if !self.split_tank(old_habitat_ptr, tile_ptr, neighbour_ptr, tile_ptr) {
+                self.split_tank_into_land(old_habitat_ptr, tile_ptr, neighbour_ptr, tile_ptr);
                 self.check_exhibit_morph(tile_ptr, direction);
             }
             return;
@@ -1217,13 +1217,12 @@ impl ZTHabitatMgr {
     /// 6. **Merge path**: picks a survivor (the habitat that absorbs the other) - the "world" habitat
     ///    always wins; otherwise whichever side's own entrance *isn't* sitting exactly on the removed
     ///    fence survives, with `leadsTo` connectivity and then habitat size as tie-breakers when neither
-    ///    (or both) entrances match. If survivor and absorbed are **both** tanks, calls through to
-    ///    `mergeTanks` and returns - tank merging (wall geometry) is out of this pass's own scope, same as
-    ///    `ZTHabitatMgr::splitTank`/`splitTankIntoLand` in `fence_placed`. If the *survivor* turns out to
+    ///    (or both) entrances match. If survivor and absorbed are **both** tanks, calls
+    ///    [`Self::merge_tanks`] and returns. If the *survivor* turns out to
     ///    be a tank but the absorbed side isn't, swaps them (captures the tank's own current gate first via
     ///    [`ZTHabitat::get_gate`], to relocate onto the real survivor below) - real vanilla prefers keeping
     ///    a plain habitat's own identity over a tank's. Then: removes illegal entities from a tank about to
-    ///    be absorbed, [`REMOVE_HABITAT_0`]s it, resizes/dirties the survivor around whichever tile it now
+    ///    be absorbed, [`Self::remove_habitat`]s it, resizes/dirties the survivor around whichever tile it now
     ///    owns, relocates the captured gate onto the survivor if one was captured
     ///    ([`Self::replace_gate`] + [`ZTHabitat::move_gate_to_inner`] - the same internal helper
     ///    `Self::place_gate` uses, already fixed against the two live-crash bugs its own doc comment
@@ -1233,7 +1232,6 @@ impl ZTHabitatMgr {
     /// destroy/merge habitats with no known synthetic-safe input - detoured for manual/interactive live
     /// verification, not covered by an automated live test.
     pub fn fence_removed(&self, tile_ptr: u32, direction: u32) {
-        let mgr_ptr = self as *const Self as *const u32;
         let self_addr = self as *const Self as u32;
         let base = get_module_base("zoo.exe") as u32;
         if get_from_memory::<u8>(base + GATE_CONVERSION_IN_PROGRESS_RVA) != 0 {
@@ -1313,7 +1311,7 @@ impl ZTHabitatMgr {
             let survivor_is_tank = unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.is_tank();
             let absorbed_is_tank = unsafe { ref_from_memory::<ZTHabitat>(absorbed_ptr) }.is_tank();
             if survivor_is_tank && absorbed_is_tank {
-                unsafe { MERGE_TANKS.original()(mgr_ptr, survivor_ptr as *const u32, absorbed_ptr as *const u32, resize_tile_ptr as *const u32) };
+                self.merge_tanks(survivor_ptr as u32, absorbed_ptr as u32, resize_tile_ptr as u32);
                 return;
             }
 
@@ -1327,7 +1325,7 @@ impl ZTHabitatMgr {
             if unsafe { ref_from_memory::<ZTHabitat>(absorbed_ptr) }.is_tank() {
                 unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(absorbed_ptr as *const u32) }.remove_illegal_entities(0, false);
             }
-            unsafe { REMOVE_HABITAT_0.original()(mgr_ptr, absorbed_ptr as *const i32) };
+            self.remove_habitat(absorbed_ptr as u32);
             unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.resize(resize_tile_ptr);
             unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.set_dirty_characteristics();
             if gate_fence_to_move != 0 {
@@ -1419,7 +1417,7 @@ impl ZTHabitatMgr {
     ///    the new habitat afterward.
     /// 4. If the *original* habitat was a tank, removes its illegal entities
     ///    ([`ZTTankExhibit::remove_illegal_entities`](super::super::tank_exhibit::ZTTankExhibit::remove_illegal_entities)) before destroying it.
-    /// 5. [`Self::replace_gate`], captures the current gate-tile-in/out pair, [`REMOVE_HABITAT_0`]s the
+    /// 5. [`Self::replace_gate`], captures the current gate-tile-in/out pair, [`Self::remove_habitat`]s the
     ///    habitat, then [`Self::replace_gate`] again (matching real vanilla's own two calls either side
     ///    of the removal) - the same "capture then call twice" shape [`Self::fence_removed`]'s own merge
     ///    path already uses around `move_gate_to_inner`.
@@ -1507,7 +1505,7 @@ impl ZTHabitatMgr {
         self.replace_gate();
         let gate_tile_in_ptr = habitat.gate_tile_in_ptr();
         let gate_tile_out_ptr = habitat.gate_tile_out_ptr();
-        unsafe { REMOVE_HABITAT_0.original()(self as *const Self as *const u32, habitat_ptr as *const i32) };
+        self.remove_habitat(habitat_ptr as u32);
         self.replace_gate();
 
         if gate_fence_ptr != 0 {
@@ -3717,6 +3715,344 @@ impl ZTHabitatMgr {
         }
     }
 
+    /// Ports `ZTHabitatMgr::getMergeTankWalls` (`ZTHabitatMgr_getMergeTankWalls.c`/`.asm`,
+    /// `GET_MERGE_TANK_WALLS` at `0x00487498`): for every boundary pair `(a, b)` of `tank_ptr` whose far
+    /// tile `b` lies in `other_ptr`, appends the `ZTFence` between them as seen from `a` and then as seen
+    /// from `b` (each skipped when absent or not a fence) to the vanilla `vector<ZTFence*>` header at
+    /// `out_vector`. Reads the Rust-owned pair store, since vanilla's own pair vector is empty.
+    pub fn get_merge_tank_walls(&self, tank_ptr: u32, other_ptr: u32, out_vector: u32) {
+        let tank = unsafe { ref_from_memory::<ZTHabitat>(tank_ptr) };
+        for (tile_a_ptr, tile_b_ptr) in tank.boundary_tile_pairs() {
+            if self.get_tank(tile_b_ptr) != other_ptr {
+                continue;
+            }
+            for (from, to) in [(tile_a_ptr, tile_b_ptr), (tile_b_ptr, tile_a_ptr)] {
+                let fence = self.fence_between_tiles(from, to);
+                if fence != 0 {
+                    crate::vanilla_vector::push_word(out_vector, fence, free_event_vector_buffer);
+                }
+            }
+        }
+    }
+
+    /// The `ZTFence` on `from`'s edge facing `to`, or `0` when the tiles are not adjacent, the slot is
+    /// empty, or the occupant is not a fence.
+    pub(crate) fn fence_between_tiles(&self, from: u32, to: u32) -> u32 {
+        if from == 0 || to == 0 {
+            return 0;
+        }
+        let dir = unsafe { BFMAP_GET_DIRECTION_0.original()(from as i32, to as i32) };
+        if dir == -1 {
+            return 0;
+        }
+        let from_tile = get_from_memory::<BFTile>(from);
+        let fence = ZTHabitat::fence_slot_by_index(&from_tile, dir / 2);
+        if fence != 0 && unsafe { entity_type_matches(fence, RVA_FENCE_TYPE_CHECK_ARG) } {
+            fence
+        } else {
+            0
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::removeHabitat` (`ZTHabitatMgr_removeHabitat_0.c`/`.asm`, `REMOVE_HABITAT_0` at
+    /// `0x0050c515`, including its outlined tail `REMOVE_HABITAT_1` at `0x005b66ea`, which is the same
+    /// body reached with the "entrance fence is live" flag in `AL`):
+    ///
+    /// 1. A habitat that is not the pending/"world" kind (`unknown_flag_0x2c` clear) must be in the array,
+    ///    else this returns without doing anything.
+    /// 2. If its entrance fence (the `entrance_rotation / 2` edge of `entrance_tile_ptr`) is a live world
+    ///    entity, that fence is stashed in `pending_gate_fence_ptr`, the habitat's entrance is cleared, and
+    ///    the map view's selection is dropped when it was that fence.
+    /// 3. Staff assignments and thoughts for the habitat are cleared.
+    /// 4. A pending habitat just nulls `pending_habitat_ptr`; an array member gets the `0x2716` event through
+    ///    its own vtable slot `+0`, its grandstands emptied, its habitat-list UI entry removed, and is
+    ///    erased from the array.
+    /// 5. `pending_place_gate_habitat_ptr` is nulled if it named this habitat, the habitat is destroyed
+    ///    through its deleting destructor (vtable `+0x18`), and the habitat-list dirty byte and buy-panel
+    ///    refresh run.
+    pub fn remove_habitat(&self, habitat_ptr: u32) {
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) };
+        let is_pending = habitat.unknown_flag_0x2c != 0;
+        let (array_start, array_end, _) = self.exhibit_array.raw_parts();
+        let mut erase_at = array_end;
+        if !is_pending {
+            match (array_start..array_end).step_by(4).find(|&slot| get_from_memory::<u32>(slot) == habitat_ptr) {
+                Some(slot) => erase_at = slot,
+                None => return,
+            }
+        }
+
+        let entrance_tile_ptr = habitat.entrance_tile_ptr;
+        let entrance_rotation = habitat.entrance_rotation;
+        if entrance_tile_ptr != 0 && entrance_rotation != u32::MAX {
+            let entrance_tile = get_from_memory::<BFTile>(entrance_tile_ptr);
+            let fence = ZTHabitat::fence_slot_by_index(&entrance_tile, (entrance_rotation / 2) as i32);
+            let world_ptr = globals().ztworldmgr_ptr() as *const u32;
+            if fence != 0 && unsafe { BFWORLDMGR_VERIFY_ENTITY_0.original()(world_ptr, fence as *const u32) } != 0 {
+                write_live!(self, pending_gate_fence_ptr, fence);
+                write_live!(habitat, entrance_tile_ptr, 0);
+                write_live!(habitat, entrance_rotation, u32::MAX);
+                let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+                if fence == get_from_memory::<u32>(mapview_ptr + MAPVIEW_SELECTED_ENTITY_OFFSET) {
+                    unsafe { ZTMAPVIEW_SET_SELECTED_ENTITY_0.original()(mapview_ptr as *const u32, std::ptr::null(), true) };
+                }
+            }
+        }
+
+        Self::clear_staff_habitat(habitat_ptr);
+        globals().ztthoughtmgr().remove_thoughts_by_habitat(habitat_ptr, false);
+
+        if is_pending {
+            write_live!(self, pending_habitat_ptr, 0);
+        } else {
+            let show_info_id = habitat.get_show_info_id() as u32;
+            let send_event: extern "thiscall" fn(u32, u32, u32, u32, u32, u32, u32) =
+                unsafe { std::mem::transmute(get_from_memory::<u32>(get_from_memory::<u32>(habitat_ptr))) };
+            send_event(habitat_ptr, 0x2716, show_info_id, 0x53, 0, 0, 1);
+            self.empty_grandstands(show_info_id as u16);
+            unsafe { ZTUI_HABITATINFO_REMOVE_HABITAT.original()(habitat_ptr as *const i32) };
+            let (_, array_end, array_cap_end) = self.exhibit_array.raw_parts();
+            let mut slot = erase_at;
+            while slot + 4 < array_end {
+                save_to_memory::<u32>(slot, get_from_memory::<u32>(slot + 4));
+                slot += 4;
+            }
+            self.exhibit_array.set_raw_parts(array_start, array_end - 4, array_cap_end);
+        }
+
+        if self.pending_place_gate_habitat_ptr == habitat_ptr {
+            write_live!(self, pending_place_gate_habitat_ptr, 0);
+        }
+        if habitat_ptr != 0 {
+            unsafe { call_vtable_slot_with_u8(habitat_ptr, 0x18, 1) };
+        }
+        save_to_memory::<u8>(get_module_base("zoo.exe") as u32 + HABITAT_LIST_DIRTY_RVA, 1);
+        unsafe { ZTUI_BUYH_REFRESH.original()() };
+    }
+
+    /// Ports `ZTHabitatMgr::mergeTanks` (`ZTHabitatMgr_mergeTanks.c`/`.asm`, `MERGE_TANKS` at `0x0048712c`):
+    /// folds the tank `absorbed_ptr` into `survivor_ptr`.
+    ///
+    /// 1. Collects the walls between the two tanks ([`Self::get_merge_tank_walls`]) and snapshots both
+    ///    tanks ([`ZTTankExhibit::merge_side`]) - everything [`plan_merge`] needs, taken before the
+    ///    absorbed tank is destroyed.
+    /// 2. Destroys the absorbed tank ([`Self::remove_habitat`]), resizes the survivor around
+    ///    `resize_tile_ptr`, and marks it dirty (`show_unit_scan_pending` set).
+    /// 3. When the survivor has a gate (both gate tiles non-null): snaps its walls inward, reclaims and
+    ///    levels its tiles, applies the planned base level and height, then fills it or (drained) drains
+    ///    it and removes illegal entities; stamps the planned salinity into both water-type fields, sets
+    ///    the purity, cleans the water if drained, and refreshes the show check, gate, tank info,
+    ///    amphibious neighbours and the tank-modify panel.
+    /// 4. Unless the map view is undoing, removes each collected wall entity from it.
+    pub fn merge_tanks(&self, survivor_ptr: u32, absorbed_ptr: u32, resize_tile_ptr: u32) {
+        let survivor = unsafe { ref_from_memory::<ZTTankExhibit>(survivor_ptr as *const u32) };
+        let absorbed = unsafe { ref_from_memory::<ZTTankExhibit>(absorbed_ptr as *const u32) };
+
+        let mut walls = [0u32; 3];
+        self.get_merge_tank_walls(survivor_ptr, absorbed_ptr, walls.as_mut_ptr() as u32);
+        let plan = plan_merge(&survivor.merge_side(), &absorbed.merge_side());
+
+        self.remove_habitat(absorbed_ptr);
+        survivor.resize(resize_tile_ptr);
+        survivor.set_dirty_characteristics();
+        write_live!(survivor.habitat, show_unit_scan_pending, 1u8);
+        if survivor.gate_tile_in_ptr() != 0 && survivor.gate_tile_out_ptr() != 0 {
+            self.snap_tank_walls_inward(survivor_ptr);
+            survivor.reclaim_tiles();
+            survivor.level_all_tiles();
+            survivor.set_base_level(plan.base_level);
+            survivor.set_tank_height(plan.tank_height);
+            if plan.is_filled {
+                survivor.fill();
+            } else {
+                survivor.drain();
+                survivor.remove_illegal_entities(0, false);
+            }
+            survivor.set_merged_water_type(plan.salinity);
+            survivor.set_water_purity(plan.water_purity);
+            if !plan.is_filled {
+                survivor.set_water_clean();
+            }
+            self.do_show_check(survivor_ptr, false);
+            self.replace_gate();
+            survivor.update_tank_info();
+            self.update_amphibious_neighbors(survivor_ptr);
+            unsafe { ZTUI_TANKMODIFY_FETCH_VALUES_FROM_TANK.original()() };
+        }
+
+        let mapview_ptr = unsafe { ZTUI_GENERAL_GET_MAPVIEW.original()() } as u32;
+        if get_from_memory::<u8>(mapview_ptr + 0x378) == 0 {
+            let (begin, end) = (walls[0], walls[1]);
+            for slot in (begin..end).step_by(4) {
+                unsafe { ZTMAPVIEW_REMOVE_ENTITY.original()(mapview_ptr as *const u32, get_from_memory::<u32>(slot) as *const i32, 0) };
+            }
+        }
+        free_event_vector_buffer(walls[0], walls[2].wrapping_sub(walls[0]));
+    }
+
+    /// Allocates and constructs a plain `ZTHabitat` on `tile_ptr` (`operator new(0x178)` + vanilla constructor),
+    /// returning `0` when the allocation fails.
+    fn new_plain_habitat(tile_ptr: u32) -> u32 {
+        let ptr = unsafe { OPERATOR_NEW.original()(0x178) } as u32;
+        if ptr == 0 {
+            return 0;
+        }
+        unsafe { ZTHABITAT_CONSTRUCTOR.original()(ptr as *const u32, tile_ptr as *const u32, false) as u32 }
+    }
+
+    /// Picks `placeGate`'s three tile arguments from a habitat's boundary pairs, as `splitTankIntoLand`'s two
+    /// inlined scans do: the first pair whose second tile belongs to a "world" habitat (`unknown_flag_0x2c`)
+    /// and is inside the zoo yields `(first, second, first)`; a null `first` in that pair, or no such pair,
+    /// yields `defaults`.
+    fn gate_hints_from_pairs(&self, pairs: &[(u32, u32)], defaults: (u32, u32, u32)) -> (u32, u32, u32) {
+        for &(first, second) in pairs {
+            if second == 0 {
+                continue;
+            }
+            let tile = get_from_memory::<BFTile>(second);
+            let habitat_ptr = self.get_habitat_ptr(tile.pos.x, tile.pos.y);
+            if habitat_ptr == 0 || get_from_memory::<u8>(habitat_ptr + 0x2c) == 0 {
+                continue;
+            }
+            if low_byte_bool(unsafe { BFTILE_IS_IN_ZOO.original()(second as *const u32, 1) }) {
+                return if first == 0 { defaults } else { (first, second, first) };
+            }
+        }
+        defaults
+    }
+
+    /// Ports `ZTHabitatMgr::splitTankIntoLand` (`ZTHabitatMgr_splitTankIntoLand.c`/`.asm`, `SPLIT_TANK_INTO_LAND`
+    /// at `0x006044a5`): a fence placed through `tank_ptr` leaves two land habitats instead of two tanks.
+    ///
+    /// Removes the tank ([`Self::remove_habitat`]), replaces the gate, then builds, names and registers one
+    /// plain habitat per side (`tile_a_ptr` first, then `tile_b_ptr`). Each side then gets a gate: the hints
+    /// come from [`Self::gate_hints_from_pairs`] over that habitat's boundary pairs, defaulting to
+    /// `(a, b, hint)` for the first habitat and `(b, a, hint)` for the second. The first habitat's pairs
+    /// are snapshotted before its own `placeGate` and the second's are read after it, as vanilla's
+    /// temporary-vector copies do. Finally refreshes both habitats' amphibious neighbours. Always `true`.
+    pub fn split_tank_into_land(&self, tank_ptr: u32, tile_a_ptr: u32, tile_b_ptr: u32, hint_tile_ptr: u32) -> bool {
+        self.remove_habitat(tank_ptr);
+        self.replace_gate();
+
+        let mgr_ptr = self as *const Self as *const u32;
+        let habitat_a_ptr = Self::new_plain_habitat(tile_a_ptr);
+        unsafe { NAME_HABITAT.original()(mgr_ptr, habitat_a_ptr as *const u32) };
+        self.add_habitat(habitat_a_ptr);
+
+        let habitat_b_ptr = Self::new_plain_habitat(tile_b_ptr);
+        unsafe { NAME_HABITAT.original()(mgr_ptr, habitat_b_ptr as *const u32) };
+        self.add_habitat(habitat_b_ptr);
+
+        let pairs_a = unsafe { ref_from_memory::<ZTHabitat>(habitat_a_ptr) }.boundary_tile_pairs();
+        let (t1, t2, t3) = self.gate_hints_from_pairs(&pairs_a, (tile_a_ptr, tile_b_ptr, hint_tile_ptr));
+        self.place_gate(habitat_a_ptr, t1, t2, t3);
+
+        let pairs_b = unsafe { ref_from_memory::<ZTHabitat>(habitat_b_ptr) }.boundary_tile_pairs();
+        let (t1, t2, t3) = self.gate_hints_from_pairs(&pairs_b, (tile_b_ptr, tile_a_ptr, hint_tile_ptr));
+        self.place_gate(habitat_b_ptr, t1, t2, t3);
+
+        self.update_amphibious_neighbors(habitat_a_ptr);
+        self.update_amphibious_neighbors(habitat_b_ptr);
+        true
+    }
+
+    /// Ports `ZTHabitatMgr::splitTank` (`ZTHabitatMgr_splitTank.c`/`.asm`, `SPLIT_TANK` at `0x004877bf`): a fence
+    /// placed through `tank_ptr` splits it into two tanks, the original keeping `tile_a_ptr`'s side and a new
+    /// tank taking `tile_b_ptr`'s. Returns `false`, leaving the tank reclaimed but unsplit, when either side
+    /// would not form a tank (the caller then falls back to [`Self::split_tank_into_land`]).
+    ///
+    /// 1. Remembers the tank's entrance tile (its neighbour in the entrance rotation when the tile no longer
+    ///    belongs to the tank).
+    /// 2. Builds a throwaway habitat on each side, runs `doTankCheck` on both and destroys them.
+    /// 3. Reclaims the tank's tiles and undoes the two `habitatNum` increments the throwaways cost.
+    /// 4. On success: resizes the tank to side A, constructs the new tank on side B, copies height, water
+    ///    type, purity, level and the filled/drained state across, names and registers it, and places its
+    ///    gate - the hint tiles swap and both tanks resize and re-snap when the remembered entrance tile
+    ///    does not belong to the original tank. Finishes with the show/amphibious neighbour refresh.
+    pub fn split_tank(&self, tank_ptr: u32, tile_a_ptr: u32, tile_b_ptr: u32, hint_tile_ptr: u32) -> bool {
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr as *const u32) };
+        let mgr_ptr = self as *const Self as *const u32;
+
+        let mut entrance_ptr = tank.habitat.entrance_tile_ptr;
+        if entrance_ptr != 0 {
+            let entrance = get_from_memory::<BFTile>(entrance_ptr);
+            if self.get_habitat_ptr(entrance.pos.x, entrance.pos.y) != tank_ptr {
+                entrance_ptr = get_neighbour_raw(globals().ztworldmgr(), entrance_ptr, tank.habitat.entrance_rotation);
+            }
+        }
+
+        let probe_b = Self::new_plain_habitat(tile_b_ptr);
+        let probe_a = Self::new_plain_habitat(tile_a_ptr);
+        let side_b_is_tank = unsafe { ref_from_memory::<ZTHabitat>(probe_b) }.do_tank_check();
+        let side_a_is_tank = unsafe { ref_from_memory::<ZTHabitat>(probe_a) }.do_tank_check();
+        unsafe {
+            if probe_b != 0 {
+                call_vtable_slot_with_u8(probe_b, 0, 1);
+            }
+            if probe_a != 0 {
+                call_vtable_slot_with_u8(probe_a, 0, 1);
+            }
+        }
+
+        tank.reclaim_tiles();
+        self.decrement_habitat_num();
+        self.decrement_habitat_num();
+        if !(side_b_is_tank && side_a_is_tank) {
+            return false;
+        }
+
+        tank.habitat.resize(tile_a_ptr);
+        tank.habitat.set_dirty_characteristics();
+        self.snap_tank_walls_inward(tank_ptr);
+        tank.update_tank_info();
+
+        let mut new_ptr = unsafe { OPERATOR_NEW.original()(0x1e8) } as u32;
+        if new_ptr != 0 {
+            new_ptr = ZTTankExhibit::construct(new_ptr, tile_b_ptr, false, false);
+        }
+        let new_tank = unsafe { ref_from_memory::<ZTTankExhibit>(new_ptr as *const u32) };
+        self.snap_tank_walls_inward(new_ptr);
+        new_tank.set_tank_height(tank.get_tank_height() as i32);
+        new_tank.set_merged_water_type(*tank.current_water_type());
+        new_tank.set_water_purity(tank.get_water_purity());
+        new_tank.set_water_level(tank.get_water_level() as i32);
+        if !*tank.is_filled() {
+            new_tank.drain();
+        }
+        new_tank.update_tank_info();
+        unsafe { NAME_HABITAT.original()(mgr_ptr, new_ptr as *const u32) };
+        self.add_habitat(new_ptr);
+
+        let entrance_still_owned = entrance_ptr == 0 || {
+            let entrance = get_from_memory::<BFTile>(entrance_ptr);
+            self.get_habitat_ptr(entrance.pos.x, entrance.pos.y) == tank_ptr
+        };
+        if entrance_still_owned {
+            self.place_gate(new_ptr, tile_b_ptr, tile_a_ptr, hint_tile_ptr);
+        } else {
+            tank.habitat.resize(tile_b_ptr);
+            new_tank.habitat.resize(tile_a_ptr);
+            self.place_gate(new_ptr, tile_a_ptr, tile_b_ptr, hint_tile_ptr);
+            self.snap_tank_walls_inward(tank_ptr);
+            self.snap_tank_walls_inward(new_ptr);
+            tank.reclaim_tiles();
+        }
+
+        new_tank.habitat.clear_show_neighbors();
+        tank.habitat.clear_show_neighbors();
+        self.do_show_check(new_ptr, false);
+        self.do_show_check(tank_ptr, false);
+        self.update_amphibious_neighbors(new_ptr);
+        self.update_amphibious_neighbors(tank_ptr);
+        new_tank.habitat.clear_show_neighbors();
+        tank.habitat.clear_show_neighbors();
+        self.update_show_neighbors(new_ptr);
+        self.update_show_neighbors(tank_ptr);
+        tank.update_tank_info();
+        new_tank.update_tank_info();
+        true
+    }
+
     /// Ports `ZTHabitatMgr::getOutermostTank` (`ZTHabitatMgr_getOutermostTank.c`/`.asm`): clears every
     /// real habitat's own [`ZTHabitat::tank_walk_visited_marker`] (a fresh walk each call), then returns
     /// [`ZTHabitat::get_outermost_tank`] for `habitat_ptr`.
@@ -4023,6 +4359,36 @@ impl ZTHabitatMgr {
             if far_habitat_ptr != 0 {
                 unsafe { ref_from_memory::<ZTHabitat>(far_habitat_ptr) }.set_deterioration(level);
             }
+        }
+    }
+
+    /// Ports `ZTHabitatMgr::recalculateCharacteristics` (`ZTHabitatMgr_recalculateCharacteristics.c`/`.asm`):
+    /// bumps the global tick counter, runs [`ZTHabitat::recalculate_characteristics`] on the "world" habitat
+    /// ([`Self::pending_habitat_ptr`]) and then on every habitat in [`Self::exhibit_array`], and runs
+    /// [`Self::recalculate_deterioration`] unless the counter is a multiple of `0x3aa9` and
+    /// [`Self::unknown_flag_0x6c`] is clear (any other counter value sets that flag first, so the
+    /// deterioration pass runs on all but one tick in `0x3aa9`).
+    pub fn recalculate_characteristics(&self) {
+        let counter_addr = get_module_base("zoo.exe") as u32 + RVA_RECALCULATE_TICK_COUNTER;
+        let counter = get_from_memory::<i32>(counter_addr).wrapping_add(1);
+        save_to_memory(counter_addr, counter);
+
+        if self.pending_habitat_ptr != 0 {
+            unsafe { ref_from_memory::<ZTHabitat>(self.pending_habitat_ptr) }.recalculate_characteristics();
+        }
+        for i in 0..self.exhibit_array.len() {
+            let habitat_ptr = self.exhibit_array.get_ptr(i);
+            if habitat_ptr != 0 {
+                unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.recalculate_characteristics();
+            }
+        }
+
+        let flag_addr = self as *const Self as u32 + std::mem::offset_of!(Self, unknown_flag_0x6c) as u32;
+        if counter % DETERIORATION_SKIP_PERIOD != 0 {
+            save_to_memory(flag_addr, 1u8);
+        }
+        if get_from_memory::<u8>(flag_addr) != 0 {
+            self.recalculate_deterioration();
         }
     }
 

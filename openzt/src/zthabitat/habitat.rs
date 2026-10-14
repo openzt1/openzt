@@ -11,6 +11,7 @@ use openzt_detour::generated::{
         msvc_std_listuint::{INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE, LIST as MSVC_LIST_UINT_DTOR},
         msvc_std_vector_t_4::VECTOR_T_4 as MSVC_VECTOR_T_4_DTOR,
         msvc_std_tree36::{CLEAR as MSVC_TREE36_CLEAR, OPERATOR_INDEX as MSVC_TREE36_OPERATOR_INDEX},
+        bfworldmgr::GET_TYPE as BFWORLDMGR_GET_TYPE,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
         ztanimal::{
@@ -19,11 +20,10 @@ use openzt_detour::generated::{
         },
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            ADD_FOUND_SPECIES, GET_EVENTS,
-            REVISE_SPECIES_LIST, SEND_EVENT,
+            GET_EVENTS,
+            SEND_EVENT,
             SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
-        zthabitatmgr::REMOVE_HABITAT_0,
         ztkeeper::CLEANS_UP,
         ztapp::GET_WORLD_MGR as ZTAPP_GET_WORLD_MGR,
         ztspecies::IS_SPECIAL_DUMMY_SPECIES,
@@ -41,13 +41,14 @@ use openzt_detour::generated::{
         },
     };
 use getset::Getters;
+use glam::i32::IVec3;
 use std::{collections::HashMap, fmt, mem::offset_of};
 
 use crate::{
     ambients::Ambients,
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory, write_live_ptr, ZTBufferString, ZTString},
-    vanilla_vector::{VanillaEventVector, VanillaVector},
+    vanilla_vector::{push_pair, VanillaEventVector, VanillaVector},
     write_live,
     zoostatus::ZooStatus,
     ztmapview::BFTile,
@@ -66,8 +67,12 @@ pub(crate) static DESTRUCT_CALLS: std::sync::atomic::AtomicU32 = std::sync::atom
 use super::support::{self, *};
 use super::tank_exhibit::ZTTankExhibit;
 
-/// Water-clean threshold setting (`DAT_006390a4`) `needsService` compares a tank's `+0x1a8` against. RVA = address - `0x400000`.
-const RVA_WATER_CLEAN_THRESHOLD: u32 = 0x006390a4 - 0x400000;
+/// RVA of the global empty-name C string (`DAT_00638084`) `addSpecies` compares a species' ambients name against.
+const RVA_EMPTY_NAME_STRING: u32 = 0x0063_8084 - 0x0040_0000;
+
+/// RVA of the global flag byte (`DAT_0063cb35`) `reviseSpeciesList` sets once a habitat holds animals of all
+/// three tracked species kinds; meaning not otherwise identified.
+const RVA_ALL_SPECIES_KINDS_SEEN: u32 = 0x0063_cb35 - 0x0040_0000;
 
 /// `ZTAnimal::FUN_004d9a2f(smile)` (not in `generated.rs`): queues a smile/frown face on the animal.
 /// Reached through `.hooked()` by [`ZTHabitat::generate_faces`] so the live battery's recorder can
@@ -3511,7 +3516,7 @@ impl ZTHabitat {
     /// [`Self::get_attractiveness`].
     pub(crate) fn recalc_phase_1_2(&self, map_ptr: u32, found_species_vec: &mut VanillaVector<u32>) -> bool {
         if self.species_list_dirty != 0 {
-            unsafe { REVISE_SPECIES_LIST.original()(self as *const Self as *const u32) };
+            self.revise_species_list();
         }
         write_live!(self, characteristics_dirty, 0u8);
         write_live!(self, num_animals, 0i32);
@@ -3624,6 +3629,152 @@ impl ZTHabitat {
         true
     }
 
+    /// Ports `ZTHabitat::reviseSpeciesList` (`ZTHabitat_reviseSpeciesList.c`/`.asm`, `REVISE_SPECIES_LIST`):
+    /// clears [`Self::species_list_dirty`], and unless [`Self::unknown_flag_0x2c`] is set, rebuilds
+    /// `species_list` from the animals standing on owned tiles.
+    ///
+    /// - Collects the distinct entity types (by pointer) of every `ZTAnimal` occupant of every owned tile
+    ///   into a local `Vec` (no tile-equality test, unlike [`Self::add_found_species`]); each new type's
+    ///   `+0x20` vtable result is compared against those of world types `0x138e`/`0x138f`/`0x1398`, and when
+    ///   all three kinds were seen, the global byte at `RVA_ALL_SPECIES_KINDS_SEEN` is set to `1`.
+    /// - Every old `species_list` entry missing from the new set goes through [`Self::remove_species`]; every
+    ///   new entry missing from the old list goes through [`Self::add_species`].
+    /// - The list is then emptied and refilled in order, growing through `PoolAlloc` with the old buffer
+    ///   returned by `PoolAlloc::deallocate` ([`vector_push_pool_alloc4_pool_dealloc`]).
+    pub fn revise_species_list(&self) {
+        write_live!(self, species_list_dirty, 0u8);
+        if self.unknown_flag_0x2c != 0 {
+            return;
+        }
+
+        let world_ptr = globals().ztworldmgr_ptr() as u32;
+        let kind_of_type = |type_id: i32| -> u32 {
+            let type_ptr = unsafe { BFWORLDMGR_GET_TYPE.original()(world_ptr as *const u32, type_id) } as u32;
+            unsafe { call_entity_vtable_u32_noargs(type_ptr, 0x20) }
+        };
+        let tracked_kinds = [kind_of_type(0x138e), kind_of_type(0x138f), kind_of_type(0x1398)];
+        let mut kinds_seen = [false; 3];
+
+        let mut found: Vec<u32> = Vec::new();
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+            for occ_node in walk_tile_list(get_from_memory::<u32>(tile_ptr)) {
+                let occupant = get_from_memory::<TileListNode>(occ_node).payload;
+                if occupant == 0 || !unsafe { entity_type_matches(occupant, RVA_ANIMAL_TYPE_CHECK) } {
+                    continue;
+                }
+                let entity_type_ptr = get_from_memory::<u32>(occupant + 0x128);
+                if found.contains(&entity_type_ptr) {
+                    continue;
+                }
+                let kind = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) };
+                for (seen, tracked) in kinds_seen.iter_mut().zip(tracked_kinds) {
+                    *seen |= kind == tracked;
+                }
+                found.push(entity_type_ptr);
+            }
+        }
+        if kinds_seen.iter().all(|&seen| seen) {
+            save_to_memory::<u8>(get_module_base("zoo.exe") as u32 + RVA_ALL_SPECIES_KINDS_SEEN, 1);
+        }
+
+        let old_list: Vec<u32> = (self.species_list_begin..self.species_list_end).step_by(4).map(get_from_memory::<u32>).collect();
+        for &old in &old_list {
+            if !found.contains(&old) {
+                self.remove_species(old);
+            }
+        }
+        for &new in &found {
+            if !old_list.contains(&new) {
+                self.add_species(new);
+            }
+        }
+
+        write_live!(self, species_list_end, self.species_list_begin);
+        for &entry in &found {
+            vector_push_pool_alloc4_pool_dealloc(std::ptr::addr_of!(self.species_list_begin) as u32, entry);
+        }
+    }
+
+    /// Ports `ZTHabitat::addSpecies` (`ZTHabitat_addSpecies.c`/`.asm`, `ADD_SPECIES`): registers an ambient
+    /// sound for `species_key` (an entity type pointer) by appending a `(species_key, Ambients*)` pair to the
+    /// vector at `ambients_begin` ([`push_pair`]). Does nothing when the habitat owns no tiles or when the
+    /// species' ambients name (the `begin`/`end` string span at entity type `+0x3bc`/`+0x3c0`) equals the
+    /// empty-name global at `RVA_EMPTY_NAME_STRING`. Otherwise picks one owned tile with one game RNG draw
+    /// (`rand() % tile_count`), converts its position plus local `(0x20, 0x20, 0)` to world coordinates, and
+    /// builds an `Ambients` (`operator_new(0x18)`, [`Ambients::construct`]) from the name and that position;
+    /// a failed allocation stores a null `Ambients*`, as vanilla does.
+    pub fn add_species(&self, species_key: u32) {
+        let name_begin: u32 = get_from_memory(species_key + 0x3bc);
+        let name_end: u32 = get_from_memory(species_key + 0x3c0);
+        let mut name: Vec<u8> = (name_begin..name_end).map(get_from_memory::<u8>).collect();
+
+        let empty_name_addr = get_module_base("zoo.exe") as u32 + RVA_EMPTY_NAME_STRING;
+        let empty_name: Vec<u8> = (empty_name_addr..).map(get_from_memory::<u8>).take_while(|&b| b != 0).collect();
+        if name == empty_name {
+            return;
+        }
+        let tile_count = walk_tile_list(self.owned_tiles_ptr).count() as u32;
+        if tile_count == 0 {
+            return;
+        }
+
+        let pick = (next_game_random() % tile_count) as usize;
+        let node = walk_tile_list(self.owned_tiles_ptr).nth(pick).unwrap_or(0);
+        let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+        let tile_pos: IVec3 = get_from_memory(tile_ptr + 0x34);
+        let world_pos = globals().ztworldmgr().tile_to_world(tile_pos, IVec3::new(0x20, 0x20, 0));
+        let position = [world_pos.x, world_pos.y, world_pos.z];
+
+        name.push(0);
+        let block = unsafe { OPERATOR_NEW.original()(0x18) };
+        let ambients_ptr = if block.is_null() {
+            0
+        } else {
+            unsafe { (*(block as *mut Ambients)).construct(name.as_ptr(), position.as_ptr()) };
+            block as u32
+        };
+        push_pair(std::ptr::addr_of!(self.ambients_begin) as u32, species_key, ambients_ptr, free_event_vector_buffer);
+    }
+
+    /// Ports `ZTHabitat::addFoundSpecies` (`ZTHabitat_addFoundSpecies.c`/`.asm`, `ADD_FOUND_SPECIES`):
+    /// walks this habitat's owned tiles ([`walk_tile_list`]) and each tile's occupant list; for every
+    /// `ZTAnimal` whose own current tile is that tile, stashes its species id (`entity_type+0x1ec`) into
+    /// [`RVA_CURRENT_SPECIES_ID_STASH`] and, if no entity type in the vanilla-layout `found_species_vec`
+    /// (`begin`/`end`/`cap_end`) at `found_vec_ptr` has that species id, appends the entity type through
+    /// [`vector_push_pool_alloc4`] and increments the `i32` at `count_ptr` (the caller's
+    /// `species_found_count`).
+    pub(crate) fn add_found_species(&self, found_vec_ptr: u32, count_ptr: u32) {
+        let stash_addr = get_module_base("zoo.exe") as u32 + RVA_CURRENT_SPECIES_ID_STASH;
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile_ptr = get_from_memory::<TileListNode>(node).payload;
+            for occ_node in walk_tile_list(get_from_memory::<u32>(tile_ptr)) {
+                let occupant = get_from_memory::<TileListNode>(occ_node).payload;
+                if !unsafe { entity_type_matches(occupant, RVA_ANIMAL_TYPE_CHECK) } {
+                    continue;
+                }
+                if unsafe { BFENTITY_GET_TILE.original()(occupant as *const u32) } as u32 != tile_ptr {
+                    continue;
+                }
+                let entity_type_ptr = get_from_memory::<u32>(occupant + 0x128);
+                let species_id = get_from_memory::<i32>(entity_type_ptr + 0x1ec);
+                save_to_memory::<i32>(stash_addr, species_id);
+
+                let begin = get_from_memory::<u32>(found_vec_ptr);
+                let end = get_from_memory::<u32>(found_vec_ptr + 4);
+                let already_found = (begin..end)
+                    .step_by(4)
+                    .any(|addr| get_from_memory::<i32>(get_from_memory::<u32>(addr) + 0x1ec) == species_id);
+                if already_found {
+                    continue;
+                }
+                let count: i32 = get_from_memory(count_ptr);
+                unsafe { write_live_ptr(count_ptr as *const i32, count + 1) };
+                vector_push_pool_alloc4(found_vec_ptr, entity_type_ptr);
+            }
+        }
+    }
+
     /// Ports the species-found propagation portion (phase 3) of `ZTHabitat::recalculateCharacteristics`
     /// (`RECALCULATE_CHARACTERISTICS`, `0x00444827`) - see
     /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 3.
@@ -3665,34 +3816,19 @@ impl ZTHabitat {
     /// [`Self::get_attractiveness`].
     pub(crate) fn recalc_phase_3(&self, found_species_vec: &mut VanillaVector<u32>, old_species_found_count: u32, old_num_animals: i32) {
         for neighbor_ptr in self.amphibious_neighbors() {
-            unsafe {
-                ADD_FOUND_SPECIES.original()(
-                    neighbor_ptr as *const u32,
-                    found_species_vec.as_ptr() as *const i32,
-                    std::ptr::addr_of!(self.species_found_count) as *const i32,
-                )
-            };
+            unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }
+                .add_found_species(found_species_vec.as_ptr() as u32, std::ptr::addr_of!(self.species_found_count) as u32);
 
             let neighbor_show_neighbors_head: u32 = get_from_memory(neighbor_ptr + 0x14);
             for inner_neighbor_ptr in neighbor_set_members(neighbor_show_neighbors_head) {
-                unsafe {
-                    ADD_FOUND_SPECIES.original()(
-                        inner_neighbor_ptr as *const u32,
-                        found_species_vec.as_ptr() as *const i32,
-                        std::ptr::addr_of!(self.species_found_count) as *const i32,
-                    )
-                };
+                unsafe { ref_from_memory::<ZTHabitat>(inner_neighbor_ptr) }
+                    .add_found_species(found_species_vec.as_ptr() as u32, std::ptr::addr_of!(self.species_found_count) as u32);
             }
         }
 
         for neighbor_ptr in self.show_neighbors() {
-            unsafe {
-                ADD_FOUND_SPECIES.original()(
-                    neighbor_ptr as *const u32,
-                    found_species_vec.as_ptr() as *const i32,
-                    std::ptr::addr_of!(self.species_found_count) as *const i32,
-                )
-            };
+            unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }
+                .add_found_species(found_species_vec.as_ptr() as u32, std::ptr::addr_of!(self.species_found_count) as u32);
         }
 
         if old_species_found_count != self.species_found_count {
@@ -6165,8 +6301,8 @@ impl ZTHabitat {
     ///    with `include_neighbors` a sickly one (and any non-show-tank, unflagged (`+0x395`) hungry-and-
     ///    foodless animal whose home habitat is this one) means `true`.
     /// 3. Any owned tile (`+0x40`, payload `+0x10`) the keeper's vtable `+0x324` accepts: `true`.
-    /// 4. Tank with the keeper predicate, `+0x188 > 0` and `+0x1a8 < DAT_006390a4` (the water-purity
-    ///    threshold): `true`. `needsShowKeeper`: `true`.
+    /// 4. Tank with the keeper predicate, `+0x188 > 0` and murky water (`!`[`ZTTankExhibit::is_pure_water`]):
+    ///    `true`. `needsShowKeeper`: `true`.
     /// 5. When some animal was serviceable: `true` if never serviced (`+0xec == 0`) or the AI manager's
     ///    `+0xec` clock minus ours exceeds the habitat manager's `+0x64` (unsigned).
     /// 6. With `include_neighbors`: any amphibious neighbour needing service (`include_neighbors = false`).
@@ -6230,11 +6366,10 @@ impl ZTHabitat {
             }
         }
 
-        let module_base = get_module_base("zoo.exe") as u32;
         if is_tank()
             && keeper_predicate()
             && get_from_memory::<i32>(self_addr + 0x188) > 0
-            && get_from_memory::<i32>(self_addr + 0x1a8) < get_from_memory::<i32>(module_base + RVA_WATER_CLEAN_THRESHOLD)
+            && !unsafe { ref_from_memory::<ZTTankExhibit>(self_addr) }.is_pure_water()
         {
             return true;
         }
@@ -6639,7 +6774,7 @@ impl ZTHabitat {
 
     /// Vtable address real vanilla's destructor resets `this` to before tearing down (the base
     /// `ZTHabitat` vtable, `0x00632100`).
-    const BASE_VTABLE_PTR: u32 = 0x0063_2100;
+    pub(super) const BASE_VTABLE_PTR: u32 = 0x0063_2100;
 
     /// Ports `ZTHabitat::~ZTHabitat` (`generated.rs`'s `DESTRUCTOR_0`, `0x00458cab`, called by
     /// `DESTRUCTOR_1`'s scalar-deleting wrapper and by the `ZTTankExhibit` destructor), step for step in
@@ -7032,7 +7167,7 @@ impl ZTHabitat {
         if self.species_list_dirty != 0 {
             let draw = next_game_random();
             write_live!(self, species_list_timer, draw % 200);
-            unsafe { REVISE_SPECIES_LIST.original()(self as *const Self as *const u32) };
+            self.revise_species_list();
         }
 
         if self.characteristics_timer > 6999 {
@@ -7296,7 +7431,7 @@ impl ZTHabitat {
     /// `createViewingAreas` is the direct call to [`Self::create_viewing_areas`]. Sets [`Self::characteristics_dirty`] unconditionally (the `.asm`'s own bare
     /// `MOV byte ptr [ESI+0x2d], 1` - not the guarded neighbor walk [`Self::set_dirty_characteristics`]
     /// does). Finally, when the rebuilt owned-tile list is empty, destroys the habitat outright via
-    /// `ZTHabitatMgr::removeHabitat` (`REMOVE_HABITAT_0`, un-ported, on the `GLOBAL_ZTHabitatMgr` global) -
+    /// [`ZTHabitatMgr::remove_habitat`] -
     /// so this method is destructive on its own main path, the same "no synthetic-safe live input" class
     /// as [`ZTHabitatMgr::morph_exhibit`].
     ///
@@ -7318,8 +7453,7 @@ impl ZTHabitat {
         self.recalculate_viewing_areas();
         write_live!(self, characteristics_dirty, 1u8);
         if self.get_size(false) == 0 {
-            let mgr = globals().zthabitatmgr_ptr();
-            unsafe { REMOVE_HABITAT_0.original()(mgr as *const u32, self_addr as *const i32) };
+            globals().zthabitatmgr().remove_habitat(self_addr);
         }
     }
 

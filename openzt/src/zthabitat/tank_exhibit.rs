@@ -2,14 +2,17 @@ use getset::Getters;
 use glam::i32::IVec3;
 use openzt_detour::generated::{
     bfcategory::GET_VALUE,
-    bfmap::{ADJUST_CELL, PAINT_CELL, SET_SELECTION, VALIDATE_TILES},
-    bfuimgr::{DISPLAY_MESSAGE_0, DISPLAY_MESSAGE_1},
+    bfmap::{ADJUST_CELL, CLEAR_TILE_TERRAIN, PAINT_CELL, SAVE_TILE_TERRAIN, SET_SELECTION, VALIDATE_TILES},
+    bfuimgr::{CONFIRM_DIALOG_1, DISPLAY_MESSAGE_0, DISPLAY_MESSAGE_1},
     bfentity::SET_WORLD_POS,
     bfworldmgr::{ADD_TRANSIENT, FIND_TYPES, GET_ENTITY, GET_ENTITY_REVERSE},
     zttankfilter::{IS_STILL_ATTACHED, REMOVE_BUBBLES},
-    zttankwall::SET_WALL_HEIGHT,
+    zttankwall::{SET_BOTH_EDGES_FENCE, SET_LEFT_EDGE_FENCE, SET_MIDDLE_FENCE, SET_RIGHT_EDGE_FENCE, SET_WALL_HEIGHT},
     ztanimal::BOX as ZTANIMAL_BOX,
-    ztmapview::{PREPARE_TO_DELETE_ENTITY, REMOVE_ENTITY_FROM_MAP},
+    ztmapview::{ADD_UNDO_ACTION, HAS_UNDO_ACTION, PREPARE_TO_DELETE_ENTITY, REMOVE_ENTITY_FROM_MAP},
+    zthabitat::CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR,
+    standalone::MEMMOVE,
+    poolalloc::ALLOCATE as POOLALLOC_ALLOCATE,
     ztui_general::GET_MAPVIEW,
     ztworldmgr::{BOX_UP_AND_FIND_APLACE_FOR_ANIMAL, FIND_APLACE_FOR_STAFF_MEMBER},
     gxmixer::UPDATE as GXMIXER_UPDATE,
@@ -22,8 +25,10 @@ use openzt_detour::generated::{
     bftile::SNAP_TO_EDGE,
     poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
     zttankexhibit::{
-        CONFIRM_SELL_OFF, REMOVE_ILLEGAL_ENTITIES, ADD_TANK_WALL, CLEAR_WALL_VECTOR, DO_DEPTH_SUITABILITY, GET_ILLEGAL_ENTITIES, IS_ILLEGAL_ENTITY, LEVEL_ALL_TILES, RECLAIM_TILES, RESTORE_OWNED_TRANSIENTS, UPDATE_TANK_WALL_INFO, VALIDATE_FILTER_POSITION,
+        CONSTRUCTOR as ZTTANKEXHIBIT_CONSTRUCTOR, DESTRUCTOR_0 as ZTTANKEXHIBIT_DESTRUCTOR_0,
+        CONFIRM_SELL_OFF, REMOVE_ILLEGAL_ENTITIES, ADD_TANK_WALL, CLEAR_WALL_VECTOR, DO_DEPTH_SUITABILITY, GET_ILLEGAL_ENTITIES, IS_ILLEGAL_ENTITY, LEVEL_ALL_TILES, RECLAIM_TILES, UPDATE_TANK_INFO, RESTORE_OWNED_TRANSIENTS, UPDATE_TANK_WALL_INFO, VALIDATE_FILTER_POSITION,
         ADD_RANDOM_SPARKLE, ADD_WATER_RIPPLE, ADD_WATER_RIPPLES, REMOVE_ALL_SPARKLES, REMOVE_ALL_SPARKLES_BY_ID, CAN_BE_IN_TANK, CHECK_ENTITIES_FOR_DRAIN, CHECK_ENTITIES_FOR_FILL, CLEAN_WATER_AMOUNT, DRAIN, FILL, GET_ALL_ENTITIES, REMOVE_OWNED_TRANSIENTS, REMOVE_WATER_RIPPLES, SET_BASE_LEVEL, SET_BASE_TERRAIN_TYPE, SET_SALINITY, SET_WATER_CLEAN, GET_COST_TO_CHANGE_HEIGHT, GET_LADDER_BASE_INSIDE_POS, GET_LADDER_BASE_OUTSIDE_POS, GET_LADDER_TOP_INSIDE_POS, GET_LADDER_TOP_OUTSIDE_POS, GET_MIN_DEPTH, GET_PLATFORM_POS, GET_TANK_HEIGHT,
+        LOAD_PROPERTIES, SAVE, SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT,
         GET_WATER_LEVEL, GET_WATER_PURITY, IS_EXTREMELY_MURKY_WATER, IS_PURE_WATER, IS_RIGHT_SALINITY, REMOVE_DEAD_SPARKLES, SET_TANK_HEIGHT, SET_WATER_LEVEL, SET_WATER_PURITY, UPDATE, UPDATE_ADJUSTMENT_COSTS,
     },
 };
@@ -32,7 +37,8 @@ use std::collections::BTreeSet;
 use tracing::error;
 
 use super::habitat::ZTHabitat;
-use super::support::{call_entity_type_create, call_vtable_slot_noargs, call_vtable_slot_noargs_ret_bool, RVA_STAFF_TYPE_CHECK_ARG, call_vtable_slot_with_u8, call_vtable_slot_with_u8_u8, free_event_vector_buffer, next_game_random, rb_set_insert, walk_tile_list, RVA_APP_INIT_SUCCESS_BASE, RVA_GLOBAL_BFUIMGR, RVA_TANK_WALL_TYPE_CHECK_ARG};
+use super::support::{get_neighbour_raw, RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL, write_bytes_to_file, RVA_FENCE_TYPE_CHECK_ARG, call_entity_type_create, call_vtable_slot_noargs, call_vtable_slot_noargs_ret_bool, RVA_STAFF_TYPE_CHECK_ARG, call_vtable_slot_with_u8, call_vtable_slot_with_u8_u8, free_event_vector_buffer, next_game_random, rb_set_insert, walk_tile_list, RVA_APP_INIT_SUCCESS_BASE, RVA_GLOBAL_BFUIMGR, RVA_TANK_WALL_TYPE_CHECK_ARG};
+use crate::bfconfigfile::ini_compat;
 use crate::string_registry::load_string_by_id;
 use crate::util::ZTString;
 use crate::ztmegatilemgr::entity_type_matches;
@@ -169,6 +175,110 @@ const SALT_WATER_COST_RVA: u32 = 0x0023_af10;
 const FRESH_WATER_COST_RVA: u32 = 0x0023_af40;
 const WALL_HEIGHT_PRICE_DIVISOR_RVA: u32 = 0x0023_af14;
 
+/// `tanks.cfg` `[tank]` settings `loadProperties` fills (`i32` data globals, `zoo.exe` base + RVA):
+/// `DAT_0063af38`/`af34` `initialSink`/`initialSinkShow`, `af24` `initialWaterLevel`, `af28`
+/// `initialFillState`, `af2c` `initialSalinity`, `af30` `initialTemperature`, `af18` `maximumTankHeight`,
+/// `af08`/`af3c` `tankTerrain`/`tankTerrainShow` (terrain index `setIsNotShowExhibit`/`setIsShowExhibit`
+/// paint), and `af0c` `veryMurkyWaterPurity` (also written by `extremelyMurkyWaterPurity`).
+const INITIAL_SINK_RVA: u32 = 0x0023_af38;
+const INITIAL_SINK_SHOW_RVA: u32 = 0x0023_af34;
+const INITIAL_WATER_LEVEL_RVA: u32 = 0x0023_af24;
+const INITIAL_FILL_STATE_RVA: u32 = 0x0023_af28;
+const INITIAL_SALINITY_RVA: u32 = 0x0023_af2c;
+const INITIAL_TEMPERATURE_RVA: u32 = 0x0023_af30;
+const MAXIMUM_TANK_HEIGHT_RVA: u32 = 0x0023_af18;
+const TANK_TERRAIN_RVA: u32 = 0x0023_af08;
+const TANK_TERRAIN_SHOW_RVA: u32 = 0x0023_af3c;
+const VERY_MURKY_WATER_PURITY_RVA: u32 = 0x0023_af0c;
+
+/// One side of a `ZTHabitatMgr::mergeTanks` call, read before either tank is touched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeSide {
+    /// `ZTHabitat::getSize(false)`.
+    pub size: i32,
+    /// Base elevation of the first owned tile (`0` when there is none).
+    pub base_level: i32,
+    pub tank_height: i32,
+    pub tile_count: i32,
+    pub is_filled: bool,
+    pub salinity: i32,
+    pub water_purity: i32,
+}
+
+impl MergeSide {
+    /// `tank_height * owned tile count`: `ZTTankExhibit::getTankVolume`, with vanilla's wrapping `IMUL`.
+    fn volume(&self) -> i32 {
+        self.tank_height.wrapping_mul(self.tile_count)
+    }
+
+    /// The volume counted as water: zero for a drained tank.
+    fn water_volume(&self) -> i32 {
+        if self.is_filled { self.volume() } else { 0 }
+    }
+}
+
+/// What `mergeTanks` applies to the surviving tank, derived from both tanks' pre-merge state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergePlan {
+    pub base_level: i32,
+    pub tank_height: i32,
+    pub is_filled: bool,
+    pub salinity: i32,
+    pub water_purity: i32,
+}
+
+/// The arithmetic of `ZTHabitatMgr::mergeTanks` (`0x0048712c`) on the survivor `a` and the absorbed `b`.
+///
+/// Base level and height are size-weighted averages; purity is weighted by the volume of water each
+/// tank holds. The fill state and salinity come from the larger-volume tank (`a` on a tie), with
+/// ties broken first by which tank is filled, then by which has non-zero salinity. Divisions truncate
+/// toward zero like vanilla's `IDIV`; a zero denominator (a `#DE` in vanilla, unreachable live because
+/// every tank owns tiles) yields `0` for the averages.
+pub fn plan_merge(a: &MergeSide, b: &MergeSide) -> MergePlan {
+    let size_sum = a.size.wrapping_add(b.size);
+    let weighted = |value_a: i32, value_b: i32| {
+        a.size.wrapping_mul(value_a).wrapping_add(b.size.wrapping_mul(value_b)).checked_div(size_sum).unwrap_or(0)
+    };
+    let water_a = a.water_volume();
+    let water_b = b.water_volume();
+    let water_sum = water_a.wrapping_add(water_b);
+    let water_purity = b
+        .water_purity
+        .wrapping_mul(water_b)
+        .wrapping_add(a.water_purity.wrapping_mul(water_a))
+        .checked_div(water_sum)
+        .unwrap_or(0);
+
+    let b_dominates = if b.volume() != a.volume() {
+        b.volume() > a.volume()
+    } else if a.is_filled == b.is_filled {
+        b.salinity != 0 && a.salinity == 0
+    } else {
+        b.is_filled
+    };
+    let dominant = if b_dominates { b } else { a };
+
+    MergePlan {
+        base_level: weighted(a.base_level, b.base_level),
+        tank_height: weighted(a.tank_height, b.tank_height),
+        is_filled: dominant.is_filled,
+        salinity: dominant.salinity,
+        water_purity,
+    }
+}
+
+/// Tile base elevation (`tile+0x3c`).
+const TILE_BASE_ELEVATION_OFFSET: u32 = 0x3c;
+
+/// `ZTTankWall` entity vtable slot (`+0x7c`) `setIsShowExhibit` calls with `(wall type, 1)` to switch a wall
+/// to the show fence type.
+const WALL_SET_TYPE_VTABLE_OFFSET: u32 = 0x7c;
+
+/// `confirmSellOff`'s dialog: string id `0x2938` and the `ui/sharedui/question/question` layout name
+/// (`0x0063b968`).
+const SELL_OFF_MESSAGE_ID: u32 = 0x2938;
+const CONFIRM_DIALOG_NAME_RVA: u32 = 0x0023_b968;
+
 /// `DAT_0063af20` `initialHeight` / `DAT_0063af1c` `initialHeightShow` (`i32`): the height up to which
 /// `getCostToChangeHeight` charges nothing, for a regular / show tank.
 const INITIAL_HEIGHT_RVA: u32 = 0x0023_af20;
@@ -245,6 +355,48 @@ const ENTITY_SET_IS_REMOVED_VTABLE_OFFSET: u32 = 0xa8;
 const ENTITY_DESTROY_VTABLE_OFFSET: u32 = 0xcc;
 const ENTITY_VALIDATE_POSITION_VTABLE_OFFSET: u32 = 0x84;
 
+/// Number of times [`ZTTankExhibit::construct`]/[`ZTTankExhibit::destruct`] have run - lets the live
+/// battery prove each port was reached by vanilla's own construction and teardown paths.
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) static CONSTRUCT_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) static DESTRUCT_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The `std::string` holding an entity type's fence-style name (`+0x98` begin, `+0x9c` end).
+const ENTITY_TYPE_NAME_BEGIN_OFFSET: u32 = 0x98;
+const ENTITY_TYPE_NAME_END_OFFSET: u32 = 0x9c;
+
+/// The probes [`ZTTankExhibit::update_tank_info`] runs for one edge of a wall (see
+/// [`ZTTankExhibit::wall_continues`]); slots are offsets of a tile's four wall pointers.
+struct WallEdgeProbe {
+    direct_slot: u32,
+    corner_dirs: (u32, u32),
+    corner_slot: u32,
+    side_dir: u32,
+    side_slot: u32,
+}
+
+/// `(left, right)` edge probes by wall rotation `0`, `2`, `4` and any other (`6`), read from
+/// `updateTankInfo`'s four rotation branches.
+const WALL_EDGE_PROBES: [(WallEdgeProbe, WallEdgeProbe); 4] = [
+    (
+        WallEdgeProbe { direct_slot: 0x18, corner_dirs: (0, 2), corner_slot: 0x20, side_dir: 2, side_slot: 0x14 },
+        WallEdgeProbe { direct_slot: 0x20, corner_dirs: (0, 6), corner_slot: 0x18, side_dir: 6, side_slot: 0x14 },
+    ),
+    (
+        WallEdgeProbe { direct_slot: 0x1c, corner_dirs: (2, 4), corner_slot: 0x14, side_dir: 4, side_slot: 0x18 },
+        WallEdgeProbe { direct_slot: 0x14, corner_dirs: (2, 0), corner_slot: 0x1c, side_dir: 0, side_slot: 0x18 },
+    ),
+    (
+        WallEdgeProbe { direct_slot: 0x20, corner_dirs: (4, 6), corner_slot: 0x18, side_dir: 6, side_slot: 0x1c },
+        WallEdgeProbe { direct_slot: 0x18, corner_dirs: (4, 2), corner_slot: 0x20, side_dir: 2, side_slot: 0x1c },
+    ),
+    (
+        WallEdgeProbe { direct_slot: 0x14, corner_dirs: (6, 0), corner_slot: 0x1c, side_dir: 0, side_slot: 0x20 },
+        WallEdgeProbe { direct_slot: 0x1c, corner_dirs: (6, 4), corner_slot: 0x14, side_dir: 4, side_slot: 0x20 },
+    ),
+];
+
 /// `DAT_006390b4`: a sparkle is retired once its age (ticks) exceeds this (signed).
 const SPARKLE_MAX_AGE_RVA: u32 = 0x0023_90b4;
 
@@ -271,6 +423,14 @@ const RVA_TYPE_CHECK_ARG_6386B0: u32 = 0x0023_86b0;
 /// `BFTile` bytes `setBaseTerrainType`/`setBaseLevel` raise around the map call that edits the tile: the
 /// terrain-paint guard (`+0x87`) and the height-adjust guard (`+0x86`).
 const TILE_PAINTING_FLAG_OFFSET: u32 = 0x87;
+/// `BFTile` byte the constructor clears on every claimed tile outside loading, its tile height (`+0x3c`,
+/// summed to average the tank's base level), and the `ZTMapView` byte (`+0x378`) that is non-zero during a
+/// show edit.
+const TILE_VISIBLE_FLAG_OFFSET: u32 = 0x81;
+const TILE_HEIGHT_OFFSET: u32 = 0x3c;
+const MAPVIEW_SHOW_EDIT_OFFSET: u32 = 0x378;
+/// The `initialTemperature` word (`+0x194`), set by the constructor and read by nothing ported.
+const TANK_TEMPERATURE_OFFSET: u32 = 0x194;
 const TILE_ADJUSTING_FLAG_OFFSET: u32 = 0x86;
 
 /// `ZTAdvTerrainMgr`'s terrain-type info vector (`begin` at `+0x10`, `end` at `+0x14`; elements are `0x30`
@@ -338,6 +498,8 @@ const UNIT_SELL_VALUE_VTABLE_OFFSET: u32 = 0x2a4;
 /// and the flag bit that marks the tile as owned.
 const TILE_OWNER_LIST_OFFSET: u32 = 0x88;
 const TILE_FLAG_OWNED: u8 = 0x20;
+/// Set on every owned tile when the tank's height changes.
+const TILE_FLAG_TANK_HEIGHT_CHANGED: u8 = 0x2;
 
 /// Shows `text` through `BFUIMgr::displayMessage` (the `std::string` overload) at `priority`, attached to
 /// `entity_ptr` (`0` for none). The message vector is built on vanilla's allocator, as the overload's
@@ -907,6 +1069,30 @@ impl ZTTankExhibit {
         );
     }
 
+    /// Snapshot of this tank for [`plan_merge`], taken before `mergeTanks` modifies anything.
+    pub(crate) fn merge_side(&self) -> MergeSide {
+        let tile_count = walk_tile_list(self.owned_tiles_ptr).count() as i32;
+        let base_level = walk_tile_list(self.owned_tiles_ptr).next().map_or(0, |node| {
+            let tile: u32 = get_from_memory(node + OWNED_TILE_NODE_TILE_OFFSET);
+            if tile == 0 { 0 } else { get_from_memory::<i32>(tile + TILE_BASE_ELEVATION_OFFSET) }
+        });
+        MergeSide {
+            size: self.get_size(false),
+            base_level,
+            tank_height: self.tank_height as i32,
+            tile_count,
+            is_filled: self.is_filled,
+            salinity: self.current_water_type,
+            water_purity: self.water_purity,
+        }
+    }
+
+    /// Writes `salinity` to both `current_water_type` and `pending_water_type`, as `mergeTanks` does.
+    pub(crate) fn set_merged_water_type(&self, salinity: i32) {
+        write_live!(self, current_water_type, salinity);
+        write_live!(self, pending_water_type, salinity);
+    }
+
     fn this_ptr(&self) -> *const u32 {
         self as *const Self as *const u32
     }
@@ -950,7 +1136,7 @@ impl ZTTankExhibit {
         if (self.water_level as i32) < 1 {
             if old_level > 0 {
                 unsafe {
-                    SET_WATER_CLEAN.original()(this as *const std::ffi::c_void);
+                    self.set_water_clean();
                     self.remove_owned_transients();
                     FETCH_VALUES_FROM_TANK.original()();
                 }
@@ -1402,7 +1588,7 @@ impl ZTTankExhibit {
         if flagged.is_empty() {
             return true;
         }
-        if confirm && !low_byte_bool(unsafe { CONFIRM_SELL_OFF.original()() } as u32) {
+        if confirm && !Self::confirm_sell_off() {
             return false;
         }
 
@@ -1700,6 +1886,428 @@ impl ZTTankExhibit {
     fn sparkle_timer_reload(numerator: u32, tile_count: u32) -> i32 {
         numerator.checked_div(tile_count).unwrap_or(0) as i32
     }
+
+    /// Ports `ZTTankExhibit::setTankHeight` (`0x005af39e`, `RET 4`): clamps `height` to `[getMinDepth,
+    /// max]` (signed, the lower bound first), where `max` is `maximumTankHeight` unless `fill_suppressed`
+    /// is set, in which case it is the minimum depth itself. A changed height then runs
+    /// [`Self::do_depth_suitability`] with the new height before writing it, lowers the water level to
+    /// `height + DAT_006390ac` when it is above that, and refreshes the walls (and so the costs). It
+    /// resets the unit AI and validates positions (vtable `+0x34`/`+0x40`), flags the habitat (`+0x30`) and
+    /// every owned tile (`+0x85 |= 2`), updates the show and amphibious neighbours, refreshes the
+    /// tank-modify dialog, marks the viewing areas for recreation and requests a draw-order recalculation.
+    /// An unchanged height does nothing.
+    pub fn set_tank_height(&self, height: i32) {
+        let min_depth = self.get_min_depth();
+        let max_height = if self.fill_suppressed == 0 { Self::read_setting::<i32>(MAXIMUM_TANK_HEIGHT_RVA) } else { min_depth };
+        let height = if height < min_depth { min_depth } else { height };
+        let height = if max_height < height { max_height } else { height };
+        if self.tank_height as i32 == height {
+            return;
+        }
+
+        self.do_depth_suitability(height);
+        write_live!(self, tank_height, height as u32);
+        let water_ceiling = height.wrapping_add(Self::read_setting::<i32>(WATER_RISE_TARGET_ABOVE_TANK_HEIGHT_RVA));
+        if (self.water_level as i32) > water_ceiling {
+            self.set_water_level(water_ceiling);
+        }
+        self.update_tank_wall_info();
+        let this = self.this_ptr() as u32;
+        unsafe {
+            call_vtable_slot_noargs(this, RESET_UNIT_AI_VTABLE_OFFSET);
+            call_vtable_slot_noargs(this, VALIDATE_POSITIONS_VTABLE_OFFSET);
+        }
+        write_live!(self.habitat, unknown_flag_0x30, 1u8);
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + OWNED_TILE_NODE_TILE_OFFSET);
+            save_to_memory(tile + TILE_FLAGS_OFFSET, get_from_memory::<u8>(tile + TILE_FLAGS_OFFSET) | TILE_FLAG_TANK_HEIGHT_CHANGED);
+        }
+        let habitat_mgr = globals().zthabitatmgr();
+        habitat_mgr.update_show_neighbors(this);
+        unsafe { FETCH_VALUES_FROM_TANK.original()() };
+        habitat_mgr.update_amphibious_neighbors(this);
+        self.habitat.recreate_oas();
+        unsafe { SET_NEEDS_ORDER_RECALCULATE.original()(1) };
+    }
+
+    /// Ports `ZTTankExhibit::setWaterClean` (`0x005052b1`): sets the purity to `initialWaterPurity`
+    /// through [`Self::set_water_purity`].
+    pub fn set_water_clean(&self) {
+        self.set_water_purity(Self::read_setting(INITIAL_WATER_PURITY_RVA));
+    }
+
+    /// Vtable address of `ZTTankExhibit` (`0x006312bc`), written once the base constructor has run.
+    const TANK_VTABLE_PTR: u32 = 0x0063_12bc;
+
+    /// Ports `ZTTankExhibit::ZTTankExhibit` (`0x0045b92f`, `RET 0xc`) on the allocation at `this_addr`:
+    /// runs vanilla's own (un-ported) `ZTHabitat` constructor for the base, zeroes the tank's fields
+    /// (`-1` for the attached filter id) and installs the tank vtable. It then snapshots the owned
+    /// tiles' terrain for undo (only when the map view is not in a show edit), claims the tiles
+    /// (`|= 0x20`, guard bytes cleared, owner back-pointer set, `+0x81` cleared outside loading), levels
+    /// them to the average tile height (less `initialSink`/`initialSinkShow` when `start_filled`),
+    /// validates the map, posts the terrain undo action (id `3`, labelled with vanilla's fixed
+    /// undo-label string), and applies `tanks.cfg`'s initial height, water level, fill state, salinity,
+    /// temperature, purity and purity timer - filling when `initialFillState > 0`.
+    ///
+    /// Vanilla's null-`GLOBAL_ZTApp` store of `ZTApp::handleMessages` is not ported (it only runs before
+    /// the app exists), as in [`Self::confirm_sell_off`]. The owned-tile count divides the height sum
+    /// with a signed `IDIV`; a tank with no owned tiles faults in vanilla and averages to `0` here.
+    pub fn construct(this_addr: u32, tile: u32, param_2: bool, start_filled: bool) -> u32 {
+        #[cfg(feature = "reimplementation-tests")]
+        CONSTRUCT_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        unsafe { ZTHABITAT_CONSTRUCTOR.original()(this_addr as *const u32, tile as *const u32, param_2) };
+        for offset in [0x178u32, 0x17c, 0x180, 0x184, 0x188, 0x18c, 0x190, 0x194, 0x1b4, 0x1b8, 0x1bc, 0x1c0, 0x1c4, 0x1c8, 0x1cc, 0x1d0, 0x1d4, 0x1d8, 0x1dc, 0x1e0, 0x1e4] {
+            save_to_memory(this_addr + offset, 0u32);
+        }
+        save_to_memory(this_addr + std::mem::offset_of!(ZTTankExhibit, attached_filter_id) as u32, -1i32);
+        save_to_memory(this_addr, Self::TANK_VTABLE_PTR);
+
+        let tank = unsafe { ref_from_memory::<ZTTankExhibit>(this_addr) };
+        let owned_tiles_field = this_addr + std::mem::offset_of!(ZTHabitat, owned_tiles_ptr) as u32;
+        let map = Self::world_bfmap();
+
+        let mapview = unsafe { GET_MAPVIEW.original()() } as u32;
+        if !low_byte_bool(unsafe { HAS_UNDO_ACTION.original()(mapview as *const u32, 3, 0) }) {
+            unsafe { CLEAR_TILE_TERRAIN.original()(map, 1) };
+        }
+        let mapview = unsafe { GET_MAPVIEW.original()() } as u32;
+        if get_from_memory::<u8>(mapview + MAPVIEW_SHOW_EDIT_OFFSET) == 0 {
+            for node in walk_tile_list(tank.owned_tiles_ptr) {
+                unsafe { SAVE_TILE_TERRAIN.original()(map, get_from_memory::<u32>(node + OWNED_TILE_NODE_TILE_OFFSET) as *const u32) };
+            }
+        }
+
+        let is_show = globals().zthabitatmgr().do_show_check(this_addr, false);
+        let (mut tile_count, mut height_sum) = (0i32, 0i32);
+        for node in walk_tile_list(tank.owned_tiles_ptr) {
+            tile_count += 1;
+            height_sum = height_sum.wrapping_add(get_from_memory::<i32>(get_from_memory::<u32>(node + OWNED_TILE_NODE_TILE_OFFSET) + TILE_HEIGHT_OFFSET));
+        }
+        let mut base_level = height_sum.checked_div(tile_count).unwrap_or(0);
+        if start_filled {
+            base_level = base_level.wrapping_sub(Self::read_setting::<i32>(if is_show { INITIAL_SINK_SHOW_RVA } else { INITIAL_SINK_RVA }));
+        }
+
+        let loading = Self::load_in_progress();
+        for node in walk_tile_list(tank.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + OWNED_TILE_NODE_TILE_OFFSET);
+            save_to_memory(tile + TILE_ADJUSTING_FLAG_OFFSET, 0u8);
+            save_to_memory(tile + TILE_PAINTING_FLAG_OFFSET, 0u8);
+            save_to_memory(tile + TILE_FLAGS_OFFSET, get_from_memory::<u8>(tile + TILE_FLAGS_OFFSET) | TILE_FLAG_OWNED);
+            if !loading {
+                save_to_memory(tile + TILE_VISIBLE_FLAG_OFFSET, 0u8);
+            }
+            save_to_memory(tile + TILE_OWNER_LIST_OFFSET, owned_tiles_field);
+        }
+
+        tank.level_all_tiles();
+        tank.set_base_level(base_level);
+        unsafe { VALIDATE_TILES.original()(map) };
+
+        let label_ptr = get_module_base("zoo.exe") as u32 + RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL;
+        let mut label_len = 0u32;
+        while get_from_memory::<u8>(label_ptr + label_len) != 0 {
+            label_len += 1;
+        }
+        let label_buf = unsafe { POOLALLOC_ALLOCATE.original()(label_len + 1) } as u32;
+        unsafe { MEMMOVE.original()(label_buf as *const u32, label_ptr as *const u32, label_len) };
+        save_to_memory(label_buf + label_len, 0u8);
+        // The undo action takes ownership of the label buffer.
+        let mapview = unsafe { GET_MAPVIEW.original()() } as u32;
+        unsafe {
+            ADD_UNDO_ACTION.original()(
+                mapview as *const u32,
+                3,
+                0,
+                0,
+                std::ptr::null::<u32>(),
+                u32::MAX,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null::<i32>(),
+                label_buf as *const u32,
+                (label_buf + label_len) as i32,
+                (label_buf + label_len + 1) as i32,
+            )
+        };
+
+        write_live!(tank, fill_suppressed, 0u8);
+        write_live!(tank, tank_height, Self::read_setting::<u32>(if is_show { INITIAL_HEIGHT_SHOW_RVA } else { INITIAL_HEIGHT_RVA }));
+        write_live!(tank, water_level, Self::read_setting::<u32>(INITIAL_WATER_LEVEL_RVA));
+        write_live!(tank, is_filled, false);
+        if Self::read_setting::<i32>(INITIAL_FILL_STATE_RVA) > 0 {
+            tank.fill();
+        }
+        let salinity: i32 = Self::read_setting(INITIAL_SALINITY_RVA);
+        write_live!(tank, current_water_type, salinity);
+        write_live!(tank, pending_water_type, salinity);
+        save_to_memory(this_addr + TANK_TEMPERATURE_OFFSET, Self::read_setting::<u32>(INITIAL_TEMPERATURE_RVA));
+        write_live!(tank, water_purity, Self::read_setting::<i32>(INITIAL_WATER_PURITY_RVA));
+        write_live!(tank, water_purity_timer, Self::read_setting::<i32>(WATER_PURITY_TIMER_RELOAD_RVA));
+        this_addr
+    }
+
+    /// Ports `ZTTankExhibit::~ZTTankExhibit`'s body (`0x00505148`; the scalar-deleting wrapper
+    /// `DESTRUCTOR_1` calls this address): resets the vtable to the base `ZTHabitat`'s before anything
+    /// virtual runs, removes the sparkles and transients, drains the tank to `0`, drops every wall to
+    /// height `0`, and - outside a show edit - repaints the base terrain as `tankTerrain`. It then
+    /// releases each owned tile (`0x20` cleared, guard bytes set to `1`, owner back-pointer cleared),
+    /// frees the four vectors (`+0x178` walls, `+0x1b4` ripples, `+0x1c4` sparkles, `+0x1d0` sparkle ids)
+    /// back to `PoolAlloc` by capacity, and runs the base destructor ([`ZTHabitat::destruct`]).
+    pub fn destruct(&self) {
+        #[cfg(feature = "reimplementation-tests")]
+        DESTRUCT_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        write_live!(self.habitat, vtable, ZTHabitat::BASE_VTABLE_PTR);
+        self.remove_all_sparkles_by_id();
+        self.remove_owned_transients();
+        self.set_water_level(0);
+        self.for_each_tank_wall(|wall| unsafe { SET_WALL_HEIGHT.original()(wall as *const u32, 0) });
+
+        let mapview = unsafe { GET_MAPVIEW.original()() } as u32;
+        if mapview != 0 && get_from_memory::<u8>(mapview + MAPVIEW_SHOW_EDIT_OFFSET) == 0 {
+            self.set_base_terrain_type(Self::read_setting(TANK_TERRAIN_RVA));
+        }
+
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + OWNED_TILE_NODE_TILE_OFFSET);
+            save_to_memory(tile + TILE_FLAGS_OFFSET, get_from_memory::<u8>(tile + TILE_FLAGS_OFFSET) & !TILE_FLAG_OWNED);
+            save_to_memory(tile + TILE_ADJUSTING_FLAG_OFFSET, 1u8);
+            save_to_memory(tile + TILE_PAINTING_FLAG_OFFSET, 1u8);
+            save_to_memory(tile + TILE_OWNER_LIST_OFFSET, 0u32);
+        }
+
+        let this = self.this_ptr() as u32;
+        // (begin offset, capacity-end offset, element size): each freed by whole elements of capacity.
+        for (begin_offset, cap_end_offset, element_size) in [(0x1d0u32, 0x1d8u32, 4u32), (0x1c4, 0x1cc, 8), (0x1b4, 0x1bc, 4), (0x178, 0x180, 4)] {
+            let begin: u32 = get_from_memory(this + begin_offset);
+            if begin != 0 {
+                let cap_end: u32 = get_from_memory(this + cap_end_offset);
+                let byte_size = cap_end.wrapping_sub(begin) / element_size * element_size;
+                unsafe { POOLALLOC_DEALLOCATE.original()(begin as *const u32, byte_size) };
+            }
+        }
+        self.habitat.destruct();
+    }
+
+    /// `true` when `entity` is a `ZTTankWall` whose id is in this tank's wall vector.
+    fn is_own_tank_wall(&self, entity: u32) -> bool {
+        if entity == 0 || !unsafe { entity_type_matches(entity, RVA_TANK_WALL_TYPE_CHECK_ARG) } {
+            return false;
+        }
+        let id: i32 = get_from_memory(entity + ENTITY_ID_OFFSET);
+        let end_addr = self.this_ptr() as u32 + std::mem::offset_of!(ZTTankExhibit, wall_ids_end) as u32;
+        let mut slot = self.wall_ids_begin;
+        while slot != get_from_memory::<u32>(end_addr) {
+            if get_from_memory::<i32>(slot) == id {
+                return true;
+            }
+            slot += 4;
+        }
+        false
+    }
+
+    /// The fence-style name of an entity type: the bytes of the `std::string` at type `+0x98`/`+0x9c`.
+    fn entity_type_name(entity_type: u32) -> Vec<u8> {
+        let begin: u32 = get_from_memory(entity_type + ENTITY_TYPE_NAME_BEGIN_OFFSET);
+        let end: u32 = get_from_memory(entity_type + ENTITY_TYPE_NAME_END_OFFSET);
+        (begin..end).map(get_from_memory::<u8>).collect()
+    }
+
+    /// One edge test of [`Self::update_tank_info`]: whether this wall continues into another of the tank's
+    /// walls on that side. Three probes, first hit wins: the tile's own wall `direct` slot, the wall
+    /// `corner_slot` of the tile reached by stepping `corner_dirs.0` then `corner_dirs.1`, and the
+    /// wall `side_slot` of the tile reached by `side_dir` - which only counts when its fence style
+    /// name differs from this wall's (`own_type_name`).
+    fn wall_continues(&self, tile: u32, own_type_name: &[u8], edge: &WallEdgeProbe) -> bool {
+        if self.is_own_tank_wall(get_from_memory(tile + edge.direct_slot)) {
+            return true;
+        }
+        let world = globals().ztworldmgr();
+        let step = |from: u32, direction: u32| if from == 0 { 0 } else { get_neighbour_raw(world, from, direction) };
+        let corner = step(step(tile, edge.corner_dirs.0), edge.corner_dirs.1);
+        if corner != 0 && self.is_own_tank_wall(get_from_memory(corner + edge.corner_slot)) {
+            return true;
+        }
+        let side = step(tile, edge.side_dir);
+        if side == 0 {
+            return false;
+        }
+        let neighbour_wall: u32 = get_from_memory(side + edge.side_slot);
+        self.is_own_tank_wall(neighbour_wall) && Self::entity_type_name(get_from_memory(neighbour_wall + ENTITY_TYPE_OFFSET)) != own_type_name
+    }
+
+    /// Ports `ZTTankExhibit::updateTankInfo` (`0x0045bc0f`): re-picks each tank wall's fence variant from
+    /// which of its two edges continue into another wall of the tank (`setMiddleFence`,
+    /// `setLeftEdgeFence`, `setRightEdgeFence` or `setBothEdgesFence`), then runs
+    /// [`Self::update_tank_wall_info`], drops the transients when any ripple ids are held, and respawns
+    /// the ripples on a tank with pure water.
+    ///
+    /// The edge tests per wall rotation are [`WALL_EDGE_PROBES`]; any rotation other than `0`, `2` or `4`
+    /// takes the `6` row, as vanilla's fall-through does.
+    pub fn update_tank_info(&self) {
+        let end_addr = self.this_ptr() as u32 + std::mem::offset_of!(ZTTankExhibit, wall_ids_end) as u32;
+        let mut slot = self.wall_ids_begin;
+        while slot != get_from_memory::<u32>(end_addr) {
+            let wall = Self::entity_by_id(get_from_memory::<i32>(slot));
+            if wall != 0 && unsafe { entity_type_matches(wall, RVA_TANK_WALL_TYPE_CHECK_ARG) } {
+                let own_type_name = Self::entity_type_name(get_from_memory(wall + ENTITY_TYPE_OFFSET));
+                let tile = unsafe { BFENTITY_GET_TILE.original()(wall as *const u32) } as u32;
+                let rotation: u32 = get_from_memory(wall + ENTITY_ROTATION_OFFSET);
+                let (left_probe, right_probe) = &WALL_EDGE_PROBES[match rotation {
+                    0 => 0,
+                    2 => 1,
+                    4 => 2,
+                    _ => 3,
+                }];
+                let left = self.wall_continues(tile, &own_type_name, left_probe);
+                let right = self.wall_continues(tile, &own_type_name, right_probe);
+                unsafe {
+                    match (left, right) {
+                        (true, true) => SET_BOTH_EDGES_FENCE.original()(wall as *const u32),
+                        (true, false) => SET_LEFT_EDGE_FENCE.original()(wall as *const u32),
+                        (false, true) => SET_RIGHT_EDGE_FENCE.original()(wall as *const u32),
+                        (false, false) => SET_MIDDLE_FENCE.original()(wall as *const u32),
+                    }
+                }
+            }
+            slot += 4;
+        }
+
+        self.update_tank_wall_info();
+        if (self.ripple_entity_ids_end.wrapping_sub(self.ripple_entity_ids_begin) & !3) != 0 {
+            self.remove_owned_transients();
+        }
+        if self.water_level as i32 > 0 && self.is_pure_water() {
+            self.add_water_ripples();
+        }
+    }
+
+    /// Ports `ZTTankExhibit::save` (`0x00606398`): the base habitat record, then `tank_height`,
+    /// `water_level`, `is_filled` (one byte), `current_water_type`, `pending_water_type` and
+    /// `water_purity`. Every write happens regardless of an earlier failure.
+    pub fn save(&self, file: *const i8) -> bool {
+        let mut ok = self.habitat.save(file);
+        ok &= write_bytes_to_file(&self.tank_height, file);
+        ok &= write_bytes_to_file(&self.water_level, file);
+        ok &= write_bytes_to_file(&self.is_filled, file);
+        ok &= write_bytes_to_file(&self.current_water_type, file);
+        ok &= write_bytes_to_file(&self.pending_water_type, file);
+        ok &= write_bytes_to_file(&self.water_purity, file);
+        ok
+    }
+
+    /// Whether `wall` is a `ZTTankWall` whose fence type is a show fence (type byte `+0x6f`).
+    fn is_show_fence_wall(wall: u32) -> bool {
+        if wall == 0 || !unsafe { entity_type_matches(wall, RVA_TANK_WALL_TYPE_CHECK_ARG) } {
+            return false;
+        }
+        let is_fence = unsafe { entity_type_matches(wall, RVA_FENCE_TYPE_CHECK_ARG) };
+        is_fence && get_from_memory::<u8>(get_from_memory::<u32>(wall + ENTITY_TYPE_OFFSET) + ENTITY_TYPE_MODE2_ALLOWED_OFFSET) != 0
+    }
+
+    /// Ports `ZTTankExhibit::setIsShowExhibit` (`0x005ab683`): the base habitat's show setup, then the
+    /// `tankTerrainShow` terrain for a show tank, then every tank wall whose type is not a show fence is
+    /// changed (entity vtable `+0x7c`, `(type, 1)`) to the type of the first wall that is one.
+    pub fn set_is_show_exhibit(&self) {
+        self.habitat.set_is_show_exhibit();
+        if self.habitat.is_show_tank_dispatched() {
+            unsafe { SET_BASE_TERRAIN_TYPE.hooked()(self.this_ptr(), Self::read_setting(TANK_TERRAIN_SHOW_RVA)) };
+        }
+
+        let end_addr = self.this_ptr() as u32 + std::mem::offset_of!(ZTTankExhibit, wall_ids_end) as u32;
+        let mut slot = self.wall_ids_begin;
+        let mut show_wall_type = 0;
+        while slot != get_from_memory::<u32>(end_addr) {
+            let wall = Self::entity_by_id(get_from_memory::<i32>(slot));
+            if Self::is_show_fence_wall(wall) {
+                show_wall_type = get_from_memory::<u32>(wall + ENTITY_TYPE_OFFSET);
+                break;
+            }
+            slot += 4;
+        }
+        if show_wall_type == 0 {
+            return;
+        }
+
+        let mut slot = self.wall_ids_begin;
+        while slot != get_from_memory::<u32>(end_addr) {
+            let wall = Self::entity_by_id(get_from_memory::<i32>(slot));
+            if wall != 0 && unsafe { entity_type_matches(wall, RVA_TANK_WALL_TYPE_CHECK_ARG) } && !Self::is_show_fence_wall(wall) {
+                let vtable: u32 = get_from_memory(wall);
+                let set_wall_type: extern "thiscall" fn(u32, u32, u32) =
+                    unsafe { std::mem::transmute(get_from_memory::<u32>(vtable + WALL_SET_TYPE_VTABLE_OFFSET)) };
+                set_wall_type(wall, show_wall_type, 1);
+            }
+            slot += 4;
+        }
+    }
+
+    /// Ports `ZTTankExhibit::setIsNotShowExhibit` (`0x0045b7ec`): the base habitat's teardown, then the
+    /// `tankTerrain` terrain once the tank is no longer a show tank.
+    pub fn set_is_not_show_exhibit(&self) {
+        self.habitat.set_is_not_show_exhibit();
+        if !self.habitat.is_show_tank_dispatched() {
+            unsafe { SET_BASE_TERRAIN_TYPE.hooked()(self.this_ptr(), Self::read_setting(TANK_TERRAIN_RVA)) };
+        }
+    }
+
+    /// Ports `ZTTankExhibit::confirmSellOff` (`0x00485aa7`): asks the player to confirm selling off the
+    /// entities a tank change would remove (string `0x2938`, `question` dialog); `true` when a load is in
+    /// progress (no dialog) or the player accepts. Vanilla first stores `ZTApp::handleMessages` in a null
+    /// `GLOBAL_ZTApp`, which only differs before the app exists.
+    pub fn confirm_sell_off() -> bool {
+        if Self::load_in_progress() {
+            return true;
+        }
+        let base = get_module_base("zoo.exe") as u32;
+        let bfuimgr = base + RVA_GLOBAL_BFUIMGR;
+        let dialog_name = (base + CONFIRM_DIALOG_NAME_RVA) as *const i8;
+        unsafe { CONFIRM_DIALOG_1.hooked()(bfuimgr as *const u32, SELL_OFF_MESSAGE_ID as i32, std::ptr::null(), 1, dialog_name, 1, 0, 0, 0) == 1 }
+    }
+
+    /// Ports `ZTTankExhibit::loadProperties` (`0x00463a0e`): reads the tank settings globals out of
+    /// `tanks.cfg` (`[cost]` and `[tank]`). A key that is missing or does not parse leaves its global
+    /// untouched. `veryMurkyWaterPurity` and `extremelyMurkyWaterPurity` both write
+    /// [`VERY_MURKY_WATER_PURITY_RVA`], the second winning; nothing writes `DAT_006390b0`.
+    pub fn load_properties() {
+        let Some(ini) = ini_compat::read_cfg("tanks.cfg") else {
+            return;
+        };
+        let base = get_module_base("zoo.exe") as u32;
+        let float_settings: [(&str, &str, u32); 2] = [("cost", "saltWater", SALT_WATER_COST_RVA), ("cost", "freshWater", FRESH_WATER_COST_RVA)];
+        for (section, key, rva) in float_settings {
+            if let Some(value) = ini_compat::first_parse::<f32>(&ini, section, key) {
+                save_to_memory(base + rva, value);
+            }
+        }
+        let int_settings: [(&str, &str, u32); 18] = [
+            ("cost", "wallHeightPriceDivisor", WALL_HEIGHT_PRICE_DIVISOR_RVA),
+            ("tank", "initialSink", INITIAL_SINK_RVA),
+            ("tank", "initialSinkShow", INITIAL_SINK_SHOW_RVA),
+            ("tank", "initialHeight", INITIAL_HEIGHT_RVA),
+            ("tank", "initialHeightShow", INITIAL_HEIGHT_SHOW_RVA),
+            ("tank", "initialWaterLevel", INITIAL_WATER_LEVEL_RVA),
+            ("tank", "initialFillState", INITIAL_FILL_STATE_RVA),
+            ("tank", "initialSalinity", INITIAL_SALINITY_RVA),
+            ("tank", "initialTemperature", INITIAL_TEMPERATURE_RVA),
+            ("tank", "maximumTankHeight", MAXIMUM_TANK_HEIGHT_RVA),
+            ("tank", "waterOffset", WATER_RISE_TARGET_ABOVE_TANK_HEIGHT_RVA),
+            ("tank", "tankTerrain", TANK_TERRAIN_RVA),
+            ("tank", "tankTerrainShow", TANK_TERRAIN_SHOW_RVA),
+            ("tank", "initialWaterPurity", INITIAL_WATER_PURITY_RVA),
+            ("tank", "murkyWaterPurity", MURKY_WATER_PURITY_RVA),
+            ("tank", "veryMurkyWaterPurity", VERY_MURKY_WATER_PURITY_RVA),
+            ("tank", "extremelyMurkyWaterPurity", VERY_MURKY_WATER_PURITY_RVA),
+            ("tank", "waterPurityDecayTime", WATER_PURITY_TIMER_RELOAD_RVA),
+        ];
+        for (section, key, rva) in int_settings {
+            if let Some(value) = ini_compat::first_parse::<i32>(&ini, section, key) {
+                save_to_memory(base + rva, value);
+            }
+        }
+    }
 }
 
 /// `ZTTankExhibit::isRightSalinity`'s own fixed address (`0x004936df`) is referenced exactly once in the
@@ -1856,6 +2464,24 @@ pub mod detours {
         unsafe { ref_from_memory::<ZTTankExhibit>(this as *const u32) }.clear_wall_vector()
     }
 
+    #[detour(ZTTANKEXHIBIT_CONSTRUCTOR)]
+    unsafe extern "thiscall" fn tank_constructor(this: *const u32, tile: *const u32, param_2: bool, start_filled: bool) -> *const u32 {
+        ZTTankExhibit::construct(this as u32, tile as u32, param_2, start_filled) as *const u32
+    }
+
+    /// `~ZTTankExhibit`'s body (`0x00505148`); the scalar-deleting wrapper (`DESTRUCTOR_1`) calls this
+    /// address, so one detour covers every tank teardown.
+    #[detour(ZTTANKEXHIBIT_DESTRUCTOR_0)]
+    unsafe extern "thiscall" fn tank_destructor(this: *const u32) -> *const u32 {
+        unsafe { ref_from_memory::<ZTTankExhibit>(this) }.destruct();
+        this
+    }
+
+    #[detour(UPDATE_TANK_INFO)]
+    unsafe extern "thiscall" fn update_tank_info(this: *const u32) {
+        unsafe { ref_from_memory::<ZTTankExhibit>(this) }.update_tank_info()
+    }
+
     #[detour(UPDATE_TANK_WALL_INFO)]
     unsafe extern "thiscall" fn update_tank_wall_info(this: *const u32) {
         unsafe { ref_from_memory::<ZTTankExhibit>(this) }.update_tank_wall_info()
@@ -1967,13 +2593,39 @@ pub mod detours {
     /// in vanilla memory (the viewing areas live in [`super::viewing_areas`]'s store), so vanilla's loop is
     /// a no-op; this partial override runs the real function and then applies the same marking through the
     /// store exactly when the real function changed the height - its changed-branch condition.
+    #[detour(SET_WATER_CLEAN)]
+    unsafe extern "fastcall" fn set_water_clean(this: *const std::ffi::c_void) {
+        unsafe { ref_from_memory::<ZTTankExhibit>(this as *const u32) }.set_water_clean();
+    }
+
+    #[detour(SAVE)]
+    unsafe extern "thiscall" fn save(this: *const u32, file: *const u32) -> bool {
+        unsafe { ref_from_memory::<ZTTankExhibit>(this) }.save(file as *const i8)
+    }
+
+    #[detour(SET_IS_SHOW_EXHIBIT)]
+    unsafe extern "thiscall" fn set_is_show_exhibit(this: *const u32) {
+        unsafe { ref_from_memory::<ZTTankExhibit>(this) }.set_is_show_exhibit();
+    }
+
+    #[detour(SET_IS_NOT_SHOW_EXHIBIT)]
+    unsafe extern "thiscall" fn set_is_not_show_exhibit(this: *const u32) {
+        unsafe { ref_from_memory::<ZTTankExhibit>(this) }.set_is_not_show_exhibit();
+    }
+
+    #[detour(CONFIRM_SELL_OFF)]
+    unsafe extern "stdcall" fn confirm_sell_off() -> bool {
+        ZTTankExhibit::confirm_sell_off()
+    }
+
+    #[detour(LOAD_PROPERTIES)]
+    unsafe extern "stdcall" fn load_properties() {
+        ZTTankExhibit::load_properties();
+    }
+
     #[detour(SET_TANK_HEIGHT)]
     unsafe extern "thiscall" fn set_tank_height(this: *const u32, height: i32) {
-        let height_before = get_from_memory::<u32>(this as u32 + TANK_HEIGHT_OFFSET);
-        unsafe { SET_TANK_HEIGHT_DETOUR.call(this, height) };
-        if get_from_memory::<u32>(this as u32 + TANK_HEIGHT_OFFSET) != height_before {
-            unsafe { ref_from_memory::<ZTHabitat>(this) }.recreate_oas();
-        }
+        unsafe { ref_from_memory::<ZTTankExhibit>(this) }.set_tank_height(height);
     }
 
     /// Release-safe paths back to real vanilla for the Stage 1 leaf-getter comparison test - see
@@ -2159,6 +2811,21 @@ pub mod detours {
     }
 
     #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn tank_constructor_real(this: *const u32, tile: *const u32, param_2: bool, start_filled: bool) -> *const u32 {
+        unsafe { ZTTANKEXHIBIT_CONSTRUCTOR_DETOUR.call(this, tile, param_2, start_filled) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn tank_destructor_real(this: *const u32) -> *const u32 {
+        unsafe { ZTTANKEXHIBIT_DESTRUCTOR_0_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn update_tank_info_real(this: *const u32) {
+        unsafe { UPDATE_TANK_INFO_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn update_tank_wall_info_real(this: *const u32) {
         unsafe { UPDATE_TANK_WALL_INFO_DETOUR.call(this) }
     }
@@ -2210,6 +2877,36 @@ pub mod detours {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn is_right_salinity_real(this: *const u32, animal_type: *const u32) -> bool {
         unsafe { IS_RIGHT_SALINITY_DETOUR.call(this, animal_type) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn set_water_clean_real(this: *const std::ffi::c_void) {
+        unsafe { SET_WATER_CLEAN_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn save_real(this: *const u32, file: *const u32) -> bool {
+        unsafe { SAVE_DETOUR.call(this, file) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn set_is_show_exhibit_real(this: *const u32) {
+        unsafe { SET_IS_SHOW_EXHIBIT_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn set_is_not_show_exhibit_real(this: *const u32) {
+        unsafe { SET_IS_NOT_SHOW_EXHIBIT_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn confirm_sell_off_real() -> bool {
+        unsafe { CONFIRM_SELL_OFF_DETOUR.call() }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn load_properties_real() {
+        unsafe { LOAD_PROPERTIES_DETOUR.call() }
     }
 
     /// Release-safe path back to real vanilla for the live comparison test - see
@@ -2400,5 +3097,72 @@ mod tests {
     fn sparkle_reload_guards_the_zero_tile_count() {
         // Documented deviation: vanilla's DIV by zero raises #DE; unreachable live, guarded to 0 here.
         assert_eq!(ZTTankExhibit::sparkle_timer_reload(40_000, 0), 0);
+    }
+
+    fn side(size: i32, base: i32, height: i32, tiles: i32, filled: bool, salinity: i32, purity: i32) -> MergeSide {
+        MergeSide { size, base_level: base, tank_height: height, tile_count: tiles, is_filled: filled, salinity, water_purity: purity }
+    }
+
+    #[test]
+    fn merge_averages_base_and_height_by_size() {
+        let plan = plan_merge(&side(30, 2, 10, 30, true, 1, 50), &side(10, 6, 2, 10, true, 1, 50));
+        assert_eq!(plan.base_level, (30 * 2 + 10 * 6) / 40);
+        assert_eq!(plan.tank_height, (30 * 10 + 10 * 2) / 40);
+    }
+
+    #[test]
+    fn merge_truncates_averages_toward_zero() {
+        let plan = plan_merge(&side(1, -3, 0, 1, false, 0, 0), &side(1, 0, 0, 1, false, 0, 0));
+        assert_eq!(plan.base_level, -1);
+    }
+
+    #[test]
+    fn merge_purity_weights_by_water_volume_and_ignores_drained_tanks() {
+        // a holds 3*4 = 12, b holds 2*4 = 8.
+        let plan = plan_merge(&side(4, 0, 3, 4, true, 1, 100), &side(4, 0, 2, 4, true, 1, 0));
+        assert_eq!(plan.water_purity, (0 * 8 + 100 * 12) / 20);
+        // A drained tank contributes no water, whatever its purity.
+        let plan = plan_merge(&side(4, 0, 3, 4, true, 1, 80), &side(4, 0, 9, 4, false, 1, 0));
+        assert_eq!(plan.water_purity, 80);
+    }
+
+    #[test]
+    fn merge_purity_is_zero_when_neither_tank_holds_water() {
+        let plan = plan_merge(&side(4, 0, 3, 4, false, 1, 80), &side(4, 0, 9, 4, false, 1, 70));
+        assert_eq!(plan.water_purity, 0);
+    }
+
+    #[test]
+    fn merge_takes_fill_state_and_salinity_from_the_larger_volume() {
+        let small_empty = side(4, 0, 1, 4, false, 7, 0);
+        let big_full = side(4, 0, 5, 4, true, 3, 0);
+        let plan = plan_merge(&small_empty, &big_full);
+        assert!(plan.is_filled);
+        assert_eq!(plan.salinity, 3);
+        let plan = plan_merge(&big_full, &small_empty);
+        assert!(plan.is_filled);
+        assert_eq!(plan.salinity, 3);
+    }
+
+    #[test]
+    fn merge_tie_prefers_the_filled_tank_then_nonzero_salinity_then_the_survivor() {
+        let a_empty = side(4, 0, 2, 4, false, 5, 0);
+        let b_full = side(4, 0, 2, 4, true, 9, 0);
+        assert_eq!(plan_merge(&a_empty, &b_full).salinity, 9);
+        assert_eq!(plan_merge(&b_full, &a_empty).salinity, 9);
+        // Same fill state: b wins only when its salinity is non-zero and a's is zero.
+        let a_zero = side(4, 0, 2, 4, true, 0, 0);
+        let b_salt = side(4, 0, 2, 4, true, 4, 0);
+        assert_eq!(plan_merge(&a_zero, &b_salt).salinity, 4);
+        assert_eq!(plan_merge(&b_salt, &a_zero).salinity, 4);
+        let a_salt = side(4, 0, 2, 4, true, 6, 0);
+        assert_eq!(plan_merge(&a_salt, &b_salt).salinity, 6);
+        assert_eq!(plan_merge(&a_zero, &side(4, 0, 2, 4, true, 0, 0)).salinity, 0);
+    }
+
+    #[test]
+    fn merge_with_zero_sizes_does_not_divide_by_zero() {
+        let plan = plan_merge(&side(0, 1, 1, 0, false, 0, 0), &side(0, 1, 1, 0, false, 0, 0));
+        assert_eq!((plan.base_level, plan.tank_height, plan.water_purity), (0, 0, 0));
     }
 }
