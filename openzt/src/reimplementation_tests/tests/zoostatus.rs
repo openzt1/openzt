@@ -1215,10 +1215,10 @@ pub(crate) fn run_zoostatus_save_load_test(failure_log: &mut Option<std::fs::Fil
     io_redirect::end_replay();
 
     let mut failed = false;
-    if (real_load_ok & 0xff != 0) != (reimpl_load_ok & 0xff != 0) {
-        error!("{}: load ok mismatch (real={:#x}, reimpl={:#x})", test_name, real_load_ok, reimpl_load_ok);
+    if real_load_ok != (reimpl_load_ok & 0xff != 0) {
+        error!("{}: load ok mismatch (real={real_load_ok}, reimpl={reimpl_load_ok:#x})", test_name);
         if let Some(log_file) = failure_log {
-            let _ = log_file.write_all(format!("Test Failed {}: load ok mismatch (real={:#x}, reimpl={:#x})\n", test_name, real_load_ok, reimpl_load_ok).as_bytes());
+            let _ = log_file.write_all(format!("Test Failed {}: load ok mismatch (real={real_load_ok}, reimpl={reimpl_load_ok:#x})\n", test_name).as_bytes());
         }
         failed = true;
     }
@@ -1422,10 +1422,10 @@ pub(crate) fn run_zoostatus_load_legacy_test(failure_log: &mut Option<std::fs::F
         io_redirect::end_replay();
 
         let mut failed = false;
-        if (real_ok & 0xff != 0) != (reimpl_ok & 0xff != 0) {
-            error!("{}: version {:#x} load ok mismatch (real={:#x}, reimpl={:#x})", test_name, version, real_ok, reimpl_ok);
+        if real_ok != (reimpl_ok & 0xff != 0) {
+            error!("{}: version {version:#x} load ok mismatch (real={real_ok}, reimpl={reimpl_ok:#x})", test_name);
             if let Some(log_file) = failure_log {
-                let _ = log_file.write_all(format!("Test Failed {}: version {:#x} load ok mismatch (real={:#x}, reimpl={:#x})\n", test_name, version, real_ok, reimpl_ok).as_bytes());
+                let _ = log_file.write_all(format!("Test Failed {}: version {version:#x} load ok mismatch (real={real_ok}, reimpl={reimpl_ok:#x})\n", test_name).as_bytes());
             }
             failed = true;
         }

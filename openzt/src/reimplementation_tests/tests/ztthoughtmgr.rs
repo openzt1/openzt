@@ -16,7 +16,8 @@ use crate::reimplementation_tests::NoopFailurePersistence;
 use crate::util::{get_from_memory, save_to_memory, ZTBufferString, ZTString};
 use crate::zthabitatmgr::ZTHabitat;
 use crate::ztthoughtmgr::{live_support as thought_live_support, ZTThought, ZTThoughtMgr};
-use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal};
+use crate::ztworldmgr::{BFEntity, ZTAnimal};
+use glam::i32::IVec3;
 use crate::bfentitytype::ZTAnimalType;
 
 // ============================================================================================

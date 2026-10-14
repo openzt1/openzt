@@ -26,4 +26,5 @@ pub(crate) mod ztshowinfo;
 pub(crate) mod ztshowstate;
 pub(crate) mod ztshowui;
 pub(crate) mod ztsoundscape;
+pub(crate) mod zttankexhibit;
 pub(crate) mod ztthoughtmgr;

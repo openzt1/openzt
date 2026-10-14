@@ -312,8 +312,8 @@ mod award_mgr_detours {
         }
 
         #[detour(SAVE)]
-        unsafe extern "thiscall" fn save(_this: *const u32, file: *const i8) -> u32 {
-            crate::ztawardmgr::save(file as *const u32) as u32
+        unsafe extern "thiscall" fn save(_this: *const u32, file: *const i8) -> bool {
+            crate::ztawardmgr::save(file as *const u32)
         }
 
         /// `_version` is unused - `ZTAwardMgr_load.c`'s own body never reads its 3rd formal parameter -
@@ -321,8 +321,8 @@ mod award_mgr_detours {
         /// declares 3, so this must be kept in the signature purely to keep the thiscall stack-cleanup
         /// arithmetic correct.
         #[detour(LOAD)]
-        unsafe extern "thiscall" fn load(_this: *const u32, file: *const u32, _version: u32) -> u32 {
-            crate::ztawardmgr::load(file) as u32
+        unsafe extern "thiscall" fn load(_this: *const u32, file: *const u32, _version: u32) -> bool {
+            crate::ztawardmgr::load(file)
         }
 
         #[detour(START)]

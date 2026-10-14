@@ -6,7 +6,8 @@ use openzt_configparser::ini::{Ini, WriteOptions};
 use crate::{
     animation::Animation,
     resource_manager::{bfresourcemgr::BFResourcePtr, lazyresourcemap::get_file_ptr},
-    util::{mut_from_memory, ZTString},
+    util::{ref_from_memory, ZTString},
+    write_live,
 };
 
 #[derive(Debug, Clone)]
@@ -230,10 +231,10 @@ impl ZTFileBuilder<true, true, true, true> {
 
 pub fn modify_ztfile<F>(file_name: &str, modifier: F) -> anyhow::Result<()>
 where
-    F: Fn(&mut BFResourcePtr) -> anyhow::Result<()>,
+    F: Fn(&BFResourcePtr) -> anyhow::Result<()>,
 {
     let bf_resource_ptr_ptr = get_file_ptr(file_name).ok_or_else(|| anyhow!("File not found: {}", file_name))?;
-    let bf_resource_ptr = unsafe { mut_from_memory::<BFResourcePtr>(bf_resource_ptr_ptr) };
+    let bf_resource_ptr = unsafe { ref_from_memory::<BFResourcePtr>(bf_resource_ptr_ptr) };
 
     modifier(bf_resource_ptr)?;
 
@@ -244,7 +245,7 @@ pub fn modify_ztfile_as_ini<F>(file_name: &str, modifier: F) -> anyhow::Result<(
 where
     F: Fn(&mut Ini) -> anyhow::Result<()>,
 {
-    modify_ztfile(file_name, |file: &mut BFResourcePtr| {
+    modify_ztfile(file_name, |file: &BFResourcePtr| {
         let c_string = unsafe { CString::from_raw(file.data_ptr as *mut i8) };
         let bytes = c_string.as_bytes();
         let decoded_string = crate::encoding_utils::decode_game_text(bytes);
@@ -259,10 +260,10 @@ where
         write_options.space_around_delimiters = true;
         write_options.blank_lines_between_sections = 1;
         let new_string = cfg.pretty_writes(&write_options);
-        file.content_size = new_string.len() as u32;
+        write_live!(file, content_size, new_string.len() as u32);
 
         let new_c_string = CString::new(new_string).with_context(|| format!("Error converting ini to CString after modifying {}", file_name))?;
-        file.data_ptr = new_c_string.into_raw() as u32;
+        write_live!(file, data_ptr, new_c_string.into_raw() as u32);
         Ok(())
     })
 }
@@ -271,7 +272,7 @@ pub fn modify_ztfile_as_animation<F>(file_name: &str, modifier: F) -> anyhow::Re
 where
     F: Fn(&mut Animation) -> anyhow::Result<()>,
 {
-    modify_ztfile(file_name, |file: &mut BFResourcePtr| {
+    modify_ztfile(file_name, |file: &BFResourcePtr| {
         let data_vec: Box<[u8]> = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(file.data_ptr as *mut _, file.content_size as usize)) };
         let mut animation = Animation::parse(&data_vec)?;
 
@@ -281,8 +282,8 @@ where
         let boxed_slice = new_animation_bytes.into_boxed_slice();
         let data_ptr = boxed_slice.as_ptr() as u32;
         std::mem::forget(boxed_slice);
-        file.data_ptr = data_ptr;
-        file.content_size = length as u32;
+        write_live!(file, data_ptr, data_ptr);
+        write_live!(file, content_size, length as u32);
         Ok(())
     })
 }
@@ -305,6 +306,7 @@ pub fn ztfile_to_raw_resource(path: &str, file_name: String, ztfile: ZTFile) -> 
                 bf_resource_name: bf_resource_name.into(),
                 data_ptr: ptr,
                 content_size: length,
+                _live: Default::default(),
             }));
 
             Ok((lowercase_filename, type_, resource_ptr as _))
@@ -318,6 +320,7 @@ pub fn ztfile_to_raw_resource(path: &str, file_name: String, ztfile: ZTFile) -> 
                 bf_resource_name: bf_resource_name.into(),
                 data_ptr: ptr,
                 content_size: length,
+                _live: Default::default(),
             }));
 
             Ok((lowercase_filename, type_, resource_ptr as _))
