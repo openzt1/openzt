@@ -10,7 +10,6 @@ use openzt_detour::generated::{
     zttankwall::{SET_BOTH_EDGES_FENCE, SET_LEFT_EDGE_FENCE, SET_MIDDLE_FENCE, SET_RIGHT_EDGE_FENCE, SET_WALL_HEIGHT},
     ztanimal::BOX as ZTANIMAL_BOX,
     ztmapview::{ADD_UNDO_ACTION, HAS_UNDO_ACTION, PREPARE_TO_DELETE_ENTITY, REMOVE_ENTITY_FROM_MAP},
-    zthabitat::CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR,
     standalone::MEMMOVE,
     poolalloc::ALLOCATE as POOLALLOC_ALLOCATE,
     ztui_general::GET_MAPVIEW,
@@ -29,7 +28,7 @@ use openzt_detour::generated::{
         CONFIRM_SELL_OFF, REMOVE_ILLEGAL_ENTITIES, ADD_TANK_WALL, CLEAR_WALL_VECTOR, DO_DEPTH_SUITABILITY, GET_ILLEGAL_ENTITIES, IS_ILLEGAL_ENTITY, LEVEL_ALL_TILES, RECLAIM_TILES, UPDATE_TANK_INFO, RESTORE_OWNED_TRANSIENTS, UPDATE_TANK_WALL_INFO, VALIDATE_FILTER_POSITION,
         ADD_RANDOM_SPARKLE, ADD_WATER_RIPPLE, ADD_WATER_RIPPLES, REMOVE_ALL_SPARKLES, REMOVE_ALL_SPARKLES_BY_ID, CAN_BE_IN_TANK, CHECK_ENTITIES_FOR_DRAIN, CHECK_ENTITIES_FOR_FILL, CLEAN_WATER_AMOUNT, DRAIN, FILL, GET_ALL_ENTITIES, REMOVE_OWNED_TRANSIENTS, REMOVE_WATER_RIPPLES, SET_BASE_LEVEL, SET_BASE_TERRAIN_TYPE, SET_SALINITY, SET_WATER_CLEAN, GET_COST_TO_CHANGE_HEIGHT, GET_LADDER_BASE_INSIDE_POS, GET_LADDER_BASE_OUTSIDE_POS, GET_LADDER_TOP_INSIDE_POS, GET_LADDER_TOP_OUTSIDE_POS, GET_MIN_DEPTH, GET_PLATFORM_POS, GET_TANK_HEIGHT,
         LOAD_PROPERTIES, SAVE, SET_IS_NOT_SHOW_EXHIBIT, SET_IS_SHOW_EXHIBIT,
-        GET_WATER_LEVEL, GET_WATER_PURITY, IS_EXTREMELY_MURKY_WATER, IS_PURE_WATER, IS_RIGHT_SALINITY, REMOVE_DEAD_SPARKLES, SET_TANK_HEIGHT, SET_WATER_LEVEL, SET_WATER_PURITY, UPDATE, UPDATE_ADJUSTMENT_COSTS,
+        GET_WATER_LEVEL, GET_WATER_PURITY, IS_EXTREMELY_MURKY_WATER, IS_MURKY_WATER, IS_PURE_WATER, IS_RIGHT_SALINITY, IS_VERY_MURKY_WATER, REMOVE_DEAD_SPARKLES, SET_TANK_HEIGHT, SET_WATER_LEVEL, SET_WATER_PURITY, UPDATE, UPDATE_ADJUSTMENT_COSTS,
     },
 };
 use openzt_detour_macro::detour_mod;
@@ -655,6 +654,19 @@ impl ZTTankExhibit {
     /// (`SETLE`).
     pub fn is_extremely_murky_water(&self) -> bool {
         self.water_purity <= Self::read_purity_threshold(EXTREMELY_MURKY_WATER_PURITY_RVA)
+    }
+
+    /// Ports `ZTTankExhibit::isMurkyWater` (`0x005b320b`): `DAT_0063af0c <= water_purity < DAT_006390a4`,
+    /// signed. Together with [`Self::is_pure_water`], [`Self::is_very_murky_water`] and
+    /// [`Self::is_extremely_murky_water`] it completes the four purity bands.
+    pub fn is_murky_water(&self) -> bool {
+        self.water_purity < Self::read_purity_threshold(MURKY_WATER_PURITY_RVA) && Self::read_purity_threshold(VERY_MURKY_WATER_PURITY_RVA) <= self.water_purity
+    }
+
+    /// Ports `ZTTankExhibit::isVeryMurkyWater` (`0x005b32c7`): `DAT_006390b0 < water_purity < DAT_0063af0c`,
+    /// signed.
+    pub fn is_very_murky_water(&self) -> bool {
+        self.water_purity < Self::read_purity_threshold(VERY_MURKY_WATER_PURITY_RVA) && Self::read_purity_threshold(EXTREMELY_MURKY_WATER_PURITY_RVA) < self.water_purity
     }
 
     fn read_purity_threshold(rva: u32) -> i32 {
@@ -1955,7 +1967,7 @@ impl ZTTankExhibit {
     pub fn construct(this_addr: u32, tile: u32, param_2: bool, start_filled: bool) -> u32 {
         #[cfg(feature = "reimplementation-tests")]
         CONSTRUCT_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        unsafe { ZTHABITAT_CONSTRUCTOR.original()(this_addr as *const u32, tile as *const u32, param_2) };
+        ZTHabitat::construct(this_addr, tile, param_2);
         for offset in [0x178u32, 0x17c, 0x180, 0x184, 0x188, 0x18c, 0x190, 0x194, 0x1b4, 0x1b8, 0x1bc, 0x1c0, 0x1c4, 0x1c8, 0x1cc, 0x1d0, 0x1d4, 0x1d8, 0x1dc, 0x1e0, 0x1e4] {
             save_to_memory(this_addr + offset, 0u32);
         }
@@ -2344,6 +2356,17 @@ pub mod detours {
         unsafe { ref_from_memory::<ZTTankExhibit>(this) }.is_extremely_murky_water()
     }
 
+    /// Vanilla returns a full `0`/`1` in `EAX` (`undefined4`), not a bool in `AL`.
+    #[detour(IS_MURKY_WATER)]
+    unsafe extern "thiscall" fn is_murky_water(this: *const u32) -> u32 {
+        u32::from(unsafe { ref_from_memory::<ZTTankExhibit>(this) }.is_murky_water())
+    }
+
+    #[detour(IS_VERY_MURKY_WATER)]
+    unsafe extern "thiscall" fn is_very_murky_water(this: *const u32) -> u32 {
+        u32::from(unsafe { ref_from_memory::<ZTTankExhibit>(this) }.is_very_murky_water())
+    }
+
     #[detour(IS_RIGHT_SALINITY)]
     unsafe extern "thiscall" fn is_right_salinity(this: *const u32, animal_type: *const u32) -> bool {
         unsafe { ref_from_memory::<ZTTankExhibit>(this) }.is_right_salinity(animal_type as u32)
@@ -2653,6 +2676,16 @@ pub mod detours {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn is_extremely_murky_water_real(this: *const u32) -> bool {
         unsafe { IS_EXTREMELY_MURKY_WATER_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn is_murky_water_real(this: *const u32) -> u32 {
+        unsafe { IS_MURKY_WATER_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn is_very_murky_water_real(this: *const u32) -> u32 {
+        unsafe { IS_VERY_MURKY_WATER_DETOUR.call(this) }
     }
 
     #[cfg(feature = "reimplementation-tests")]

@@ -9,6 +9,7 @@ use openzt_detour::generated::{
     ztscenariosimplegoal::EVAL06,
     zthabitat::{
         SAVE as ZTHABITAT_SAVE,
+        SET_NAME as ZTHABITAT_SET_NAME,
         SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
         GET_OUTERMOST_TANK as ZTHABITAT_GET_OUTERMOST_TANK,
         DESTRUCTOR_0 as ZTHABITAT_DESTRUCTOR_0,
@@ -79,6 +80,7 @@ pub mod hooks_zthabitatmgr {
             GET_ELEVATION_SUITABILITY, GET_SHELTER_SUITABILITY, GET_TOY_SUITABILITY, GET_TANK_DEPTH_SUITABILITY,
             GET_TANK_CLEANLINESS_SUITABILITY, GET_TANK_SALINITY_SUITABILITY, GET_COMPATIBLE_ANIMAL_RATING, CONSTRUCT_SURROUNDING_SPECIES_LIST,
             IS_SHOW_TANK, GET_SPECIES_LIST, GET_NUM_DIRT_TILES,
+            SEND_EVENT, GET_EVENTS, PLAY_SHOW_START_SOUND, CREATE_NAME, CONSTRUCTOR,
         },
         zthabitatmgr::{
             DO_TANK_CHECK, ENTER_NEW_MONTH, GET_AVERAGE_HABITAT_ATTRACTIVENESS, GET_HABITAT, GET_NUM_FAMILIES, GET_NUM_SPECIES,
@@ -91,6 +93,58 @@ pub mod hooks_zthabitatmgr {
             CHECK_EXHIBIT_MORPH,
         },
     };
+
+    #[detour(SEND_EVENT)]
+    unsafe extern "thiscall" fn send_event(this: *const u32, event_id: u16, unused: u32, category: u8, value: u32, value2: u16, flag: u16) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.send_event(event_id, unused, category, value, value2, flag)
+    }
+
+    #[detour(CONSTRUCTOR)]
+    unsafe extern "thiscall" fn habitat_constructor(this: *const u32, tile: *const u32, is_world: bool) -> *const u32 {
+        ZTHabitat::construct(this as u32, tile as u32, is_world) as *const u32
+    }
+
+    #[detour(CREATE_NAME)]
+    unsafe extern "thiscall" fn create_name(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.create_name()
+    }
+
+    #[detour(GET_EVENTS)]
+    unsafe extern "thiscall" fn get_events(this: *const u32, out: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_events(out)
+    }
+
+    #[detour(PLAY_SHOW_START_SOUND)]
+    unsafe extern "thiscall" fn play_show_start_sound(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.play_show_start_sound()
+    }
+
+    /// Release-safe paths back to real vanilla for the live comparison tests, same as
+    /// [`update_portals_real`].
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn send_event_real(this: *const u32, event_id: u16, unused: u32, category: u8, value: u32, value2: u16, flag: u16) {
+        unsafe { SEND_EVENT_DETOUR.call(this, event_id, unused, category, value, value2, flag) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn habitat_constructor_real(this: *const u32, tile: *const u32, is_world: bool) -> *const u32 {
+        unsafe { CONSTRUCTOR_DETOUR.call(this, tile, is_world) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn create_name_real(this: *const u32) {
+        unsafe { CREATE_NAME_DETOUR.call(this) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_events_real(this: *const u32, out: *const u32) {
+        unsafe { GET_EVENTS_DETOUR.call(this, out) }
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn play_show_start_sound_real(this: *const u32) {
+        unsafe { PLAY_SHOW_START_SOUND_DETOUR.call(this) }
+    }
 
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
     #[detour(GET_GATE_TILE_IN)]
@@ -1759,6 +1813,64 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn revise_species_list_real(this: *const u32) {
         unsafe { REVISE_SPECIES_LIST_DETOUR.call(this) }
+    }
+
+    #[detour(GET_UNDESIRABLE_SCENERY)]
+    unsafe extern "thiscall" fn get_undesirable_scenery(this: *const u32, animal: *const u32, out_vector: *const i32, flag: i32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_undesirable_scenery(animal as u32, out_vector as u32, flag as u8 != 0)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn get_undesirable_scenery_real(this: *const u32, animal: *const u32, out_vector: *const i32, flag: i32) {
+        unsafe { GET_UNDESIRABLE_SCENERY_DETOUR.call(this, animal, out_vector, flag) }
+    }
+
+    /// The fifth argument is vanilla's `ph_AdditionalConditionValues` block: `+0` the owned-tile total
+    /// (the percentage denominator's base), `+4`/`+5` the extra low/critical condition bytes.
+    #[detour(SET_ANIMAL_CONDITIONS)]
+    unsafe extern "thiscall" fn set_animal_conditions(this: *const u32, animal: *const u32, record: *const u32, histogram: *const i32, extra: *const u32) {
+        let extra = extra as u32;
+        let owned_tile_total: i32 = crate::util::get_from_memory(extra);
+        let extra_low_bit = crate::util::get_from_memory::<u8>(extra + 4) != 0;
+        let extra_critical_bit = crate::util::get_from_memory::<u8>(extra + 5) != 0;
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.set_animal_conditions(
+            animal as u32,
+            record as u32,
+            histogram as u32,
+            owned_tile_total,
+            extra_low_bit,
+            extra_critical_bit,
+        )
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn set_animal_conditions_real(this: *const u32, animal: *const u32, record: *const u32, histogram: *const i32, extra: *const u32) {
+        unsafe { SET_ANIMAL_CONDITIONS_DETOUR.call(this, animal, record, histogram, extra) }
+    }
+
+    #[detour(CHECK_ESCAPABILITY)]
+    unsafe extern "thiscall" fn check_escapability(this: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.check_escapability()
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn check_escapability_real(this: *const u32) {
+        unsafe { CHECK_ESCAPABILITY_DETOUR.call(this) }
+    }
+
+    #[detour(GET_HABITAT_NAME)]
+    unsafe extern "thiscall" fn get_habitat_name(this: *const u32) -> i32 {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.get_habitat_name() as i32
+    }
+
+    #[detour(ZTHABITAT_SET_NAME)]
+    unsafe extern "thiscall" fn set_name(this: *const u32, name: *const u32) {
+        unsafe { ref_from_memory::<ZTHabitat>(this) }.set_name(name as u32)
+    }
+
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) fn set_name_real(this: *const u32, name: *const u32) {
+        unsafe { ZTHABITAT_SET_NAME_DETOUR.call(this, name) }
     }
 
     #[detour(ADD_FOUND_SPECIES)]

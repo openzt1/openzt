@@ -1,14 +1,18 @@
 use nt_time::{time::UtcDateTime, FileTime};
 use openzt_detour::generated::{
         bfaimgr::CHECK_PATH as BFAIMGR_CHECK_PATH,
+        bfapp::LOAD_STRING,
         bfcategory::GET_VALUE as BFCATEGORY_GET_VALUE,
+        bfinternat::GET_NUMBER_TEXT,
         bfworldmgr::VERIFY_ENTITY_0 as BFWORLDMGR_VERIFY_ENTITY_0,
         bfentity::{GET_GRID_POS as BFENTITY_GET_GRID_POS, GET_TILE as BFENTITY_GET_TILE},bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, IS_CLOSE_DIRECTION as BFMAP_IS_CLOSE_DIRECTION},
         bftile::{
             IS_IN_ZOO as BFTILE_IS_IN_ZOO, VALIDATE_POSITIONS as BFTILE_VALIDATE_POSITIONS,
         },
         msvc_std_basic_string::BASIC_STRING_0 as MSVC_BASIC_STRING_DTOR,
-        msvc_std_listuint::{INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE, LIST as MSVC_LIST_UINT_DTOR},
+        msvc_std_listuint::{INSERT_RANGE as MSVC_LIST_UINT_INSERT_RANGE, LIST as MSVC_LIST_UINT_DTOR, LIST_UINT_CTOR as MSVC_LIST_UINT_CTOR},
+        msvc_std_tree40::TREE40_CTOR,
+        msvc_std_vectorbyte::VECTORBYTE,
         msvc_std_vector_t_4::VECTOR_T_4 as MSVC_VECTOR_T_4_DTOR,
         msvc_std_tree36::{CLEAR as MSVC_TREE36_CLEAR, OPERATOR_INDEX as MSVC_TREE36_OPERATOR_INDEX},
         bfworldmgr::GET_TYPE as BFWORLDMGR_GET_TYPE,
@@ -20,9 +24,7 @@ use openzt_detour::generated::{
         },
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            GET_EVENTS,
-            SEND_EVENT,
-            SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
+            SPECIES_SUITABILITY_CACHE_ALLOC, SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
         ztkeeper::CLEANS_UP,
         ztapp::GET_WORLD_MGR as ZTAPP_GET_WORLD_MGR,
@@ -32,13 +34,10 @@ use openzt_detour::generated::{
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
         ztui_showpanel::SET_EXHIBIT,
+        ztcheat::RENAME_EXHIBIT as ZTCHEAT_RENAME_EXHIBIT,
+        ztui_habitatinfo::REFILL_HABITAT_LIST as ZTUI_REFILL_HABITAT_LIST,
         ztunit::GET_HABITAT as ZTUNIT_GET_HABITAT,
-        ztviewingarea::{
-            ADD_TILE as ZTVIEWINGAREA_ADD_TILE, CONSTRUCTOR as ZTVIEWINGAREA_CONSTRUCTOR, DESTRUCTOR as ZTVIEWINGAREA_DESTRUCTOR,
-            GET_EWEXTENT as ZTVIEWINGAREA_GET_EWEXTENT, GET_NSEXTENT as ZTVIEWINGAREA_GET_NSEXTENT, HAS_OA as ZTVIEWINGAREA_HAS_OA,
-            RECALCULATE_CHARACTERISTICS as ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS, REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
-            UPDATE_AMBIENTS as ZTVIEWINGAREA_UPDATE_AMBIENTS,
-        },
+        ztunittype::{GET_DINO_DIRT_TYPE as ZTUNITTYPE_GET_DINO_DIRT_TYPE, GET_DIRT_TYPE as ZTUNITTYPE_GET_DIRT_TYPE},
     };
 use getset::Getters;
 use glam::i32::IVec3;
@@ -47,6 +46,7 @@ use std::{collections::HashMap, fmt, mem::offset_of};
 use crate::{
     ambients::Ambients,
     globals::{get_module_base, globals},
+    string_registry::GLOBAL_BFAPP,
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory, write_live_ptr, ZTBufferString, ZTString},
     vanilla_vector::{push_pair, VanillaEventVector, VanillaVector},
     write_live,
@@ -66,6 +66,15 @@ use super::viewing_areas;
 pub(crate) static DESTRUCT_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 use super::support::{self, *};
 use super::tank_exhibit::ZTTankExhibit;
+
+/// `BFEventListenerInterface`'s vtable (`0x006321a4`), the first one the constructor installs.
+const VTABLE_EVENT_LISTENER_PTR: u32 = 0x0063_21a4;
+
+/// `ZTHabitat`'s own vtable (`0x00632100`).
+const VTABLE_HABITAT_PTR: u32 = 0x0063_2100;
+
+/// RVA of the C string (`0x00639110`) `createName` puts between the localized habitat-kind prefix and the number.
+const RVA_NAME_SEPARATOR: u32 = 0x0063_9110 - 0x0040_0000;
 
 /// RVA of the global empty-name C string (`DAT_00638084`) `addSpecies` compares a species' ambients name against.
 const RVA_EMPTY_NAME_STRING: u32 = 0x0063_8084 - 0x0040_0000;
@@ -359,6 +368,22 @@ unsafe fn animal_home_habitat(animal_ptr: u32) -> u32 {
 fn overlap_condition_bits(overlap_tally: i32, owned_tile_total: i32) -> (bool, bool) {
     let ratio = overlap_tally as f64 / owned_tile_total as f64;
     (ratio > 0.05_f32 as f64, ratio > 0.1_f32 as f64)
+}
+
+/// `0x004491ea` (unnamed in `generated.rs`): the CRT multibyte "is alphanumeric/punctuation" test
+/// (`ctype` table mask `0x117`, plus a locale-table lookup for double-byte values). `cdecl`, one argument.
+const RVA_CHAR_CLASS_TEST: u32 = 0x0004_91ea;
+
+/// `0x00405eff` (unnamed in `generated.rs`): `basic_string::append(first, last)` on a buffer string, in
+/// place when it fits, else regrown through `PoolAlloc`. `thiscall`, `RET 0xc`: the third stack argument is
+/// never read, and the callee pops it, so it must still be pushed.
+const RVA_BUFFER_STRING_APPEND_RANGE: u32 = 0x0000_5eff;
+
+/// `ZTHabitat::setName`'s acceptance scan: a new name is applied only when at least one byte is a DBCS lead
+/// byte, passes the CRT character-class test, or (code page 950 only) lies in `0xa1..=0xdf`. Short-circuits in
+/// that order; an all-whitespace name is rejected.
+fn name_has_meaningful_byte(bytes: &[u8], is_lead_byte: impl Fn(u8) -> bool, char_class: impl Fn(u8) -> bool, code_page: impl Fn() -> u32) -> bool {
+    bytes.iter().any(|&b| is_lead_byte(b) || char_class(b) || (code_page() == 950 && (0xa1..=0xdf).contains(&b)))
 }
 
 /// Everything [`ZTHabitat::recalc_phase_6_species`] needs besides the record and species: the shared,
@@ -2815,14 +2840,14 @@ impl ZTHabitat {
     /// scenery-type flag bytes set (`entity_type+0x11c != 0` or `entity_type+0x12c != 0` - real vanilla's
     /// own `piVar1[0x47]`/`(char)piVar1[0x4b]`, no corroborating name found elsewhere in the corpus this
     /// pass), calls this habitat's own `sendEvent` (vtable `+0x0`) - real vanilla always calls this address
-    /// directly rather than through the vtable pointer, since [`SEND_EVENT`] is inherited unchanged by
+    /// directly rather than through the vtable pointer, since [`Self::send_event`] is inherited unchanged by
     /// every known subclass including `ZTTankExhibit` (confirmed via `private/docs/vtables/ZTTankExhibit.md`),
     /// so a raw call-through is exactly equivalent to a real virtual dispatch here.
     ///
     /// Must only be called on a live `ZTHabitat` reference - `self`'s own address is passed directly into
-    /// [`SEND_EVENT`].
+    /// [`Self::send_event`].
     ///
-    /// **`SEND_EVENT`'s real args, per `ZTHabitat_sendMaintWorkerCleanupEvents.asm`'s own call site**: six
+    /// **`sendEvent`'s real args, per `ZTHabitat_sendMaintWorkerCleanupEvents.asm`'s own call site**: six
     /// stack args (`RET 0x18`), not the zero `generated.rs` previously carried - `(event_id: u16 = 0x2730,
     /// _unused: u32 = 0, category: u8 = 0x4d, tile_ptr: u32, _unused: u16 = 0, 1u16)`. `0x4d` is `'M'`
     /// (maintenance) - `ztshowinfo.rs`'s own analogous `sendEvent` forward uses `0x53` (`'S'`, show) in the
@@ -2833,9 +2858,8 @@ impl ZTHabitat {
     /// on exit once a loaded save's habitats reached this cleanup path, not just the stripped
     /// reimplementation-tests harness this was previously suspected to be confined to.
     pub fn send_maint_worker_cleanup_events(&self) {
-        let self_addr = self as *const Self as u32;
         for tile_ptr in self.maint_worker_cleanup_tiles() {
-            unsafe { SEND_EVENT.original()(self_addr as *const u32, 0x2730, 0, 0x4d, tile_ptr, 0, 1) };
+            self.send_event(0x2730, 0, 0x4d, tile_ptr, 0, 1);
         }
     }
 
@@ -3232,7 +3256,7 @@ impl ZTHabitat {
                 continue;
             }
             if get_from_memory::<u32>(va_ptr + 0x4c) != 0 {
-                unsafe { ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS.original()(va_ptr as *const u32) };
+                super::viewing_area::recalculate_characteristics(va_ptr);
             }
             if get_from_memory::<i32>(va_ptr + 0x54) > 0 {
                 with_guests.push(va_ptr);
@@ -3268,7 +3292,7 @@ impl ZTHabitat {
         let mut best_area = 0u32;
         let mut best_distance = 0i32;
         for va_ptr in self.viewing_area_candidates(only_with_guests) {
-            if !unsafe { ZTVIEWINGAREA_HAS_OA.original()(va_ptr as *const u32) } {
+            if !super::viewing_area::has_oa(va_ptr) {
                 continue;
             }
             let tiles_begin: u32 = get_from_memory(va_ptr + 0x40);
@@ -3300,7 +3324,7 @@ impl ZTHabitat {
         let with_oa: Vec<u32> = self
             .viewing_area_candidates(only_with_guests)
             .into_iter()
-            .filter(|&va_ptr| unsafe { ZTVIEWINGAREA_HAS_OA.original()(va_ptr as *const u32) })
+            .filter(|&va_ptr| super::viewing_area::has_oa(va_ptr))
             .collect();
         if with_oa.is_empty() {
             return 0;
@@ -3417,6 +3441,68 @@ impl ZTHabitat {
             }
             let current_score: f32 = get_from_memory(record_ptr + 0x10);
             save_to_memory::<f32>(record_ptr + 0x10, running_score as f32 + current_score);
+        }
+    }
+
+    /// Ports `ZTHabitat::getUndesirableScenery` (`ZTHabitat_getUndesirableScenery.c`/`.asm`,
+    /// `GET_UNDESIRABLE_SCENERY`): appends to the caller's `std::vector<void*>` at `out_vector_ptr`, without
+    /// duplicates, the scenery this habitat holds that `animal_ptr`'s species dislikes.
+    ///
+    /// `category_ptr` is the animal type's own `BFCategory` (`type+0x2cc`). Walks every owned tile
+    /// ([`Self::owned_tiles_ptr`]), then each tile's four direct-entity slots (`tile+0x4..+0x10`):
+    /// - A tile whose `+0x83` flag has bit `0x8` set contributes its `+0x4c` pointer (a viewing area) when
+    ///   `want_viewing_areas` is set, again deduplicated.
+    /// - A non-null occupant whose type passes the `ZTSceneryType` cast gate ([`type_check`],
+    ///   [`RVA_SCENERY_TYPE_CHECK_ARG`]) and is neither of the two dirt types (`ZTUnitType::getDirtType`/
+    ///   `getDinoDirtType`) scores `BFCategory::getValue(category, type+0x10c) + getValue(category,
+    ///   vtable-slot-0x20(type))`. With `want_viewing_areas` set the *type* is appended when the score is
+    ///   below `-5`; with it clear, when the score is in `-5..=-1`. Duplicates are skipped.
+    ///
+    /// Out-vector growth goes through [`vector_push_pool_alloc4`] because the caller's vanilla stack
+    /// local frees the buffer through `PoolAlloc`.
+    pub fn get_undesirable_scenery(&self, animal_ptr: u32, out_vector_ptr: u32, want_viewing_areas: bool) {
+        let animal_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
+        let category_ptr = animal_type_ptr + 0x2cc;
+        let dirt_type = unsafe { ZTUNITTYPE_GET_DIRT_TYPE.original()() } as u32;
+        let dino_dirt_type = unsafe { ZTUNITTYPE_GET_DINO_DIRT_TYPE.original()() } as u32;
+
+        let contains = |value: u32| -> bool {
+            let begin: u32 = get_from_memory(out_vector_ptr);
+            let end: u32 = get_from_memory(out_vector_ptr + 4);
+            (begin..end).step_by(4).any(|addr| get_from_memory::<u32>(addr) == value)
+        };
+
+        for node in walk_tile_list(self.owned_tiles_ptr) {
+            let tile: u32 = get_from_memory(node + 0x8);
+            if get_from_memory::<u8>(tile + 0x83) & 8 != 0 && want_viewing_areas {
+                let viewing_area: u32 = get_from_memory(tile + 0x4c);
+                if !contains(viewing_area) {
+                    vector_push_pool_alloc4(out_vector_ptr, viewing_area);
+                }
+            }
+            for slot in (0x4u32..=0x10).step_by(4) {
+                let entity_ptr: u32 = get_from_memory(tile + slot);
+                if entity_ptr == 0 {
+                    continue;
+                }
+                let entity_type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
+                if entity_type_ptr == 0
+                    || !unsafe { type_check(entity_type_ptr, RVA_SCENERY_TYPE_CHECK_ARG) }
+                    || entity_type_ptr == dirt_type
+                    || entity_type_ptr == dino_dirt_type
+                {
+                    continue;
+                }
+                let arg1: i32 = get_from_memory(entity_type_ptr + 0x10c);
+                let arg2 = unsafe { call_entity_vtable_u32_noargs(entity_type_ptr, 0x20) } as i32;
+                let val1 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg1) };
+                let val2 = unsafe { BFCATEGORY_GET_VALUE.original()(category_ptr as *const u32, arg2) };
+                let score = val2.wrapping_add(val1);
+                let undesirable = if want_viewing_areas { score < -5 } else { (-5..0).contains(&score) };
+                if undesirable && !contains(entity_type_ptr) {
+                    vector_push_pool_alloc4(out_vector_ptr, entity_type_ptr);
+                }
+            }
         }
     }
 
@@ -5183,9 +5269,8 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::checkEscapability` (`CHECK_ESCAPABILITY`, `0x00446088`) - see
-    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 6. Not yet called by
-    /// anything - wired into the full `recalculateCharacteristics` call graph by Stage 8 alongside phases
-    /// 1-6 and `setAnimalConditions`.
+    /// `zthabitat-recalculatecharacteristics-implementation-plan.md`'s Stage 6. Detoured at `0x00446088`;
+    /// `recalculateCharacteristics` calls this method directly.
     ///
     /// Rate-limited: increments the shared global counter at [`RVA_CHECK_ESCAPABILITY_COUNTER`] on every
     /// call and returns immediately unless `unknown_flag_0x30` is already set or the counter reaches
@@ -5314,6 +5399,231 @@ impl ZTHabitat {
         }
     }
 
+    /// Ports `ZTHabitat::getHabitatName` (`0x0041ecab`): the address of the embedded name string
+    /// ([`Self::exhibit_name`], `+0x154`).
+    pub fn get_habitat_name(&self) -> u32 {
+        self as *const Self as u32 + 0x154
+    }
+
+    /// Ports `ZTHabitat::setName` (`ZTHabitat_setName.c`/`.asm`, `0x005aedbd`). `new_name_ptr` is a vanilla
+    /// `{begin, end, ..}` byte buffer.
+    ///
+    /// When the name has at least one meaningful byte ([`name_has_meaningful_byte`]):
+    /// 1. Runs `ZTCheat::renameExhibit` (the cheat-name hook) on it.
+    /// 2. Assigns it into [`Self::exhibit_name`] the way vanilla does: overwrite the existing bytes in
+    ///    place; if the new name is longer than the old, hand the remainder to the vanilla append helper
+    ///    (which regrows through `PoolAlloc`); if shorter, copy the old terminator down and pull `end` back.
+    ///    Skipped when `new_name_ptr` is the exhibit's own name.
+    /// 3. Passes the new name to the entrance gate's own `setName` (vtable `+0x1c`), when the habitat has an
+    ///    entrance tile, a rotation other than `-1`, and a fence in that slot (`tile + 0x14 + (rotation / 2) * 4`).
+    ///
+    /// `ZTUI::habitatinfo::refillHabitatList` runs on every path, including the rejected one.
+    pub fn set_name(&self, new_name_ptr: u32) {
+        let self_addr = self as *const Self as u32;
+        let name_field = self_addr + 0x154;
+        let src_begin: u32 = get_from_memory(new_name_ptr);
+        let src_end: u32 = get_from_memory(new_name_ptr + 4);
+        let len = src_end.wrapping_sub(src_begin) as i32;
+
+        if len > 0 {
+            let bytes: Vec<u8> = (src_begin..src_end).map(get_from_memory::<u8>).collect();
+            let char_class_test: extern "cdecl" fn(u32) -> u32 =
+                unsafe { std::mem::transmute(RVA_CHAR_CLASS_TEST as usize + 0x0040_0000) };
+            let accepted = name_has_meaningful_byte(
+                &bytes,
+                |b| unsafe { windows::Win32::Globalization::IsDBCSLeadByte(b) }.is_ok(),
+                |b| char_class_test(b as i8 as i32 as u32) != 0,
+                || unsafe { windows::Win32::Globalization::GetACP() },
+            );
+            if accepted {
+                unsafe { ZTCHEAT_RENAME_EXHIBIT.original()(self_addr, name_field, new_name_ptr as *const i8) };
+                if new_name_ptr != name_field {
+                    self.assign_exhibit_name(src_begin, src_end);
+                }
+                if self.entrance_tile_ptr != 0 && self.entrance_rotation != 0xffff_ffff {
+                    let slot = self.entrance_tile_ptr + 0x14 + ((self.entrance_rotation as i32) / 2) as u32 * 4;
+                    let fence: u32 = get_from_memory(slot);
+                    if fence != 0 {
+                        unsafe { call_vtable_slot_with_ptr(fence, 0x1c, name_field) };
+                    }
+                }
+            }
+        }
+        unsafe { ZTUI_REFILL_HABITAT_LIST.original()() };
+    }
+
+    /// Ports `ZTHabitat::ZTHabitat` (`0x0044dc0d`, `RET 8`) on the `0x178`-byte allocation (or embedded base)
+    /// at `this_addr`; returns `this_addr`. `tile_ptr` is the seed tile (null for the world habitat, which
+    /// [`Self::resize`] handles) and `is_world` becomes [`Self::unknown_flag_0x2c`].
+    ///
+    /// The container constructors stay on vanilla: they allocate their sentinel nodes from vanilla's
+    /// freelist and [`Self::destruct`] frees them through vanilla. The stack arguments the decompile shows
+    /// as `&param_2`/`&local_a` are unused allocator-argument slots, passed as zero.
+    ///
+    /// Order matters: `+0x2c` is set before [`Self::create_name`] reads it, and [`Self::resize`] runs
+    /// (through the final vtable) before [`Self::set_dirty_characteristics`] and `create_name`. Real vanilla
+    /// first installs `BFEventListenerInterface`'s vtable, then the habitat vtable once the containers exist.
+    pub fn construct(this_addr: u32, tile_ptr: u32, is_world: bool) -> u32 {
+        let junk_arg = 0u32;
+        save_to_memory(this_addr, VTABLE_EVENT_LISTENER_PTR);
+        save_to_memory(this_addr + 0x4, 0u32);
+        for tree_offset in [0x8u32, 0x14, 0x20] {
+            support::init_float_scratch_tree(this_addr + tree_offset);
+        }
+        save_to_memory(this_addr + 0x2c, is_world as u8);
+        save_to_memory(this_addr + 0x2e, 0u8);
+        save_to_memory(this_addr + 0x2f, 1u8);
+        save_to_memory(this_addr + 0x30, 1u8);
+        for zeroed in [0x34u32, 0x38, 0x3c] {
+            save_to_memory(this_addr + zeroed, 0u32);
+        }
+        for list_offset in [0x40u32, 0x44] {
+            unsafe { MSVC_LIST_UINT_CTOR.original()((this_addr + list_offset) as *const std::ffi::c_void, junk_arg) };
+        }
+        let zeroed_dwords = (0x48u32..=0x88).step_by(4).chain((0xfc..=0x11c).step_by(4)).chain([0x134, 0x13c, 0x140, 0x144]);
+        for offset in zeroed_dwords {
+            save_to_memory(this_addr + offset, 0u32);
+        }
+
+        Self::init_tree_header(this_addr + 0x148, is_world, |cache| unsafe {
+            SPECIES_SUITABILITY_CACHE_ALLOC.original()(cache as *const std::ffi::c_void, junk_arg);
+        });
+
+        for offset in [0x154u32, 0x158, 0x15c] {
+            save_to_memory(this_addr + offset, 0u32);
+        }
+        unsafe { VECTORBYTE.original()((this_addr + 0x154) as *const u8, 8 as *const u32) };
+        save_to_memory(get_from_memory::<u32>(this_addr + 0x158), 0u8);
+        save_to_memory(this_addr + 0x160, 0u32);
+        save_to_memory(this_addr + 0x164, 0u32);
+        save_to_memory(this_addr + 0x168, 0u8);
+
+        Self::init_tree_header(this_addr + 0x16c, is_world, |tree| unsafe {
+            TREE40_CTOR.original()(tree as *const u32, junk_arg);
+        });
+
+        save_to_memory(this_addr, VTABLE_HABITAT_PTR);
+        save_to_memory(this_addr + 0x64, get_from_memory::<u32>(this_addr + 0x60));
+        for offset in (0xa8u32..0xe8).step_by(4) {
+            save_to_memory(this_addr + offset, 0u32);
+        }
+
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(this_addr) };
+        habitat.resize(tile_ptr);
+        habitat.set_dirty_characteristics();
+        save_to_memory(this_addr + 0x31, 1u8);
+        save_to_memory(this_addr + 0xec, 0u32);
+        save_to_memory(this_addr + 0xf8, 0u32);
+        save_to_memory(this_addr + 0x132, 0u8);
+        save_to_memory(this_addr + 0xf4, 0u32);
+        save_to_memory(this_addr + 0x8c, 0u32);
+        save_to_memory(this_addr + 0x90, 0xffff_ffffu32);
+        habitat.create_name();
+        save_to_memory(this_addr + 0x128, 0u32);
+        save_to_memory(this_addr + 0x12c, 0u32);
+        save_to_memory(this_addr + 0x120, globals().ztgamemgr().get_date());
+        save_to_memory(
+            globals().zthabitatmgr_ptr() as u32 + std::mem::offset_of!(ZTHabitatMgr, unknown_flag_0x6c) as u32,
+            1u8,
+        );
+        this_addr
+    }
+
+    /// The shared shape of the two `+0x148`/`+0x16c` map-handle initialisations in [`Self::construct`]: the
+    /// vanilla constructor `alloc_head` allocates the sentinel node into `[handle]`; then size is zeroed,
+    /// the byte at `handle + 8` takes the constructor's `bool` argument (a stack slot vanilla copies in
+    /// unchanged), and the sentinel's colour/parent bytes clear with its left/right links pointing at
+    /// itself.
+    fn init_tree_header(handle: u32, flag: bool, alloc_head: impl FnOnce(u32)) {
+        alloc_head(handle);
+        save_to_memory(handle + 4, 0u32);
+        save_to_memory(handle + 8, flag as u8);
+        let head: u32 = get_from_memory(handle);
+        save_to_memory(head, 0u8);
+        save_to_memory(head + 4, 0u32);
+        save_to_memory(head + 8, head);
+        save_to_memory(head + 0xc, head);
+    }
+
+    /// Ports `ZTHabitat::createName` (`0x0044df34`, only vanilla caller is the constructor; also reached through
+    /// vtable `+0x20` on a gate-swapped habitat).
+    ///
+    /// A world habitat (`+0x2c`) is named `"World"`. Any other draws the next manager number
+    /// ([`ZTHabitatMgr::get_next_num`]), then picks a localized prefix by habitat kind - string `0x1840` (plain
+    /// habitat), `0x1841` (tank) or `0x1842` (tank that passes the show check) - and assigns
+    /// `<prefix><separator><number text>` to [`Self::exhibit_name`] the way [`Self::set_name`] does.
+    ///
+    /// The separator is the C string at `0x00639110`, read at runtime. The number text is vanilla's
+    /// `bfinternat::getNumberText(number, 0)`, whose string is allocated and freed by vanilla.
+    ///
+    /// Real vanilla also stores `ZTApp::handleMessages` into a null `GLOBAL_ZTApp` here as a run-once
+    /// sentinel; nothing else reads that slot, so it is not reproduced.
+    pub fn create_name(&self) {
+        let self_addr = self as *const Self as u32;
+        if self.unknown_flag_0x2c != 0 {
+            let world = b"World";
+            let begin = world.as_ptr() as u32;
+            self.assign_exhibit_name(begin, begin + world.len() as u32);
+            return;
+        }
+        let habitat_mgr = globals().zthabitatmgr();
+        let number = habitat_mgr.get_next_num();
+        let string_id: u32 = if !self.do_tank_check() {
+            0x1840
+        } else if habitat_mgr.do_show_check(self_addr, false) {
+            0x1842
+        } else {
+            0x1841
+        };
+
+        let mut prefix_buffer = [0u8; 512];
+        unsafe { LOAD_STRING.hooked()(GLOBAL_BFAPP as *const u32, string_id as *const u32, prefix_buffer.as_mut_ptr()) };
+        let prefix_len = prefix_buffer.iter().position(|&b| b == 0).unwrap_or(prefix_buffer.len());
+
+        let separator_ptr = get_module_base("zoo.exe") as u32 + RVA_NAME_SEPARATOR;
+        let mut name: Vec<u8> = prefix_buffer[..prefix_len].to_vec();
+        let mut cursor = separator_ptr;
+        while get_from_memory::<u8>(cursor) != 0 {
+            name.push(get_from_memory::<u8>(cursor));
+            cursor += 1;
+        }
+
+        let mut number_text = [0u32; 3];
+        let number_text_ptr = number_text.as_mut_ptr() as *const u32;
+        unsafe { GET_NUMBER_TEXT.original()(number_text_ptr, number, 0) };
+        let (text_begin, text_end) = (number_text[0], number_text[1]);
+        name.extend((text_begin..text_end).map(get_from_memory::<u8>));
+        unsafe { MSVC_BASIC_STRING_DTOR.original()(number_text_ptr as *const std::ffi::c_void) };
+
+        let begin = name.as_ptr() as u32;
+        self.assign_exhibit_name(begin, begin + name.len() as u32);
+    }
+
+    /// The assignment step of [`Self::set_name`]: `basic_string::assign(first, last)` over the embedded
+    /// buffer string, in vanilla's exact order (see that method's doc comment).
+    fn assign_exhibit_name(&self, src_begin: u32, src_end: u32) {
+        let name_field = self as *const Self as u32 + 0x154;
+        let end_field = name_field + 4;
+        let end: u32 = get_from_memory(end_field);
+        let mut dest: u32 = get_from_memory(name_field);
+        let mut src = src_begin;
+        while src != src_end {
+            if dest == end {
+                let append: extern "thiscall" fn(u32, u32, u32, u32) -> u32 =
+                    unsafe { std::mem::transmute(RVA_BUFFER_STRING_APPEND_RANGE as usize + 0x0040_0000) };
+                append(name_field, src, src_end, 0);
+                return;
+            }
+            save_to_memory::<u8>(dest, get_from_memory::<u8>(src));
+            dest += 1;
+            src += 1;
+        }
+        if dest != end {
+            save_to_memory::<u8>(dest, get_from_memory::<u8>(end));
+            unsafe { write_live_ptr(end_field as *const u32, dest) };
+        }
+    }
+
     /// Ports `ZTHabitat::removeViewingAreas` (`ZTHabitat_removeViewingAreas.c`, `generated.rs`'s
     /// `REMOVE_VIEWING_AREAS`): a no-op if `unknown_flag_0x2c` is set (the same guard
     /// `recalculateCharacteristics`'s own early-return uses). Otherwise destroys and frees every entry in
@@ -5331,7 +5641,7 @@ impl ZTHabitat {
         for va_ptr in viewing_areas::viewing_areas(self_addr) {
             if va_ptr != 0 {
                 unsafe {
-                    ZTVIEWINGAREA_DESTRUCTOR.original()(va_ptr as *const u32);
+                    super::viewing_area::destruct(va_ptr);
                     OPERATOR_DELETE.original()(va_ptr);
                 }
             }
@@ -5698,6 +6008,59 @@ impl ZTHabitat {
             return 0;
         }
         get_from_memory::<u16>(self.zt_show_info_ptr + 0x70)
+    }
+
+    /// Ports `ZTHabitat::sendEvent` (`0x004ffe80`, `RET 0x18`): a no-op without a `GLOBAL_ZTAIMgr`, else
+    /// forwards the six arguments to the AI manager's embedded event-listener sub-object (`ZTAIMgr+0x8`,
+    /// vtable slot `+0x4`) with a `0` target id and the `0x48` (`'H'`, habitat) source category in the
+    /// slots `ZTShowInfo::sendEvent` fills with its show id and `0x53`.
+    ///
+    /// Real vanilla forwards `(event_id, unused, category, 0, 0x48, value, value2, flag)`, confirmed from
+    /// the `.asm` stack staging (the decompile reorders them).
+    pub fn send_event(&self, event_id: u16, unused: u32, category: u8, value: u32, value2: u16, flag: u16) {
+        #[cfg(feature = "reimplementation-tests")]
+        if crate::reimplementation_tests::send_event_recorder::intercept(self as *const Self as u32, event_id, category, value) {
+            return;
+        }
+        let ai_mgr = globals().ztaimgr_ptr() as u32;
+        if ai_mgr == 0 {
+            return;
+        }
+        let listener = ai_mgr + 0x8;
+        let slot = get_from_memory::<u32>(get_from_memory::<u32>(listener) + 0x4);
+        let forward: unsafe extern "thiscall" fn(u32, u16, u32, u8, u16, u32, u32, u16, u16) = unsafe { std::mem::transmute(slot) };
+        unsafe { forward(listener, event_id, unused, category, 0, 0x48, value, value2, flag) };
+    }
+
+    /// Ports `ZTHabitat::getEvents` (`0x00435762`, `RET 4`): asks this object's own vtable slot `+0xc` for the
+    /// events addressed to this habitat's show-info id (`0` with no `ZTShowInfo`), tagged `0x48`, into
+    /// `out` (an output vector the caller owns; passed through untouched).
+    ///
+    /// Dispatches through the vtable pointer, since subclasses (`ZTTankExhibit`) inherit this slot's target
+    /// but real vanilla reads it from the object.
+    pub fn get_events(&self, out: *const u32) {
+        let this = self as *const Self as u32;
+        let slot = get_from_memory::<u32>(self.vtable + 0xc);
+        let forward: unsafe extern "thiscall" fn(u32, *const u32, u32, u32) = unsafe { std::mem::transmute(slot) };
+        unsafe { forward(this, out, self.get_show_info_id() as u32, 0x48) };
+    }
+
+    /// Ports `ZTHabitat::playShowStartSound` (`0x005a3d80`): with a start sound (`+0x160`) whose vtable `+0x14`
+    /// predicate (low byte only) is true and a gate, calls the sound's vtable `+0x24` with the gate's `+0xb4`
+    /// position.
+    pub fn play_show_start_sound(&self) {
+        let sound = self.start_sound_ptr;
+        if sound == 0 {
+            return;
+        }
+        if !unsafe { call_vtable_slot_noargs_ret_bool(sound, 0x14) } {
+            return;
+        }
+        let gate = self.get_gate();
+        if gate == 0 {
+            return;
+        }
+        unsafe { call_vtable_slot_with_ptr(sound, 0x24, gate + 0xb4) };
     }
 
     /// Ports `ZTHabitat::isShowStopped` (`ZTHabitat_isShowStopped.c`): `false` with no `ZTShowInfo`,
@@ -7032,7 +7395,7 @@ impl ZTHabitat {
     /// [`Self::get_attractiveness`].
     pub fn listen(&self) {
         let mut events = VanillaEventVector::rvo_target();
-        unsafe { GET_EVENTS.original()(self as *const Self as *const u32, events.as_ptr()) };
+        self.get_events(events.as_ptr());
         if events.begin != 0 {
             free_event_vector_buffer(events.begin, events.cap_end - events.begin);
         }
@@ -7180,7 +7543,7 @@ impl ZTHabitat {
         }
 
         for viewing_area in viewing_areas::viewing_areas(self as *const Self as u32) {
-            unsafe { ZTVIEWINGAREA_UPDATE_AMBIENTS.original()(viewing_area as *const u32, elapsed as i32) };
+            super::viewing_area::update_ambients(viewing_area, elapsed as i32);
         }
 
         self.update_portals();
@@ -7407,7 +7770,7 @@ impl ZTHabitat {
     /// [`Self::viewing_areas_begin`]/`_end` entry.
     pub fn recalculate_viewing_areas(&self) {
         for va_ptr in viewing_areas::viewing_areas(self as *const Self as u32) {
-            unsafe { ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS.original()(va_ptr as *const u32) };
+            super::viewing_area::recalculate_characteristics(va_ptr);
         }
     }
 
@@ -7488,7 +7851,7 @@ impl ZTHabitat {
 
         if va_ptr != 0 {
             unsafe {
-                ZTVIEWINGAREA_DESTRUCTOR.original()(va_ptr as *const u32);
+                super::viewing_area::destruct(va_ptr);
                 OPERATOR_DELETE.original()(va_ptr);
             }
         }
@@ -7513,7 +7876,7 @@ impl ZTHabitat {
                 let vec_end: u32 = get_from_memory(va_ptr + 0x44);
                 let contains = (vec_begin..vec_end).step_by(4).any(|addr| get_from_memory::<u32>(addr) == tile_ptr);
                 if contains {
-                    unsafe { ZTVIEWINGAREA_REMOVE_TILE.original()(va_ptr as *const u32, tile_ptr as i32) };
+                    super::viewing_area::remove_tile(va_ptr, tile_ptr);
                     let new_begin: u32 = get_from_memory(va_ptr + 0x40);
                     let new_end: u32 = get_from_memory(va_ptr + 0x44);
                     if new_begin == new_end {
@@ -7609,13 +7972,11 @@ impl ZTHabitat {
                         continue;
                     }
                     let is_ns = matches!(direction, Direction::North | Direction::South);
-                    let mut low: i32 = 0;
-                    let mut high: i32 = 0;
-                    if is_ns {
-                        unsafe { ZTVIEWINGAREA_GET_NSEXTENT.original()(va_ptr as *const u32, &mut low, &mut high) };
+                    let (mut low, mut high) = if is_ns {
+                        super::viewing_area::get_ns_extent(va_ptr)
                     } else {
-                        unsafe { ZTVIEWINGAREA_GET_EWEXTENT.original()(va_ptr as *const u32, &mut low, &mut high) };
-                    }
+                        super::viewing_area::get_ew_extent(va_ptr)
+                    };
                     let coord = if is_ns { neighbour.pos.y } else { neighbour.pos.x };
                     if coord < low {
                         low = coord;
@@ -7624,7 +7985,7 @@ impl ZTHabitat {
                         high = coord;
                     }
                     if (high - low) + 1 < 4 {
-                        unsafe { ZTVIEWINGAREA_ADD_TILE.original()(va_ptr as *const u32, tile_ptr as *const std::ffi::c_void) };
+                        super::viewing_area::add_tile(va_ptr, tile_ptr);
                         return;
                     }
                     any_rejected = true;
@@ -7638,7 +7999,7 @@ impl ZTHabitat {
 
         let new_va = unsafe { OPERATOR_NEW.original()(0x5c) } as u32;
         if new_va != 0 {
-            unsafe { ZTVIEWINGAREA_CONSTRUCTOR.original()(new_va as *const u32, self_addr as *const std::ffi::c_void, tile_ptr as *const std::ffi::c_void) };
+            super::viewing_area::construct(new_va, self_addr, tile_ptr);
             self.add_viewing_area(new_va);
         }
     }
@@ -7797,7 +8158,7 @@ mod tests {
     use crate::zthabitat::support::test_fixtures::{leak_neighbor_set, leak_tile_list, leak_tree_node};
 
     use super::{
-        clamped_score, corner_height, count_penalty, elevation_band, normalise_scenery_score, overlap_condition_bits, percent_band, terrain_category_step,
+        clamped_score, corner_height, count_penalty, elevation_band, name_has_meaningful_byte, normalise_scenery_score, overlap_condition_bits, percent_band, terrain_category_step,
         tile_count_adjustment, PercentBand, ZTHabitat,
     };
 
@@ -7826,6 +8187,19 @@ mod tests {
         assert_eq!(high.score, 85.0);
         // deviation clamps at 50.
         assert_eq!(elevation_band(0, 100, 90).score, 50.0);
+    }
+
+    #[test]
+    fn name_acceptance_scan_order_and_whitespace() {
+        let lead = |b: u8| b == 0x81;
+        let class = |b: u8| b.is_ascii_alphanumeric() || b.is_ascii_punctuation();
+        assert!(!name_has_meaningful_byte(b"   ", lead, class, || 1252));
+        assert!(name_has_meaningful_byte(b"  a", lead, class, || 1252));
+        assert!(name_has_meaningful_byte(&[b' ', 0x81], lead, class, || 1252));
+        assert!(!name_has_meaningful_byte(&[b' ', 0xb0], lead, class, || 1252));
+        assert!(name_has_meaningful_byte(&[b' ', 0xb0], lead, class, || 950));
+        assert!(!name_has_meaningful_byte(&[b' ', 0xe0], lead, class, || 950));
+        assert!(!name_has_meaningful_byte(b"", lead, class, || 950));
     }
 
     #[test]

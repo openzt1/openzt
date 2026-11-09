@@ -11,6 +11,7 @@ use crate::zthabitatmgr::{ZTHabitat, ZTTankExhibit};
 const TANK_WATER_PURITY_OFFSET: u32 = 0x1a8;
 const MURKY_WATER_PURITY_RVA: u32 = 0x0023_90a4;
 const EXTREMELY_MURKY_WATER_PURITY_RVA: u32 = 0x0023_90b0;
+const VERY_MURKY_WATER_PURITY_RVA: u32 = 0x0023_af0c;
 
 /// Every live tank exhibit's address, in `exhibit_array` order.
 fn live_tank_ptrs() -> Vec<u32> {
@@ -22,13 +23,14 @@ fn live_tank_ptrs() -> Vec<u32> {
 }
 
 /// Purity values straddling both settings thresholds, so the signed `>=`/`<=` boundaries of
-/// `isPureWater`/`isExtremelyMurkyWater` are each hit from below, on, and above, plus the signed extremes.
+/// the four purity-band predicates are each hit from below, on, and above, plus the signed extremes.
 fn purity_probe_values() -> Vec<i32> {
     let base = get_module_base("zoo.exe") as u32;
     let murky: i32 = get_from_memory(base + MURKY_WATER_PURITY_RVA);
     let extremely_murky: i32 = get_from_memory(base + EXTREMELY_MURKY_WATER_PURITY_RVA);
     let mut values = vec![i32::MIN, -1, 0, 1, i32::MAX];
-    for threshold in [murky, extremely_murky] {
+    let very_murky: i32 = get_from_memory(base + VERY_MURKY_WATER_PURITY_RVA);
+    for threshold in [murky, extremely_murky, very_murky] {
         values.extend([threshold.wrapping_sub(1), threshold, threshold.wrapping_add(1)]);
     }
     values
@@ -37,12 +39,14 @@ fn purity_probe_values() -> Vec<i32> {
 fn compare_leaf_getters(tank_ptr: u32, label: &str, failures: &mut Vec<String>) {
     let this = tank_ptr as *const u32;
     let tank = unsafe { ref_from_memory::<ZTTankExhibit>(tank_ptr) };
-    let checks: [(&str, u32, u32); 5] = [
+    let checks: [(&str, u32, u32); 7] = [
         ("getWaterLevel", detours::get_water_level_real(this), tank.get_water_level()),
         ("getTankHeight", detours::get_tank_height_real(this), tank.get_tank_height()),
         ("getWaterPurity", detours::get_water_purity_real(this), tank.get_water_purity() as u32),
         ("isPureWater", detours::is_pure_water_real(this) as u32, tank.is_pure_water() as u32),
         ("isExtremelyMurkyWater", detours::is_extremely_murky_water_real(this) as u32, tank.is_extremely_murky_water() as u32),
+        ("isMurkyWater", detours::is_murky_water_real(this), tank.is_murky_water() as u32),
+        ("isVeryMurkyWater", detours::is_very_murky_water_real(this), tank.is_very_murky_water() as u32),
     ];
     for (name, real, reimpl) in checks {
         if real != reimpl {

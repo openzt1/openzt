@@ -2112,7 +2112,7 @@ pub(crate) fn run_zthabitatmgr_add_habitat_roundtrip_live_test(failure_log: &mut
         write_success_line(failure_log, &format!("{} (skipped: operator_new failed)", test_name));
         return false;
     }
-    let new_habitat = unsafe { zthabitat::CONSTRUCTOR.original()(raw as *const u32, seed_tile_ptr as *const u32, false) } as u32;
+    let new_habitat = unsafe { zthabitat::CONSTRUCTOR.hooked()(raw as *const u32, seed_tile_ptr as *const u32, false) } as u32;
 
     let len_before = habitat_mgr.exhibit_array().len();
     habitat_mgr.add_habitat(new_habitat);
@@ -2176,7 +2176,7 @@ pub(crate) fn run_zthabitatmgr_remove_habitat_matches_real_live_test(failure_log
     }
     let run = |add: bool, pending: bool, use_port: bool| -> Outcome {
         let raw = unsafe { OPERATOR_NEW.original()(0x178) } as u32;
-        let habitat = unsafe { zthabitat::CONSTRUCTOR.original()(raw as *const u32, seed_tile_ptr as *const u32, false) } as u32;
+        let habitat = unsafe { zthabitat::CONSTRUCTOR.hooked()(raw as *const u32, seed_tile_ptr as *const u32, false) } as u32;
         if pending {
             save_to_memory::<u8>(habitat + 0x2c, 1);
         }
@@ -9802,6 +9802,323 @@ pub(crate) fn run_habitat_get_sickly_animals_matches_real_live_test(failure_log:
         }
         true
     }
+}
+
+/// Real-vs-port comparison of `getUndesirableScenery`: every live habitat against one animal per
+/// distinct species found anywhere in the zoo (a habitat's own animals rarely dislike its own scenery,
+/// so the cross product is what exercises the score branches), in both flag modes (strict
+/// viewing-area/`< -5` mode and the `-5..=-1` mode). Compares the out vectors exactly, order included
+/// (both sides walk the same tiles in the same order). Fails as vacuous when no scenario produced an entry.
+pub(crate) fn run_habitat_get_undesirable_scenery_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_GET_UNDESIRABLE_SCENERY_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut entries_found = 0usize;
+
+    let mut species_animals: Vec<(u32, u32)> = Vec::new();
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        for animal in unsafe { ref_from_memory::<ZTHabitat>(ptr) }.get_all_animals(false) {
+            let animal_type: u32 = get_from_memory(animal + 0x128);
+            if animal_type != 0 && !species_animals.iter().any(|&(t, _)| t == animal_type) {
+                species_animals.push((animal_type, animal));
+            }
+        }
+    }
+    if species_animals.is_empty() {
+        write_success_line(failure_log, &format!("{} (skipped: no animals in any habitat)", test_name));
+        return false;
+    }
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for &(_, animal) in &species_animals {
+            for flag in [0i32, 1] {
+                let mut real_vector = [0u32; 3];
+                hooks_zthabitatmgr::get_undesirable_scenery_real(ptr as *const u32, animal as *const u32, real_vector.as_mut_ptr() as *const i32, flag);
+                let real: Vec<u32> = (real_vector[0]..real_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+                free_event_vector_buffer(real_vector[0], real_vector[2] - real_vector[0]);
+
+                let mut port_vector = [0u32; 3];
+                habitat.get_undesirable_scenery(animal, port_vector.as_mut_ptr() as u32, flag != 0);
+                let port: Vec<u32> = (port_vector[0]..port_vector[1]).step_by(4).map(get_from_memory::<u32>).collect();
+                free_event_vector_buffer(port_vector[0], port_vector[2] - port_vector[0]);
+
+                entries_found += real.len();
+                if real != port {
+                    failures.push(format!("habitat {} ({:#010x}) animal {:#010x} flag {}: real={:x?}, port={:x?}", i, ptr, animal, flag, real, port));
+                }
+            }
+        }
+    }
+    if entries_found == 0 {
+        failures.push(format!("no scenario produced an undesirable entry ({} species); test would be vacuous", species_animals.len()));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Real-vs-port comparison of `setAnimalConditions` over live habitats and their animals, driven by
+/// synthetic [`ZTHabitatSuitabilityRecord`]s (every flag byte, the two water adjustments and the visibility
+/// score vary per scenario), a varied terrain histogram and the vanilla `ph_AdditionalConditionValues`
+/// block. The animal's four condition words are seeded to a scenario-specific pattern before each side runs
+/// (the function read-modify-writes them), compared afterwards, and restored.
+pub(crate) fn run_habitat_set_animal_conditions_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::habitat::ZTHabitatSuitabilityRecord;
+    let test_name = "ZTHABITAT_SET_ANIMAL_CONDITIONS_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut compared = 0usize;
+    let mut changed = 0usize;
+    const WORD_OFFSETS: [u32; 4] = [0x298, 0x29c, 0x2a0, 0x2a4];
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let animals: Vec<u32> = habitat.get_all_animals(false).take(3).collect();
+        for animal in animals {
+            let originals: Vec<u32> = WORD_OFFSETS.iter().map(|&o| get_from_memory(animal + o)).collect();
+            for scenario in 0u32..16 {
+                let mut record = Box::new(ZTHabitatSuitabilityRecord::default());
+                let record_ptr = &mut *record as *mut ZTHabitatSuitabilityRecord as u32;
+                let mut lcg = scenario.wrapping_mul(0x9e37_79b9).wrapping_add(i as u32 + 1);
+                for off in 0x58u32..=0x6d {
+                    lcg = lcg.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    save_to_memory::<u8>(record_ptr + off, ((lcg >> 24) & 1) as u8);
+                }
+                save_to_memory::<i32>(record_ptr, 40);
+                save_to_memory::<i32>(record_ptr + 0x48, [0, 12, 30, 7][(scenario % 4) as usize]);
+                save_to_memory::<i32>(record_ptr + 0x4c, [0, 5, 0, 20][((scenario / 4) % 4) as usize]);
+                save_to_memory::<f32>(record_ptr + 0x50, [10.0f32, 30.0, 60.0, 49.9][((scenario / 2) % 4) as usize]);
+
+                let histogram: Vec<i32> = (0..18u32)
+                    .map(|c| ((c * 13 + scenario * 7) % 50) as i32 - if (c + scenario) % 5 == 0 { 3 } else { 0 })
+                    .map(|v| v.max(0))
+                    .collect();
+                let owned_tile_total = 60i32 + (scenario as i32 % 3) * 40;
+                let mut extra = [0u8; 8];
+                extra[..4].copy_from_slice(&owned_tile_total.to_le_bytes());
+                extra[4] = (scenario & 1) as u8;
+                extra[5] = ((scenario >> 1) & 1) as u8;
+
+                let seed = 0x5a5a_a5a5u32 ^ scenario.wrapping_mul(0x0101_0101);
+                let seed_words = |a: u32| {
+                    for (k, &o) in WORD_OFFSETS.iter().enumerate() {
+                        save_to_memory::<u32>(a + o, seed.rotate_left(k as u32 * 8));
+                    }
+                };
+                let read_words = |a: u32| -> [u32; 4] { WORD_OFFSETS.map(|o| get_from_memory::<u32>(a + o)) };
+
+                seed_words(animal);
+                let before = read_words(animal);
+                hooks_zthabitatmgr::set_animal_conditions_real(
+                    ptr as *const u32,
+                    animal as *const u32,
+                    record_ptr as *const u32,
+                    histogram.as_ptr(),
+                    extra.as_ptr() as *const u32,
+                );
+                let real = read_words(animal);
+
+                seed_words(animal);
+                habitat.set_animal_conditions(animal, record_ptr, histogram.as_ptr() as u32, owned_tile_total, extra[4] != 0, extra[5] != 0);
+                let port = read_words(animal);
+
+                compared += 1;
+                if real != before {
+                    changed += 1;
+                }
+                if real != port {
+                    failures.push(format!(
+                        "habitat {} ({:#010x}) animal {:#010x} scenario {}: real={:08x?}, port={:08x?}",
+                        i, ptr, animal, scenario, real, port
+                    ));
+                }
+            }
+            for (&o, &v) in WORD_OFFSETS.iter().zip(&originals) {
+                save_to_memory::<u32>(animal + o, v);
+            }
+        }
+    }
+    if compared == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no habitat has animals)", test_name));
+        return false;
+    }
+    if changed == 0 {
+        failures.push("the real function never changed the seeded words; test would be vacuous".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Real-vs-port comparison of `checkEscapability`'s rate gate and scan. Per habitat, three scenarios on the
+/// shared counter/`unknown_flag_0x30` state: gate closed (counter 5, flag clear: the counter increments and
+/// the cache is untouched), flag forcing the scan, and the counter reaching 30. A fake entry is planted in
+/// the per-species escapability cache before each run, so a missed `clear` shows. Compares the counter, the
+/// flag, the cache's size field and its `(species, can_escape, tile)` entries.
+pub(crate) fn run_habitat_check_escapability_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::zthabitat::support::RVA_CHECK_ESCAPABILITY_COUNTER;
+    use openzt_detour::generated::msvc_std_tree36::OPERATOR_INDEX as TREE36_OPERATOR_INDEX;
+    let test_name = "ZTHABITAT_CHECK_ESCAPABILITY_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let counter_addr = get_module_base("zoo.exe") as u32 + RVA_CHECK_ESCAPABILITY_COUNTER;
+    let original_counter: i32 = get_from_memory(counter_addr);
+    let mut failures: Vec<String> = Vec::new();
+    let mut scans = 0usize;
+    let mut escapes = 0usize;
+
+    type Snapshot = (i32, u8, u32, Vec<(u32, u8, u32)>);
+    let snapshot = |ptr: u32| -> Snapshot {
+        let head: u32 = get_from_memory(ptr + 0x16c);
+        let entries: Vec<(u32, u8, u32)> = walk_neighbor_tree(head)
+            .map(|node| (get_from_memory::<u32>(node + 0x10), get_from_memory::<u8>(node + 0x14), get_from_memory::<u32>(node + 0x1c)))
+            .collect();
+        (get_from_memory(counter_addr), get_from_memory(ptr + 0x30), get_from_memory(ptr + 0x170), entries)
+    };
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        for (name, counter, flag) in [("gate closed", 5i32, 0u8), ("flag forces scan", 0, 1), ("counter reaches 30", 29, 0)] {
+            let mut results: Vec<Snapshot> = Vec::new();
+            for real in [true, false] {
+                save_to_memory::<i32>(counter_addr, counter);
+                save_to_memory::<u8>(ptr + 0x30, flag);
+                let fake_key = 0xdead_bee0u32;
+                let fake = unsafe { TREE36_OPERATOR_INDEX.original()((ptr + 0x16c) as *const u32, &fake_key as *const u32) } as u32;
+                save_to_memory::<u8>(fake, 1);
+                if real {
+                    hooks_zthabitatmgr::check_escapability_real(ptr as *const u32);
+                } else {
+                    habitat.check_escapability();
+                }
+                results.push(snapshot(ptr));
+            }
+            let (real, port) = (&results[0], &results[1]);
+            if real.2 as usize != real.3.len() || port.2 as usize != port.3.len() {
+                failures.push(format!(
+                    "habitat {} ({}): tree walk found {}/{} entries but size fields say {}/{}",
+                    i,
+                    name,
+                    real.3.len(),
+                    port.3.len(),
+                    real.2,
+                    port.2
+                ));
+            }
+            if real != port {
+                failures.push(format!("habitat {} ({:#010x}) {}: real={:x?}, port={:x?}", i, ptr, name, real, port));
+            }
+            if name != "gate closed" {
+                scans += 1;
+                if real.3.iter().any(|e| e.0 == 0xdead_bee0) {
+                    failures.push(format!("habitat {} ({}): planted cache entry survived the scan", i, name));
+                }
+                escapes += real.3.len();
+            }
+        }
+    }
+    save_to_memory::<i32>(counter_addr, original_counter);
+    if scans == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no habitats)", test_name));
+        return false;
+    }
+    tracing::info!("{}: {} scans, {} escape entries", test_name, scans, escapes);
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Real-vs-port comparison of `ZTHabitat::setName` on every live habitat. Each scenario first resets the
+/// habitat to its original name through the real function, then applies the scenario name through the real
+/// function and again through the port (resetting between), and compares the resulting name bytes and
+/// terminator. Scenarios: shorter, longer than the original (forces the append/regrow helper), whitespace
+/// only (rejected, name untouched) and an equal-length rename. The original name is restored at the end.
+/// Capacity is not compared: it depends on the history of growths, not on the function under test.
+pub(crate) fn run_habitat_set_name_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_SET_NAME_MATCHES_REAL_LIVE";
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    let mut changed = 0usize;
+
+    let snapshot = |ptr: u32| -> (Vec<u8>, u8) {
+        let begin: u32 = get_from_memory(ptr + 0x154);
+        let end: u32 = get_from_memory(ptr + 0x158);
+        ((begin..end).map(get_from_memory::<u8>).collect(), get_from_memory::<u8>(end))
+    };
+    // Builds a vanilla-shaped `{begin, end, cap}` source buffer that outlives the call.
+    let with_source = |bytes: &[u8], f: &mut dyn FnMut(u32)| {
+        let mut buf: Vec<u8> = bytes.to_vec();
+        buf.push(0);
+        let begin = buf.as_ptr() as u32;
+        let header = [begin, begin + bytes.len() as u32, begin + bytes.len() as u32 + 1];
+        f(header.as_ptr() as u32);
+        drop(buf);
+    };
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let (original, _) = snapshot(ptr);
+        let long_name = format!("{}-extended-name-for-regrowth-0123456789", String::from_utf8_lossy(&original)).into_bytes();
+        let equal_len: Vec<u8> = original.iter().map(|&b| if b == b'Q' { b'R' } else { b'Q' }).collect();
+        let scenarios: Vec<(&str, Vec<u8>)> =
+            vec![("shorter", b"Zed".to_vec()), ("longer", long_name), ("whitespace", b"   ".to_vec()), ("equal length", equal_len), ("single", b"K".to_vec())];
+
+        for (label, name) in &scenarios {
+            let mut results: Vec<(Vec<u8>, u8)> = Vec::new();
+            for real in [true, false] {
+                with_source(&original, &mut |src| hooks_zthabitatmgr::set_name_real(ptr as *const u32, src as *const u32));
+                with_source(name, &mut |src| {
+                    if real {
+                        hooks_zthabitatmgr::set_name_real(ptr as *const u32, src as *const u32);
+                    } else {
+                        habitat.set_name(src);
+                    }
+                });
+                results.push(snapshot(ptr));
+            }
+            checked += 1;
+            if results[0].0 != *name {
+                changed += 1;
+            }
+            if results[0] != results[1] {
+                failures.push(format!(
+                    "habitat {} ({:#010x}) {}: real={:?}, port={:?}",
+                    i,
+                    ptr,
+                    label,
+                    String::from_utf8_lossy(&results[0].0),
+                    String::from_utf8_lossy(&results[1].0)
+                ));
+            }
+        }
+        with_source(&original, &mut |src| hooks_zthabitatmgr::set_name_real(ptr as *const u32, src as *const u32));
+        if snapshot(ptr).0 != original {
+            failures.push(format!("habitat {} ({:#010x}): original name not restored", i, ptr));
+        }
+    }
+    if checked == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: no habitats)", test_name));
+        return false;
+    }
+    if changed == 0 {
+        failures.push("the real function never changed any name; test would be vacuous".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
 }
 
 /// Same content-comparison shape as `run_habitat_get_sickly_animals_matches_real_live_test`, for

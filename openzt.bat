@@ -24,6 +24,7 @@ IF "%~1"=="crash-capture" GOTO crash_capture
 IF "%~1"=="debug-play" GOTO debug_play
 IF "%~1"=="update" GOTO update
 IF "%~1"=="tree" GOTO tree
+IF "%~1"=="ghidra-mcp" GOTO ghidra_mcp
 
 echo Error: Unknown subcommand "%~1"
 echo.
@@ -698,6 +699,32 @@ IF !errorlevel! NEQ 0 (
 GOTO :EOF
 
 REM ============================================================
+REM Ghidra MCP (headless) Function
+REM ============================================================
+
+:ghidra_mcp
+REM Serves D:\GhidraProjects\openzt (zoo.exe) over MCP until the window is closed.
+REM analyzeHeadless.bat breaks when PATH or an argument contains "(x86)", so PATH is trimmed
+REM to the system dirs plus java, and the binary must live at a path without parentheses.
+SET GHIDRA_DIR=%OPENZT_GHIDRA_DIR%
+IF "!GHIDRA_DIR!"=="" SET GHIDRA_DIR=D:\Tools\ghidra_12.1.4_PUBLIC
+SET GHIDRA_PROJECTS=%OPENZT_GHIDRA_PROJECTS%
+IF "!GHIDRA_PROJECTS!"=="" SET GHIDRA_PROJECTS=D:\GhidraProjects
+SET GHIDRA_PORT=%OPENZT_GHIDRA_PORT%
+IF "!GHIDRA_PORT!"=="" SET GHIDRA_PORT=8080
+SET GHIDRA_JAVA=%OPENZT_GHIDRA_JAVA%
+IF "!GHIDRA_JAVA!"=="" SET GHIDRA_JAVA=C:\Program Files\Microsoft\jdk-17.0.19.10-hotspot
+
+IF NOT EXIST "!GHIDRA_DIR!\support\analyzeHeadless.bat" (
+    echo Ghidra not found at !GHIDRA_DIR! ^(set OPENZT_GHIDRA_DIR^)
+    exit /b 1
+)
+SET "PATH=%SystemRoot%\System32;%SystemRoot%;!GHIDRA_JAVA!in"
+echo Starting Ghidra MCP on 127.0.0.1:!GHIDRA_PORT! ^(Ctrl+C to stop^)...
+call "!GHIDRA_DIR!\support\analyzeHeadless.bat" "!GHIDRA_PROJECTS!" openzt -process zoo.exe -noanalysis -scriptPath "!GHIDRA_DIR!\Ghidra\Extensions\GhidrAssistMCP\ghidra_scripts" -postScript GAMCPStartServerScript.java host=127.0.0.1 port=!GHIDRA_PORT! wait=true
+exit /b !errorlevel!
+
+REM ============================================================
 REM Help Function
 REM ============================================================
 
@@ -717,6 +744,7 @@ echo   crash-capture      Build test DLL, launch game under cdb non-interactivel
 echo   debug-play         Build real DLL, launch game under cdb WITH symbols, play manually, auto-dump on crash (--release, --out ^<file^>)
 echo   update             Run cargo update on the workspace (forwards extra args, e.g. -p ^<pkg^>)
 echo   tree               Run cargo tree on the workspace (forwards extra args, e.g. -i ^<pkg^>)
+echo   ghidra-mcp         Start headless Ghidra + GhidrAssistMCP on 127.0.0.1:8080 (OPENZT_GHIDRA_DIR, OPENZT_GHIDRA_PROJECTS, OPENZT_GHIDRA_PORT)
 echo   docs               Generate and open documentation
 echo   console            Open interactive Lua console or run oneshot command
 echo   help               Show this help message

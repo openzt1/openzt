@@ -62,7 +62,7 @@ pub(crate) mod base_terrain_recorder;
 #[cfg(target_os = "windows")]
 pub(crate) mod display_message_recorder;
 
-/// Redirects `zthabitat::SEND_EVENT` into an in-memory call record - lets the live
+/// Redirects `ZTHabitat::sendEvent` into an in-memory call record - lets the live
 /// `sendMaintWorkerCleanupEvents` comparison observe real vanilla's sends without delivering them.
 #[cfg(target_os = "windows")]
 pub(crate) mod send_event_recorder;
@@ -89,7 +89,6 @@ pub fn init() {
 
         io_redirect::init();
         portal_dispatch_recorder::init();
-        send_event_recorder::init();
         display_message_recorder::init();
         generate_faces_recorder::init();
 

@@ -1,13 +1,10 @@
-//! Redirects `zthabitat::SEND_EVENT` (`ZTHabitat::sendEvent`, `0x004ffe80`) into an in-memory record of
+//! Redirects `ZTHabitat::sendEvent` (`0x004ffe80`, via [`intercept`] from the port's own detour) into an in-memory record of
 //! `(this, event_id, category, tile_ptr)` calls instead of letting it run for real, so
 //! `ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS_MATCHES_REAL_LIVE` can call real vanilla
 //! `sendMaintWorkerCleanupEvents` and observe exactly which tiles it would have notified the AI about,
 //! without delivering any event. Same thread-local capture-window shape as `portal_dispatch_recorder.rs`.
 
 use std::cell::{Cell, RefCell};
-
-use openzt_detour::generated::zthabitat::SEND_EVENT;
-use openzt_detour_macro::detour_mod;
 
 thread_local! {
     static REDIRECT_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -24,22 +21,13 @@ pub fn end_capture() -> Vec<(u32, u16, u8, u32)> {
     RECORDED.with(|r| std::mem::take(&mut *r.borrow_mut()))
 }
 
-#[detour_mod]
-mod detours {
-    use super::*;
-
-    #[detour(SEND_EVENT)]
-    unsafe extern "thiscall" fn send_event(this: *const u32, event_id: u16, unused_a: u32, category: u8, tile_ptr: u32, unused_b: u16, flag: u16) {
-        if REDIRECT_ACTIVE.with(|a| a.get()) {
-            RECORDED.with(|r| r.borrow_mut().push((this as u32, event_id, category, tile_ptr)));
-            return;
-        }
-        unsafe { SEND_EVENT_DETOUR.call(this, event_id, unused_a, category, tile_ptr, unused_b, flag) };
+/// Called first by [`crate::zthabitat::ZTHabitat::send_event`] (the `sendEvent` port behind the production
+/// detour, since two detours cannot share an address): while a capture window is open, records the call
+/// and reports it consumed instead of letting it reach `GLOBAL_ZTAIMgr`.
+pub fn intercept(this: u32, event_id: u16, category: u8, tile_ptr: u32) -> bool {
+    if !REDIRECT_ACTIVE.with(|a| a.get()) {
+        return false;
     }
-}
-
-pub fn init() {
-    if let Err(e) = unsafe { detours::init_detours() } {
-        tracing::error!("Failed to initialise send_event_recorder detours: {e:?}");
-    }
+    RECORDED.with(|r| r.borrow_mut().push((this, event_id, category, tile_ptr)));
+    true
 }

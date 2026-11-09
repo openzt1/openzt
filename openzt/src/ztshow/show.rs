@@ -385,7 +385,7 @@ pub fn start(this: u32) -> u32 {
     let show_info = get_from_memory::<u32>(this + 0x10);
     unsafe { send_event(show_info, 0x2713, 0, 0x57, 0, 0, 1) };
     let habitat = get_from_memory::<u32>(show_info + 0xa0);
-    unsafe { PLAY_SHOW_START_SOUND.original()(habitat as *const u32) };
+    unsafe { PLAY_SHOW_START_SOUND.hooked()(habitat as *const u32) };
     0
 }
 

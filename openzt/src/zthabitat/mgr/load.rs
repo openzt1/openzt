@@ -31,7 +31,6 @@ use openzt_detour::generated::{
     msvc_std_basic_string::BASIC_STRING_0 as MSVC_BASIC_STRING_DTOR,
     poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
     standalone::DEALLOCATE as READ_BYTES_FROM_FILE,
-    zthabitat::SET_NAME as ZTHABITAT_SET_NAME,
     zttankexhibit::{
         DRAIN as ZTTANKEXHIBIT_DRAIN, FILL as ZTTANKEXHIBIT_FILL, SET_TANK_HEIGHT as ZTTANKEXHIBIT_SET_TANK_HEIGHT,
         SET_WATER_LEVEL as ZTTANKEXHIBIT_SET_WATER_LEVEL, SET_WATER_PURITY as ZTTANKEXHIBIT_SET_WATER_PURITY,
@@ -384,7 +383,7 @@ impl ZTHabitatMgr {
 
 fn apply_record_to_habitat(base: u32, habitat_ptr: u32, record: u32) {
     if get_from_memory::<u8>(base + RVA_APP_INIT_SUCCESS_BASE + 0x4d0) != 0 {
-        unsafe { ZTHABITAT_SET_NAME.original()(habitat_ptr as *const u32, (record + OFFSET_NAME) as *const u32) };
+        unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.set_name(record + OFFSET_NAME);
     }
 
     let entrance_x: i32 = get_from_memory(record + 0x14);

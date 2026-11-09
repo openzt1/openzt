@@ -207,6 +207,14 @@ pub(super) mod detour_zoo_main {
             // first settles that flag before any other test reads the same live habitats.
             RegisteredTest { name: "ZTHABITATMGR_DETOURS_ENABLED", run: tests::zthabitatmgr::run_zthabitatmgr_detours_enabled_test },
             RegisteredTest { name: "ZTTANKEXHIBIT_DETOURS_ENABLED", run: tests::zthabitatmgr::run_tankexhibit_detours_enabled_test },
+            RegisteredTest { name: "ZTVIEWINGAREA_GRID_WRITERS_MATCH_REAL_LIVE", run: tests::ztviewingarea::run_ztviewingarea_grid_writers_live_test },
+            RegisteredTest { name: "ZTVIEWINGAREA_DETOURS_ENABLED", run: tests::ztviewingarea::run_ztviewingarea_detours_enabled_test },
+            RegisteredTest { name: "ZTVIEWINGAREA_LEAVES_MATCH_REAL", run: tests::ztviewingarea::run_ztviewingarea_leaves_match_real_test },
+            RegisteredTest { name: "ZTVIEWINGAREA_RECALCULATE_CHARACTERISTICS_MATCHES_REAL", run: tests::ztviewingarea::run_ztviewingarea_recalculate_characteristics_test },
+            RegisteredTest { name: "ZTOBSERVABLEAREA_ADD_TILE_MATCHES_REAL", run: tests::ztviewingarea::run_ztobservablearea_add_tile_test },
+            RegisteredTest { name: "ZTVIEWINGAREA_RECALCULATE_OA_MATCHES_REAL", run: tests::ztviewingarea::run_ztviewingarea_recalculate_oa_test },
+            RegisteredTest { name: "ZTVIEWINGAREA_CONSTRUCT_DESTRUCT_MATCHES_REAL_LIVE", run: tests::ztviewingarea::run_ztviewingarea_lifecycle_live_test },
+            RegisteredTest { name: "ZTVIEWINGAREA_CREATE_OA_MATCHES_REAL_LIVE", run: tests::ztviewingarea::run_ztviewingarea_create_oa_live_test },
             RegisteredTest { name: "ZTHABITATMGR_GET_HABITAT_PTR_LIVE", run: tests::zthabitatmgr::run_habitat_get_habitat_ptr_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_ATTRACTIVENESS_LIVE", run: tests::zthabitatmgr::run_habitat_get_attractiveness_live_test },
             RegisteredTest { name: "ZTHABITAT_HAS_KEEPER_ASSIGNED_LIVE", run: tests::zthabitatmgr::run_habitat_has_keeper_assigned_live_test },
@@ -724,6 +732,15 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTHABITAT_GET_NEAREST_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_nearest_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_GET_RANDOM_KEEPER_FOOD_LIVE", run: tests::zthabitatmgr::run_habitat_get_random_keeper_food_live_test },
             RegisteredTest { name: "ZTHABITAT_HAS_BLDG_LIVE", run: tests::zthabitatmgr::run_habitat_has_bldg_live_test },
+            RegisteredTest { name: "ZTHABITAT_LIFECYCLE_DETOURS_ENABLED", run: tests::zthabitat_lifecycle::run_habitat_lifecycle_detours_enabled_test },
+            RegisteredTest { name: "ZTHABITAT_SEND_EVENT_MATCHES_REAL_LIVE", run: tests::zthabitat_lifecycle::run_habitat_send_event_matches_real_live_test },
+            RegisteredTest { name: "ZTHABITAT_GET_EVENTS_MATCHES_REAL_LIVE", run: tests::zthabitat_lifecycle::run_habitat_get_events_matches_real_live_test },
+            RegisteredTest {
+                name: "ZTHABITAT_PLAY_SHOW_START_SOUND_MATCHES_REAL_LIVE",
+                run: tests::zthabitat_lifecycle::run_habitat_play_show_start_sound_matches_real_live_test,
+            },
+            RegisteredTest { name: "ZTHABITAT_CREATE_NAME_MATCHES_REAL_LIVE", run: tests::zthabitat_lifecycle::run_habitat_create_name_matches_real_live_test },
+            RegisteredTest { name: "ZTHABITAT_CONSTRUCTOR_MATCHES_REAL_LIVE", run: tests::zthabitat_lifecycle::run_habitat_constructor_matches_real_live_test },
             RegisteredTest {
                 name: "ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_send_maint_worker_cleanup_events_matches_real_live_test,
@@ -731,6 +748,22 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_GET_SICKLY_ANIMALS_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_sickly_animals_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_GET_UNDESIRABLE_SCENERY_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_get_undesirable_scenery_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_SET_ANIMAL_CONDITIONS_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_set_animal_conditions_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_CHECK_ESCAPABILITY_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_check_escapability_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_SET_NAME_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_set_name_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_GET_VIEWING_AREAS_WITH_GUESTS_LIVE",

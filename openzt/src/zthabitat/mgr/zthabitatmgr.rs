@@ -18,7 +18,7 @@ use openzt_detour::generated::{
         standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
         ztfence::{IS_WORTH_FIXING, JUMP_TILE_EDGE as ZTFENCE_JUMP_TILE_EDGE, MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
-            CONSTRUCTOR as ZTHABITAT_CONSTRUCTOR, GENERATE_FACES, SET_NAME as ZTHABITAT_SET_NAME,
+            GENERATE_FACES,
         },
         zthabitatmgr::NAME_HABITAT,
         ztmapview::{ADD_UNDO_ACTION, REMOVE_ENTITY as ZTMAPVIEW_REMOVE_ENTITY, SET_SELECTED_ENTITY_0 as ZTMAPVIEW_SET_SELECTED_ENTITY_0},
@@ -28,7 +28,6 @@ use openzt_detour::generated::{
         ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
         ztui_tankmodify::FETCH_VALUES_FROM_TANK as ZTUI_TANKMODIFY_FETCH_VALUES_FROM_TANK,
         ztui_habitatinfo::{ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT, REMOVE_ALL_HABITATS as ZTUI_HABITATINFO_REMOVE_ALL_HABITATS, REMOVE_HABITAT as ZTUI_HABITATINFO_REMOVE_HABITAT},
-        ztviewingarea::REMOVE_TILE as ZTVIEWINGAREA_REMOVE_TILE,
         ztvisibilitytesting::TEST_LOS,
         ztworldmgr::{
             PLAY_FROWN_SOUND as ZTWORLDMGR_PLAY_FROWN_SOUND, PLAY_SMILE_SOUND as ZTWORLDMGR_PLAY_SMILE_SOUND,
@@ -550,7 +549,7 @@ impl ZTHabitatMgr {
 
         let mut habitat_ptr = unsafe { OPERATOR_NEW.original()(0x178) } as u32;
         if habitat_ptr != 0 {
-            habitat_ptr = unsafe { ZTHABITAT_CONSTRUCTOR.original()(habitat_ptr as *const u32, seed_tile_ptr as *const u32, false) } as u32;
+            habitat_ptr = ZTHabitat::construct(habitat_ptr, seed_tile_ptr, false);
         }
 
         let is_tank = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.do_tank_check();
@@ -597,7 +596,7 @@ impl ZTHabitatMgr {
         if name_ptr == 0 {
             unsafe { NAME_HABITAT.original()(mgr_ptr, habitat_ptr as *const u32) };
         } else {
-            unsafe { ZTHABITAT_SET_NAME.original()(habitat_ptr as *const u32, name_ptr as *const u32) };
+            unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.set_name(name_ptr as u32);
             self.decrement_habitat_num();
         }
         self.add_habitat(habitat_ptr);
@@ -1143,7 +1142,7 @@ impl ZTHabitatMgr {
 
         let mut new_habitat_ptr = unsafe { OPERATOR_NEW.original()(0x178) } as u32;
         if new_habitat_ptr != 0 {
-            new_habitat_ptr = unsafe { ZTHABITAT_CONSTRUCTOR.original()(new_habitat_ptr as *const u32, neighbour_ptr as *const u32, false) } as u32;
+            new_habitat_ptr = ZTHabitat::construct(new_habitat_ptr, neighbour_ptr, false);
         }
 
         let new_is_tank = new_habitat_ptr != 0 && unsafe { ref_from_memory::<ZTHabitat>(new_habitat_ptr) }.do_tank_check();
@@ -1169,9 +1168,9 @@ impl ZTHabitatMgr {
             (new_habitat_ptr, old_habitat_ptr)
         };
         if new_is_tank {
-            unsafe { ZTHABITAT_SET_NAME.original()(primary_ptr as *const u32, name_buf.as_ptr()) };
+            unsafe { ref_from_memory::<ZTHabitat>(primary_ptr) }.set_name(name_buf.as_ptr() as u32);
         } else if old_is_tank {
-            unsafe { ZTHABITAT_SET_NAME.original()(secondary_ptr as *const u32, name_buf.as_ptr()) };
+            unsafe { ref_from_memory::<ZTHabitat>(secondary_ptr) }.set_name(name_buf.as_ptr() as u32);
         }
 
         self.do_show_check(new_habitat_ptr, false);
@@ -3897,7 +3896,7 @@ impl ZTHabitatMgr {
         if ptr == 0 {
             return 0;
         }
-        unsafe { ZTHABITAT_CONSTRUCTOR.original()(ptr as *const u32, tile_ptr as *const u32, false) as u32 }
+        ZTHabitat::construct(ptr, tile_ptr, false)
     }
 
     /// Picks `placeGate`'s three tile arguments from a habitat's boundary pairs, as `splitTankIntoLand`'s two
@@ -4563,7 +4562,7 @@ impl ZTHabitatMgr {
                 if va_ptr == 0 {
                     continue;
                 }
-                unsafe { ZTVIEWINGAREA_REMOVE_TILE.original()(va_ptr as *const u32, tile_ptr as i32) };
+                crate::zthabitat::viewing_area::remove_tile(va_ptr, tile_ptr);
                 let vec_begin: u32 = get_from_memory(va_ptr + 0x40);
                 let vec_end: u32 = get_from_memory(va_ptr + 0x44);
                 if vec_begin == vec_end {
