@@ -5867,6 +5867,7 @@ pub mod msvc_std_basic_string {
     pub const BASIC_STRING_3: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const u8, i32)> = FunctionDef{address: 0x00401da8, function_type: PhantomData};
     pub const BASIC_STRING_4: FunctionDef<unsafe extern "thiscall" fn(*const c_void, u32, *const u32) -> *const i32> = FunctionDef{address: 0x00404cf4, function_type: PhantomData};
     pub const BASIC_STRING_5: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const u8, i32, u32)> = FunctionDef{address: 0x00404d91, function_type: PhantomData};
+    pub const APPEND_RANGE: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const u32, *const u32, u32) -> *const u32> = FunctionDef{address: 0x00405eff, function_type: PhantomData};
 }
 
 // msvc_std::deque class functions
@@ -6144,6 +6145,7 @@ pub mod standalone {
     pub const SHOW_LAYOUT: FunctionDef<unsafe extern "cdecl" fn(i32)> = FunctionDef{address: 0x00443960, function_type: PhantomData};
     pub const DIALOG_CALLBACK: FunctionDef<unsafe extern "cdecl" fn(i32)> = FunctionDef{address: 0x00443f0c, function_type: PhantomData};
     pub const BFENTITY_CAST_ZTKEEPER: FunctionDef<unsafe extern "cdecl" fn(i32) -> i32> = FunctionDef{address: 0x004460bc, function_type: PhantomData};
+    pub const CRT_ISMBCGRAPH: FunctionDef<unsafe extern "cdecl" fn(u32) -> u32> = FunctionDef{address: 0x004491ea, function_type: PhantomData};
     pub const TILE_WITHIN_AVA: FunctionDef<unsafe extern "cdecl" fn(i32, i32) -> u32> = FunctionDef{address: 0x0044ed0c, function_type: PhantomData};
     pub const VALIDATE_NEIGHBOR_PATHS: FunctionDef<unsafe extern "cdecl" fn(*const u32, i32)> = FunctionDef{address: 0x00451aa6, function_type: PhantomData};
     pub const CAN_PUT_PATH: FunctionDef<unsafe extern "cdecl" fn(*const u32, *const u32, i32) -> u32> = FunctionDef{address: 0x00451e44, function_type: PhantomData};
