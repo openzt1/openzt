@@ -7083,10 +7083,10 @@ impl ZTHabitat {
         }
 
         let self_addr = self as *const Self as u32;
-        if let Some(previous_fence) = neighbour_store::portal(self_addr, owner) {
-            if Self::is_live_world_entity(previous_fence) {
-                unsafe { call_vtable_slot_with_ptr(previous_fence, 0x138, 0) };
-            }
+        if let Some(previous_fence) = neighbour_store::portal(self_addr, owner)
+            && Self::is_live_world_entity(previous_fence)
+        {
+            unsafe { call_vtable_slot_with_ptr(previous_fence, 0x138, 0) };
         }
         unsafe { call_vtable_slot_with_ptr(fence_a, 0x138, 1) };
         neighbour_store::set_portal(self_addr, owner, fence_a);
@@ -7187,8 +7187,9 @@ impl ZTHabitat {
 
         unsafe { MSVC_VECTOR_T_4_DTOR.original()((self_addr + 0x34) as *const u32) };
 
-        // The three `std::set`/`std::map` containers: every node was already freed by the clears
-        // above, so only the header node (0x14/0x18 bytes, same size class) remains.
+        // The three `std::set`/`std::map` containers: their members live in `neighbour_store` (emptied above), so the
+        // raw trees hold no nodes and only the header node (0x14/0x18 bytes, same size class) remains. Any stray
+        // subtree is erased first so a header is never freed over live nodes.
         for (container_offset, node_size) in [(0x20, 0x18), (0x14, 0x14), (0x8, 0x14)] {
             let head: u32 = get_from_memory(self_addr + container_offset);
             rb_erase_subtree(get_from_memory(head + 4), node_size);
