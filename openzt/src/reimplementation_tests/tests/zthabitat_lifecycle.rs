@@ -293,6 +293,11 @@ pub(crate) fn run_habitat_create_name_matches_real_live_test(failure_log: &mut O
 /// containers vanilla's own constructors allocate (their sentinel addresses differ between the two builds).
 const POINTER_WORDS: [u32; 10] = [0x8, 0x14, 0x20, 0x40, 0x44, 0x148, 0x154, 0x158, 0x15c, 0x16c];
 
+/// The word that trails each of the three `{head*, size}` tree containers at `+0x8`/`+0x14`/`+0x20`. Vanilla's tree
+/// constructor fills it from an uninitialised stack slot (the copy of an empty comparator/allocator object), so
+/// its value depends on whatever the stack held, not on anything the constructor means to store.
+const TRAILING_TREE_PAD_WORDS: [u32; 3] = [0x10, 0x1c, 0x28];
+
 struct ConstructedSnapshot {
     bytes: Vec<u8>,
     name: Vec<u8>,
@@ -301,7 +306,7 @@ struct ConstructedSnapshot {
 
 fn snapshot_constructed(habitat: u32) -> ConstructedSnapshot {
     let mut bytes: Vec<u8> = (0..0x178).map(|offset| get_from_memory::<u8>(habitat + offset)).collect();
-    for word in POINTER_WORDS {
+    for word in POINTER_WORDS.into_iter().chain(TRAILING_TREE_PAD_WORDS) {
         bytes[word as usize..word as usize + 4].fill(0);
     }
     let owned_tiles = walk_tile_list(get_from_memory(habitat + 0x40)).map(|node| get_from_memory::<TileListNode>(node).payload).collect();
@@ -311,7 +316,8 @@ fn snapshot_constructed(habitat: u32) -> ConstructedSnapshot {
 /// `ZTHABITAT_CONSTRUCTOR_MATCHES_REAL_LIVE`: builds a habitat at the zoo entrance tile in a zeroed
 /// `0x178` block through real vanilla's constructor and through the port (one after the other, freeing
 /// the first before building the second so both see the tile unclaimed), restoring the manager's name
-/// counter between them, and compares every byte outside the container heads in [`POINTER_WORDS`], the
+/// counter between them, and compares every byte outside the container heads in [`POINTER_WORDS`] and the
+/// trailing tree-padding words in [`TRAILING_TREE_PAD_WORDS`], the
 /// name text and the owned-tile list. The world flag is covered by the `createName` test; a world
 /// habitat has no seed tile to build against here.
 pub(crate) fn run_habitat_constructor_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
@@ -359,6 +365,46 @@ pub(crate) fn run_habitat_constructor_matches_real_live_test(failure_log: &mut O
     }
     if real_counter != port_counter {
         failures.push(format!("name counter after: real {real_counter}, port {port_counter}"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTHABITATMGR_CREATE_WORLD_HABITAT_GRID_RESIZE_LIVE`: runs the port on zeroed scratch manager blocks (the
+/// call only touches `this+0x18` and the grid at `this+0x28`) with a zero cell count or zero column count, so
+/// no habitat is built, and checks the grid vanilla's own `vector::resize` helpers leave behind: a fresh
+/// build, shrinks, a regrow and a zero-column grid, with the pending-habitat slot staying empty. This pins the
+/// calling conventions and stack arguments of the three raw helper calls.
+///
+/// There is no real-vs-port comparison: real vanilla clears the grid over the live world's dimensions, so it
+/// reads past any smaller scratch grid, and constructing the world habitat on a live zoo falls back to the
+/// live entrance tile ([`ZTHabitat::resize`]) and claims live grid cells. The cell-clearing pass and the
+/// habitat build are only covered by loading a save or starting a new game. Vanilla-allocated grid buffers
+/// are leaked on purpose.
+pub(crate) fn run_zthabitatmgr_create_world_habitat_grid_resize_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITATMGR_CREATE_WORLD_HABITAT_GRID_RESIZE_LIVE";
+    if let Some((_, false)) = hooks_zthabitatmgr::status().iter().find(|(name, _)| *name == "CREATE_WORLD_HABITAT_1") {
+        return finish_test(test_name, vec!["CREATE_WORLD_HABITAT_1 detour not enabled".to_string()], failure_log);
+    }
+    let calls: [(u32, u32); 6] = [(0, 4), (0, 2), (0, 5), (7, 0), (0, 0), (0, 3)];
+    let block: &'static mut [u32] = Box::leak(vec![0u32; 0x20].into_boxed_slice());
+    let mgr_addr = block.as_ptr() as u32;
+    let mgr = unsafe { ref_from_memory::<crate::zthabitatmgr::ZTHabitatMgr>(mgr_addr) };
+
+    let mut failures = Vec::new();
+    for (map_x, map_y) in calls {
+        mgr.create_world_habitat(map_x, map_y, -1, -1);
+        let (grid_start, grid_end): (u32, u32) = (get_from_memory(mgr_addr + 0x28), get_from_memory(mgr_addr + 0x2c));
+        let columns = (grid_end - grid_start) / 0xc;
+        let cells: Vec<u32> = (0..columns)
+            .map(|column| {
+                let (begin, end): (u32, u32) = (get_from_memory(grid_start + column * 0xc), get_from_memory(grid_start + column * 0xc + 4));
+                (end - begin) / 0x28
+            })
+            .collect();
+        let pending: u32 = get_from_memory(mgr_addr + 0x18);
+        if columns != map_y || cells.iter().any(|&cell_count| cell_count != map_x) || pending != 0 {
+            failures.push(format!("after ({map_x}, {map_y}): {columns} columns {cells:?}, pending {pending:#x}"));
+        }
     }
     finish_test(test_name, failures, failure_log)
 }

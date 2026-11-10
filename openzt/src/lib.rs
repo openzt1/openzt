@@ -63,6 +63,7 @@ pub mod systemtime;
 pub mod geom;
 
 /// Vanilla MSVC std::vector layout compatibility types.
+pub mod vanilla_rbtree;
 pub mod vanilla_vector;
 
 /// ZTAF Animation file format parsing, writing and some modification methods.

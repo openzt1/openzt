@@ -106,6 +106,14 @@ pub struct ZTHabitatMgr {
     pub _live: crate::util::LiveMemory,
 }
 
+/// `0x0058e7da` (unnamed in `generated.rs`): `vector<vector<Cell>>::resize(count, &fill)` on the grid at
+/// `ZTHabitatMgr+0x28`. `thiscall`, `RET 8`.
+const ADDR_GRID_RESIZE_COLUMNS: u32 = 0x0058_e7da;
+/// `0x0058e81a` (unnamed): frees a `0x28`-byte-element vector's buffer through vanilla's allocator. `fastcall`, one argument.
+const ADDR_FREE_GRID_FILL_VECTOR: u32 = 0x0058_e81a;
+/// `0x004c85da` (unnamed): `vector<Cell>::resize(count, &fill)` on one grid column. `thiscall`, `RET 8`.
+const ADDR_GRID_RESIZE_CELLS: u32 = 0x004c_85da;
+
 const _: () = assert!(std::mem::size_of::<ZTHabitatMgr>() == 0x70);
 const _: () = assert!(std::mem::offset_of!(ZTHabitatMgr, habitat_num) == 0x68);
 
@@ -596,7 +604,7 @@ impl ZTHabitatMgr {
         if name_ptr == 0 {
             unsafe { NAME_HABITAT.original()(mgr_ptr, habitat_ptr as *const u32) };
         } else {
-            unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.set_name(name_ptr as u32);
+            unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.set_name(name_ptr);
             self.decrement_habitat_num();
         }
         self.add_habitat(habitat_ptr);
@@ -1310,7 +1318,7 @@ impl ZTHabitatMgr {
             let survivor_is_tank = unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.is_tank();
             let absorbed_is_tank = unsafe { ref_from_memory::<ZTHabitat>(absorbed_ptr) }.is_tank();
             if survivor_is_tank && absorbed_is_tank {
-                self.merge_tanks(survivor_ptr as u32, absorbed_ptr as u32, resize_tile_ptr as u32);
+                self.merge_tanks(survivor_ptr, absorbed_ptr, resize_tile_ptr);
                 return;
             }
 
@@ -1324,7 +1332,7 @@ impl ZTHabitatMgr {
             if unsafe { ref_from_memory::<ZTHabitat>(absorbed_ptr) }.is_tank() {
                 unsafe { ref_from_memory::<super::super::tank_exhibit::ZTTankExhibit>(absorbed_ptr as *const u32) }.remove_illegal_entities(0, false);
             }
-            self.remove_habitat(absorbed_ptr as u32);
+            self.remove_habitat(absorbed_ptr);
             unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.resize(resize_tile_ptr);
             unsafe { ref_from_memory::<ZTHabitat>(survivor_ptr) }.set_dirty_characteristics();
             if gate_fence_to_move != 0 {
@@ -1504,7 +1512,7 @@ impl ZTHabitatMgr {
         self.replace_gate();
         let gate_tile_in_ptr = habitat.gate_tile_in_ptr();
         let gate_tile_out_ptr = habitat.gate_tile_out_ptr();
-        self.remove_habitat(habitat_ptr as u32);
+        self.remove_habitat(habitat_ptr);
         self.replace_gate();
 
         if gate_fence_ptr != 0 {
@@ -2757,7 +2765,7 @@ impl ZTHabitatMgr {
             let is_tank = unsafe { call_vtable_slot_noargs_ret_bool(habitat_ptr, 0x20) };
             let passes_species_gate = unsafe { call_vtable_slot_noargs_ret_bool(species_ptr, 0xcc) };
             let first_gate = !(is_tank && passes_species_gate)
-                || (get_from_memory::<u32>(habitat_ptr + 0xc) == 0 && (animal_type != 0 || scenery_type != 0));
+                || (crate::zthabitat::neighbour_store::len(habitat_ptr, crate::zthabitat::neighbour_store::NeighbourSet::Amphibious) == 0 && (animal_type != 0 || scenery_type != 0));
             if !first_gate || (neighbor_pass && !passes_species_gate) {
                 continue;
             }
@@ -3593,6 +3601,71 @@ impl ZTHabitatMgr {
         }
     }
 
+    /// Ports `ZTHabitatMgr::createWorldHabitat(x, y, entrance_x, entrance_y)` (`CREATE_WORLD_HABITAT_1`,
+    /// `0x0058e607`, `RET 0x10`; the argument-less `_0` just forwards the manager's own four fields and stays
+    /// vanilla):
+    /// 1. Resizes the tile-ownership grid (`this+0x28`, see [`Self::get_habitat_cell_addr`]) to `map_y` columns
+    ///    of `map_x` zeroed `0x28`-byte cells. The two `std::vector::resize` instantiations
+    ///    ([`ADDR_GRID_RESIZE_COLUMNS`], [`ADDR_GRID_RESIZE_CELLS`]) stay vanilla so the grid's buffers keep
+    ///    coming from, and returning to, vanilla's allocator. The fill cell's tenth dword (`+0x24`, the visited
+    ///    byte) is stack garbage in vanilla; it is zero here, and the next step masks the byte anyway.
+    /// 2. Clears every cell: the occupant and the eight direction slots, setting bit 0 of the matching map
+    ///    tile's `+0x85` byte for each slot that held a value, then masks the visited bits (`+0x24 &= 0xfc`).
+    ///    Like [`Self::clear_pathfinding`], this walks `x`/`y` directly instead of reproducing vanilla's
+    ///    axis-swapped loop nesting, which agrees on the square maps the game ships.
+    /// 3. With both dimensions positive, allocates a `0x178` habitat through vanilla's `operator new`,
+    ///    constructs it as the world habitat (`is_world = true`) on the entrance tile when
+    ///    `(entrance_x, entrance_y)` is inside the map, else on no tile, and adds it
+    ///    ([`Self::add_habitat`] stashes it in the pending slot).
+    ///
+    /// Divergence: a failed allocation returns without calling `addHabitat(null)`, which would fault in
+    /// vanilla.
+    pub fn create_world_habitat(&self, map_x: u32, map_y: u32, entrance_x: i32, entrance_y: i32) {
+        let this_addr = self as *const Self as u32;
+        let grid_addr = this_addr + 0x28;
+
+        let scratch_fill_vector = [0u32; 3];
+        let resize_columns: unsafe extern "thiscall" fn(u32, u32, *const [u32; 3]) = unsafe { std::mem::transmute(ADDR_GRID_RESIZE_COLUMNS as usize) };
+        unsafe { resize_columns(grid_addr, map_y, &scratch_fill_vector) };
+        let free_fill_vector: unsafe extern "fastcall" fn(*const [u32; 3]) = unsafe { std::mem::transmute(ADDR_FREE_GRID_FILL_VECTOR as usize) };
+        unsafe { free_fill_vector(&scratch_fill_vector) };
+
+        let fill_cell = [0u32; 10];
+        let resize_cells: unsafe extern "thiscall" fn(u32, u32, *const [u32; 10]) = unsafe { std::mem::transmute(ADDR_GRID_RESIZE_CELLS as usize) };
+        for column in 0..map_y {
+            let column_ptr = get_from_memory::<u32>(grid_addr) + column * 0xc;
+            unsafe { resize_cells(column_ptr, map_x, &fill_cell) };
+        }
+
+        let world = globals().ztworldmgr();
+        for x in 0..world.map_x_size as i32 {
+            for y in 0..world.map_y_size as i32 {
+                let Some(cell) = self.get_habitat_cell_addr(x, y) else { continue };
+                let tile_ptr = world.get_tile_ptr(x as u32, y as u32);
+                for slot in 0..9u32 {
+                    let slot_addr = cell + slot * 4;
+                    if get_from_memory::<u32>(slot_addr) != 0 {
+                        save_to_memory::<u32>(slot_addr, 0);
+                        save_to_memory::<u8>(tile_ptr + 0x85, get_from_memory::<u8>(tile_ptr + 0x85) | 1);
+                    }
+                }
+                save_to_memory::<u8>(cell + 0x24, get_from_memory::<u8>(cell + 0x24) & 0xfc);
+            }
+        }
+
+        if (map_x as i32) < 1 || (map_y as i32) < 1 {
+            return;
+        }
+        let habitat_ptr = unsafe { OPERATOR_NEW.original()(0x178) } as u32;
+        if habitat_ptr == 0 {
+            return;
+        }
+        let entrance_in_map = entrance_x >= 0 && entrance_y >= 0 && (entrance_x as u32) < world.map_x_size && (entrance_y as u32) < world.map_y_size;
+        let tile_ptr = if entrance_in_map { world.get_tile_ptr(entrance_x as u32, entrance_y as u32) } else { 0 };
+        let habitat_ptr = ZTHabitat::construct(habitat_ptr, tile_ptr, true);
+        self.add_habitat(habitat_ptr);
+    }
+
     /// Ports `ZTHabitatMgr::clearStaffHabitat` (`ZTHabitatMgr_clearStaffHabitat.c`/`.asm`) as an
     /// orchestrator: despite its `ZTHabitatMgr::` decompile namespace this is a plain free `stdcall`
     /// helper - the `.asm`'s own `RET 0x4` pops only the one stack argument and nothing in the body reads
@@ -3810,13 +3883,7 @@ impl ZTHabitatMgr {
             send_event(habitat_ptr, 0x2716, show_info_id, 0x53, 0, 0, 1);
             self.empty_grandstands(show_info_id as u16);
             unsafe { ZTUI_HABITATINFO_REMOVE_HABITAT.original()(habitat_ptr as *const i32) };
-            let (_, array_end, array_cap_end) = self.exhibit_array.raw_parts();
-            let mut slot = erase_at;
-            while slot + 4 < array_end {
-                save_to_memory::<u32>(slot, get_from_memory::<u32>(slot + 4));
-                slot += 4;
-            }
-            self.exhibit_array.set_raw_parts(array_start, array_end - 4, array_cap_end);
+            crate::vanilla_vector::erase_element(std::ptr::addr_of!(self.exhibit_array) as u32, erase_at, 4);
         }
 
         if self.pending_place_gate_habitat_ptr == habitat_ptr {
@@ -3986,10 +4053,10 @@ impl ZTHabitatMgr {
         let side_a_is_tank = unsafe { ref_from_memory::<ZTHabitat>(probe_a) }.do_tank_check();
         unsafe {
             if probe_b != 0 {
-                call_vtable_slot_with_u8(probe_b, 0, 1);
+                call_vtable_slot_with_u8(probe_b, 0x18, 1);
             }
             if probe_a != 0 {
-                call_vtable_slot_with_u8(probe_a, 0, 1);
+                call_vtable_slot_with_u8(probe_a, 0x18, 1);
             }
         }
 

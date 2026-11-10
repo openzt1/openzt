@@ -1,5 +1,6 @@
 pub mod habitat;
 pub mod mgr;
+pub mod neighbour_store;
 pub mod support;
 pub mod tank_exhibit;
 pub mod viewing_area;

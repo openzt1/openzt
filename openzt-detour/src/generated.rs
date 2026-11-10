@@ -4407,8 +4407,9 @@ pub mod ztobservablearea {
     use super::*;
 
     pub const RECALCULATE_CHARACTERISTICS: FunctionDef<unsafe extern "fastcall" fn(*const i32)> = FunctionDef{address: 0x00447a00, function_type: PhantomData};
-    pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void) -> *const u32> = FunctionDef{address: 0x0044ef63, function_type: PhantomData};
-    pub const ADD_TILE: FunctionDef<unsafe extern "thiscall" fn(*const c_void, i32)> = FunctionDef{address: 0x004f3b00, function_type: PhantomData};
+    pub const CONSTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x0044ef63, function_type: PhantomData};
+    pub const DESTRUCTOR: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x00459113, function_type: PhantomData};
+    pub const ADD_TILE: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x004f3b00, function_type: PhantomData};
 }
 
 // ZTPath class functions
@@ -6123,6 +6124,7 @@ pub mod standalone {
     pub const NULLSUB_5: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x004072ef, function_type: PhantomData};
     pub const NULLSUB_6: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0040733c, function_type: PhantomData};
     pub const NULLSUB_7: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00409b61, function_type: PhantomData};
+    pub const COPY4_MEMMOVE: FunctionDef<unsafe extern "cdecl" fn(*const u32, i32, *const u32) -> *const u32> = FunctionDef{address: 0x00409ca6, function_type: PhantomData};
     pub const NULLSUB_8: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x0040bcc9, function_type: PhantomData};
     pub const VER_QUERY_VALUE_A: FunctionDef<unsafe extern "stdcall" fn(u32, u32, *const c_void, u32) -> bool> = FunctionDef{address: 0x0040dcfb, function_type: PhantomData};
     pub const SET_NEEDS_ORDER_RECALCULATE: FunctionDef<unsafe extern "stdcall" fn(u8)> = FunctionDef{address: 0x0040f15b, function_type: PhantomData};
@@ -6345,6 +6347,7 @@ pub mod standalone {
     pub const UPDATE_MULTI_BUILDING_LIST: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x004f0979, function_type: PhantomData};
     pub const SET_TERRAFORMING: FunctionDef<unsafe extern "cdecl" fn(*const bool, i32)> = FunctionDef{address: 0x004f1e6e, function_type: PhantomData};
     pub const UPDATE_PROGRESS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x004f202e, function_type: PhantomData};
+    pub const LOS: FunctionDef<unsafe extern "cdecl" fn(*const u32, i32) -> u32> = FunctionDef{address: 0x004f39a2, function_type: PhantomData};
     pub const CHECK_CHARACTERISTICS_2: FunctionDef<unsafe extern "cdecl" fn(i32) -> bool> = FunctionDef{address: 0x004f5d7f, function_type: PhantomData};
     pub const NULLSUB_20: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00501634, function_type: PhantomData};
     pub const CLICK_NEW_0: FunctionDef<unsafe extern "cdecl" fn(i8) -> u32> = FunctionDef{address: 0x00501699, function_type: PhantomData};

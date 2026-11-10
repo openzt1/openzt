@@ -36,14 +36,15 @@ use std::collections::BTreeSet;
 use tracing::error;
 
 use super::habitat::ZTHabitat;
-use super::support::{get_neighbour_raw, RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL, write_bytes_to_file, RVA_FENCE_TYPE_CHECK_ARG, call_entity_type_create, call_vtable_slot_noargs, call_vtable_slot_noargs_ret_bool, RVA_STAFF_TYPE_CHECK_ARG, call_vtable_slot_with_u8, call_vtable_slot_with_u8_u8, free_event_vector_buffer, next_game_random, rb_set_insert, walk_tile_list, RVA_APP_INIT_SUCCESS_BASE, RVA_GLOBAL_BFUIMGR, RVA_TANK_WALL_TYPE_CHECK_ARG};
+use super::support::{get_neighbour_raw, RVA_CREATE_DOUBLE_FENCE_UNDO_LABEL, write_bytes_to_file, RVA_FENCE_TYPE_CHECK_ARG, call_entity_type_create, call_vtable_slot_noargs, call_vtable_slot_noargs_ret_bool, RVA_STAFF_TYPE_CHECK_ARG, call_vtable_slot_with_u8, call_vtable_slot_with_u8_u8, free_event_vector_buffer, next_game_random, walk_tile_list, RVA_APP_INIT_SUCCESS_BASE, RVA_GLOBAL_BFUIMGR, RVA_TANK_WALL_TYPE_CHECK_ARG};
+use crate::vanilla_rbtree::rb_set_insert;
 use crate::bfconfigfile::ini_compat;
 use crate::string_registry::load_string_by_id;
 use crate::util::ZTString;
 use crate::ztmegatilemgr::entity_type_matches;
 use crate::globals::{get_module_base, globals};
 use crate::util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory, LiveMemory};
-use crate::vanilla_vector::{push_pair, push_word};
+use crate::vanilla_vector::{erase_element, push_pair, push_word};
 use crate::write_live;
 
 /// `ZTTankExhibit`, the single-inheritance subclass of [`ZTHabitat`] real tank/show exhibits are
@@ -913,17 +914,11 @@ impl ZTTankExhibit {
         while slot != end && get_from_memory::<u32>(slot) != id {
             slot += 4;
         }
-        let mut next = slot + 4;
-        let mut count = (end as i32).wrapping_sub(next as i32) >> 2;
-        if next != end && count > 0 {
-            while count != 0 {
-                save_to_memory(slot, get_from_memory::<u32>(next));
-                slot += 4;
-                next += 4;
-                count -= 1;
-            }
+        if slot == end {
+            write_live!(self, sparkle_entity_ids_end, end.wrapping_sub(4));
+        } else {
+            erase_element(self.this_ptr() as u32 + std::mem::offset_of!(ZTTankExhibit, sparkle_entity_ids_begin) as u32, slot, 4);
         }
-        write_live!(self, sparkle_entity_ids_end, self.sparkle_entity_ids_end.wrapping_sub(4));
     }
 
     /// [`Self::remove_dead_sparkles`]' pair-vector erase: first `(age, entity)` match (or the end), later
@@ -934,18 +929,11 @@ impl ZTTankExhibit {
         while slot != end && !(get_from_memory::<u32>(slot) == age && get_from_memory::<u32>(slot + 4) == entity) {
             slot += 8;
         }
-        let mut next = slot + 8;
-        let mut count = (end as i32).wrapping_sub(next as i32) >> 3;
-        if next != end && count > 0 {
-            while count != 0 {
-                save_to_memory(slot, get_from_memory::<u32>(next));
-                save_to_memory(slot + 4, get_from_memory::<u32>(next + 4));
-                slot += 8;
-                next += 8;
-                count -= 1;
-            }
+        if slot == end {
+            write_live!(self, sparkle_entities_end, end.wrapping_sub(8));
+        } else {
+            erase_element(self.this_ptr() as u32 + std::mem::offset_of!(ZTTankExhibit, sparkle_entities_begin) as u32, slot, 8);
         }
-        write_live!(self, sparkle_entities_end, self.sparkle_entities_end.wrapping_sub(8));
     }
 
     /// Ports `ZTTankExhibit::addRandomSparkle` (`0x00496382`, `fastcall`): on a tank with water at or above

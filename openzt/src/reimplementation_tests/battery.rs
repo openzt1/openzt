@@ -742,6 +742,10 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTHABITAT_CREATE_NAME_MATCHES_REAL_LIVE", run: tests::zthabitat_lifecycle::run_habitat_create_name_matches_real_live_test },
             RegisteredTest { name: "ZTHABITAT_CONSTRUCTOR_MATCHES_REAL_LIVE", run: tests::zthabitat_lifecycle::run_habitat_constructor_matches_real_live_test },
             RegisteredTest {
+                name: "ZTHABITATMGR_CREATE_WORLD_HABITAT_GRID_RESIZE_LIVE",
+                run: tests::zthabitat_lifecycle::run_zthabitatmgr_create_world_habitat_grid_resize_live_test,
+            },
+            RegisteredTest {
                 name: "ZTHABITAT_SEND_MAINT_WORKER_CLEANUP_EVENTS_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_send_maint_worker_cleanup_events_matches_real_live_test,
             },
@@ -816,6 +820,10 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_SUITABILITY_STORE_HAS_NO_STALE_ENTRIES",
                 run: tests::zthabitatmgr::run_habitat_suitability_store_has_no_stale_entries_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_NEIGHBOUR_STORE_HAS_NO_STALE_ENTRIES",
+                run: tests::zthabitatmgr::run_habitat_neighbour_store_has_no_stale_entries_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_NEEDS_SHOW_KEEPER_MATCHES_REAL_LIVE",

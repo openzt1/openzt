@@ -58,6 +58,8 @@ use crate::{
     geom::Direction,
 };
 use super::mgr::zthabitatmgr::ZTHabitatMgr;
+use super::neighbour_store::{self, NeighbourSet};
+use crate::vanilla_rbtree::rb_erase_subtree;
 use super::viewing_areas;
 
 /// Number of times [`ZTHabitat::destruct`] has run - lets the live battery prove the destructor port was
@@ -138,6 +140,8 @@ fn x87_weighted_sum(terms: &[(f64, f64)]) -> f64 {
 pub struct ZTHabitat {
     pub vtable: u32,                 // 0x000
     pub zt_show_info_ptr: u32,       // 0x004
+    // The three tree containers at +0x8/+0x14/+0x20 keep vanilla's layout, but only their (empty) header nodes live here: the
+    // members are owned by `neighbour_store`, and the port never reads or writes these trees.
     pub amphibious_neighbors_head: u32, // 0x008 // MSVC `std::set<ZTHabitat*>` head/sentinel node pointer for the amphibious-neighbor set - confirmed red-black-tree node layout (`+0x0`=color/isnil, `+0x4`=parent, `+0x8`=left, `+0xc`=right, `+0x10`=value) via `ZTHabitat_hiliteAmphibiousNeighbors.c`'s own in-order walk (see `walk_neighbor_tree`) and `addAmphibiousNeighbor`'s own STL insert helper (both left un-ported - see `Self::hilite_amphibious_neighbors`'s own doc comment). `ZTHabitat_getSize.c` independently walks this exact same field with identical node arithmetic (see `Self::get_size`) - this corrects `zthabitatmgr-implementation-plan.md`'s own earlier step 6h note (which speculated this was an unrelated nested-sub-habitat tree).
     pub pad1a_a1: [u8; 0x8],          // ----------------------- padding: 8 bytes
     pub show_neighbors_head: u32,    // 0x014 // Same shape as `amphibious_neighbors_head`, for the show-neighbor set (`ZTHabitat_hiliteShowNeighbors.c`/`addShowNeighbor`/`clearShowNeighbors`). The C decompiles mislabel this field `zoo_entrance_y` (an OOAnalyzer type-propagation artifact bleeding in a `ZTHabitatMgr`-shaped name) - trust the `.asm`-confirmed `+0x14` offset, named here for what it actually is.
@@ -614,15 +618,17 @@ pub(crate) struct PortalDispatch {
 }
 
 impl ZTHabitat {
-    /// `ZTHabitat*` members of the amphibious-neighbor set (`+0x8`), in vanilla's in-order traversal order.
-    /// Reads the set lazily, so callers that mutate neighbors while iterating should collect first.
+    /// `ZTHabitat*` members of the amphibious-neighbor set, in vanilla's in-order (ascending pointer) order.
+    /// A snapshot taken from [`neighbour_store`]: later changes to the set do not affect an iteration in
+    /// progress.
     pub fn amphibious_neighbors(&self) -> impl Iterator<Item = u32> {
-        neighbor_set_members(self.amphibious_neighbors_head)
+        neighbour_store::members(self as *const Self as u32, NeighbourSet::Amphibious).into_iter()
     }
 
-    /// `ZTHabitat*` members of the show-neighbor set (`+0x14`), in vanilla's in-order traversal order.
+    /// `ZTHabitat*` members of the show-neighbor set, in vanilla's in-order (ascending pointer) order. A snapshot
+    /// taken from [`neighbour_store`], like [`Self::amphibious_neighbors`].
     pub fn show_neighbors(&self) -> impl Iterator<Item = u32> {
-        neighbor_set_members(self.show_neighbors_head)
+        neighbour_store::members(self as *const Self as u32, NeighbourSet::Show).into_iter()
     }
 
     pub(crate) const TANK_VTABLE_PTR: u32 = 0x006312bc;
@@ -810,9 +816,8 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::getNeedyNestedTank` (`ZTHabitat_getNeedyNestedTank.c`/`.asm`) - depth-first
-    /// search over the amphibious-connected tank chain (via [`Self::boundary_tile_pairs`],
-    /// not the `amphibious_neighbors_head` tree despite this file's own earlier "recurses the
-    /// amphibious-neighbor tree" description) for a tank whose own `needsService(keeper_ptr, true)` is
+    /// search over the amphibious-connected tank chain (via [`Self::boundary_tile_pairs`], not the
+    /// amphibious-neighbour set) for a tank whose own `needsService(keeper_ptr, true)` is
     /// true and whose keeper isn't already stationed there ([`ztunit::GET_HABITAT`] on `keeper_ptr` !=
     /// the candidate).
     ///
@@ -1131,16 +1136,14 @@ impl ZTHabitat {
     /// Ports `ZTHabitat::getNumAnimals` (`ZTHabitat_getNumAnimals.c`/`.asm`): same
     /// `characteristics_dirty`-gated lazy-recalculate shape as [`Self::species_list`], then returns the
     /// cached direct-occupant count ([`Self::num_animals`]) alone when `include_neighbors` is `false`. When
-    /// `true`, additionally walks the amphibious-neighbor set ([`walk_neighbor_tree`] over
-    /// `amphibious_neighbors_head`) - `.asm`-confirmed identical `+0x8` node arithmetic to
+    /// `true`, additionally walks the amphibious-neighbor set ([`Self::amphibious_neighbors`]) - `.asm`-confirmed identical `+0x8` node arithmetic to
     /// [`Self::hilite_amphibious_neighbors`]'s own walk, per the correction
     /// `zthabitatmgr-implementation-plan.md`'s step 6d recorded for this same field - recursively summing
     /// each neighbor's own `get_num_animals(false)` (never recursing sub-neighbors of sub-neighbors,
     /// matching real vanilla's own `getNumAnimals(neighbor, false)` call exactly).
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::species_list`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry, which reads
-    /// real `ZTHabitat*` pointers directly out of the tree).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_num_animals(&self, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
             self.recalculate_characteristics();
@@ -1294,7 +1297,7 @@ impl ZTHabitat {
     /// count (recursing with `false`, same single-level-only shape as [`Self::get_num_animals`]).
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_num_adult_animals(&self, include_neighbors: bool) -> i32 {
         let mut total = 0i32;
         for animal_ptr in self.get_all_animals(false) {
@@ -1328,7 +1331,7 @@ impl ZTHabitat {
     /// walks this between the counting and the scratch-buffer teardown, order preserved here).
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_num_adult_animals_by_species(&self, species_id: i32, include_neighbors: bool) -> i32 {
         let mut total = 0i32;
         for animal_ptr in self.species_animals(species_id) {
@@ -1468,16 +1471,14 @@ impl ZTHabitat {
     /// habitat's owned-tile count, plus every amphibious neighbor's own count when `subhabs` is set.
     /// The false arm is exactly the owned-tile node count [`walk_tile_list`] walks over
     /// [`Self::owned_tiles_ptr`] (the loop both decompile arms run). When `subhabs` is set,
-    /// additionally walks the amphibious-neighbor set ([`walk_neighbor_tree`] over
-    /// [`Self::amphibious_neighbors_head`], `.asm`-confirmed identical `+0x8` node arithmetic to
+    /// additionally walks the amphibious-neighbor set ([`Self::amphibious_neighbors`], `.asm`-confirmed identical `+0x8` node arithmetic to
     /// [`Self::get_num_animals`]'s own walk, `ZTHabitat*` payload read directly from node `+0x10`),
     /// summing each neighbor's own `get_size(false)` (never re-passing `true` down, matching real
     /// vanilla's own `getSize(neighbor, false)` call exactly). A pure read both ways: no
     /// `characteristics_dirty` lazy-recalculate, no RNG.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as
-    /// [`Self::get_num_animals`]; each neighbor visited must also be live (true for every
-    /// [`walk_neighbor_tree`] entry, which reads real `ZTHabitat*` pointers directly out of the tree).
+    /// [`Self::get_num_animals`]; each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_size(&self, subhabs: bool) -> i32 {
         let mut total = walk_tile_list(self.owned_tiles_ptr).count() as i32;
         if subhabs {
@@ -1700,7 +1701,7 @@ impl ZTHabitat {
     /// is this same overload and corroborates every step): gathers the clear-tile candidate pool into
     /// the same zero-initialized scratch `std::vector<BFTile*>` real vanilla's own stack-local is (the
     /// `.asm`'s three zero stores) - [`Self::add_clear_tiles`] for `this`, then one call per amphibious
-    /// neighbor when `subhabs` is set, walked in [`walk_neighbor_tree`] order with the habitat payload
+    /// neighbor when `subhabs` is set, walked in ascending pointer order with the habitat payload
     /// read from node `+0x10` (the same tree the dirty-gated count getters recurse; each call is the
     /// call-the-port convention - real vanilla calls `addClearTiles` at its now-detoured address, which
     /// re-enters this file's port under the live battery). `animal_ptr` may be null - [`Self::add_clear_tiles`]
@@ -1724,7 +1725,7 @@ impl ZTHabitat {
     /// delegation above.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_random_clear_tile_for_animal(&self, animal_ptr: u32, check_path: bool, subhabs: bool) -> u32 {
         let world = globals().ztworldmgr_ptr() as u32;
         if world == 0 {
@@ -2209,16 +2210,16 @@ impl ZTHabitat {
     /// Shared recursive aggregation behind the three biome-tile getters below
     /// (`ZTHabitat_getLandTiles.c`/`_getWaterTiles.c`/`_getUnderwaterTiles.c` - three byte-for-byte
     /// identical `.asm` bodies apart from the callee): one call to the matching
-    /// [`Self::add_tiles_matching`]-sibling for `this`, then an in-order [`walk_neighbor_tree`] walk
-    /// over [`Self::amphibious_neighbors_head`] calling the same sibling per neighbor into the same
-    /// out-vector, the habitat payload read from node `+0x10` (each sibling call is the call-the-port
+    /// [`Self::add_tiles_matching`]-sibling for `this`, then an in-order walk over
+    /// [`Self::amphibious_neighbors`] calling the same sibling per neighbor into the same
+    /// out-vector (each sibling call is the call-the-port
     /// convention - real vanilla calls `add*Tiles` at their now-detoured addresses, which re-enter
     /// this file's ports under the live battery, the same shape as
     /// [`Self::get_random_clear_tile_for_animal`]'s subhabitat loop). Deterministic on all three: no
     /// RNG draw, no `characteristics_dirty` recalculate.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     fn get_tiles_aggregating(&self, out_vector_ptr: u32, tile_qualifies: fn(u32) -> bool) {
         for tile in self.aggregated_tiles_matching(tile_qualifies) {
             vector_push_pool_alloc4_pool_dealloc(out_vector_ptr, tile);
@@ -2231,7 +2232,7 @@ impl ZTHabitat {
     /// aggregator wrapping [`Self::add_land_tiles`] via [`Self::get_tiles_aggregating`].
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_land_tiles(&self, out_vector_ptr: u32) {
         self.get_tiles_aggregating(out_vector_ptr, is_land_tile);
     }
@@ -2241,7 +2242,7 @@ impl ZTHabitat {
     /// [`Self::get_land_tiles`].
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_water_tiles(&self, out_vector_ptr: u32) {
         self.get_tiles_aggregating(out_vector_ptr, is_water_tile);
     }
@@ -2251,7 +2252,7 @@ impl ZTHabitat {
     /// [`Self::add_underwater_tiles`] - see [`Self::get_land_tiles`].
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_underwater_tiles(&self, out_vector_ptr: u32) {
         self.get_tiles_aggregating(out_vector_ptr, is_underwater_tile);
     }
@@ -2272,7 +2273,7 @@ impl ZTHabitat {
     /// Deterministic on all three: no RNG draw, no `characteristics_dirty` recalculate.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     fn get_num_tiles_aggregating(&self, tile_qualifies: fn(u32) -> bool) -> i32 {
         self.aggregated_tiles_matching(tile_qualifies).len() as i32
     }
@@ -2327,7 +2328,7 @@ impl ZTHabitat {
     /// tile pointer (or null) - so the port keeps `u32` and the detour casts.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     fn get_random_tiles_aggregating(&self, tile_qualifies: fn(u32) -> bool) -> u32 {
         let tiles = self.aggregated_tiles_matching(tile_qualifies);
         if tiles.is_empty() {
@@ -2445,8 +2446,7 @@ impl ZTHabitat {
     /// `GET_AMOUNT_KEEPER_FOOD`): same `characteristics_dirty`-gated lazy-recalculate shape as
     /// [`Self::get_all_animals`], then reads this habitat's own cached per-category tally
     /// ([`Self::keeper_food_category_amounts`]`[category]`). When `include_neighbors` is set, additionally
-    /// sums every amphibious neighbor's own cached tally for the same category ([`walk_neighbor_tree`] over
-    /// `amphibious_neighbors_head`) - real vanilla's own recursive call always passes `include_neighbors =
+    /// sums every amphibious neighbor's own cached tally for the same category ([`Self::amphibious_neighbors`]) - real vanilla's own recursive call always passes `include_neighbors =
     /// false` for each neighbor, so despite being coded as recursion in the decompile this is only ever one
     /// level deep, matching [`Self::get_num_animals`]'s own established shape for the identical pattern.
     ///
@@ -2454,7 +2454,7 @@ impl ZTHabitat {
     /// vanilla, which performs no bounds check either.
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as [`Self::get_attractiveness`];
-    /// each neighbor visited must also be live (true for every `walk_neighbor_tree` entry).
+    /// each neighbor visited must also be live (true for every neighbour-set member).
     pub fn get_amount_keeper_food(&self, category: u32, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
             self.recalculate_characteristics();
@@ -2649,7 +2649,7 @@ impl ZTHabitat {
     /// own `ZTFood+0x120` layout) among this habitat's own owned tiles, ties going to the first in
     /// owned-tile-list order (strict `<` against the `0x7fffffff` sentinel). The own hit is returned
     /// immediately - the amphibious neighbors are consulted only when the own pool is empty and
-    /// `include_neighbors` is set, each neighbor ([`walk_neighbor_tree`] order) resolving its own
+    /// `include_neighbors` is set, each neighbor (ascending pointer order) resolving its own
     /// internal minimum through the same function with `include_neighbors = false`, the parent then
     /// comparing the *returned entity's* amount against its running best (strict `<`), not re-walking
     /// the neighbor's tiles itself.
@@ -2968,7 +2968,7 @@ impl ZTHabitat {
     /// [`Self::get_attractiveness`] - the lazy recalculate is also this counter's own writer (its census
     /// zeroes `num_angry_animals` and re-increments it per angry animal) - then returns the cached count
     /// alone when `include_neighbors` is `false`. When `true`, additionally walks the amphibious-neighbor
-    /// set ([`walk_neighbor_tree`] over `amphibious_neighbors_head`) summing each neighbor's own
+    /// set ([`Self::amphibious_neighbors`]) summing each neighbor's own
     /// `get_num_angry_animals(false)` (never recursing sub-neighbors of sub-neighbors, matching real
     /// vanilla's own `getNumAngryAnimals(neighbor, false)` recursion exactly). Real vanilla's own
     /// subhabitat recursion is a direct self-call at this function's own (detoured) entry, so
@@ -2977,7 +2977,7 @@ impl ZTHabitat {
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as
     /// [`Self::get_attractiveness`]; each neighbor visited must also be live (true for every
-    /// `walk_neighbor_tree` entry).
+    /// neighbour-set member).
     pub fn get_num_angry_animals(&self, include_neighbors: bool) -> i32 {
         if self.characteristics_dirty != 0 {
             self.recalculate_characteristics();
@@ -3874,12 +3874,12 @@ impl ZTHabitat {
     /// `recalc_phase_1_2`.
     ///
     /// Real body, per `ZTHabitat_recalculateCharacteristics.c`/`.asm`:
-    /// - Walks [`Self::amphibious_neighbors_head`] ([`walk_neighbor_tree`]); per amphibious neighbor,
+    /// - Walks [`Self::amphibious_neighbors`]; per amphibious neighbor,
     ///   calls the still-un-ported real vanilla [`ADD_FOUND_SPECIES`] on that neighbor directly (its own
     ///   owned-tile census, same shape [`Self::recalc_phase_1_2`]'s own per-animal loop performs), then
-    ///   walks *that neighbor's own* `show_neighbors_head` (node `+0x14` off the neighbor pointer) and
+    ///   walks *that neighbor's own* show-neighbour set and
     ///   calls `ADD_FOUND_SPECIES` on each of those too - two levels deep.
-    /// - Then walks this habitat's own [`Self::show_neighbors_head`] and calls `ADD_FOUND_SPECIES` on each
+    /// - Then walks this habitat's own [`Self::show_neighbors`] and calls `ADD_FOUND_SPECIES` on each
     ///   direct show-neighbor.
     /// - Never calls `ADD_FOUND_SPECIES` on `self` - this habitat's own species were already found by
     ///   [`Self::recalc_phase_1_2`]'s own per-animal census.
@@ -3905,8 +3905,7 @@ impl ZTHabitat {
             unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) }
                 .add_found_species(found_species_vec.as_ptr() as u32, std::ptr::addr_of!(self.species_found_count) as u32);
 
-            let neighbor_show_neighbors_head: u32 = get_from_memory(neighbor_ptr + 0x14);
-            for inner_neighbor_ptr in neighbor_set_members(neighbor_show_neighbors_head) {
+            for inner_neighbor_ptr in neighbour_store::members(neighbor_ptr, NeighbourSet::Show) {
                 unsafe { ref_from_memory::<ZTHabitat>(inner_neighbor_ptr) }
                     .add_found_species(found_species_vec.as_ptr() as u32, std::ptr::addr_of!(self.species_found_count) as u32);
             }
@@ -3945,7 +3944,7 @@ impl ZTHabitat {
     /// [`Self::additional_scenery_suitability_change`] unchanged, never touching either itself.
     ///
     /// Real body, per `ZTHabitat_recalculateCharacteristics.c`/`.asm`: walks every amphibious neighbor
-    /// ([`walk_neighbor_tree`] over [`Self::amphibious_neighbors_head`]). For each neighbor that
+    /// ([`Self::amphibious_neighbors`]). For each neighbor that
     /// [`Self::is_tank`]:
     /// - Adds the neighbor's own `get_size(false)` into `tank_neighbor_total_size`.
     /// - When the neighbor `is_filled` (`+0x198`), adds that same size into `freshwater_filled_size` or
@@ -3985,8 +3984,7 @@ impl ZTHabitat {
     /// must thread this method's return value through to that continuation unchanged.
     ///
     /// Must only be called on a live `ZTHabitat` reference; each neighbor visited must also be live
-    /// (true for every [`walk_neighbor_tree`] entry, which reads real `ZTHabitat*` pointers directly out
-    /// of the tree). Constructing a [`ZTTankExhibit`] reference over a neighbor is only safe once
+    /// (true for every neighbour-set member). Constructing a [`ZTTankExhibit`] reference over a neighbor is only safe once
     /// [`Self::is_tank`] has confirmed it - matches that struct's own doc comment on why an unconfirmed
     /// plain `ZTHabitat` pointer would over-read.
     pub(crate) fn recalc_phase_5(&self, map_ptr: u32, found_species_vec: &mut VanillaVector<u32>) -> RecalcPhase5Summary {
@@ -4364,7 +4362,7 @@ impl ZTHabitat {
     /// flags plus `+0x5c`/`+0x5d`/`+0x69` and forces `score_percent_c` (`+0x24`) to `100.0`. Runs after
     /// [`Self::recalc_phase_6_species_scores`], whose flags it clears.
     pub(crate) fn recalc_phase_6_reset_tank_flags(&self, record_ptr: u32, species_type_ptr: u32) {
-        let neighbor_set_size: u32 = get_from_memory(self as *const Self as u32 + 0xc);
+        let neighbor_set_size = neighbour_store::len(self as *const Self as u32, NeighbourSet::Amphibious);
         if !self.is_tank() || neighbor_set_size != 0 || !unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) } {
             return;
         }
@@ -4961,13 +4959,13 @@ impl ZTHabitat {
     ///   `self`'s own list here, unlike the two neighbor walks below - `self` needs no lazy-recalculate
     ///   re-check mid-`recalculateCharacteristics`).
     /// - If `!self.is_tank()` (`self`'s own vtable `+0x20` dispatch, `0x00446307`-`0x0044630e`): walks
-    ///   [`Self::amphibious_neighbors_head`] ([`walk_neighbor_tree`]); per neighbor (node `+0x10`), calls
+    ///   [`Self::amphibious_neighbors`]; per neighbor (node `+0x10`), calls
     ///   through real vanilla `getSpeciesList` (`0x00410f26`, [`Self::species_list`]'s own callee, confirmed
     ///   via 3 real `CALL 0x00410f26` sites in this loop) and, for each entry passing that entry's own
     ///   vtable `+0xcc` predicate ([`call_entity_vtable_noargs`] - the same "species wants water"-shaped slot
     ///   [`Self::scan_building_list_for_surrounding_animal`]'s sibling `FUN_0044699a` call site documents),
     ///   appends it if not already present.
-    /// - Unconditionally walks [`Self::show_neighbors_head`] the same way, but with **no** `+0xcc` gate -
+    /// - Unconditionally walks [`Self::show_neighbors`] the same way, but with **no** `+0xcc` gate -
     ///   every entry not already present gets appended.
     ///
     /// Both neighbor walks dedup by linear scan of the vector-so-far before appending
@@ -4977,7 +4975,7 @@ impl ZTHabitat {
     /// since the vector was just truncated to empty immediately before).
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as
-    /// [`Self::get_attractiveness`]; each neighbor visited via `walk_neighbor_tree` must also be live.
+    /// [`Self::get_attractiveness`]; each neighbor visited must also be live.
     pub(crate) fn construct_surrounding_species_list(&self) {
         write_live!(self, surrounding_species_end, self.surrounding_species_begin);
 
@@ -5686,14 +5684,13 @@ impl ZTHabitat {
     /// `characteristics_dirty`, guarded so it never re-enters an already-dirty habitat (the same guard
     /// real vanilla's own recursive walk depends on to terminate over a neighbor graph that may contain
     /// cycles), then recursively marks every amphibious- and show-neighbor
-    /// ([`walk_neighbor_tree`] over [`Self::amphibious_neighbors_head`]/[`Self::show_neighbors_head`],
+    /// ([`Self::amphibious_neighbors`]/[`Self::show_neighbors`],
     /// the same two sets step 6d already resolved) dirty in turn - both trees are walked (unlike
     /// [`Self::set_time_last_serviced`], which only walks the amphibious set), confirmed directly against
     /// the decompile's own two, near-identical tree-walk blocks.
     ///
     /// Must only be called on a live `ZTHabitat` reference - `self`'s own address feeds directly into
-    /// the tree walk, and each neighbor visited must also be live (true for every `walk_neighbor_tree`
-    /// entry, which reads real `ZTHabitat*` pointers directly out of the tree).
+    /// the tree walk, and each neighbor visited must also be live (true for every neighbour-set member).
     ///
     /// Takes `&self` and writes the flag volatilely before recursing: a neighbour cycle re-enters this
     /// same habitat, so a `&mut self` here would alias.
@@ -5728,8 +5725,7 @@ impl ZTHabitat {
 
     /// Ports `ZTHabitat::setTimeLastServiced` (`ZTHabitat_setTimeLastServiced.c`/`.asm`): sets
     /// [`Self::time_last_serviced`] (`+0xec`), then - when `propagate` is set - recursively calls itself
-    /// with `propagate = false` on every amphibious neighbor ([`walk_neighbor_tree`] over
-    /// [`Self::amphibious_neighbors_head`] only, not `show_neighbors_head` too - confirmed directly
+    /// with `propagate = false` on every amphibious neighbor ([`Self::amphibious_neighbors`] only, not the show set too - confirmed directly
     /// against the decompile, which reads only `field_0x8`). Real vanilla's own decompile has no guard
     /// against visiting the same neighbor twice (unlike [`Self::set_dirty_characteristics`]'s own dirty-
     /// flag guard), but since the recursive call always passes `propagate = false`, the walk is only ever
@@ -6295,9 +6291,8 @@ impl ZTHabitat {
 
     /// Ports `ZTHabitat::isShowNeighbor` (`ZTHabitat_isShowNeighbor.c`/`.asm`, `generated.rs`'s
     /// `IS_SHOW_NEIGHBOR` at `0x005a3585`): whether `neighbor_ptr` is a member of this habitat's
-    /// show-neighbor set - a pure, read-only probe of the `std::set<ZTHabitat*>`
-    /// (`less<ZTHabitat*>`) rooted at [`Self::show_neighbors_head`], answered when a show goal
-    /// completes to decide whether the habitat being arrived at / left is show-linked.
+    /// show-neighbor set - a pure, read-only membership probe of the set held in [`neighbour_store`],
+    /// answered when a show goal completes to decide whether the habitat being arrived at / left is show-linked.
     ///
     /// Real vanilla is the MSVC `_Tree::find` shape: a lower_bound descent from the head's
     /// `_Parent` (`+0x4`, the root) - descending `_Right` (`+0xc`) while `node->_Value` (`+0x10`)
@@ -6305,10 +6300,9 @@ impl ZTHabitat {
     /// then confirming the surviving candidate with `candidate != head && candidate->_Value <=
     /// key`. The loop guard is a plain null check, so an empty set (null root) exits immediately
     /// with the candidate still the head and the answer `false`; the `&&` short-circuit likewise
-    /// keeps the head's own `+0x10` slot (never meaningful) unread. Node layout is the same one
-    /// [`walk_neighbor_tree`] documents, and the tree itself stays un-ported - this only ever
-    /// reads a shape real vanilla's own `addShowNeighbor`/`clearShowNeighbors` produced. The C
-    /// decompiles mislabel `show_neighbors_head` (`this+0x14`) `zoo_entrance_y` - an OOAnalyzer
+    /// keeps the head's own `+0x10` slot (never meaningful) unread. The port answers from the store
+    /// ([`neighbour_store::contains`]); the raw tree stays empty. The C
+    /// decompiles mislabel the show set's head (`this+0x14`) `zoo_entrance_y` - an OOAnalyzer
     /// type-propagation artifact, not a real field read. The macOS counterpart
     /// (`ZTHabitat_isShowNeighbor.c`) reaches the same answer through named
     /// `std::tree<ZTHabitat*>::find` on `this+0x14`, returning a branchless `found != end()`.
@@ -6322,18 +6316,7 @@ impl ZTHabitat {
     /// `as u32` detour widen drops with it (the same mechanical step `HAS_PORTAL_ANIMAL` already
     /// went through). The port returns a clean `bool`.
     pub fn is_show_neighbor(&self, neighbor_ptr: u32) -> bool {
-        let head = self.show_neighbors_head;
-        let mut candidate = head;
-        let mut node: u32 = get_from_memory(head + 0x4); // head->_Parent = root
-        while node != 0 {
-            if get_from_memory::<u32>(node + 0x10) < neighbor_ptr {
-                node = get_from_memory(node + 0xc); // _Right
-            } else {
-                candidate = node;
-                node = get_from_memory(node + 0x8); // _Left
-            }
-        }
-        candidate != head && get_from_memory::<u32>(candidate + 0x10) <= neighbor_ptr
+        neighbour_store::contains(self as *const Self as u32, NeighbourSet::Show, neighbor_ptr)
     }
 
     /// Whether the habitat at `habitat_ptr` is a show tank: `isTank()` by real vtable dispatch (slot
@@ -6346,10 +6329,9 @@ impl ZTHabitat {
 
     /// Ports `ZTHabitat::addAmphibiousNeighbor` (`generated.rs`'s `ADD_AMPHIBIOUS_NEIGHBOR`, `0x005078d3`;
     /// the macOS `ZTHabitat_addAmphibiousNeighbor.c` agrees): inserts `other_ptr` into the amphibious
-    /// `std::set<ZTHabitat*>` ([`Self::amphibious_neighbors_head`], size at `+0xc`) when the two
+    /// `std::set<ZTHabitat*>` (held in [`neighbour_store`]) when the two
     /// habitats' `isTank()` results differ. The return is true whenever that gate passes, whether or not
-    /// the key was already present. Nodes come from `PoolAlloc` (see [`rb_set_insert`]), matching what
-    /// vanilla's `clearAmphibiousNeighbors`/destructor free.
+    /// the key was already present.
     pub fn add_amphibious_neighbor(&self, other_ptr: u32) -> bool {
         if other_ptr == 0 {
             return false;
@@ -6360,7 +6342,7 @@ impl ZTHabitat {
         if self_is_tank == other_is_tank {
             return false;
         }
-        rb_set_insert(self_addr + 0x8, other_ptr);
+        neighbour_store::insert(self_addr, NeighbourSet::Amphibious, other_ptr);
         true
     }
 
@@ -6373,37 +6355,25 @@ impl ZTHabitat {
         for neighbor in neighbors {
             unsafe { ref_from_memory::<ZTHabitat>(neighbor) }.remove_amphibious_neighbor(self_addr);
         }
-        rb_tree_clear(self_addr + 0x8, 0x14);
+        neighbour_store::clear(self_addr, NeighbourSet::Amphibious);
     }
 
     /// Ports `ZTHabitat::removeAmphibiousNeighbor` (`REMOVE_AMPHIBIOUS_NEIGHBOR`, `0x00507a90`): erases
-    /// `other_ptr` from the amphibious set ([`rb_set_erase`]; vanilla's `equal_range` +
-    /// `erase(first, last)`). Returns whether `other_ptr` is non-null, whether or not it was present.
+    /// `other_ptr` from the amphibious set ([`neighbour_store::remove`]; an absent key is a no-op). Returns whether `other_ptr` is non-null, whether or not it was present.
     /// Vanilla's low byte is all the real callers read (the decompile packs garbage upper bytes).
     pub fn remove_amphibious_neighbor(&self, other_ptr: u32) -> bool {
         if other_ptr == 0 {
             return false;
         }
-        rb_set_erase(self as *const Self as u32 + 0x8, other_ptr);
+        neighbour_store::remove(self as *const Self as u32, NeighbourSet::Amphibious, other_ptr);
         true
     }
 
     /// Ports `ZTHabitat::isAmphibiousNeighbor` (`IS_AMPHIBIOUS_NEIGHBOR`, `0x00448c79`): whether
-    /// `neighbor_ptr` is in the amphibious set - the same `lower_bound` + `key <= neighbor` shape as
-    /// [`Self::is_show_neighbor`], over [`Self::amphibious_neighbors_head`].
+    /// `neighbor_ptr` is in the amphibious set ([`neighbour_store::contains`]), the counterpart of
+    /// [`Self::is_show_neighbor`].
     pub fn is_amphibious_neighbor(&self, neighbor_ptr: u32) -> bool {
-        let head = self.amphibious_neighbors_head;
-        let mut candidate = head;
-        let mut node: u32 = get_from_memory(head + 0x4);
-        while node != 0 {
-            if get_from_memory::<u32>(node + 0x10) < neighbor_ptr {
-                node = get_from_memory(node + 0xc);
-            } else {
-                candidate = node;
-                node = get_from_memory(node + 0x8);
-            }
-        }
-        candidate != head && get_from_memory::<u32>(candidate + 0x10) <= neighbor_ptr
+        neighbour_store::contains(self as *const Self as u32, NeighbourSet::Amphibious, neighbor_ptr)
     }
 
     /// Ports `ZTHabitat::getCloseOutsideTile` (`GET_CLOSE_OUTSIDE_TILE`, `0x00448cb7`). The Windows body
@@ -6460,7 +6430,7 @@ impl ZTHabitat {
     /// Ports `ZTHabitat::addShowNeighbor` (`ADD_SHOW_NEIGHBOR`, `0x005ab1e7`, `ZTHabitat_addShowNeighbor.c`):
     /// when exactly one of the two habitats is a show tank ([`Self::is_show_tank_by_vtable`]) and both
     /// have the same `isTank()` result, inserts `other_ptr` into the show-neighbor set
-    /// ([`Self::show_neighbors_head`], size at `+0x18`). If `other_ptr` is the show tank, every animal of
+    /// (held in [`neighbour_store`]). If `other_ptr` is the show tank, every animal of
     /// this habitat and of each amphibious neighbour that passes its vtable `+0x228` predicate is
     /// registered with it via [`Self::add_show_unit`]. Returns whether the insert gate passed.
     pub fn add_show_neighbor(&self, other_ptr: u32) -> bool {
@@ -6474,7 +6444,7 @@ impl ZTHabitat {
         if unsafe { call_vtable_slot_noargs_ret_bool(other_ptr, 0x20) } != unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
             return false;
         }
-        rb_set_insert(self_addr + 0x14, other_ptr);
+        neighbour_store::insert(self_addr, NeighbourSet::Show, other_ptr);
         if Self::is_show_tank_by_vtable(other_ptr) {
             let register_show_units = |habitat: &ZTHabitat| {
                 let animals: Vec<u32> = habitat.get_all_animals(false).collect();
@@ -6495,8 +6465,9 @@ impl ZTHabitat {
 
     /// Ports `ZTHabitat::clearShowNeighbors` (`CLEAR_SHOW_NEIGHBORS`, `0x00458a88`): for every member
     /// calls [`Self::remove_show_neighbor`]`(member, self)` and real vanilla `removeShowPortal(member, self)` and
-    /// `removeShowPortal(self, member)` (un-ported), then frees the show-neighbor set and the
-    /// show-portal map ([`Self::show_portal_map_head`], size at `+0x24`, `0x18`-byte nodes).
+    /// `removeShowPortal(self, member)`, then empties the show-neighbor set and the show-portal map in
+    /// [`neighbour_store`], and zeroes the portal map's raw size dword at `+0x24` as vanilla's tree `clear()` does
+    /// (it overlaps `neighbor_dirty`, so a set dirty flag is cleared).
     pub fn clear_show_neighbors(&self) {
         let self_addr = self as *const Self as u32;
         let neighbors: Vec<u32> = self.show_neighbors().collect();
@@ -6506,8 +6477,13 @@ impl ZTHabitat {
             neighbor_habitat.remove_show_portal(self_addr);
             self.remove_show_portal(neighbor);
         }
-        rb_tree_clear(self_addr + 0x14, 0x14);
-        rb_tree_clear(self_addr + 0x20, 0x18);
+        neighbour_store::clear(self_addr, NeighbourSet::Show);
+        neighbour_store::clear_portals(self_addr);
+        // Vanilla's tree `clear()` also zeroes the map's size dword at `+0x24` when it is non-zero. That dword
+        // overlaps `neighbor_dirty` (`+0x25`), so a set dirty flag is cleared as a side effect; keep that.
+        if get_from_memory::<u32>(self_addr + 0x24) != 0 {
+            save_to_memory::<u32>(self_addr + 0x24, 0);
+        }
     }
 
     /// Ports `ZTHabitat::addShowUnit` (`ADD_SHOW_UNIT`, `0x00458610`): registers `unit_ptr` with this
@@ -6524,8 +6500,7 @@ impl ZTHabitat {
             return ztshowinfo::add_unit(self.zt_show_info_ptr, unit_ptr) as u32;
         }
         let self_addr = self as *const Self as u32;
-        let forward = |head: u32| -> u32 {
-            let neighbors: Vec<u32> = neighbor_set_members(head).collect();
+        let forward = |neighbors: Vec<u32>| -> u32 {
             let mut result = 0;
             for neighbor in neighbors {
                 if neighbor != 0 {
@@ -6536,10 +6511,10 @@ impl ZTHabitat {
             }
             result
         };
-        if get_from_memory::<u32>(self_addr + 0x18) != 0 {
-            forward(self.show_neighbors_head)
-        } else if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } && get_from_memory::<u32>(self_addr + 0xc) != 0 {
-            forward(self.amphibious_neighbors_head)
+        if neighbour_store::len(self_addr, NeighbourSet::Show) != 0 {
+            forward(self.show_neighbors().collect())
+        } else if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } && neighbour_store::len(self_addr, NeighbourSet::Amphibious) != 0 {
+            forward(self.amphibious_neighbors().collect())
         } else {
             0
         }
@@ -6559,8 +6534,7 @@ impl ZTHabitat {
             return 1;
         }
         let self_addr = self as *const Self as u32;
-        let forward = |head: u32| -> u8 {
-            let neighbors: Vec<u32> = neighbor_set_members(head).collect();
+        let forward = |neighbors: Vec<u32>| -> u8 {
             let mut result = 0;
             for neighbor in neighbors {
                 // A null neighbour reads its `+0x4` in vanilla; neighbour sets never hold one.
@@ -6568,17 +6542,17 @@ impl ZTHabitat {
             }
             result
         };
-        if get_from_memory::<u32>(self_addr + 0x18) != 0 {
-            forward(self.show_neighbors_head)
-        } else if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } && get_from_memory::<u32>(self_addr + 0xc) != 0 {
-            forward(self.amphibious_neighbors_head)
+        if neighbour_store::len(self_addr, NeighbourSet::Show) != 0 {
+            forward(self.show_neighbors().collect())
+        } else if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } && neighbour_store::len(self_addr, NeighbourSet::Amphibious) != 0 {
+            forward(self.amphibious_neighbors().collect())
         } else {
             0
         }
     }
 
     /// Ports `ZTHabitat::removeShowNeighbor` (`REMOVE_SHOW_NEIGHBOR`, `0x005aa75e`): erases `other_ptr`
-    /// from the show-neighbour set ([`rb_set_erase`]) and, if `other_ptr` is a show tank
+    /// from the show-neighbour set ([`neighbour_store::remove`]) and, if `other_ptr` is a show tank
     /// ([`Self::is_show_tank_by_vtable`]), removes every animal of this habitat and of each amphibious
     /// neighbour that passes its vtable `+0x228` predicate from `other_ptr`'s show via
     /// [`Self::remove_show_unit`]. Returns whether `other_ptr` is non-null.
@@ -6586,7 +6560,7 @@ impl ZTHabitat {
         if other_ptr == 0 {
             return false;
         }
-        rb_set_erase(self as *const Self as u32 + 0x14, other_ptr);
+        neighbour_store::remove(self as *const Self as u32, NeighbourSet::Show, other_ptr);
         if Self::is_show_tank_by_vtable(other_ptr) {
             let other = unsafe { ref_from_memory::<ZTHabitat>(other_ptr) };
             let remove_show_units = |habitat: &ZTHabitat| {
@@ -6624,8 +6598,13 @@ impl ZTHabitat {
         let module_base = get_module_base("zoo.exe") as u32;
         let weight = |rva: u32| get_from_memory::<f32>(module_base + rva) as f64;
 
-        let members: Vec<u32> =
-            neighbor_set_members(get_from_memory::<u32>(set_container_ptr)).collect();
+        // The caller passes the address of the `{head*, size}` container inside a habitat: `+0x14` for the show set,
+        // `+0x8` for the amphibious one.
+        let members: Vec<u32> = if is_show_set {
+            neighbour_store::members(set_container_ptr - 0x14, NeighbourSet::Show)
+        } else {
+            neighbour_store::members(set_container_ptr - 0x8, NeighbourSet::Amphibious)
+        };
         let mut best_rating: f32 = -1.0;
         let mut best: u32 = 0;
         for habitat_ptr in members {
@@ -6751,8 +6730,7 @@ impl ZTHabitat {
             }
         }
         if include_neighbors {
-            let neighbors: Vec<u32> =
-                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
+            let neighbors: Vec<u32> = self.amphibious_neighbors().collect();
             for neighbor_ptr in neighbors {
                 if unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.needs_service(keeper_ptr, false) {
                     return true;
@@ -6812,8 +6790,7 @@ impl ZTHabitat {
             return candidates[draw as usize % candidates.len()];
         }
         if include_neighbors {
-            let neighbors: Vec<u32> =
-                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
+            let neighbors: Vec<u32> = self.amphibious_neighbors().collect();
             for neighbor_ptr in neighbors {
                 let found = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.get_random_hungry_animal(keeper_ptr, false, self_addr);
                 if found != 0 {
@@ -6861,8 +6838,7 @@ impl ZTHabitat {
             && other_habitat_ptr == 0
             && unsafe { call_vtable_slot_noargs_ret_bool(species_type_ptr, 0xcc) }
         {
-            let neighbors: Vec<u32> =
-                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
+            let neighbors: Vec<u32> = self.amphibious_neighbors().collect();
             for neighbor_ptr in neighbors {
                 any_matched |= unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.generate_faces(species_type_ptr, smile, self_addr);
             }
@@ -6932,7 +6908,7 @@ impl ZTHabitat {
 
         if Self::is_show_tank_by_vtable(self_addr) {
             let rating = tank_sum(&SHOW_TANK_RATING_WEIGHTS);
-            return if !is_amphibious_animal || get_from_memory::<u32>(self_addr + 0x18) != 0 { rating } else { ((rating as f32) - (penalty() as f32)) as f64 };
+            return if !is_amphibious_animal || neighbour_store::len(self_addr, NeighbourSet::Show) != 0 { rating } else { ((rating as f32) - (penalty() as f32)) as f64 };
         }
         if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) } {
             return land_sum();
@@ -6940,9 +6916,8 @@ impl ZTHabitat {
         if !is_amphibious_animal {
             return tank_sum(&PLAIN_TANK_RATING_WEIGHTS);
         }
-        if include_neighbors && get_from_memory::<u32>(self_addr + 0xc) != 0 {
-            let neighbors: Vec<u32> =
-                neighbor_set_members(get_from_memory::<u32>(self_addr + 0x8)).collect();
+        if include_neighbors && neighbour_store::len(self_addr, NeighbourSet::Amphibious) != 0 {
+            let neighbors: Vec<u32> = self.amphibious_neighbors().collect();
             let mut best = NEIGHBOR_RATING_SEED;
             for neighbor_ptr in neighbors {
                 let rating = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr as *const u32) }.habitat_rating_unrounded(animal_ptr, false);
@@ -6967,10 +6942,10 @@ impl ZTHabitat {
         }
         let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
         let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
-        if animal_type != 0 && unsafe { call_vtable_slot_noargs_ret_bool(animal_type, 0xcc) } && get_from_memory::<u32>(self_addr + 0xc) != 0 {
+        if animal_type != 0 && unsafe { call_vtable_slot_noargs_ret_bool(animal_type, 0xcc) } && neighbour_store::len(self_addr, NeighbourSet::Amphibious) != 0 {
             return Self::find_best_rating(animal_ptr, self_addr + 0x8, false);
         }
-        if Self::is_show_tank_by_vtable(self_addr) && get_from_memory::<u32>(self_addr + 0x18) != 0 {
+        if Self::is_show_tank_by_vtable(self_addr) && neighbour_store::len(self_addr, NeighbourSet::Show) != 0 {
             return Self::find_best_rating(animal_ptr, self_addr + 0x14, true);
         }
         self_addr
@@ -7107,16 +7082,14 @@ impl ZTHabitat {
             return false;
         }
 
-        let map_addr = self as *const Self as u32 + 0x20;
-        if let Some(existing) = rb_find(map_addr, owner) {
-            let previous_fence: u32 = get_from_memory(existing + 0x14);
+        let self_addr = self as *const Self as u32;
+        if let Some(previous_fence) = neighbour_store::portal(self_addr, owner) {
             if Self::is_live_world_entity(previous_fence) {
                 unsafe { call_vtable_slot_with_ptr(previous_fence, 0x138, 0) };
             }
         }
         unsafe { call_vtable_slot_with_ptr(fence_a, 0x138, 1) };
-        let node = rb_map_find_or_insert(map_addr, owner);
-        save_to_memory(node + 0x14, fence_a);
+        neighbour_store::set_portal(self_addr, owner, fence_a);
         true
     }
 
@@ -7124,15 +7097,14 @@ impl ZTHabitat {
     /// stored portal fence, tells it to drop its portal state (vtable `+0x138(0)`, when still a live world
     /// entity) and erases the entry. A no-op for an unknown habitat.
     pub fn remove_show_portal(&self, other_ptr: u32) {
-        let map_addr = self as *const Self as u32 + 0x20;
-        let Some(node) = rb_find(map_addr, other_ptr) else {
+        let self_addr = self as *const Self as u32;
+        let Some(fence) = neighbour_store::portal(self_addr, other_ptr) else {
             return;
         };
-        let fence: u32 = get_from_memory(node + 0x14);
         if fence != 0 && Self::is_live_world_entity(fence) {
             unsafe { call_vtable_slot_with_ptr(fence, 0x138, 0) };
         }
-        rb_map_erase(map_addr, other_ptr);
+        neighbour_store::remove_portal(self_addr, other_ptr);
     }
 
     /// Vtable address real vanilla's destructor resets `this` to before tearing down (the base
@@ -7178,6 +7150,7 @@ impl ZTHabitat {
             ZTHabitatMgr::break_amphibious_connection(tile_a, tile_b);
         }
         self.clear_show_neighbors();
+        super::neighbour_store::remove_habitat(self_addr);
         viewing_areas::take_viewing_areas(self_addr);
         viewing_areas::take_edge_tiles(self_addr);
 
@@ -7236,9 +7209,8 @@ impl ZTHabitat {
     /// corroborated by the macOS `ZTHabitat_getShowPortal.c`).
     ///
     /// **Tank branch** (`self.is_tank()` true, real vanilla's `virt_meth_0x4016d1_32` vtable dispatch):
-    /// a lower_bound descent of [`Self::show_portal_map_head`], same shape as [`Self::is_show_neighbor`]'s
-    /// descent but over the two-word `(ZTHabitat*, ZTFence*)` pair value at each node - `+0x10` is the
-    /// key, `+0x14` the value. **This is a pure read, despite the plan's original sketch calling it a
+    /// a lookup in the show-portal map held in [`neighbour_store`] (vanilla: a lower_bound descent whose nodes
+    /// carry a `(ZTHabitat*, ZTFence*)` pair - `+0x10` the key, `+0x14` the value). **This is a pure read, despite the plan's original sketch calling it a
     /// mutating find-or-insert**: the `.asm` only reaches `msvc_std::tree24::insert` (`0x005ab33a`'s
     /// fallthrough continuation) from inside the branch already gated on the manual descent finding an
     /// existing match (`aiStack_1c[0] != head && key < candidate->key` both false) - i.e. the insert path
@@ -7249,34 +7221,18 @@ impl ZTHabitat {
     /// new entries) calls `find_or_insert` unconditionally at its tail. A miss falls straight through to
     /// `return 0` with no insertion. Never calls `.original()` - this is a same-file sibling read.
     ///
-    /// **Non-tank branch**: recurses over every amphibious neighbor ([`walk_neighbor_tree`] over
-    /// [`Self::amphibious_neighbors_head`]), short-circuiting on the first nonzero result - the real
+    /// **Non-tank branch**: recurses over every amphibious neighbor ([`Self::amphibious_neighbors`]), short-circuiting on the first nonzero result - the real
     /// body's own `this->field_0xc != 0` guard is that set's `_Mysize` (confirmed via `.asm`: the generic
     /// `_Tree::insert` helper increments `handle+4` on every real insert), a pure optimization to skip an
-    /// empty walk that [`walk_neighbor_tree`] already answers identically (an empty tree yields nothing),
-    /// so it isn't separately modeled here.
+    /// empty walk that iterating an empty set already answers identically, so it isn't separately modeled
+    /// here (the guard reads [`neighbour_store::len`] elsewhere, where the size itself is needed).
     ///
     /// Must only be called on a live `ZTHabitat` reference, same precondition as
     /// [`Self::get_attractiveness`]; each neighbor visited must also be live (true for every
-    /// `walk_neighbor_tree` entry, which reads real `ZTHabitat*` pointers directly out of the tree).
+    /// neighbour-set member).
     pub fn get_show_portal(&self, other_ptr: u32) -> u32 {
         if self.is_tank() {
-            let head = self.show_portal_map_head;
-            let mut candidate = head;
-            let mut node: u32 = get_from_memory(head + 0x4); // head->_Parent = root
-            while node != 0 {
-                if get_from_memory::<u32>(node + 0x10) < other_ptr {
-                    node = get_from_memory(node + 0xc); // _Right
-                } else {
-                    candidate = node;
-                    node = get_from_memory(node + 0x8); // _Left
-                }
-            }
-            if candidate != head && get_from_memory::<u32>(candidate + 0x10) <= other_ptr {
-                get_from_memory(candidate + 0x14)
-            } else {
-                0
-            }
+            neighbour_store::portal(self as *const Self as u32, other_ptr).unwrap_or(0)
         } else {
             for neighbor_ptr in self.amphibious_neighbors() {
                 let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
@@ -7562,7 +7518,7 @@ impl ZTHabitat {
     /// other classes' own predicates (never detoured), and the gate's equivalence is pinned live by
     /// `ZTHABITAT_IS_TANK_LIVE` and the multi-reimpl census leg.
     ///
-    /// **Walk**: [`walk_neighbor_tree`] over [`Self::show_neighbors_head`] - the Windows `.c` render
+    /// **Walk**: [`Self::show_neighbors`] - the Windows `.c` render
     /// mislabels this field `zoo_entrance_y` (the same OOAnalyzer artifact the field's own doc comment
     /// documents); trust the `.asm`-confirmed `+0x14` offset already established there.
     ///
@@ -7582,7 +7538,7 @@ impl ZTHabitat {
     /// target fence's portal-open/animation state, which none of the four per-pair reads above
     /// consult.
     ///
-    /// Live-memory note: this only reads `self` and each `walk_neighbor_tree` neighbor through
+    /// Live-memory note: this only reads `self` and each amphibious neighbour through
     /// `&self` methods - no writes, no `&mut`.
     pub(crate) fn portal_dispatch_plan(&self) -> Vec<PortalDispatch> {
         let mut plan = Vec::new();
@@ -7687,7 +7643,7 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::hiliteAmphibiousNeighbors` (`ZTHabitat_hiliteAmphibiousNeighbors.c`): walks
-    /// [`Self::amphibious_neighbors_head`] via [`walk_neighbor_tree`] and calls the already-ported
+    /// [`Self::amphibious_neighbors`] and calls the already-ported
     /// [`Self::highlight`]/[`Self::unhighlight`] on each neighbor - `unhighlight()` when `hilite` is
     /// `false`, `highlight(true)` otherwise, matching the real decompile's own two branches exactly (not
     /// a symmetric `highlight(hilite)`/`highlight(!hilite)` pair - see those methods' own doc comments for
@@ -7706,7 +7662,7 @@ impl ZTHabitat {
     }
 
     /// Ports `ZTHabitat::hiliteShowNeighbors` (`ZTHabitat_hiliteShowNeighbors.c`) - identical shape to
-    /// [`Self::hilite_amphibious_neighbors`], walking [`Self::show_neighbors_head`] instead.
+    /// [`Self::hilite_amphibious_neighbors`], walking [`Self::show_neighbors`] instead.
     pub fn hilite_show_neighbors(&self, hilite: bool) {
         for neighbor_ptr in self.show_neighbors() {
             let neighbor = unsafe { ref_from_memory::<ZTHabitat>(neighbor_ptr) };
@@ -8153,9 +8109,10 @@ impl fmt::Display for ZTHabitat {
 
 #[cfg(test)]
 mod tests {
+    use crate::zthabitat::neighbour_store::{self, NeighbourSet};
     use std::mem::{self, offset_of};
 
-    use crate::zthabitat::support::test_fixtures::{leak_neighbor_set, leak_tile_list, leak_tree_node};
+    use crate::zthabitat::support::test_fixtures::leak_tile_list;
 
     use super::{
         clamped_score, corner_height, count_penalty, elevation_band, name_has_meaningful_byte, normalise_scenery_score, overlap_condition_bits, percent_band, terrain_category_step,
@@ -8343,13 +8300,13 @@ mod tests {
         habitat
     }
 
-    /// A zeroed [`ZTHabitat`] whose `show_neighbors_head` points at a leaked head node whose
-    /// `_Parent` (`+0x4`, the root slot) holds `root`. Every show-tree test must set a real head -
-    /// a null `show_neighbors_head` would make the port read address `0x4` in the host process
-    /// (real vanilla cannot reach that either; its own set constructor always builds the head).
-    fn fixture_habitat_with_show_tree(root: u32) -> ZTHabitat {
-        let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
-        habitat.show_neighbors_head = leak_tree_node(root, 0, 0, 0);
+    /// A leaked, zeroed [`ZTHabitat`] (stable address, so it keys the neighbour store) whose show-neighbour set
+    /// holds `neighbors`.
+    fn fixture_habitat_with_show_neighbors(neighbors: &[u32]) -> &'static ZTHabitat {
+        let habitat: &'static ZTHabitat = Box::leak(Box::new(unsafe { mem::zeroed::<ZTHabitat>() }));
+        for &neighbor in neighbors {
+            neighbour_store::insert(habitat as *const ZTHabitat as u32, NeighbourSet::Show, neighbor);
+        }
         habitat
     }
 
@@ -8409,38 +8366,27 @@ mod tests {
         assert!(!habitat.has_portal_animal(0x0059_e9a3));
     }
 
-    /// `isShowNeighbor`'s `.asm` null-root guard (`MOV EAX,[ECX+0x4]` + `TEST EAX,EAX` into the
-    /// loop tail): an empty set leaves the candidate at the head, so the tail's `candidate != head`
-    /// arm fails and the answer is `false` for every key, null or not.
+    /// An empty set answers `false` for every key, null or not (`isShowNeighbor`'s `.asm` null-root guard).
     #[test]
     fn empty_show_tree_returns_false() {
-        let habitat = fixture_habitat_with_show_tree(0);
+        let habitat = fixture_habitat_with_show_neighbors(&[]);
         assert!(!habitat.is_show_neighbor(0x0063_2100));
         assert!(!habitat.is_show_neighbor(0));
     }
 
-    /// One-node set: an exact hit satisfies both tail arms; a key below the value passes the
-    /// descent but fails the `candidate->_Value <= key` confirmation (the `.asm`'s JC-to-tail
-    /// path); a key above the value descends right to null, so the candidate never leaves the head.
+    /// One-member set: an exact hit is found; keys below and above it are not.
     #[test]
     fn show_neighbor_hit_and_miss_single_node() {
-        let habitat = fixture_habitat_with_show_tree(leak_tree_node(0, 0, 0, 0x2000));
+        let habitat = fixture_habitat_with_show_neighbors(&[0x2000]);
         assert!(habitat.is_show_neighbor(0x2000));
         assert!(!habitat.is_show_neighbor(0x1000));
         assert!(!habitat.is_show_neighbor(0x3000));
     }
 
-    /// Three-node BST: hits resolve from either subtree and the root; a key falling between two
-    /// nodes survives the descent but fails the confirmation compare; a key beyond the maximum
-    /// descends right to null and leaves the candidate at the head.
+    /// Three-member set: every member is found; a key between two members and one beyond the maximum are not.
     #[test]
     fn show_neighbor_multi_node_descent() {
-        let left = leak_tree_node(0, 0, 0, 0x1000);
-        let right = leak_tree_node(0, 0, 0, 0x3000);
-        let root = leak_tree_node(0, left, right, 0x2000);
-        save_to_memory(left + 0x4, root);
-        save_to_memory(right + 0x4, root);
-        let habitat = fixture_habitat_with_show_tree(root);
+        let habitat = fixture_habitat_with_show_neighbors(&[0x1000, 0x2000, 0x3000]);
 
         assert!(habitat.is_show_neighbor(0x1000));
         assert!(habitat.is_show_neighbor(0x2000));
@@ -8449,78 +8395,50 @@ mod tests {
         assert!(!habitat.is_show_neighbor(0x4000));
     }
 
-    /// `less<ZTHabitat*>` is a plain unsigned compare, so a null key can only match a null value -
-    /// a tree of real (non-null) pointers answers `false` for it: lower_bound(0) lands on the
-    /// leftmost node and its value `<= 0` confirmation fails.
+    /// A null key can only match a null member, so a set of real (non-null) pointers answers `false` for it.
     #[test]
     fn null_target_never_matches_non_null_tree() {
-        let left = leak_tree_node(0, 0, 0, 0x10_00);
-        let right = leak_tree_node(0, 0, 0, 0x30_00);
-        let root = leak_tree_node(0, left, right, 0x20_00);
-        save_to_memory(left + 0x4, root);
-        save_to_memory(right + 0x4, root);
-        let habitat = fixture_habitat_with_show_tree(root);
+        let habitat = fixture_habitat_with_show_neighbors(&[0x10_00, 0x20_00, 0x30_00]);
 
         assert!(!habitat.is_show_neighbor(0));
     }
 
-    /// Leaks a zeroed 24-byte MSVC map-node-shaped block and writes `parent`/`left`/`right`/`key`/
-    /// `value` into the `+0x4`/`+0x8`/`+0xc`/`+0x10`/`+0x14` slots [`ZTHabitat::get_show_portal`]'s
-    /// tank-branch descent reads, returning the block's address - the same layout as
-    /// [`leak_tree_node`] with one extra trailing `value` word for the map's `ZTFence*` payload.
-    fn leak_map_node(parent: u32, left: u32, right: u32, key: u32, value: u32) -> u32 {
-        let block: &'static mut [u8] = Box::leak(vec![0u8; 0x18].into_boxed_slice());
-        let node_ptr = block.as_ptr() as u32;
-        save_to_memory(node_ptr + 0x4, parent);
-        save_to_memory(node_ptr + 0x8, left);
-        save_to_memory(node_ptr + 0xc, right);
-        save_to_memory(node_ptr + 0x10, key);
-        save_to_memory(node_ptr + 0x14, value);
-        node_ptr
-    }
-
-    /// A tank-vtable [`ZTHabitat`] whose `show_portal_map_head` points at a leaked head node whose
-    /// `_Parent` (`+0x4`) holds `root` - same reasoning as [`fixture_habitat_with_show_tree`], plus
-    /// the tank vtable so [`ZTHabitat::is_tank`] routes `get_show_portal` into the map descent.
-    fn fixture_tank_habitat_with_portal_map(root: u32) -> ZTHabitat {
-        let mut habitat = fixture_habitat(ZTHabitat::TANK_VTABLE_PTR);
-        habitat.show_portal_map_head = leak_map_node(0, 0, 0, 0, 0);
-        save_to_memory(habitat.show_portal_map_head + 0x4, root);
+    /// A leaked, zeroed tank-vtable [`ZTHabitat`] (stable address, so it keys the neighbour store) whose show-portal
+    /// map holds `entries`, so [`ZTHabitat::is_tank`] routes `get_show_portal` into the map lookup.
+    fn fixture_tank_habitat_with_portals(entries: &[(u32, u32)]) -> &'static ZTHabitat {
+        let habitat: &'static mut ZTHabitat = Box::leak(Box::new(unsafe { mem::zeroed::<ZTHabitat>() }));
+        habitat.vtable = ZTHabitat::TANK_VTABLE_PTR;
+        let habitat: &'static ZTHabitat = habitat;
+        for &(neighbour, fence) in entries {
+            neighbour_store::set_portal(habitat as *const ZTHabitat as u32, neighbour, fence);
+        }
         habitat
     }
 
-    /// An empty portal map leaves the candidate at the head, so `get_show_portal` returns `0` for
-    /// every key without ever reaching `msvc_std_tree24::insert` - the pure-read shape documented on
+    /// An empty portal map returns `0` for every key - the pure-read shape documented on
     /// [`ZTHabitat::get_show_portal`] itself.
     #[test]
     fn empty_portal_map_returns_zero() {
-        let habitat = fixture_tank_habitat_with_portal_map(0);
+        let habitat = fixture_tank_habitat_with_portals(&[]);
         assert_eq!(habitat.get_show_portal(0x0063_2100), 0);
         assert_eq!(habitat.get_show_portal(0), 0);
     }
 
-    /// One-entry map: an exact key hit returns the stored `ZTFence*` value; a key below or above
-    /// the stored key both miss (below fails the `<=` confirmation, above descends right to null
-    /// and never leaves the head), same descent shape as [`show_neighbor_hit_and_miss_single_node`].
+    /// One-entry map: an exact key hit returns the stored `ZTFence*` value; a key below or above the stored key
+    /// both miss.
     #[test]
     fn portal_map_hit_and_miss_single_node() {
-        let node = leak_map_node(0, 0, 0, 0x2000, 0x9000_0000);
-        let habitat = fixture_tank_habitat_with_portal_map(node);
+        let habitat = fixture_tank_habitat_with_portals(&[(0x2000, 0x9000_0000)]);
         assert_eq!(habitat.get_show_portal(0x2000), 0x9000_0000);
         assert_eq!(habitat.get_show_portal(0x1000), 0);
         assert_eq!(habitat.get_show_portal(0x3000), 0);
     }
 
-    /// Three-node BST: hits resolve from either subtree and the root to their own distinct values;
-    /// a key falling between two nodes survives the descent but fails the confirmation compare.
+    /// Three-entry map: every key resolves to its own distinct value; a key between two entries and one beyond the
+    /// maximum miss.
     #[test]
     fn portal_map_multi_node_descent() {
-        let left = leak_map_node(0, 0, 0, 0x1000, 0xa000_0001);
-        let right = leak_map_node(0, 0, 0, 0x3000, 0xa000_0003);
-        let root = leak_map_node(0, left, right, 0x2000, 0xa000_0002);
-        save_to_memory(left + 0x4, root);
-        save_to_memory(right + 0x4, root);
-        let habitat = fixture_tank_habitat_with_portal_map(root);
+        let habitat = fixture_tank_habitat_with_portals(&[(0x1000, 0xa000_0001), (0x2000, 0xa000_0002), (0x3000, 0xa000_0003)]);
 
         assert_eq!(habitat.get_show_portal(0x1000), 0xa000_0001);
         assert_eq!(habitat.get_show_portal(0x2000), 0xa000_0002);
@@ -8539,12 +8457,15 @@ mod tests {
         habitat_ptr
     }
 
-    /// A zeroed [`ZTHabitat`] with a leaked owned-tile list and a leaked amphibious-neighbor set
-    /// whose payloads are the given neighbor habitat block addresses.
-    fn fixture_habitat_with_tiles_and_neighbors(tiles: &[u32], neighbors: &[u32]) -> ZTHabitat {
-        let mut habitat: ZTHabitat = unsafe { mem::zeroed() };
+    /// A leaked, zeroed [`ZTHabitat`] (so its address is stable and keys the neighbour store) with a leaked
+    /// owned-tile list and the given neighbor habitat block addresses in its amphibious-neighbor set.
+    fn fixture_habitat_with_tiles_and_neighbors(tiles: &[u32], neighbors: &[u32]) -> &'static ZTHabitat {
+        let habitat: &'static mut ZTHabitat = Box::leak(Box::new(unsafe { mem::zeroed::<ZTHabitat>() }));
         habitat.owned_tiles_ptr = leak_tile_list(tiles);
-        habitat.amphibious_neighbors_head = leak_neighbor_set(neighbors);
+        let habitat: &'static ZTHabitat = habitat;
+        for &neighbor in neighbors {
+            neighbour_store::insert(habitat as *const ZTHabitat as u32, NeighbourSet::Amphibious, neighbor);
+        }
         habitat
     }
 
@@ -8584,25 +8505,18 @@ mod tests {
     fn get_size_passes_false_down() {
         let c = leak_neighbor_habitat(&[1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let b = leak_neighbor_habitat(&[1, 2, 3, 4, 5, 6, 7]);
-        save_to_memory(b + 0x8, leak_neighbor_set(&[c]));
+        neighbour_store::insert(b, NeighbourSet::Amphibious, c);
         let habitat = fixture_habitat_with_tiles_and_neighbors(&[1, 2, 3, 4, 5, 6, 7, 8, 9], &[b]);
         assert_eq!(habitat.get_size(false), 9);
         assert_eq!(habitat.get_size(true), 16);
     }
 
-    /// A leaked tank-vtable [`ZTHabitat`]-shaped block whose `show_portal_map_head` holds a
-    /// one-entry map keyed by `key` returning `value` - a recursion target for
-    /// [`ZTHabitat::get_show_portal`]'s non-tank branch, which recurses into each amphibious
-    /// neighbor's own `get_show_portal` rather than reading the map directly.
+    /// A leaked tank-vtable [`ZTHabitat`]-shaped block whose show-portal map holds one entry keyed by `key`
+    /// returning `value` - a recursion target for [`ZTHabitat::get_show_portal`]'s non-tank branch, which
+    /// recurses into each amphibious neighbor's own `get_show_portal` rather than reading the map directly.
     fn leak_tank_neighbor_with_portal(key: u32, value: u32) -> u32 {
-        let block: &'static mut [u8] = Box::leak(vec![0u8; std::mem::size_of::<ZTHabitat>()].into_boxed_slice());
-        let habitat_ptr = block.as_ptr() as u32;
-        save_to_memory(habitat_ptr, ZTHabitat::TANK_VTABLE_PTR);
-        let head = leak_map_node(0, 0, 0, 0, 0);
-        let root = leak_map_node(0, 0, 0, key, value);
-        save_to_memory(head + 0x4, root); // head._Parent = root
-        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_portal_map_head) as u32, head);
-        habitat_ptr
+        let habitat: &'static ZTHabitat = fixture_tank_habitat_with_portals(&[(key, value)]);
+        habitat as *const ZTHabitat as u32
     }
 
     /// An empty amphibious-neighbor set never recurses, so the non-tank branch returns `0` for any
@@ -8636,9 +8550,7 @@ mod tests {
 
     /// A leaked, fully-addressable [`ZTHabitat`] for [`ZTHabitat::portal_dispatch_plan`] fixtures: tank
     /// vtable + non-null `zt_show_info_ptr` (satisfies the `is_tank() && is_show_tank()` gate), an
-    /// empty `all_animals` vector, and a valid-but-empty `show_portal_map_head` (same reasoning as
-    /// [`fixture_tank_habitat_with_portal_map`] - a null head would make `get_show_portal`'s descent
-    /// read address `0x4` in the host process for any pair [`set_portal_map_entry`] doesn't cover).
+    /// empty `all_animals` vector, and an empty show-portal map (entries are added with [`set_portal_map_entry`]).
     /// Leaked (not stack-built) because `portal_dispatch_plan` passes `self`'s own address into each
     /// neighbor's reciprocal `has_portal_animal`/`get_show_portal` call, which must resolve to a real,
     /// dereferenceable block.
@@ -8647,39 +8559,23 @@ mod tests {
         let habitat_ptr = block.as_ptr() as u32;
         save_to_memory(habitat_ptr, ZTHabitat::TANK_VTABLE_PTR);
         save_to_memory(habitat_ptr + offset_of!(ZTHabitat, zt_show_info_ptr) as u32, 0xdead_0000u32);
-        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_portal_map_head) as u32, leak_map_node(0, 0, 0, 0, 0));
         habitat_ptr
     }
 
-    /// Overwrites `habitat_ptr`'s `show_neighbors_head` so
-    /// [`walk_neighbor_tree`](crate::zthabitat::support::walk_neighbor_tree) visits exactly `neighbors`.
+    /// Replaces `habitat_ptr`'s show-neighbour set in the neighbour store with exactly `neighbors`.
     fn set_show_neighbors(habitat_ptr: u32, neighbors: &[u32]) {
-        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_neighbors_head) as u32, leak_neighbor_set(neighbors));
+        neighbour_store::clear(habitat_ptr, NeighbourSet::Show);
+        for &neighbor in neighbors {
+            neighbour_store::insert(habitat_ptr, NeighbourSet::Show, neighbor);
+        }
     }
 
-    /// Overwrites `habitat_ptr`'s `show_portal_map_head` (set to a valid empty map by
-    /// [`leak_tank_show_habitat`]) with a map holding every `(key, value)` in `entries`, built as a
-    /// right-leaning vine over keys sorted ascending - the lower-bound descent
-    /// [`ZTHabitat::get_show_portal`] performs only depends on real BST ordering, and a sorted right
-    /// vine (every left child null) satisfies that for arbitrary runtime key values (leaked-block
-    /// addresses, whose relative order isn't known up front) without needing a real balanced tree -
-    /// same trick as [`leak_neighbor_set`]'s own right vine.
+    /// Replaces `habitat_ptr`'s show-portal map in the neighbour store with exactly `entries`.
     fn set_portal_map_entries(habitat_ptr: u32, entries: &[(u32, u32)]) {
-        let mut sorted = entries.to_vec();
-        sorted.sort_by_key(|(key, _)| *key);
-        let head = leak_map_node(0, 0, 0, 0, 0);
-        let mut root = head;
-        let mut prev = head;
-        for (key, value) in sorted {
-            let node = leak_map_node(prev, 0, 0, key, value);
-            save_to_memory(prev + 0xc, node); // prev._Right = node
-            if root == head {
-                root = node;
-            }
-            prev = node;
+        neighbour_store::clear_portals(habitat_ptr);
+        for &(neighbour, fence) in entries {
+            neighbour_store::set_portal(habitat_ptr, neighbour, fence);
         }
-        save_to_memory(head + 0x4, root); // head._Parent = root
-        save_to_memory(habitat_ptr + offset_of!(ZTHabitat, show_portal_map_head) as u32, head);
     }
 
     /// Single-entry convenience wrapper over [`set_portal_map_entries`].
@@ -8745,7 +8641,7 @@ mod tests {
         assert!(plan.is_empty());
     }
 
-    /// Two neighbors: entries appear in `walk_neighbor_tree` order, one pair's worth per neighbor.
+    /// Two neighbors: entries appear in ascending pointer order, one pair's worth per neighbor.
     #[test]
     fn portal_dispatch_plan_multiple_neighbors_preserve_walk_order() {
         let self_ptr = leak_tank_show_habitat();

@@ -1066,7 +1066,7 @@ impl VanillaEntitySet {
     }
 
     fn members(&self) -> Vec<u32> {
-        crate::zthabitatmgr::support::walk_neighbor_tree(self.container[0]).map(|node| get_from_memory::<u32>(node + 0x10)).collect()
+        crate::vanilla_rbtree::walk_nodes(self.container[0]).map(|node| get_from_memory::<u32>(node + 0x10)).collect()
     }
 
     fn size(&self) -> u32 {
@@ -1077,7 +1077,7 @@ impl VanillaEntitySet {
 impl Drop for VanillaEntitySet {
     fn drop(&mut self) {
         use openzt_detour::generated::poolalloc::DEALLOCATE;
-        crate::zthabitatmgr::support::rb_tree_clear(self.addr(), ENTITY_SET_NODE_SIZE);
+        crate::vanilla_rbtree::rb_tree_clear(self.addr(), ENTITY_SET_NODE_SIZE);
         unsafe { DEALLOCATE.original()(self.container[0] as *const u32, ENTITY_SET_NODE_SIZE) };
     }
 }

@@ -90,7 +90,7 @@ pub mod hooks_zthabitatmgr {
             GET_OUTERMOST_TANK, GET_NEEDY_NESTED_TANK, ENTITY_ABOUT_TO_BE_PLACED, ENTITY_ABOUT_TO_BE_REMOVED, ENTITY_PLACED, ENTITY_REMOVED,
             BEFORE_ENTITY_CHANGE, TERRAIN_ABOUT_TO_BE_CHANGED, TERRAIN_CHANGED, CREATE_DOUBLE_FENCE,
             UPDATE_GATES, FORMAT_HABITAT_MESSAGE, FIND_BEST_PLACE_FOR_GATE, FIND_BETTER_GATES_FOR_NEIGHBORS, CHECK_GATE, GET_NEXT_FENCE_PAIR, PLACE_GATE,
-            CHECK_EXHIBIT_MORPH,
+            CHECK_EXHIBIT_MORPH, CREATE_WORLD_HABITAT_1,
         },
     };
 
@@ -123,27 +123,27 @@ pub mod hooks_zthabitatmgr {
     /// [`update_portals_real`].
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn send_event_real(this: *const u32, event_id: u16, unused: u32, category: u8, value: u32, value2: u16, flag: u16) {
-        unsafe { SEND_EVENT_DETOUR.call(this, event_id, unused, category, value, value2, flag) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { SEND_EVENT_DETOUR.call(this, event_id, unused, category, value, value2, flag) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn habitat_constructor_real(this: *const u32, tile: *const u32, is_world: bool) -> *const u32 {
-        unsafe { CONSTRUCTOR_DETOUR.call(this, tile, is_world) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CONSTRUCTOR_DETOUR.call(this, tile, is_world) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn create_name_real(this: *const u32) {
-        unsafe { CREATE_NAME_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CREATE_NAME_DETOUR.call(this) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_events_real(this: *const u32, out: *const u32) {
-        unsafe { GET_EVENTS_DETOUR.call(this, out) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_EVENTS_DETOUR.call(this, out) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn play_show_start_sound_real(this: *const u32) {
-        unsafe { PLAY_SHOW_START_SOUND_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { PLAY_SHOW_START_SOUND_DETOUR.call(this) })
     }
 
     // 00410349 BFTile * __thiscall OOAnalyzer::ZTHabitat::getGateTileIn(ZTHabitat *this)
@@ -298,7 +298,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_size_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn recalculate_characteristics_real(this: *const u32) {
-        unsafe { RECALCULATE_CHARACTERISTICS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { RECALCULATE_CHARACTERISTICS_DETOUR.call(this) })
     }
 
     #[detour(BLOCK_SERVICE)]
@@ -331,7 +331,7 @@ pub mod hooks_zthabitatmgr {
     #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
     pub(crate) fn get_num_animals_by_species_real(this: *const u32, species_id: i32, include_neighbors: bool) -> i32 {
         let previous = GET_NUM_ANIMALS_BY_SPECIES_REAL_MODE.with(|m| m.replace(true));
-        let result = unsafe { GET_NUM_ANIMALS_1_DETOUR.call(this, species_id, include_neighbors) };
+        let result = crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_NUM_ANIMALS_1_DETOUR.call(this, species_id, include_neighbors) });
         GET_NUM_ANIMALS_BY_SPECIES_REAL_MODE.with(|m| m.set(previous));
         result
     }
@@ -347,7 +347,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_size_real(this: *const u32, subhabs: bool) -> i32 {
-        unsafe { GET_SIZE_DETOUR.call(this, subhabs) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_SIZE_DETOUR.call(this, subhabs) })
     }
 
     #[detour(GET_NUM_ADULT_ANIMALS_0)]
@@ -383,7 +383,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn construct_surrounding_species_list_real(this: *const i32) {
-        unsafe { CONSTRUCT_SURROUNDING_SPECIES_LIST_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CONSTRUCT_SURROUNDING_SPECIES_LIST_DETOUR.call(this) })
     }
 
     /// `generated.rs`'s own entry is `fastcall` (`ECX = this`) returning the picked `ZTAnimal*`
@@ -701,7 +701,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_size_real`] for why `.original()` cannot be used.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn species_rating_real(this: *const u32, species: i32) -> f32 {
-        unsafe { GET_SPECIES_RATING_DETOUR.call(this, species) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_SPECIES_RATING_DETOUR.call(this, species) })
     }
 
     /// Release-safe path back to real vanilla for the live comparison test, selecting one of the eleven
@@ -756,17 +756,17 @@ pub mod hooks_zthabitatmgr {
     /// [`get_size_real`] for why `.original()` cannot be used.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_nearest_viewing_area_real(this: *const u32, tile: *const u32, only_with_guests: bool) -> i32 {
-        unsafe { GET_NEAREST_VIEWING_AREA_DETOUR.call(this, tile, only_with_guests) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_NEAREST_VIEWING_AREA_DETOUR.call(this, tile, only_with_guests) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_random_viewing_area_real(this: *const u32, only_with_guests: bool) -> *const u32 {
-        unsafe { GET_RANDOM_VIEWING_AREA_DETOUR.call(this, only_with_guests) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_RANDOM_VIEWING_AREA_DETOUR.call(this, only_with_guests) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn create_viewing_areas_real(this: *const u32) {
-        unsafe { CREATE_VIEWING_AREAS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CREATE_VIEWING_AREAS_DETOUR.call(this) })
     }
 
     #[detour(HAS_BLDG)]
@@ -834,46 +834,46 @@ pub mod hooks_zthabitatmgr {
     /// [`get_show_portal_real`].
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn update_portals_real(this: *const u32) {
-        unsafe { UPDATE_PORTALS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { UPDATE_PORTALS_DETOUR.call(this) })
     }
 
     /// Release-safe path back to real vanilla for the live comparison test, same as
     /// [`update_portals_real`].
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn send_maint_worker_cleanup_events_real(this: *const u32) {
-        unsafe { SEND_MAINT_WORKER_CLEANUP_EVENTS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { SEND_MAINT_WORKER_CLEANUP_EVENTS_DETOUR.call(this) })
     }
 
     /// Release-safe paths back to real vanilla for the viewing-area live comparison tests, same as
     /// [`update_portals_real`].
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn remove_from_all_vas_real(this: *const u32, tile_ptr: i32) {
-        unsafe { REMOVE_FROM_ALL_VAS_DETOUR.call(this, tile_ptr) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { REMOVE_FROM_ALL_VAS_DETOUR.call(this, tile_ptr) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn zthabitat_path_placed_real(this: *const u32, tile_ptr: *const std::ffi::c_void) {
-        unsafe { ZTHABITAT_PATH_PLACED_DETOUR.call(this, tile_ptr) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ZTHABITAT_PATH_PLACED_DETOUR.call(this, tile_ptr) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn zthabitatmgr_path_placed_real(this: *const u32, tile_ptr: *const u32) {
-        unsafe { ZTHABITATMGR_PATH_PLACED_DETOUR.call(this, tile_ptr) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ZTHABITATMGR_PATH_PLACED_DETOUR.call(this, tile_ptr) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn zthabitatmgr_path_removed_real(this: *const u32, tile_ptr: i32) {
-        unsafe { ZTHABITATMGR_PATH_REMOVED_DETOUR.call(this, tile_ptr) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ZTHABITATMGR_PATH_REMOVED_DETOUR.call(this, tile_ptr) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn do_show_check_real(this: *const u32, habitat: *const i32, remove_illegal: i8) -> bool {
-        unsafe { DO_SHOW_CHECK_DETOUR.call(this, habitat, remove_illegal) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { DO_SHOW_CHECK_DETOUR.call(this, habitat, remove_illegal) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn mark_zoo_exterior_real(this: *const u32) {
-        unsafe { MARK_ZOO_EXTERIOR_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { MARK_ZOO_EXTERIOR_DETOUR.call(this) })
     }
 
     /// Ports `ZTHabitat::getTilesCopy` - the out-param is a real `list<uint>` that `0x004f3a31`'s own
@@ -888,14 +888,14 @@ pub mod hooks_zthabitatmgr {
     /// `call_real` doc comments for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_tiles_copy_real(this: *const u32, out_list: *const i32) -> *const i32 {
-        unsafe { GET_TILES_COPY_DETOUR.call(this, out_list) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_TILES_COPY_DETOUR.call(this, out_list) })
     }
 
     /// Release-safe path back to real vanilla for the live comparison test, same as
     /// [`get_tiles_copy_real`].
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn is_show_neighbor_real(this: *const u32, neighbor: *const u32) -> bool {
-        unsafe { IS_SHOW_NEIGHBOR_DETOUR.call(this, neighbor) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { IS_SHOW_NEIGHBOR_DETOUR.call(this, neighbor) })
     }
 
     /// `~ZTHabitat`'s body (`0x00458cab`); the scalar-deleting wrapper (`DESTRUCTOR_1`) and the
@@ -909,7 +909,7 @@ pub mod hooks_zthabitatmgr {
     /// Release-safe path to real vanilla `~ZTHabitat` for live comparison tests.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn zthabitat_destructor_real(this: *const u32) -> *const u32 {
-        unsafe { ZTHABITAT_DESTRUCTOR_0_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ZTHABITAT_DESTRUCTOR_0_DETOUR.call(this) })
     }
 
     #[detour(ADD_AMPHIBIOUS_NEIGHBOR)]
@@ -935,22 +935,22 @@ pub mod hooks_zthabitatmgr {
     /// Release-safe paths back to real vanilla for the neighbour-set live comparison tests.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn add_amphibious_neighbor_real(this: *const u32, other: *const u32) -> u8 {
-        unsafe { ADD_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, other) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADD_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, other) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn clear_amphibious_neighbors_real(this: *const u32) {
-        unsafe { CLEAR_AMPHIBIOUS_NEIGHBORS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CLEAR_AMPHIBIOUS_NEIGHBORS_DETOUR.call(this) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn add_show_neighbor_real(this: *const u32, other: *const u32) -> u32 {
-        unsafe { ADD_SHOW_NEIGHBOR_DETOUR.call(this, other) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADD_SHOW_NEIGHBOR_DETOUR.call(this, other) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn clear_show_neighbors_real(this: *const u32) {
-        unsafe { CLEAR_SHOW_NEIGHBORS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CLEAR_SHOW_NEIGHBORS_DETOUR.call(this) })
     }
 
     /// Low byte only is meaningful, as with vanilla's (`CONCAT31`-packed) return.
@@ -979,22 +979,22 @@ pub mod hooks_zthabitatmgr {
     /// Release-safe paths back to real vanilla for the neighbour-set live comparison tests.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn remove_amphibious_neighbor_real(this: *const u32, other: *const u32) -> u32 {
-        unsafe { REMOVE_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, other) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { REMOVE_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, other) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn is_amphibious_neighbor_real(this: *const std::ffi::c_void, neighbor: u32) -> bool {
-        unsafe { IS_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, neighbor) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { IS_AMPHIBIOUS_NEIGHBOR_DETOUR.call(this, neighbor) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_close_outside_tile_real(this: *const std::ffi::c_void) -> i32 {
-        unsafe { GET_CLOSE_OUTSIDE_TILE_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_CLOSE_OUTSIDE_TILE_DETOUR.call(this) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_surrounding_animals_real(this: *const u32, out_vector: *const u32) -> *const u32 {
-        unsafe { GET_SURROUNDING_ANIMALS_DETOUR.call(this, out_vector) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_SURROUNDING_ANIMALS_DETOUR.call(this, out_vector) })
     }
 
     #[detour(GET_MOST_SUITABLE_HABITAT)]
@@ -1026,7 +1026,7 @@ pub mod hooks_zthabitatmgr {
     #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
     pub(crate) fn generate_faces_real(this: *const u32, species_type: *const u32, smile: bool, other: *const u32) -> bool {
         let previous = GENERATE_FACES_REAL_MODE.with(|m| m.replace(true));
-        let result = unsafe { GENERATE_FACES_DETOUR.call(this, species_type, smile, other) };
+        let result = crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GENERATE_FACES_DETOUR.call(this, species_type, smile, other) });
         GENERATE_FACES_REAL_MODE.with(|m| m.set(previous));
         result
     }
@@ -1049,7 +1049,7 @@ pub mod hooks_zthabitatmgr {
     #[cfg(all(feature = "reimplementation-tests", target_os = "windows"))]
     pub(crate) fn needs_service_real(this: *const u32, keeper: *const u32, include_neighbors: bool) -> bool {
         let previous = NEEDS_SERVICE_REAL_MODE.with(|m| m.replace(true));
-        let result = unsafe { NEEDS_SERVICE_DETOUR.call(this, keeper, include_neighbors) };
+        let result = crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { NEEDS_SERVICE_DETOUR.call(this, keeper, include_neighbors) });
         NEEDS_SERVICE_REAL_MODE.with(|m| m.set(previous));
         crate::util::low_byte_bool(result)
     }
@@ -1066,7 +1066,7 @@ pub mod hooks_zthabitatmgr {
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_random_hungry_animal_real(this: *const u32, keeper: *const u32, include_neighbors: bool, home: *const u32) -> *const i32 {
         let previous = GET_RANDOM_HUNGRY_ANIMAL_REAL_MODE.with(|m| m.replace(true));
-        let result = unsafe { GET_RANDOM_HUNGRY_ANIMAL_DETOUR.call(this, keeper, include_neighbors, home) };
+        let result = crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_RANDOM_HUNGRY_ANIMAL_DETOUR.call(this, keeper, include_neighbors, home) });
         GET_RANDOM_HUNGRY_ANIMAL_REAL_MODE.with(|m| m.set(previous));
         result
     }
@@ -1084,7 +1084,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_habitat_rating_real(this: *const u32, animal: i32, include_neighbors: i8) -> f32 {
-        unsafe { GET_HABITAT_RATING_DETOUR.call(this, animal, include_neighbors) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_HABITAT_RATING_DETOUR.call(this, animal, include_neighbors) })
     }
 
     #[detour(FIND_BEST_RATING)]
@@ -1094,12 +1094,12 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_most_suitable_habitat_real(this: *const u32, animal: *const u32) -> *const u32 {
-        unsafe { GET_MOST_SUITABLE_HABITAT_DETOUR.call(this, animal) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_MOST_SUITABLE_HABITAT_DETOUR.call(this, animal) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn find_best_rating_real(animal: *const u32, set_container: *const i32, is_show_set: bool) -> *const i32 {
-        unsafe { FIND_BEST_RATING_DETOUR.call(animal, set_container, is_show_set) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { FIND_BEST_RATING_DETOUR.call(animal, set_container, is_show_set) })
     }
 
     /// `ZTScenarioSimpleGoal::eval06` (ICF-folded with `eval00`): `fastcall` with the goal in `ECX`.
@@ -1110,7 +1110,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn scenario_goal_eval06_real(goal: i32) -> u32 {
-        unsafe { EVAL06_DETOUR.call(goal) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { EVAL06_DETOUR.call(goal) })
     }
 
     #[detour(ADD_SHOW_UNIT)]
@@ -1142,35 +1142,35 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn add_show_portal_real(this: *const u32, tile_a: *const u32, tile_b: *const u32) -> u32 {
-        unsafe { ADD_SHOW_PORTAL_DETOUR.call(this, tile_a, tile_b) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADD_SHOW_PORTAL_DETOUR.call(this, tile_a, tile_b) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn remove_show_portal_real(this: *const u32, other: *const u32) {
-        unsafe { REMOVE_SHOW_PORTAL_DETOUR.call(this, other) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { REMOVE_SHOW_PORTAL_DETOUR.call(this, other) })
     }
 
     /// Release-safe paths back to real vanilla for the show-unit live comparison tests.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn add_show_unit_real(this: *const u32, unit: u32) -> u32 {
-        unsafe { ADD_SHOW_UNIT_DETOUR.call(this, unit) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADD_SHOW_UNIT_DETOUR.call(this, unit) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn remove_show_unit_real(this: *const u32, unit: *const u32) -> u8 {
-        unsafe { REMOVE_SHOW_UNIT_DETOUR.call(this, unit) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { REMOVE_SHOW_UNIT_DETOUR.call(this, unit) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn remove_show_neighbor_real(this: *const u32, other: *const u32) -> u32 {
-        unsafe { REMOVE_SHOW_NEIGHBOR_DETOUR.call(this, other) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { REMOVE_SHOW_NEIGHBOR_DETOUR.call(this, other) })
     }
 
     /// Release-safe path back to real vanilla for the live comparison test, same as
     /// [`is_show_neighbor_real`].
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_show_portal_real(this: *const u32, other: *const u32) -> i32 {
-        unsafe { GET_SHOW_PORTAL_DETOUR.call(this, other) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_SHOW_PORTAL_DETOUR.call(this, other) })
     }
 
     #[detour(ADD_TO_BUILDING_LIST)]
@@ -1182,7 +1182,7 @@ pub mod hooks_zthabitatmgr {
     /// own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn add_to_building_list_real(this: *const u32, out_vector_ptr: *const i32, other_ptr: *const u32) {
-        unsafe { ADD_TO_BUILDING_LIST_DETOUR.call(this, out_vector_ptr, other_ptr) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADD_TO_BUILDING_LIST_DETOUR.call(this, out_vector_ptr, other_ptr) })
     }
 
     #[detour(ADDITIONAL_SCENERY_SUITABILITY_CHANGE)]
@@ -1194,7 +1194,7 @@ pub mod hooks_zthabitatmgr {
     /// own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn additional_scenery_suitability_change_real(this: *const u32, species_vector_ptr: *const i32, map_ptr: *const i32) {
-        unsafe { ADDITIONAL_SCENERY_SUITABILITY_CHANGE_DETOUR.call(this, species_vector_ptr, map_ptr) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADDITIONAL_SCENERY_SUITABILITY_CHANGE_DETOUR.call(this, species_vector_ptr, map_ptr) })
     }
 
     #[detour(ZTHABITAT_SET_DIRTY_CHARACTERISTICS)]
@@ -1221,7 +1221,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn set_deterioration_real(this: *const u32, level: u32) -> u32 {
-        unsafe { SET_DETERIORATION_DETOUR.call(this, level) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { SET_DETERIORATION_DETOUR.call(this, level) })
     }
 
     #[detour(TRIGGER_KEEPER_ARRIVED)]
@@ -1264,7 +1264,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_size_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn zthabitatmgr_load_real(this: *const u32, file: *const u32, version: u32) -> bool {
-        unsafe { ZTHABITATMGR_LOAD_DETOUR.call(this, file, version) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ZTHABITATMGR_LOAD_DETOUR.call(this, file, version) })
     }
 
     #[detour(ZTHABITATMGR_ADD_HABITAT)]
@@ -1306,7 +1306,12 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_num_non_show_non_world_habitats_real(this: *const u32) -> i32 {
-        unsafe { GET_NUM_NON_SHOW_NON_WORLD_HABITATS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_NUM_NON_SHOW_NON_WORLD_HABITATS_DETOUR.call(this) })
+    }
+
+    #[detour(CREATE_WORLD_HABITAT_1)]
+    unsafe extern "thiscall" fn create_world_habitat(this: *const u32, map_x: u32, map_y: u32, entrance_x: i32, entrance_y: i32) {
+        unsafe { ref_from_memory::<ZTHabitatMgr>(this) }.create_world_habitat(map_x, map_y, entrance_x, entrance_y)
     }
 
     #[detour(REMOVE_ALL_HABITATS)]
@@ -1316,7 +1321,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn remove_all_habitats_real(this: *const u32) {
-        unsafe { REMOVE_ALL_HABITATS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { REMOVE_ALL_HABITATS_DETOUR.call(this) })
     }
 
     #[detour(CLEAR)]
@@ -1326,7 +1331,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn clear_real(this: *const u32) {
-        unsafe { CLEAR_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CLEAR_DETOUR.call(this) })
     }
 
     #[detour(NAME_LOADED_HABITATS)]
@@ -1336,7 +1341,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn name_loaded_habitats_real(this: *const u32) {
-        unsafe { NAME_LOADED_HABITATS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { NAME_LOADED_HABITATS_DETOUR.call(this) })
     }
 
     #[detour(CLEAR_ALL_STAFF_HABITATS)]
@@ -1346,7 +1351,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn clear_all_staff_habitats_real() {
-        unsafe { CLEAR_ALL_STAFF_HABITATS_DETOUR.call() }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CLEAR_ALL_STAFF_HABITATS_DETOUR.call() })
     }
 
     #[detour(GET_NEXT_NUM)]
@@ -1358,7 +1363,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_next_num_real(this: *const u32) -> u32 {
-        unsafe { GET_NEXT_NUM_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_NEXT_NUM_DETOUR.call(this) })
     }
 
     /// Free `stdcall` helper in vanilla (`generated.rs` files it under `ZTHabitatMgr`); takes the show id
@@ -1370,7 +1375,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_grandstands_real(show_id: u16, out_list: u32) {
-        unsafe { GET_GRANDSTANDS_DETOUR.call(show_id, out_list as *const i32) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_GRANDSTANDS_DETOUR.call(show_id, out_list as *const i32) })
     }
 
     #[detour(EMPTY_GRANDSTANDS)]
@@ -1380,7 +1385,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn empty_grandstands_real(this: *const u32, show_id: u16) {
-        unsafe { EMPTY_GRANDSTANDS_DETOUR.call(this, show_id) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { EMPTY_GRANDSTANDS_DETOUR.call(this, show_id) })
     }
 
     #[detour(IS_SHOW_TANK)]
@@ -1390,7 +1395,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn is_show_tank_real(this: *const u32) -> u32 {
-        unsafe { IS_SHOW_TANK_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { IS_SHOW_TANK_DETOUR.call(this) })
     }
 
     /// Returns the address of the embedded species vector (`this+0x60`) after the lazy recalculate.
@@ -1401,7 +1406,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_species_list_real(this: *const u32) -> i32 {
-        unsafe { GET_SPECIES_LIST_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_SPECIES_LIST_DETOUR.call(this) })
     }
 
     #[detour(GET_NUM_DIRT_TILES)]
@@ -1411,7 +1416,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_num_dirt_tiles_real(this: *const u32, keeper: *const u32) -> i32 {
-        unsafe { GET_NUM_DIRT_TILES_DETOUR.call(this, keeper) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_NUM_DIRT_TILES_DETOUR.call(this, keeper) })
     }
 
     #[detour(GET_NONEMPTY_NON_WORLD_HABITATS)]
@@ -1423,7 +1428,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_nonempty_non_world_habitats_real(this: *const u32, out_vector: u32) {
-        unsafe { GET_NONEMPTY_NON_WORLD_HABITATS_DETOUR.call(this, out_vector as *const std::ffi::c_void) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_NONEMPTY_NON_WORLD_HABITATS_DETOUR.call(this, out_vector as *const std::ffi::c_void) })
     }
 
     /// Real vanilla is a free `stdcall` helper taking a `ZTHabitat*` directly, not a `ZTHabitatMgr`
@@ -1461,7 +1466,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn decrement_habitat_num_real(this: *const u32) {
-        unsafe { DECREMENT_HABITAT_NUM_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { DECREMENT_HABITAT_NUM_DETOUR.call(this) })
     }
 
     /// Both known correctness bugs are fixed (see `ZTHabitat::move_gate_to`/`move_gate_to_inner`'s own
@@ -1529,7 +1534,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`]'s own doc comment for why `.original()` cannot be used here.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn check_exhibit_morph_real(this: *const u32, tile_ptr: *const u32, direction: u32) {
-        unsafe { CHECK_EXHIBIT_MORPH_DETOUR.call(this, tile_ptr, direction) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CHECK_EXHIBIT_MORPH_DETOUR.call(this, tile_ptr, direction) })
     }
 
     /// Real vanilla is a plain free `stdcall` helper (`generated.rs`'s own signature has no `this`) -
@@ -1599,12 +1604,12 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn after_entity_change_real(habitat_ptr: *const u32, entity_type: *const u32, removal: bool, neighbor_pass: u8) {
-        unsafe { AFTER_ENTITY_CHANGE_DETOUR.call(habitat_ptr, entity_type, std::ptr::null(), removal, neighbor_pass) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { AFTER_ENTITY_CHANGE_DETOUR.call(habitat_ptr, entity_type, std::ptr::null(), removal, neighbor_pass) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn before_entity_change_real(habitat_ptr: *const i32) {
-        unsafe { BEFORE_ENTITY_CHANGE_DETOUR.call(habitat_ptr) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { BEFORE_ENTITY_CHANGE_DETOUR.call(habitat_ptr) })
     }
 
     #[detour(TERRAIN_ABOUT_TO_BE_CHANGED)]
@@ -1807,12 +1812,12 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn add_species_real(this: *const u32, species_key: u32) {
-        unsafe { ADD_SPECIES_DETOUR.call(this, species_key) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADD_SPECIES_DETOUR.call(this, species_key) })
     }
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn revise_species_list_real(this: *const u32) {
-        unsafe { REVISE_SPECIES_LIST_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { REVISE_SPECIES_LIST_DETOUR.call(this) })
     }
 
     #[detour(GET_UNDESIRABLE_SCENERY)]
@@ -1822,7 +1827,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn get_undesirable_scenery_real(this: *const u32, animal: *const u32, out_vector: *const i32, flag: i32) {
-        unsafe { GET_UNDESIRABLE_SCENERY_DETOUR.call(this, animal, out_vector, flag) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { GET_UNDESIRABLE_SCENERY_DETOUR.call(this, animal, out_vector, flag) })
     }
 
     /// The fifth argument is vanilla's `ph_AdditionalConditionValues` block: `+0` the owned-tile total
@@ -1845,7 +1850,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn set_animal_conditions_real(this: *const u32, animal: *const u32, record: *const u32, histogram: *const i32, extra: *const u32) {
-        unsafe { SET_ANIMAL_CONDITIONS_DETOUR.call(this, animal, record, histogram, extra) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { SET_ANIMAL_CONDITIONS_DETOUR.call(this, animal, record, histogram, extra) })
     }
 
     #[detour(CHECK_ESCAPABILITY)]
@@ -1855,7 +1860,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn check_escapability_real(this: *const u32) {
-        unsafe { CHECK_ESCAPABILITY_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CHECK_ESCAPABILITY_DETOUR.call(this) })
     }
 
     #[detour(GET_HABITAT_NAME)]
@@ -1870,7 +1875,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn set_name_real(this: *const u32, name: *const u32) {
-        unsafe { ZTHABITAT_SET_NAME_DETOUR.call(this, name) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ZTHABITAT_SET_NAME_DETOUR.call(this, name) })
     }
 
     #[detour(ADD_FOUND_SPECIES)]
@@ -1880,7 +1885,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn add_found_species_real(this: *const u32, found_vec: *const i32, count: *const i32) {
-        unsafe { ADD_FOUND_SPECIES_DETOUR.call(this, found_vec, count) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ADD_FOUND_SPECIES_DETOUR.call(this, found_vec, count) })
     }
 
     #[detour(ZTHABITATMGR_RECALCULATE_CHARACTERISTICS)]
@@ -1890,7 +1895,7 @@ pub mod hooks_zthabitatmgr {
 
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn zthabitatmgr_recalculate_characteristics_real(this: *const u32) {
-        unsafe { ZTHABITATMGR_RECALCULATE_CHARACTERISTICS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { ZTHABITATMGR_RECALCULATE_CHARACTERISTICS_DETOUR.call(this) })
     }
 
     #[detour(FILL_ZOO_EXTERIOR)]
@@ -1922,7 +1927,7 @@ pub mod hooks_zthabitatmgr {
     /// [`get_tiles_copy_real`].
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) fn create_edge_pairs_real(this: *const u32) {
-        unsafe { CREATE_EDGE_PAIRS_DETOUR.call(this) }
+        crate::zthabitat::neighbour_store::with_real_neighbour_state(|| unsafe { CREATE_EDGE_PAIRS_DETOUR.call(this) })
     }
 
     #[detour(RECALCULATE_VIEWING_AREAS)]

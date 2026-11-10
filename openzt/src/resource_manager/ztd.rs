@@ -56,8 +56,8 @@ impl ZtdArchive {
         Ok(ZtdFile { inner: zip_file })
     }
 
-    pub fn file_names(&self) -> impl Iterator<Item = &str> {
-        self.archive.file_names()
+    pub fn file_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.archive.file_names().filter_map(|name| name.ok()).map(|name| name.into_owned())
     }
 }
 
@@ -72,12 +72,12 @@ impl<'a, R: Read> ZtdFile<'a, R> {
 }
 
 impl<R: Read> ZtdFile<'_, R> {
-    pub fn name(&self) -> &str {
-        self.inner.name()
+    pub fn name(&self) -> String {
+        self.inner.name().map(|name| name.into_owned()).unwrap_or_default()
     }
 
     pub fn read_exact(&mut self, buffer: &mut [u8]) -> anyhow::Result<()> {
-        self.inner.read_exact(buffer).with_context(|| format!("Error reading file: {}", self.inner.name()))?;
+        self.inner.read_exact(buffer).with_context(|| format!("Error reading file: {}", self.name()))?;
         Ok(())
     }
 
@@ -93,7 +93,7 @@ impl<R: Read> ZtdFile<'_, R> {
         let mut buffer = vec![0u8; self.inner.size() as usize].into_boxed_slice();
         self.inner
             .read_exact(&mut buffer)
-            .with_context(|| format!("Error reading file: {}", self.inner.name()))?;
+            .with_context(|| format!("Error reading file: {}", self.name()))?;
 
         Ok(crate::encoding_utils::decode_game_text(&buffer))
     }
@@ -106,7 +106,7 @@ impl<R: Read> TryFrom<ZtdFile<'_, R>> for String {
         let mut buffer = vec![0u8; file.size() as usize].into_boxed_slice();
         file.inner
             .read_exact(&mut buffer)
-            .with_context(|| format!("Error reading file: {}", file.inner.name()))?;
+            .with_context(|| format!("Error reading file: {}", file.name()))?;
 
         Ok(crate::encoding_utils::decode_game_text(&buffer))
     }

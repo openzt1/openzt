@@ -172,6 +172,21 @@ pub(crate) fn with_vanilla_mirror<R>(habitat: u32, f: impl FnOnce() -> R) -> R {
     })
 }
 
+/// Copies `habitat`'s store contents into its raw vanilla containers, for a whole-run real-vanilla scenario
+/// under [`with_vanilla_viewing_areas`] that must see every habitat's existing areas and edge tiles, not
+/// just the fixture's. Undo with [`release_vanilla_containers`].
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) fn mirror_store_into_vanilla(habitat: u32) {
+    let areas = viewing_area_store().get(&habitat).cloned().unwrap_or_default();
+    let edges = edge_tile_store().get(&habitat).cloned().unwrap_or_default();
+    for &area in &areas {
+        vanilla::push_viewing_area(habitat, area);
+    }
+    if !edges.is_empty() {
+        vanilla::set_edge_tiles(habitat, &edges);
+    }
+}
+
 /// Returns `habitat`'s raw vanilla containers to the constructor's empty state (a no-op when they already are).
 #[cfg(feature = "reimplementation-tests")]
 pub(crate) fn release_vanilla_containers(habitat: u32) {

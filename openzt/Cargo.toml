@@ -16,7 +16,7 @@ tracing-appender = "0.2.4"
 retour = {path = "../vendor/retour-rs", version = "0.3.1"}
 num_enum = "0.7.5"
 walkdir = "2.5.0"
-zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64"] }
+zip = { version = "9.5.0", default-features = false, features = ["deflate", "deflate64"] }
 openzt-configparser = { path = "../openzt-configparser", version = "1.1.1", features = ["indexmap"]}
 openzt-detour = { path = "../openzt-detour", version = "0.1.0" }
 openzt-detour-macro = { path = "../openzt-detour-macro", version = "0.1.0" }

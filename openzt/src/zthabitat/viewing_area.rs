@@ -39,7 +39,7 @@ use super::habitat::ZTHabitat;
 use crate::ambients::Ambients;
 use crate::globals::{get_module_base, globals};
 use crate::util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory};
-use crate::vanilla_vector::push_word;
+use crate::vanilla_vector::{erase_element, push_word};
 
 const OFFSET_OA_TILES_BEGIN: u32 = 0x04;
 const OFFSET_OA_TILES_END: u32 = 0x08;
@@ -659,12 +659,7 @@ pub fn remove_tile(viewing_area: u32, tile: u32) {
     let Some(found) = (begin..end).step_by(4).find(|&slot| get_from_memory::<u32>(slot) == tile) else {
         return;
     };
-    let mut slot = found;
-    while slot + 4 != end {
-        save_to_memory(slot, get_from_memory::<u32>(slot + 4));
-        slot += 4;
-    }
-    save_to_memory(viewing_area + OFFSET_TILES_END, end - 4);
+    erase_element(viewing_area + OFFSET_TILES_BEGIN, found, 4);
     clear_tile_of_va(viewing_area, tile);
     save_to_memory(viewing_area + OFFSET_RECREATE_OA_DIRTY, 1u8);
     save_to_memory(viewing_area + OFFSET_CHARACTERISTICS_DIRTY, 1u8);
@@ -698,7 +693,7 @@ mod viewing_area_detours {
     }
 
     #[detour(ZTOBSERVABLEAREA_ADD_TILE)]
-    unsafe extern "thiscall" fn observable_area_add_tile_detour(this: *const std::ffi::c_void, tile: i32) {
+    unsafe extern "thiscall" fn observable_area_add_tile_detour(this: *const u32, tile: i32) {
         observable_area_add_tile(this as u32, tile as u32);
     }
 
@@ -777,7 +772,7 @@ mod viewing_area_detours {
         }
 
         pub(crate) fn observable_area_add_tile(this: u32, tile: u32) {
-            unsafe { super::ZTOBSERVABLEAREA_ADD_TILE_DETOUR.call(this as *const std::ffi::c_void, tile as i32) }
+            unsafe { super::ZTOBSERVABLEAREA_ADD_TILE_DETOUR.call(this as *const u32, tile as i32) }
         }
 
         pub(crate) fn construct(this: u32, habitat: u32, seed_tile: u32) {
