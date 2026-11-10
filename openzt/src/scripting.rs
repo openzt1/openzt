@@ -564,4 +564,33 @@ pub fn init() {
     lua_fn!("ping", "Test console connectivity", "ping()", || {
         Ok("pong".to_string())
     });
+
+    lua_fn!(
+        "load_game",
+        "Load a .zoo save file into the running game (same fopen/loadFile/fclose sequence as the load-game UI, minus the dialog)",
+        "load_game(path)",
+        |path: String| {
+            use openzt_detour::generated::{
+                standalone::{FCLOSE, FOPEN},
+                ztui_gameopts::LOAD_FILE,
+            };
+
+            let path_cstring = match std::ffi::CString::new(path.clone()) {
+                Ok(c) => c,
+                Err(e) => return Ok((String::new(), Some(format!("Invalid path {:?}: {}", path, e)))),
+            };
+            let file_ptr = unsafe { FOPEN.original()(path_cstring.as_ptr() as u32, c"rb".as_ptr()) };
+            if file_ptr.is_null() {
+                return Ok((String::new(), Some(format!("fopen failed for {:?}", path))));
+            }
+            let load_result = unsafe { LOAD_FILE.original()(file_ptr as *const u8) };
+            unsafe { FCLOSE.original()(file_ptr) };
+
+            if (load_result & 0xff) != 0 {
+                Ok((format!("Loaded {}", path), None::<String>))
+            } else {
+                Ok((String::new(), Some(format!("Load failed (raw result {:#010x}) for {:?}", load_result, path))))
+            }
+        }
+    );
 }

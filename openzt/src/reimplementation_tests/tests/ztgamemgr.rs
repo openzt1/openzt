@@ -407,7 +407,7 @@ pub(crate) fn run_gamemgr_save_load_test(failure_log: &mut Option<std::fs::File>
         gamemgr_live_support::destroy_standalone_mgr(real_load_ptr);
         gamemgr_live_support::destroy_standalone_mgr(reimpl_load_ptr);
 
-        prop_assert_eq!(real_load_ok != 0, reimpl_load_ok, "load ok mismatch for version={}", version);
+        prop_assert_eq!(real_load_ok, reimpl_load_ok, "load ok mismatch for version={}", version);
         prop_assert_eq!(real_result, reimpl_result, "load result mismatch for version={}", version);
 
         Ok(())
@@ -767,8 +767,8 @@ pub(crate) fn run_gamemgr_finance_date_helpers_test(failure_log: &mut Option<std
             let real_is_game_date = unsafe { ZTGAMEMGR_IS_GAME_DATE.original()(real_ptr as *const u32, game_day, game_month) };
             let reimpl_is_game_date = unsafe { (*reimpl_ptr).is_game_date(game_day, game_month) };
             prop_assert_eq!(
-                real_is_game_date & 0xff,
-                reimpl_is_game_date as u32,
+                real_is_game_date,
+                reimpl_is_game_date,
                 "isGameDate mismatch for day={}, month={}, date=({},{},{},{},{},{},{})",
                 game_day,
                 game_month,

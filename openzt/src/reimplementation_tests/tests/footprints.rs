@@ -13,7 +13,8 @@ use tracing::{error, info};
 use crate::bfentitytype::{BFEntityType, ZTAnimalType, ZTUnitType};
 use crate::reimplementation_tests::NoopFailurePersistence;
 use crate::reimplementation_tests::harness::write_success_line;
-use crate::ztworldmgr::{BFEntity, IVec3, ZTAnimal, ZTUnit};
+use crate::ztworldmgr::{BFEntity, ZTAnimal, ZTUnit};
+use glam::i32::IVec3;
 
 /// Calls the real GET_FOOTPRINT function at `entity_ptr` and reads the `IVec3` it writes back.
 fn call_original_get_footprint(

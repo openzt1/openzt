@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn test_set_fields() {
-        let mut my_struct = MyStruct::default();
+        let my_struct = MyStruct::default();
 
         let result = my_struct.set_field("field1", "hello");
         assert!(result.is_ok());
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_deref_set_fields() {
-        let mut my_child_struct = MyChildStruct::default();
+        let my_child_struct = MyChildStruct::default();
 
         let result = my_child_struct.set_field("child_field1", "hello");
         assert!(result.is_ok());

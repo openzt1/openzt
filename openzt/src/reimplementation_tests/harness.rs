@@ -36,6 +36,11 @@ pub(crate) fn write_battery_marker(failure_log: &mut Option<std::fs::File>, mess
 pub(crate) fn run_registered_tests(tests: &[RegisteredTest], failure_log: &mut Option<std::fs::File>) -> bool {
     let mut fail_flag = false;
     for test in tests {
+        if let Ok(only) = std::env::var("OPENZT_TEST_ONLY")
+            && !only.split(',').any(|part| test.name.contains(part))
+        {
+            continue;
+        }
         info!("Running {}", test.name);
         fail_flag |= (test.run)(failure_log);
     }

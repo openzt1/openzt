@@ -352,6 +352,15 @@ static GLOBALS: OnceLock<Globals> = OnceLock::new();
 /// # Panics
 /// Panics if the module cannot be found.
 pub fn get_module_base(name: &str) -> usize {
+    // zoo.exe is never unloaded and this is called per-entity in hot loops.
+    static ZOO_EXE_BASE: OnceLock<usize> = OnceLock::new();
+    if name == "zoo.exe" {
+        return *ZOO_EXE_BASE.get_or_init(|| lookup_module_base(name));
+    }
+    lookup_module_base(name)
+}
+
+fn lookup_module_base(name: &str) -> usize {
     let cname = CString::new(name).unwrap();
     unsafe {
         windows::Win32::System::LibraryLoader::GetModuleHandleA(

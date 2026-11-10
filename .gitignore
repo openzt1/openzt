@@ -4,3 +4,11 @@
 /libs/*/target
 .idea
 .openzt-build-state
+private/
+.claude/plans/
+.temp/
+openzt/plans/
+openzt/scripts/
+orchestrator.bat
+scratchpad
+crash_capture_output.txt

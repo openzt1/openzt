@@ -97,8 +97,12 @@ mod hook_registry {
 
     /// Sized from an audit of the workspace: 172 `#[detour]` sites, ~166 installable
     /// simultaneously with the `experimental` feature set (the remainder are test-only and never
-    /// co-install with them).
-    const CAPACITY: usize = 256;
+    /// co-install with them) at the time this was first sized to 256. The codebase has since grown
+    /// past 350 `#[detour]` sites in total and exhausted that headroom (confirmed live: adding 4 more
+    /// simultaneously-installed detours pushed 3 unrelated, earlier-registered addresses into
+    /// overflow) - bumped to 512 for fresh headroom; a debug-only `AtomicU64` array, so the added
+    /// memory cost is negligible.
+    const CAPACITY: usize = 512;
 
     /// Each slot packs `(address: u32) << 32 | (trampoline as u32)`; `0` = empty (trampolines are
     /// never null). 32-bit pointers only - this crate is i686-only (the `thiscall` ABI it detours
