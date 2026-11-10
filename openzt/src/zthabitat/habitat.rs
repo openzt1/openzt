@@ -6311,10 +6311,8 @@ impl ZTHabitat {
     /// shapes pack garbage upper bytes around one real byte) - both callers,
     /// `ZTGoalGoToShow::complete` (Win call site `0x005a3897`) and
     /// `ZTGoalReturnFromShow::complete` (Win call site `0x005a375c`), consume it low byte only.
-    /// The return is retyped to `bool` in the live Ghidra project, so the next `generated.rs`
-    /// regeneration carries `-> bool` and [`crate::zthabitatmgr::hooks_zthabitatmgr`]'s temporary
-    /// `as u32` detour widen drops with it (the same mechanical step `HAS_PORTAL_ANIMAL` already
-    /// went through). The port returns a clean `bool`.
+    /// `generated.rs`'s `IS_SHOW_NEIGHBOR` is typed `-> bool`, and its detour returns the port's
+    /// clean `bool` directly with no widening.
     pub fn is_show_neighbor(&self, neighbor_ptr: u32) -> bool {
         neighbour_store::contains(self as *const Self as u32, NeighbourSet::Show, neighbor_ptr)
     }
