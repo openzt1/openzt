@@ -26,8 +26,14 @@ use openzt_detour::generated::{
         F_HIDE_PREDATOR, F_HIDE_PREDATOR_F, F_KEEPER_ROUTINE, F_KEEPER_ROUTINE_F, F_MAINT_ROUTINE, F_MAINT_ROUTINE_F, F_RETURN_TO_BUILDING, F_RETURN_TO_BUILDING_F, F_SPRAY_F,
         GET_RANDOM_X, GET_RANDOM_Y, IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION, REMOVE_ENTITY,
     },
+    bfentity::GET_TILE as BFENTITY_GET_TILE,
+    ztaimgr::{
+        F_CAUGHT_PREY, F_CAUGHT_PREY_F, F_DIE, F_DIE_F, F_EXIT_BUILDING, F_EXIT_BUILDING_F, F_HATCH, F_HATCH_F, F_KILL_PREY, F_KILL_PREY_F, F_SHOW_PREDATOR, F_SHOW_PREDATOR_F,
+    },
+    ztanimal::{CONSUME as ZTANIMAL_CONSUME, FINISH_HATCH},
     ztguest::F_ROUTINE as ZTGUEST_F_ROUTINE,
-    ztunit::GET_PREDATOR_UNIT,
+    zthabitat::TRIGGER_DEATH_ARRIVED,
+    ztunit::{F_ZOO_MESSAGE_TILE_0, GET_PREDATOR_UNIT, GET_TARGET_UNIT as ZTUNIT_GET_TARGET_UNIT, SET_IS_REMOVED as ZTUNIT_SET_IS_REMOVED},
     ztmapview::PREPARE_TO_DELETE_ENTITY,
     ztui_general::GET_MAPVIEW,
 };
@@ -346,6 +352,124 @@ pub unsafe fn f_keeper_routine(unit: u32, done: *const bool) -> bool {
     routine(unit, done) as u8 != 0
 }
 
+/// `ZTUnit` field `fShowPredator` clears and `fCaughtPrey` stores the hunter's id into on the prey.
+const UNIT_SHOW_PREDATOR_FLAG_OFFSET: u32 = 0x20d;
+const UNIT_PREY_HUNTER_FIELD_OFFSET: u32 = 0x22c;
+/// Entity field read by `fCaughtPrey` and stored into the prey's [`UNIT_PREY_HUNTER_FIELD_OFFSET`].
+const ENTITY_ID_OFFSET: u32 = 0x124;
+/// Entity vtable slots: refresh after the predator/prey change (`+0x254`), find a fallback prey (`+0x25c`),
+/// the fallback when there is none (`+0x258`), the unit's habitat (`+0x24c`), exit building (`+0x2ac`).
+const ENTITY_VTABLE_REFRESH: u32 = 0x254;
+const ENTITY_VTABLE_FIND_PREY: u32 = 0x25c;
+const ENTITY_VTABLE_NO_PREY: u32 = 0x258;
+const ENTITY_VTABLE_GET_HABITAT: u32 = 0x24c;
+const ENTITY_VTABLE_EXIT_BUILDING: u32 = 0x2ac;
+/// Message id and flags `fDie` posts at the animal's tile.
+const DEATH_MESSAGE_ID: u32 = 0x2802;
+const DEATH_MESSAGE_KIND: u32 = 2;
+
+unsafe fn call_entity_virtual_ret(entity: u32, slot: u32) -> u32 {
+    let vtable = get_from_memory::<u32>(entity);
+    let target = get_from_memory::<u32>(vtable + slot);
+    let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(target) };
+    method(entity)
+}
+
+unsafe fn is_animal(unit: u32) -> bool {
+    unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTANIMAL) }
+}
+
+/// `fShowPredator`: has a guest's predator consume the guest, then refreshes and clears the show flag.
+/// `None` (defer to vanilla) for a null/non-guest unit, which vanilla then dereferences as null.
+pub unsafe fn f_show_predator(unit: u32, done: *const bool) -> Option<bool> {
+    if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTGUEST) } {
+        return None;
+    }
+    let predator = unsafe { GET_PREDATOR_UNIT.original()(unit as *const u32) } as u32;
+    if predator != 0 && unsafe { is_animal(predator) } {
+        unsafe { ZTANIMAL_CONSUME.original()(predator as *const u32, unit as *const i32) };
+    }
+    unsafe { call_entity_virtual(unit, ENTITY_VTABLE_REFRESH) };
+    unsafe { ((unit + UNIT_SHOW_PREDATOR_FLAG_OFFSET) as *mut u8).write_volatile(0) };
+    unsafe { set_done(done) };
+    Some(true)
+}
+
+/// `fCaughtPrey`: the animal consumes its target (or the fallback prey vanilla looks up), the prey records
+/// the hunter, and the prey refreshes. Always reports success.
+pub unsafe fn f_caught_prey(unit: u32, done: *const bool) -> bool {
+    if unit != 0 && unsafe { is_animal(unit) } {
+        let mut prey = unsafe { ZTUNIT_GET_TARGET_UNIT.original()(unit as *const u32) } as u32;
+        if prey == 0 {
+            prey = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_FIND_PREY) };
+            if prey == 0 {
+                unsafe { call_entity_virtual(unit, ENTITY_VTABLE_NO_PREY) };
+                unsafe { set_done(done) };
+                return true;
+            }
+        }
+        unsafe { ZTANIMAL_CONSUME.original()(unit as *const u32, prey as *const i32) };
+        let hunter_id = get_from_memory::<u32>(unit + ENTITY_ID_OFFSET);
+        unsafe { ((prey + UNIT_PREY_HUNTER_FIELD_OFFSET) as *mut u32).write_volatile(hunter_id) };
+        unsafe { call_entity_virtual(prey, ENTITY_VTABLE_REFRESH) };
+    }
+    unsafe { set_done(done) };
+    true
+}
+
+/// `fKillPrey`: removes the animal's target. `true` only when a target was killed.
+pub unsafe fn f_kill_prey(unit: u32, done: *const bool) -> bool {
+    let mut killed = false;
+    if unit != 0 && unsafe { is_animal(unit) } {
+        let prey = unsafe { ZTUNIT_GET_TARGET_UNIT.original()(unit as *const u32) } as u32;
+        if prey != 0 {
+            let vtable = get_from_memory::<u32>(prey);
+            let target = get_from_memory::<u32>(vtable + ENTITY_VTABLE_HIDE_PREDATOR);
+            let hide = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32)>(target) };
+            hide(prey, 0);
+            unsafe { ZTUNIT_SET_IS_REMOVED.original()(prey as *const u32, 1) };
+            killed = true;
+        }
+    }
+    unsafe { set_done(done) };
+    killed
+}
+
+/// `fDie`: removes a dying animal, posts the death message at its tile and tells its habitat. `true` only
+/// when the animal was removed here.
+pub unsafe fn f_die(unit: u32, done: *const bool) -> bool {
+    let mut removed = false;
+    if unit != 0 && unsafe { is_animal(unit) } {
+        if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+            unsafe { ZTUNIT_SET_IS_REMOVED.original()(unit as *const u32, 1) };
+            let tile = unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) };
+            unsafe { F_ZOO_MESSAGE_TILE_0.original()(unit as *const u32, DEATH_MESSAGE_ID, DEATH_MESSAGE_KIND, tile as u32, 0, 1) };
+            removed = true;
+        }
+        let habitat = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_GET_HABITAT) };
+        if habitat != 0 {
+            unsafe { TRIGGER_DEATH_ARRIVED.hooked()(habitat as *const u32, 0) };
+        }
+    }
+    unsafe { set_done(done) };
+    removed
+}
+
+/// `fHatch`: finishes the animal's hatch. `false` (defer to vanilla) for a null/non-animal unit, where
+/// vanilla calls `finishHatch` with a null `this`.
+pub unsafe fn f_hatch(unit: u32, done: *const bool) -> bool {
+    if !unsafe { is_animal(unit) } {
+        return false;
+    }
+    unsafe { FINISH_HATCH.original()(unit as *const u32) };
+    unsafe { set_done(done) };
+    true
+}
+
+pub unsafe fn f_exit_building(unit: u32, done: *const bool) -> bool {
+    unsafe { building_transition(unit, done, ENTITY_VTABLE_EXIT_BUILDING) }
+}
+
 fn call_done_flag(call: u32) -> *const bool {
     (call + CALL_DONE_FLAG_OFFSET) as *const bool
 }
@@ -450,6 +574,82 @@ mod ztaimgr_detours {
         unsafe { f_keeper_routine(unit as u32, call_done_flag(call)) };
     }
 
+    // Prey/predator/death/hatch/exit handlers. Halves are `(unit, done)`; `F` wrappers are `(call, unit)`.
+    #[detour(F_SHOW_PREDATOR)]
+    unsafe extern "stdcall" fn f_show_predator_detour(unit: *const i32, done: *const u8) -> u32 {
+        match unsafe { f_show_predator(unit as u32, done as *const bool) } {
+            Some(result) => result as u32,
+            None => unsafe { F_SHOW_PREDATOR_DETOUR.call(unit, done) },
+        }
+    }
+
+    #[detour(F_SHOW_PREDATOR_F)]
+    unsafe extern "stdcall" fn f_show_predator_f_detour(call: i32, unit: *const i32) {
+        if unsafe { f_show_predator(unit as u32, call_done_flag(call as u32)) }.is_none() {
+            unsafe { F_SHOW_PREDATOR_F_DETOUR.call(call, unit) };
+        }
+    }
+
+    #[detour(F_CAUGHT_PREY)]
+    unsafe extern "stdcall" fn f_caught_prey_detour(unit: *const i32, done: *const u8) -> u32 {
+        unsafe { f_caught_prey(unit as u32, done as *const bool) as u32 }
+    }
+
+    #[detour(F_CAUGHT_PREY_F)]
+    unsafe extern "stdcall" fn f_caught_prey_f_detour(call: i32, unit: *const i32) {
+        unsafe { f_caught_prey(unit as u32, call_done_flag(call as u32)) };
+    }
+
+    #[detour(F_KILL_PREY)]
+    unsafe extern "stdcall" fn f_kill_prey_detour(unit: *const u8, done: *const u8) -> u32 {
+        unsafe { f_kill_prey(unit as u32, done as *const bool) as u32 }
+    }
+
+    #[detour(F_KILL_PREY_F)]
+    unsafe extern "stdcall" fn f_kill_prey_f_detour(call: i32, unit: *const u8) {
+        unsafe { f_kill_prey(unit as u32, call_done_flag(call as u32)) };
+    }
+
+    #[detour(F_DIE)]
+    unsafe extern "stdcall" fn f_die_detour(unit: *const i32, done: *const u8) -> u32 {
+        unsafe { f_die(unit as u32, done as *const bool) as u32 }
+    }
+
+    #[detour(F_DIE_F)]
+    unsafe extern "stdcall" fn f_die_f_detour(call: i32, unit: *const i32) {
+        unsafe { f_die(unit as u32, call_done_flag(call as u32)) };
+    }
+
+    #[detour(F_HATCH)]
+    unsafe extern "stdcall" fn f_hatch_detour(unit: *const i32, done: *const u8) -> u32 {
+        if unsafe { f_hatch(unit as u32, done as *const bool) } {
+            1
+        } else {
+            unsafe { F_HATCH_DETOUR.call(unit, done) }
+        }
+    }
+
+    #[detour(F_HATCH_F)]
+    unsafe extern "stdcall" fn f_hatch_f_detour(call: i32, unit: *const i32) {
+        if !unsafe { f_hatch(unit as u32, call_done_flag(call as u32)) } {
+            unsafe { F_HATCH_F_DETOUR.call(call, unit) };
+        }
+    }
+
+    #[detour(F_EXIT_BUILDING)]
+    unsafe extern "stdcall" fn f_exit_building_detour(unit: *const i32, done: *const u8) {
+        if !unsafe { f_exit_building(unit as u32, done as *const bool) } {
+            unsafe { F_EXIT_BUILDING_DETOUR.call(unit, done) };
+        }
+    }
+
+    #[detour(F_EXIT_BUILDING_F)]
+    unsafe extern "stdcall" fn f_exit_building_f_detour(call: i32, unit: *const i32) {
+        if !unsafe { f_exit_building(unit as u32, call_done_flag(call as u32)) } {
+            unsafe { F_EXIT_BUILDING_F_DETOUR.call(call, unit) };
+        }
+    }
+
     /// `fSprayF` only forwards to the `return 1` stub `BFAIMgr::fFaceDirection`: nothing to do.
     #[detour(F_SPRAY_F)]
     unsafe extern "stdcall" fn f_spray_f_detour(_call: i32, _unit: *const u32) {}
@@ -533,6 +733,22 @@ mod ztaimgr_detours {
             unsafe { super::F_RETURN_TO_BUILDING_DETOUR.call(unit, done) }
         }
 
+        pub(crate) fn f_exit_building(unit: *const i32, done: *const u8) {
+            unsafe { super::F_EXIT_BUILDING_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_kill_prey(unit: *const u8, done: *const u8) -> u32 {
+            unsafe { super::F_KILL_PREY_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_caught_prey(unit: *const i32, done: *const u8) -> u32 {
+            unsafe { super::F_CAUGHT_PREY_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_die(unit: *const i32, done: *const u8) -> u32 {
+            unsafe { super::F_DIE_DETOUR.call(unit, done) }
+        }
+
         pub(crate) fn f_guest_routine(unit: *const u32, done: *const bool) -> bool {
             unsafe { super::F_GUEST_ROUTINE_DETOUR.call(unit, done) }
         }
@@ -593,7 +809,10 @@ pub(crate) mod live_support {
         ztaimgr_detours::test_real::convert_constant_param(this, name, entity)
     }
 
-    pub(crate) use super::{f_enter_building, f_return_to_building};
+    pub(crate) use super::{f_enter_building, f_exit_building, f_hatch, f_return_to_building, f_show_predator};
+    pub(crate) use ztaimgr_detours::test_real::{
+        f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
+    };
     pub(crate) use ztaimgr_detours::test_real::{
         f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,
         f_keeper_routine as real_f_keeper_routine, f_maint_routine as real_f_maint_routine, f_return_to_building as real_f_return_to_building,

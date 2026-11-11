@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use openzt_detour::generated::ztaimgr::{
-    CONVERT_CONSTANT_PARAM, F_END_TRICK, F_ENTER_BUILDING, F_GUEST_ROUTINE, F_GUIDE_ROUTINE, F_KEEPER_ROUTINE, F_MAINT_ROUTINE, F_RETURN_TO_BUILDING, GET_RANDOM_X, GET_RANDOM_Y,
+    CONVERT_CONSTANT_PARAM, F_CAUGHT_PREY, F_DIE, F_EXIT_BUILDING, F_KILL_PREY, F_END_TRICK, F_ENTER_BUILDING, F_GUEST_ROUTINE, F_GUIDE_ROUTINE, F_KEEPER_ROUTINE, F_MAINT_ROUTINE, F_RETURN_TO_BUILDING, GET_RANDOM_X, GET_RANDOM_Y,
     IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION,
 };
 
@@ -82,6 +82,9 @@ extern "thiscall" fn fake_return_to_building(this: u32) {
 extern "thiscall" fn fake_end_trick(this: u32) {
     record_virtual(0xc, this);
 }
+extern "thiscall" fn fake_exit_building(this: u32) {
+    record_virtual(0xd, this);
+}
 
 fn reset_virtual_log() {
     VIRTUAL_LOG.store(0, Ordering::Relaxed);
@@ -115,6 +118,7 @@ impl Fixture {
         entity_vtable[0x2a8 / 4] = fake_enter_building as *const () as usize as u32;
         entity_vtable[0x2b0 / 4] = fake_return_to_building as *const () as usize as u32;
         entity_vtable[0x2bc / 4] = fake_end_trick as *const () as usize as u32;
+        entity_vtable[0x2ac / 4] = fake_exit_building as *const () as usize as u32;
         let entity_vtable_ptr = entity_vtable.as_ptr() as u32;
 
         let mut types = Vec::new();
@@ -315,6 +319,47 @@ pub(crate) fn run_ztaimgr_building_and_trick_handlers_test(failure_log: &mut Opt
                     failures.push(format!("{name} {label}: expected the port to defer untouched, got {outcome:?}"));
                 }
             }
+        }
+
+        // The fake types never report `ZTAnimal`/`ZTGuest`-for-castclass, so these take vanilla's
+        // non-animal paths, which are safe to run for real.
+        if kind.is_some_and(|k| k != Kind::Scenery) {
+            let rust = run_pole(*unit, |u, d| {
+                unsafe { F_EXIT_BUILDING.hooked()(u as *const i32, d as *const u8) };
+                true
+            });
+            let real = run_pole(*unit, |u, d| {
+                live_support::real_f_exit_building(u as *const i32, d as *const u8);
+                true
+            });
+            if rust != real {
+                failures.push(format!("fExitBuilding {label}: rust {rust:?} != real {real:?}"));
+            }
+        } else {
+            let outcome = run_pole(*unit, |u, d| unsafe { live_support::f_exit_building(u as u32, d) });
+            if outcome != (false, false, (0, 0)) {
+                failures.push(format!("fExitBuilding {label}: expected the port to defer untouched, got {outcome:?}"));
+            }
+        }
+        let rust = run_pole(*unit, |u, d| unsafe { F_KILL_PREY.hooked()(u as *const u8, d as *const u8) });
+        let real = run_pole(*unit, |u, d| live_support::real_f_kill_prey(u as *const u8, d as *const u8));
+        if (rust.0 & 0xff, rust.1, rust.2) != (real.0 & 0xff, real.1, real.2) {
+            failures.push(format!("fKillPrey {label}: rust {rust:?} != real {real:?}"));
+        }
+        let rust = run_pole(*unit, |u, d| unsafe { F_CAUGHT_PREY.hooked()(u as *const i32, d as *const u8) });
+        let real = run_pole(*unit, |u, d| live_support::real_f_caught_prey(u as *const i32, d as *const u8));
+        if (rust.0 & 0xff, rust.1, rust.2) != (real.0 & 0xff, real.1, real.2) {
+            failures.push(format!("fCaughtPrey {label}: rust {rust:?} != real {real:?}"));
+        }
+        let rust = run_pole(*unit, |u, d| unsafe { F_DIE.hooked()(u as *const i32, d as *const u8) });
+        let real = run_pole(*unit, |u, d| live_support::real_f_die(u as *const i32, d as *const u8));
+        if (rust.0 & 0xff, rust.1, rust.2) != (real.0 & 0xff, real.1, real.2) {
+            failures.push(format!("fDie {label}: rust {rust:?} != real {real:?}"));
+        }
+        let predator = run_pole(*unit, |u, d| unsafe { live_support::f_show_predator(u as u32, d) });
+        let hatch = run_pole(*unit, |u, d| unsafe { live_support::f_hatch(u as u32, d) });
+        if predator != (None, false, (0, 0)) || hatch != (false, false, (0, 0)) {
+            failures.push(format!("{label}: show-predator/hatch should defer untouched, got {predator:?} / {hatch:?}"));
         }
 
         let is_guest = *kind == Some(Kind::Guest);
