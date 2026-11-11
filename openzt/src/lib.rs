@@ -119,6 +119,10 @@ mod ztmegatilemgr;
 /// zoo-achievement awards and the award.cfg catalogue.
 mod ztawardmgr;
 
+/// ztaimgr module has the vanilla ZTAIMgr/BFAIMgr AI manager's leaf vtable methods (random-walk extents,
+/// move-speed classifiers, constant parameter lookup, entity removal).
+mod ztaimgr;
+
 /// ztshow module contains the Marine Mania show subsystem:
 /// ZTShow, ZTShowInfo, ZTShowMgr, ZTShowScriptMgr, ZTShowState, ZTShowScriptState, ZTShowUI.
 mod ztshow;
@@ -273,6 +277,7 @@ mod zoo_init {
             ztguest::init();
             ambients::init();
             ztsoundscape::init();
+            ztaimgr::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }
     }

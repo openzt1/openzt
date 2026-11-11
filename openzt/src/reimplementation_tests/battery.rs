@@ -128,6 +128,12 @@ pub(super) mod detour_zoo_main {
         tests.extend([RegisteredTest { name: "MENUMUSICHANDLER_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_original_routes_to_trampoline_test }]);
         tests.push(RegisteredTest { name: "AMBIENTS_DETOURS_ENABLED", run: tests::ambients::run_ambients_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
+        tests.extend([
+            RegisteredTest { name: "ZTAIMGR_DETOURS_ENABLED", run: tests::ztaimgr::run_ztaimgr_detours_enabled_test },
+            RegisteredTest { name: "ZTAIMGR_GET_RANDOM_XY", run: tests::ztaimgr::run_ztaimgr_get_random_xy_test },
+            RegisteredTest { name: "ZTAIMGR_MOVE_FUNCTIONS", run: tests::ztaimgr::run_ztaimgr_move_functions_test },
+            RegisteredTest { name: "ZTAIMGR_CONVERT_CONSTANT_PARAM", run: tests::ztaimgr::run_ztaimgr_convert_constant_param_test },
+        ]);
         #[cfg(debug_assertions)]
         tests.extend([RegisteredTest { name: "ZTSOUNDSCAPE_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztsoundscape::run_ztsoundscape_original_routes_to_trampoline_test }]);
         tests.extend([

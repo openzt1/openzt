@@ -9,6 +9,7 @@ pub(crate) mod ambients;
 pub(crate) mod footprints;
 pub(crate) mod ztadvterrainmgr;
 pub(crate) mod ztawardmgr;
+pub(crate) mod ztaimgr;
 pub(crate) mod ztgamemgr;
 pub(crate) mod ztgamemgr_menumusichandler;
 pub(crate) mod ztguest;
