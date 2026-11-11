@@ -6,6 +6,10 @@
 //! offset, so nothing here replaces the object: each detour reads and writes vanilla's own memory in place
 //! (style 1), and no struct is declared because only a few fixed dwords are touched (the offsets below).
 //!
+//! Also reimplemented: the thin handler halves `fEndTrick`, `fEnterBuilding`, `fReturnToBuilding`,
+//! `fHidePredator`, `fGuestRoutine`/`fMaintRoutine`/`fGuideRoutine`/`fKeeperRoutine`, their `F` wrappers and
+//! `fSprayF`. The entity `fRoutine` bodies stay vanilla; cases where vanilla faults on a null `this` defer to it.
+//!
 //! Reimplemented: `getRandomX`/`getRandomY`, `isSlowMoveFunction`/`isMediumMoveFunction`/
 //! `isFastMoveFunction`, `convertConstantParam` (partial override, see below) and `removeEntity`.
 //! Not detoured: `init` (a bare `jmp [vtable+0x38]` thunk and the never-reached `BFAIMgr::init`),
@@ -17,7 +21,13 @@
 use std::{ffi::c_void, mem};
 
 use openzt_detour::generated::{
-    ztaimgr::{CONVERT_CONSTANT_PARAM, GET_RANDOM_X, GET_RANDOM_Y, IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION, REMOVE_ENTITY},
+    ztaimgr::{
+        CONVERT_CONSTANT_PARAM, F_END_TRICK, F_END_TRICK_F, F_ENTER_BUILDING, F_ENTER_BUILDING_F, F_GUEST_ROUTINE, F_GUEST_ROUTINE_F, F_GUIDE_ROUTINE, F_GUIDE_ROUTINE_F,
+        F_HIDE_PREDATOR, F_HIDE_PREDATOR_F, F_KEEPER_ROUTINE, F_KEEPER_ROUTINE_F, F_MAINT_ROUTINE, F_MAINT_ROUTINE_F, F_RETURN_TO_BUILDING, F_RETURN_TO_BUILDING_F, F_SPRAY_F,
+        GET_RANDOM_X, GET_RANDOM_Y, IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION, REMOVE_ENTITY,
+    },
+    ztguest::F_ROUTINE as ZTGUEST_F_ROUTINE,
+    ztunit::GET_PREDATOR_UNIT,
     ztmapview::PREPARE_TO_DELETE_ENTITY,
     ztui_general::GET_MAPVIEW,
 };
@@ -55,6 +65,24 @@ const WORLD_MGR_VTABLE_REMOVE_ENTITY: u32 = 0x1c;
 const RVA_TAG_ZTGUEST: u32 = 0x0023_8700;
 const RVA_TAG_ZTSTAFF: u32 = 0x0023_8710;
 const RVA_TAG_ZTUNITTYPE: u32 = 0x0023_86b0;
+const RVA_TAG_ZTANIMAL: u32 = 0x0023_8690;
+const RVA_TAG_ZTKEEPER: u32 = 0x0023_8760;
+const RVA_TAG_ZTGUIDE: u32 = 0x0023_8770;
+const RVA_TAG_ZTMAINT: u32 = 0x0023_8780;
+
+/// Entity vtable slots the building/trick handlers dispatch through (thiscall, no arguments).
+const ENTITY_VTABLE_END_TRICK: u32 = 0x2bc;
+const ENTITY_VTABLE_ENTER_BUILDING: u32 = 0x2a8;
+const ENTITY_VTABLE_RETURN_TO_BUILDING: u32 = 0x2b0;
+/// Entity vtable slot `fHidePredator` calls on the predator with `0`.
+const ENTITY_VTABLE_HIDE_PREDATOR: u32 = 0xcc;
+/// Offset of the `done` flag inside the call object the `F` wrappers receive.
+const CALL_DONE_FLAG_OFFSET: u32 = 0x18;
+
+/// `ZTGuide::fRoutine` and `ZTKeeper::fRoutine` (`thiscall(this, done)`): no `generated.rs` entry, so they
+/// are called by Ghidra address.
+const ZTGUIDE_F_ROUTINE_ADDRESS: u32 = 0x0058_a929;
+const ZTKEEPER_F_ROUTINE_ADDRESS: u32 = 0x004a_86ba;
 const RVA_TAG_ZTGUIDETYPE: u32 = 0x0023_8770;
 
 /// `ZTUnitType` dwords `convertConstantParam` returns, in `RANDOM_TIME_NAMES` order.
@@ -212,9 +240,219 @@ pub unsafe fn remove_entity(entity: u32) -> bool {
     remove(world, entity, true)
 }
 
+/// Calls a no-argument thiscall virtual at `slot` of the entity's own vtable.
+unsafe fn call_entity_virtual(entity: u32, slot: u32) {
+    let vtable = get_from_memory::<u32>(entity);
+    let target = get_from_memory::<u32>(vtable + slot);
+    let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32)>(target) };
+    method(entity);
+}
+
+unsafe fn set_done(done: *const bool) {
+    unsafe { (done as *mut bool).write_volatile(true) };
+}
+
+/// `unit` is non-null and its entity type passes the type's `slot` test against `tag_rva`.
+unsafe fn unit_is(unit: u32, slot: u32, tag_rva: u32) -> bool {
+    if unit == 0 {
+        return false;
+    }
+    let entity_type = get_from_memory::<u32>(unit + OFFSET_ENTITY_TYPE);
+    unsafe { type_tag_check(entity_type, slot, tag_rva) }
+}
+
+/// `fEndTrick`: ends the trick on a unit, or just finishes for a null/non-unit target.
+pub unsafe fn f_end_trick(unit: u32, done: *const bool) -> bool {
+    if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+        unsafe { call_entity_virtual(unit, ENTITY_VTABLE_END_TRICK) };
+    }
+    unsafe { set_done(done) };
+    true
+}
+
+/// `fEnterBuilding`/`fReturnToBuilding`. Returns `false` without acting when `unit` is null or not a unit
+/// type: vanilla then calls a virtual through a null object and faults, so the caller defers to it.
+unsafe fn building_transition(unit: u32, done: *const bool, slot: u32) -> bool {
+    if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+        return false;
+    }
+    unsafe { call_entity_virtual(unit, slot) };
+    unsafe { set_done(done) };
+    true
+}
+
+pub unsafe fn f_enter_building(unit: u32, done: *const bool) -> bool {
+    unsafe { building_transition(unit, done, ENTITY_VTABLE_ENTER_BUILDING) }
+}
+
+pub unsafe fn f_return_to_building(unit: u32, done: *const bool) -> bool {
+    unsafe { building_transition(unit, done, ENTITY_VTABLE_RETURN_TO_BUILDING) }
+}
+
+/// `fHidePredator` for a guest: hides the guest's predator if it is an animal, then finishes. Returns
+/// `false` without acting for a null/non-guest `unit`, which vanilla passes to `getPredatorUnit` as null.
+pub unsafe fn f_hide_predator(unit: u32, done: *const bool) -> bool {
+    if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTGUEST) } {
+        return false;
+    }
+    let predator = unsafe { GET_PREDATOR_UNIT.original()(unit as *const u32) } as u32;
+    if predator != 0 && unsafe { unit_is(predator, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTANIMAL) } {
+        let vtable = get_from_memory::<u32>(predator);
+        let target = get_from_memory::<u32>(vtable + ENTITY_VTABLE_HIDE_PREDATOR);
+        let hide = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32)>(target) };
+        hide(predator, 0);
+    }
+    unsafe { set_done(done) };
+    true
+}
+
+/// `fGuestRoutine`/`fMaintRoutine`/`fGuideRoutine`: run the entity's `fRoutine` when its type is exactly
+/// `tag_rva`. Always reports success.
+unsafe fn exact_class_routine(unit: u32, done: *const bool, tag_rva: u32, routine: unsafe fn(u32, *const bool)) -> bool {
+    if unsafe { unit_is(unit, TYPE_VTABLE_IS_CLASS, tag_rva) } {
+        unsafe { routine(unit, done) };
+    }
+    true
+}
+
+unsafe fn guest_f_routine(unit: u32, done: *const bool) {
+    unsafe { ZTGUEST_F_ROUTINE.original()(unit as *const u32, done) };
+}
+
+unsafe fn guide_f_routine(unit: u32, done: *const bool) {
+    let routine = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, *const bool) -> u32>(ZTGUIDE_F_ROUTINE_ADDRESS) };
+    routine(unit, done);
+}
+
+pub unsafe fn f_guest_routine(unit: u32, done: *const bool) -> bool {
+    unsafe { exact_class_routine(unit, done, RVA_TAG_ZTGUEST, guest_f_routine) }
+}
+
+/// `ZTMaint` runs the same (ICF-folded) `fRoutine` body as `ZTGuest`.
+pub unsafe fn f_maint_routine(unit: u32, done: *const bool) -> bool {
+    unsafe { exact_class_routine(unit, done, RVA_TAG_ZTMAINT, guest_f_routine) }
+}
+
+pub unsafe fn f_guide_routine(unit: u32, done: *const bool) -> bool {
+    unsafe { exact_class_routine(unit, done, RVA_TAG_ZTGUIDE, guide_f_routine) }
+}
+
+/// `fKeeperRoutine`: the keeper's `fRoutine` result, or `false` for a non-keeper.
+pub unsafe fn f_keeper_routine(unit: u32, done: *const bool) -> bool {
+    if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTKEEPER) } {
+        return false;
+    }
+    let routine = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, *const bool) -> u32>(ZTKEEPER_F_ROUTINE_ADDRESS) };
+    routine(unit, done) as u8 != 0
+}
+
+fn call_done_flag(call: u32) -> *const bool {
+    (call + CALL_DONE_FLAG_OFFSET) as *const bool
+}
+
 #[detour_mod]
 mod ztaimgr_detours {
     use super::*;
+
+    // Behavior halves: `(unit, done)`.
+    #[detour(F_END_TRICK)]
+    unsafe extern "stdcall" fn f_end_trick_detour(unit: *const u32, done: *const bool) -> bool {
+        unsafe { f_end_trick(unit as u32, done) }
+    }
+
+    #[detour(F_ENTER_BUILDING)]
+    unsafe extern "stdcall" fn f_enter_building_detour(unit: *const u32, done: *const bool) {
+        if !unsafe { f_enter_building(unit as u32, done) } {
+            unsafe { F_ENTER_BUILDING_DETOUR.call(unit, done) };
+        }
+    }
+
+    #[detour(F_RETURN_TO_BUILDING)]
+    unsafe extern "stdcall" fn f_return_to_building_detour(unit: *const u32, done: *const bool) {
+        if !unsafe { f_return_to_building(unit as u32, done) } {
+            unsafe { F_RETURN_TO_BUILDING_DETOUR.call(unit, done) };
+        }
+    }
+
+    #[detour(F_HIDE_PREDATOR)]
+    unsafe extern "stdcall" fn f_hide_predator_detour(unit: *const u32, done: *const bool) -> bool {
+        if unsafe { f_hide_predator(unit as u32, done) } {
+            true
+        } else {
+            unsafe { F_HIDE_PREDATOR_DETOUR.call(unit, done) }
+        }
+    }
+
+    #[detour(F_GUEST_ROUTINE)]
+    unsafe extern "stdcall" fn f_guest_routine_detour(unit: *const u32, done: *const bool) -> bool {
+        unsafe { f_guest_routine(unit as u32, done) }
+    }
+
+    #[detour(F_MAINT_ROUTINE)]
+    unsafe extern "stdcall" fn f_maint_routine_detour(unit: *const u32, done: *const bool) -> bool {
+        unsafe { f_maint_routine(unit as u32, done) }
+    }
+
+    #[detour(F_GUIDE_ROUTINE)]
+    unsafe extern "stdcall" fn f_guide_routine_detour(unit: *const u32, done: *const bool) -> bool {
+        unsafe { f_guide_routine(unit as u32, done) }
+    }
+
+    #[detour(F_KEEPER_ROUTINE)]
+    unsafe extern "stdcall" fn f_keeper_routine_detour(unit: *const u32, done: *const bool) -> bool {
+        unsafe { f_keeper_routine(unit as u32, done) }
+    }
+
+    // `F` wrappers: `(call, unit)`, with the `done` flag at `call + 0x18`.
+    #[detour(F_END_TRICK_F)]
+    unsafe extern "stdcall" fn f_end_trick_f_detour(call: i32, unit: *const i32) {
+        unsafe { f_end_trick(unit as u32, call_done_flag(call as u32)) };
+    }
+
+    #[detour(F_ENTER_BUILDING_F)]
+    unsafe extern "stdcall" fn f_enter_building_f_detour(call: i32, unit: *const i32) {
+        if !unsafe { f_enter_building(unit as u32, call_done_flag(call as u32)) } {
+            unsafe { F_ENTER_BUILDING_F_DETOUR.call(call, unit) };
+        }
+    }
+
+    #[detour(F_RETURN_TO_BUILDING_F)]
+    unsafe extern "stdcall" fn f_return_to_building_f_detour(call: i32, unit: *const i32) {
+        if !unsafe { f_return_to_building(unit as u32, call_done_flag(call as u32)) } {
+            unsafe { F_RETURN_TO_BUILDING_F_DETOUR.call(call, unit) };
+        }
+    }
+
+    #[detour(F_HIDE_PREDATOR_F)]
+    unsafe extern "stdcall" fn f_hide_predator_f_detour(call: i32, unit: *const u8) {
+        if !unsafe { f_hide_predator(unit as u32, call_done_flag(call as u32)) } {
+            unsafe { F_HIDE_PREDATOR_F_DETOUR.call(call, unit) };
+        }
+    }
+
+    #[detour(F_GUEST_ROUTINE_F)]
+    unsafe extern "stdcall" fn f_guest_routine_f_detour(call: u32, unit: u32) {
+        unsafe { f_guest_routine(unit, call_done_flag(call)) };
+    }
+
+    #[detour(F_MAINT_ROUTINE_F)]
+    unsafe extern "stdcall" fn f_maint_routine_f_detour(call: u32, unit: u32) {
+        unsafe { f_maint_routine(unit, call_done_flag(call)) };
+    }
+
+    #[detour(F_GUIDE_ROUTINE_F)]
+    unsafe extern "stdcall" fn f_guide_routine_f_detour(call: u32, unit: u32) {
+        unsafe { f_guide_routine(unit, call_done_flag(call)) };
+    }
+
+    #[detour(F_KEEPER_ROUTINE_F)]
+    unsafe extern "stdcall" fn f_keeper_routine_f_detour(call: u32, unit: *const i32) {
+        unsafe { f_keeper_routine(unit as u32, call_done_flag(call)) };
+    }
+
+    /// `fSprayF` only forwards to the `return 1` stub `BFAIMgr::fFaceDirection`: nothing to do.
+    #[detour(F_SPRAY_F)]
+    unsafe extern "stdcall" fn f_spray_f_detour(_call: i32, _unit: *const u32) {}
 
     #[detour(GET_RANDOM_X)]
     unsafe extern "thiscall" fn get_random_x_detour(this: *const u32, entity: *const u32) -> i32 {
@@ -282,6 +520,34 @@ mod ztaimgr_detours {
         pub(crate) fn convert_constant_param(this: *const u32, name: *const c_void, entity: *const u32) -> i32 {
             unsafe { super::CONVERT_CONSTANT_PARAM_DETOUR.call(this, name, entity) }
         }
+
+        pub(crate) fn f_end_trick(unit: *const u32, done: *const bool) -> bool {
+            unsafe { super::F_END_TRICK_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_enter_building(unit: *const u32, done: *const bool) {
+            unsafe { super::F_ENTER_BUILDING_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_return_to_building(unit: *const u32, done: *const bool) {
+            unsafe { super::F_RETURN_TO_BUILDING_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_guest_routine(unit: *const u32, done: *const bool) -> bool {
+            unsafe { super::F_GUEST_ROUTINE_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_maint_routine(unit: *const u32, done: *const bool) -> bool {
+            unsafe { super::F_MAINT_ROUTINE_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_guide_routine(unit: *const u32, done: *const bool) -> bool {
+            unsafe { super::F_GUIDE_ROUTINE_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_keeper_routine(unit: *const u32, done: *const bool) -> bool {
+            unsafe { super::F_KEEPER_ROUTINE_DETOUR.call(unit, done) }
+        }
     }
 }
 
@@ -326,6 +592,12 @@ pub(crate) mod live_support {
     pub(crate) fn real_convert_constant_param(this: *const u32, name: *const c_void, entity: *const u32) -> i32 {
         ztaimgr_detours::test_real::convert_constant_param(this, name, entity)
     }
+
+    pub(crate) use super::{f_enter_building, f_return_to_building};
+    pub(crate) use ztaimgr_detours::test_real::{
+        f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,
+        f_keeper_routine as real_f_keeper_routine, f_maint_routine as real_f_maint_routine, f_return_to_building as real_f_return_to_building,
+    };
 }
 
 #[cfg(test)]

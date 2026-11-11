@@ -6,7 +6,12 @@
 //! poles over the same memory: the hooked address (the Rust port) and the real vanilla body, which reads
 //! the same fixtures and dispatches through the same fake vtables.
 
-use openzt_detour::generated::ztaimgr::{CONVERT_CONSTANT_PARAM, GET_RANDOM_X, GET_RANDOM_Y, IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use openzt_detour::generated::ztaimgr::{
+    CONVERT_CONSTANT_PARAM, F_END_TRICK, F_ENTER_BUILDING, F_GUEST_ROUTINE, F_GUIDE_ROUTINE, F_KEEPER_ROUTINE, F_MAINT_ROUTINE, F_RETURN_TO_BUILDING, GET_RANDOM_X, GET_RANDOM_Y,
+    IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION,
+};
 
 use crate::{
     globals::get_module_base,
@@ -58,7 +63,37 @@ extern "thiscall" fn fake_is_cast_class(this: u32, tag_arg: u32) -> bool {
     (tag_arg == tag(RVA_TAG_ZTUNITTYPE) && kind != Kind::Scenery as u32) || (tag_arg == tag(RVA_TAG_ZTGUIDETYPE) && kind == Kind::Guide as u32)
 }
 
+/// Entity-vtable calls made by the fake handlers below: each call appends its slot id as a nibble, and the
+/// last `this` is kept, so a comparison sees both which virtual ran and on which object.
+static VIRTUAL_LOG: AtomicU32 = AtomicU32::new(0);
+static VIRTUAL_THIS: AtomicU32 = AtomicU32::new(0);
+
+fn record_virtual(id: u32, this: u32) {
+    VIRTUAL_LOG.store(VIRTUAL_LOG.load(Ordering::Relaxed) * 16 + id, Ordering::Relaxed);
+    VIRTUAL_THIS.store(this, Ordering::Relaxed);
+}
+
+extern "thiscall" fn fake_enter_building(this: u32) {
+    record_virtual(0xa, this);
+}
+extern "thiscall" fn fake_return_to_building(this: u32) {
+    record_virtual(0xb, this);
+}
+extern "thiscall" fn fake_end_trick(this: u32) {
+    record_virtual(0xc, this);
+}
+
+fn reset_virtual_log() {
+    VIRTUAL_LOG.store(0, Ordering::Relaxed);
+    VIRTUAL_THIS.store(0, Ordering::Relaxed);
+}
+
+fn virtual_log() -> (u32, u32) {
+    (VIRTUAL_LOG.load(Ordering::Relaxed), VIRTUAL_THIS.load(Ordering::Relaxed))
+}
+
 struct Fixture {
+    _entity_vtable: Box<[u32; 0x100]>,
     ai_mgr: Box<[u32; 0x60]>,
     _vtable: Box<FakeVtable>,
     _types: Vec<(Kind, Box<FakeType>)>,
@@ -76,6 +111,12 @@ impl Fixture {
         vtable.slots[0x1c / 4] = fake_is_cast_class as *const () as usize as u32;
         let vtable_ptr = vtable.slots.as_ptr() as u32;
 
+        let mut entity_vtable = Box::new([0u32; 0x100]);
+        entity_vtable[0x2a8 / 4] = fake_enter_building as *const () as usize as u32;
+        entity_vtable[0x2b0 / 4] = fake_return_to_building as *const () as usize as u32;
+        entity_vtable[0x2bc / 4] = fake_end_trick as *const () as usize as u32;
+        let entity_vtable_ptr = entity_vtable.as_ptr() as u32;
+
         let mut types = Vec::new();
         let mut entities = Vec::new();
         for kind in ALL_KINDS {
@@ -86,11 +127,12 @@ impl Fixture {
             ty.words[0] = vtable_ptr;
             ty.words[1] = kind as u32;
             let mut entity = Box::new([0u32; 0x60]);
+            entity[0] = entity_vtable_ptr;
             entity[0x128 / 4] = ty.words.as_ptr() as u32;
             types.push((kind, ty));
             entities.push((kind, entity));
         }
-        Self { ai_mgr, _vtable: vtable, _types: types, entities }
+        Self { _entity_vtable: entity_vtable, ai_mgr, _vtable: vtable, _types: types, entities }
     }
 
     fn this(&self) -> *const u32 {
@@ -206,6 +248,97 @@ pub(crate) fn run_ztaimgr_move_functions_test(failure_log: &mut Option<std::fs::
             if rust != real {
                 failures.push(format!("is{which}MoveFunction call {:#x}: rust {rust} != real {real}", call.ptr() as u32));
             }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+type PoleOutcome<R> = (R, bool, (u32, u32));
+
+/// Runs `pole` on `unit` with a fresh `done` flag, returning `(result, done, (virtual log, last this))`.
+fn run_pole<R>(unit: *const u32, pole: impl FnOnce(*const u32, *const bool) -> R) -> PoleOutcome<R> {
+    reset_virtual_log();
+    let done = Box::new(false);
+    let result = pole(unit, &*done as *const bool);
+    (result, *done, virtual_log())
+}
+
+/// `ZTAIMGR_BUILDING_AND_TRICK_HANDLERS`: `fEndTrick` over every entity kind and a null unit, and
+/// `fEnterBuilding`/`fReturnToBuilding` over every unit kind, against the real bodies. The real
+/// `fEnterBuilding`/`fReturnToBuilding` fault on a null or non-unit target, so there the test asserts only that
+/// the port defers without acting. The routine handlers are compared only for targets that are not exactly
+/// their class (the real `fRoutine` bodies are not safe to run on fake entities).
+pub(crate) fn run_ztaimgr_building_and_trick_handlers_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTAIMGR_BUILDING_AND_TRICK_HANDLERS";
+    let fixture = Fixture::new();
+    let mut failures = Vec::new();
+    let null = std::ptr::null::<u32>();
+
+    let mut targets: Vec<(String, Option<Kind>, *const u32)> = ALL_KINDS.iter().map(|k| (format!("{k:?}"), Some(*k), fixture.entity(*k))).collect();
+    targets.push(("null".to_string(), None, null));
+
+    for (label, kind, unit) in &targets {
+        let rust = run_pole(*unit, |u, d| unsafe { F_END_TRICK.hooked()(u, d) });
+        let real = run_pole(*unit, live_support::real_f_end_trick);
+        if rust != real {
+            failures.push(format!("fEndTrick {label}: rust {rust:?} != real {real:?}"));
+        }
+
+        if kind.is_some_and(|k| k != Kind::Scenery) {
+            let rust = run_pole(*unit, |u, d| {
+                unsafe { F_ENTER_BUILDING.hooked()(u, d) };
+                true
+            });
+            let real = run_pole(*unit, |u, d| {
+                live_support::real_f_enter_building(u, d);
+                true
+            });
+            if rust != real {
+                failures.push(format!("fEnterBuilding {label}: rust {rust:?} != real {real:?}"));
+            }
+            let rust = run_pole(*unit, |u, d| {
+                unsafe { F_RETURN_TO_BUILDING.hooked()(u, d) };
+                true
+            });
+            let real = run_pole(*unit, |u, d| {
+                live_support::real_f_return_to_building(u, d);
+                true
+            });
+            if rust != real {
+                failures.push(format!("fReturnToBuilding {label}: rust {rust:?} != real {real:?}"));
+            }
+        } else {
+            let enter = run_pole(*unit, |u, d| unsafe { live_support::f_enter_building(u as u32, d) });
+            let ret = run_pole(*unit, |u, d| unsafe { live_support::f_return_to_building(u as u32, d) });
+            for (name, outcome) in [("fEnterBuilding", enter), ("fReturnToBuilding", ret)] {
+                if outcome != (false, false, (0, 0)) {
+                    failures.push(format!("{name} {label}: expected the port to defer untouched, got {outcome:?}"));
+                }
+            }
+        }
+
+        let is_guest = *kind == Some(Kind::Guest);
+        if !is_guest {
+            let rust = run_pole(*unit, |u, d| unsafe { F_GUEST_ROUTINE.hooked()(u, d) });
+            let real = run_pole(*unit, live_support::real_f_guest_routine);
+            if rust != real {
+                failures.push(format!("fGuestRoutine {label}: rust {rust:?} != real {real:?}"));
+            }
+        }
+        let rust = run_pole(*unit, |u, d| unsafe { F_MAINT_ROUTINE.hooked()(u, d) });
+        let real = run_pole(*unit, live_support::real_f_maint_routine);
+        if rust != real {
+            failures.push(format!("fMaintRoutine {label}: rust {rust:?} != real {real:?}"));
+        }
+        let rust = run_pole(*unit, |u, d| unsafe { F_GUIDE_ROUTINE.hooked()(u, d) });
+        let real = run_pole(*unit, live_support::real_f_guide_routine);
+        if rust != real {
+            failures.push(format!("fGuideRoutine {label}: rust {rust:?} != real {real:?}"));
+        }
+        let rust = run_pole(*unit, |u, d| unsafe { F_KEEPER_ROUTINE.hooked()(u, d) });
+        let real = run_pole(*unit, live_support::real_f_keeper_routine);
+        if rust != real {
+            failures.push(format!("fKeeperRoutine {label}: rust {rust:?} != real {real:?}"));
         }
     }
     finish_test(test_name, failures, failure_log)
