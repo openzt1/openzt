@@ -134,6 +134,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTAIMGR_MOVE_FUNCTIONS", run: tests::ztaimgr::run_ztaimgr_move_functions_test },
             RegisteredTest { name: "ZTAIMGR_CONVERT_CONSTANT_PARAM", run: tests::ztaimgr::run_ztaimgr_convert_constant_param_test },
             RegisteredTest { name: "ZTAIMGR_BUILDING_AND_TRICK_HANDLERS", run: tests::ztaimgr::run_ztaimgr_building_and_trick_handlers_test },
+            RegisteredTest { name: "ZTAIMGR_EXECUTE_CALL", run: tests::ztaimgr::run_ztaimgr_execute_call_test },
         ]);
         #[cfg(debug_assertions)]
         tests.extend([RegisteredTest { name: "ZTSOUNDSCAPE_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztsoundscape::run_ztsoundscape_original_routes_to_trampoline_test }]);

@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use openzt_detour::generated::ztaimgr::{
-    CONVERT_CONSTANT_PARAM, F_CAUGHT_PREY, F_DIE, F_EXIT_BUILDING, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_TARGET, F_KILL_PREY, F_END_TRICK, F_ENTER_BUILDING, F_GUEST_ROUTINE, F_GUIDE_ROUTINE, F_KEEPER_ROUTINE, F_MAINT_ROUTINE, F_RETURN_TO_BUILDING, GET_RANDOM_X, GET_RANDOM_Y,
+    CONVERT_CONSTANT_PARAM, EXECUTE_CALL, F_CAUGHT_PREY, F_DIE, F_EXIT_BUILDING, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_TARGET, F_KILL_PREY, F_END_TRICK, F_ENTER_BUILDING, F_GUEST_ROUTINE, F_GUIDE_ROUTINE, F_KEEPER_ROUTINE, F_MAINT_ROUTINE, F_RETURN_TO_BUILDING, GET_RANDOM_X, GET_RANDOM_Y,
     IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION,
 };
 
@@ -167,7 +167,8 @@ impl CallString {
 
 /// A fake `BFFunctionCall`: name string, then a parameter vector of 12-byte `{begin,end,cap}` entries.
 struct Call {
-    raw: Box<[u32; 6]>,
+    /// Six words of name and parameter vector, then the result flag byte at `+0x18`.
+    raw: Box<[u32; 7]>,
     _name: CallString,
     _params: Vec<CallString>,
     _param_words: Vec<u32>,
@@ -180,7 +181,7 @@ impl Call {
         let param_words: Vec<u32> = params.iter().flat_map(|p| p.raw).collect();
         let begin = param_words.as_ptr() as u32;
         let end = begin + (param_words.len() * 4) as u32;
-        let raw = Box::new([name.raw[0], name.raw[1], name.raw[2], begin, end, end]);
+        let raw = Box::new([name.raw[0], name.raw[1], name.raw[2], begin, end, end, 0]);
         Self { raw, _name: name, _params: params, _param_words: param_words }
     }
 
@@ -397,6 +398,40 @@ pub(crate) fn run_ztaimgr_building_and_trick_handlers_test(failure_log: &mut Opt
         let real = run_pole(*unit, live_support::real_f_keeper_routine);
         if rust != real {
             failures.push(format!("fKeeperRoutine {label}: rust {rust:?} != real {real:?}"));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_EXECUTE_CALL`: the real dispatch chain against the port for the names whose real handler is safe
+/// on a null or scenery unit (the cast unit is then null for every ZT handler), plus names that fall through
+/// the whole `BFAIMgr` chain. Compares the `done` byte, the call's own flag byte and entity-virtual calls.
+pub(crate) fn run_ztaimgr_execute_call_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTAIMGR_EXECUTE_CALL";
+    let fixture = Fixture::new();
+    let mut failures = Vec::new();
+    let names = [
+        "fSpray", "fKeeperRoutine", "fGuestRoutine", "fGuideRoutine", "fMaintRoutine", "fFaceTowardFood", "fFaceTowardTarget", "fKillPrey", "fCaughtPrey", "fDie", "fEndTrick",
+        "fKeepControl", "fNoSuchFunction", "", "fdie", "fDieX", "fDi",
+    ];
+    for name in names {
+        for (label, unit) in [("null", std::ptr::null::<u32>()), ("scenery", fixture.entity(Kind::Scenery))] {
+            let mut outcomes = Vec::new();
+            for real in [false, true] {
+                let call = Call::new(name, &[]);
+                reset_virtual_log();
+                let done = Box::new(0xabu8);
+                let (call_ptr, unit_ptr, done_ptr) = (call.ptr() as *const i8, unit as *const i32, &*done as *const u8);
+                if real {
+                    live_support::real_execute_call(fixture.this(), call_ptr, unit_ptr, done_ptr);
+                } else {
+                    unsafe { EXECUTE_CALL.hooked()(fixture.this(), call_ptr, unit_ptr, done_ptr) };
+                }
+                outcomes.push((*done, call.raw[6] & 0xff, virtual_log()));
+            }
+            if outcomes[0] != outcomes[1] {
+                failures.push(format!("{name:?} {label}: rust {:?} != real {:?}", outcomes[0], outcomes[1]));
+            }
         }
     }
     finish_test(test_name, failures, failure_log)

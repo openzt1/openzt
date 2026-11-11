@@ -30,7 +30,8 @@ use openzt_detour::generated::{
     ztaimgr::{
         F_CAUGHT_PREY, F_CAUGHT_PREY_F, F_DIE, F_DIE_F, F_EXIT_BUILDING, F_EXIT_BUILDING_F, F_HATCH, F_HATCH_F, F_KILL_PREY, F_KILL_PREY_F, F_SHOW_PREDATOR, F_SHOW_PREDATOR_F,
     },
-    ztaimgr::{F_FACE_TOWARD_FOOD, F_FACE_TOWARD_FOOD_F, F_FACE_TOWARD_TARGET, F_FACE_TOWARD_TARGET_F},
+    bfaimgr::{EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F},
+    ztaimgr::{EXECUTE_CALL, F_DUST_BALL_F, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_FOOD_F, F_FACE_TOWARD_TARGET, F_FACE_TOWARD_TARGET_F, F_PLAY_SET_TANK_F, F_TARGET_BUILDING_F},
     ztanimal::{CONSUME as ZTANIMAL_CONSUME, FACE_TOWARD_FOOD, FINISH_HATCH},
     ztguest::F_ROUTINE as ZTGUEST_F_ROUTINE,
     zthabitat::TRIGGER_DEATH_ARRIVED,
@@ -500,6 +501,110 @@ pub unsafe fn f_face_toward_target(unit: u32, done: *const bool) -> bool {
     true
 }
 
+/// Function names `ZTAIMgr::executeCall` handles itself; every other name goes to `BFAIMgr::executeCall`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ZtCall {
+    MoveSlow,
+    MoveMedium,
+    MoveFast,
+    Spray,
+    KeeperRoutine,
+    GuestRoutine,
+    GuideRoutine,
+    MaintRoutine,
+    FaceTowardFood,
+    FaceTowardTarget,
+    ShowPredator,
+    HidePredator,
+    EnterBuilding,
+    ExitBuilding,
+    DustBall,
+    KillPrey,
+    CaughtPrey,
+    Die,
+    TargetBuilding,
+    Hatch,
+    EndTrick,
+    ReturnToBuilding,
+    PlaySetTank,
+}
+
+/// Exact, case-sensitive match of a call name against the 24 names the ZT chain tests.
+pub fn lookup_zt_call(name: &[u8]) -> Option<ZtCall> {
+    Some(match name {
+        b"fWalk" | b"fSwim" => ZtCall::MoveSlow,
+        b"fTrot" => ZtCall::MoveMedium,
+        b"fRun" => ZtCall::MoveFast,
+        b"fSpray" => ZtCall::Spray,
+        b"fKeeperRoutine" => ZtCall::KeeperRoutine,
+        b"fGuestRoutine" => ZtCall::GuestRoutine,
+        b"fGuideRoutine" => ZtCall::GuideRoutine,
+        b"fMaintRoutine" => ZtCall::MaintRoutine,
+        b"fFaceTowardFood" => ZtCall::FaceTowardFood,
+        b"fFaceTowardTarget" => ZtCall::FaceTowardTarget,
+        b"fShowPredator" => ZtCall::ShowPredator,
+        b"fHidePredator" => ZtCall::HidePredator,
+        b"fEnterBuilding" => ZtCall::EnterBuilding,
+        b"fExitBuilding" => ZtCall::ExitBuilding,
+        b"fDustBall" => ZtCall::DustBall,
+        b"fKillPrey" => ZtCall::KillPrey,
+        b"fCaughtPrey" => ZtCall::CaughtPrey,
+        b"fDie" => ZtCall::Die,
+        b"fTargetBuilding" => ZtCall::TargetBuilding,
+        b"fHatch" => ZtCall::Hatch,
+        b"fEndTrick" => ZtCall::EndTrick,
+        b"fReturnToBuilding" => ZtCall::ReturnToBuilding,
+        b"fPlaySetTank" => ZtCall::PlaySetTank,
+        _ => return None,
+    })
+}
+
+/// Runs the handler for `which` the way the vanilla chain does. Handlers this crate has ported are reached
+/// through their wrapper address (`hooked()`, what a vanilla caller would run), so their own deferral to
+/// vanilla for faulting inputs still applies; the rest call the real wrappers.
+unsafe fn dispatch_zt_call(this: u32, which: ZtCall, call: u32, unit: u32) {
+    let (c, u) = (call as i32, unit as *const i32);
+    unsafe {
+        match which {
+            ZtCall::MoveSlow => drop(F_MOVE_SLOW_F.original()(this as *const u32, c, u)),
+            ZtCall::MoveMedium => drop(F_MOVE_MEDIUM_F.original()(this as *const u32, c, u)),
+            ZtCall::MoveFast => drop(F_MOVE_FAST_F.original()(this as *const u32, c, u)),
+            ZtCall::Spray => F_SPRAY_F.hooked()(c, unit as *const u32),
+            ZtCall::KeeperRoutine => F_KEEPER_ROUTINE_F.hooked()(call, u),
+            ZtCall::GuestRoutine => F_GUEST_ROUTINE_F.hooked()(call, unit),
+            ZtCall::GuideRoutine => F_GUIDE_ROUTINE_F.hooked()(call, unit),
+            ZtCall::MaintRoutine => F_MAINT_ROUTINE_F.hooked()(call, unit),
+            ZtCall::FaceTowardFood => F_FACE_TOWARD_FOOD_F.hooked()(c, unit as *const u8),
+            ZtCall::FaceTowardTarget => F_FACE_TOWARD_TARGET_F.hooked()(c, unit as *const c_void),
+            ZtCall::ShowPredator => F_SHOW_PREDATOR_F.hooked()(c, u),
+            ZtCall::HidePredator => F_HIDE_PREDATOR_F.hooked()(c, unit as *const u8),
+            ZtCall::EnterBuilding => F_ENTER_BUILDING_F.hooked()(c, u),
+            ZtCall::ExitBuilding => F_EXIT_BUILDING_F.hooked()(c, u),
+            ZtCall::DustBall => F_DUST_BALL_F.original()(this as *const u32, c, u),
+            ZtCall::KillPrey => F_KILL_PREY_F.hooked()(c, unit as *const u8),
+            ZtCall::CaughtPrey => F_CAUGHT_PREY_F.hooked()(c, u),
+            ZtCall::Die => F_DIE_F.hooked()(c, u),
+            ZtCall::TargetBuilding => drop(F_TARGET_BUILDING_F.original()(c, u)),
+            ZtCall::Hatch => F_HATCH_F.hooked()(c, u),
+            ZtCall::EndTrick => F_END_TRICK_F.hooked()(c, u),
+            ZtCall::ReturnToBuilding => F_RETURN_TO_BUILDING_F.hooked()(c, u),
+            ZtCall::PlaySetTank => drop(F_PLAY_SET_TANK_F.original()(c, unit as *const c_void)),
+        }
+    }
+}
+
+/// `ZTAIMgr::executeCall`: dispatches the ZT-specific names; anything else is passed to `BFAIMgr`'s chain
+/// (`fall_through`) with the uncast unit. Afterwards the call's result flag is copied to `done`.
+pub unsafe fn execute_call(this: u32, call: u32, unit: u32, done: *mut u8, fall_through: impl FnOnce()) {
+    let name = unsafe { &*(call as *const RawCallString) }.bytes();
+    let unit_cast = if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } { unit } else { 0 };
+    match lookup_zt_call(name) {
+        Some(which) => unsafe { dispatch_zt_call(this, which, call, unit_cast) },
+        None => fall_through(),
+    }
+    unsafe { done.write_volatile(get_from_memory::<u8>(call + CALL_DONE_FLAG_OFFSET)) };
+}
+
 fn call_done_flag(call: u32) -> *const bool {
     (call + CALL_DONE_FLAG_OFFSET) as *const bool
 }
@@ -706,6 +811,15 @@ mod ztaimgr_detours {
         }
     }
 
+    #[detour(EXECUTE_CALL)]
+    unsafe extern "thiscall" fn execute_call_detour(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) {
+        unsafe {
+            execute_call(this as u32, call as u32, unit as u32, done as *mut u8, || {
+                BFAIMGR_EXECUTE_CALL.original()(this, call, unit, done);
+            })
+        }
+    }
+
     /// `fSprayF` only forwards to the `return 1` stub `BFAIMgr::fFaceDirection`: nothing to do.
     #[detour(F_SPRAY_F)]
     unsafe extern "stdcall" fn f_spray_f_detour(_call: i32, _unit: *const u32) {}
@@ -787,6 +901,10 @@ mod ztaimgr_detours {
 
         pub(crate) fn f_return_to_building(unit: *const u32, done: *const bool) {
             unsafe { super::F_RETURN_TO_BUILDING_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn execute_call(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) {
+            unsafe { super::EXECUTE_CALL_DETOUR.call(this, call, unit, done) }
         }
 
         pub(crate) fn f_exit_building(unit: *const i32, done: *const u8) {
@@ -875,7 +993,7 @@ pub(crate) mod live_support {
 
     pub(crate) use super::{f_enter_building, f_exit_building, f_hatch, f_return_to_building, f_show_predator};
     pub(crate) use ztaimgr_detours::test_real::{
-        f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_face_toward_food as real_f_face_toward_food, f_face_toward_target as real_f_face_toward_target, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
+        execute_call as real_execute_call, f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_face_toward_food as real_f_face_toward_food, f_face_toward_target as real_f_face_toward_target, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
     };
     pub(crate) use ztaimgr_detours::test_real::{
         f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,
@@ -895,6 +1013,47 @@ mod tests {
     fn call_with(name: &'static [u8], params: &[RawCallString]) -> RawFunctionCall {
         let range = params.as_ptr_range();
         RawFunctionCall { name: string_of(name), params_begin: range.start, params_end: range.end, params_capacity: range.end }
+    }
+
+    #[test]
+    fn zt_call_lookup_covers_every_name_and_nothing_near() {
+        let names: [(&[u8], ZtCall); 23] = [
+            (b"fWalk", ZtCall::MoveSlow),
+            (b"fSwim", ZtCall::MoveSlow),
+            (b"fTrot", ZtCall::MoveMedium),
+            (b"fRun", ZtCall::MoveFast),
+            (b"fSpray", ZtCall::Spray),
+            (b"fKeeperRoutine", ZtCall::KeeperRoutine),
+            (b"fGuestRoutine", ZtCall::GuestRoutine),
+            (b"fGuideRoutine", ZtCall::GuideRoutine),
+            (b"fMaintRoutine", ZtCall::MaintRoutine),
+            (b"fFaceTowardFood", ZtCall::FaceTowardFood),
+            (b"fFaceTowardTarget", ZtCall::FaceTowardTarget),
+            (b"fShowPredator", ZtCall::ShowPredator),
+            (b"fHidePredator", ZtCall::HidePredator),
+            (b"fEnterBuilding", ZtCall::EnterBuilding),
+            (b"fExitBuilding", ZtCall::ExitBuilding),
+            (b"fDustBall", ZtCall::DustBall),
+            (b"fKillPrey", ZtCall::KillPrey),
+            (b"fCaughtPrey", ZtCall::CaughtPrey),
+            (b"fDie", ZtCall::Die),
+            (b"fTargetBuilding", ZtCall::TargetBuilding),
+            (b"fHatch", ZtCall::Hatch),
+            (b"fEndTrick", ZtCall::EndTrick),
+            (b"fReturnToBuilding", ZtCall::ReturnToBuilding),
+        ];
+        for (name, expected) in names {
+            assert_eq!(lookup_zt_call(name), Some(expected), "{}", String::from_utf8_lossy(name));
+            let mut longer = name.to_vec();
+            longer.push(b'x');
+            assert_eq!(lookup_zt_call(&longer), None);
+            assert_eq!(lookup_zt_call(&name[..name.len() - 1]), None);
+            assert_eq!(lookup_zt_call(&name.to_ascii_lowercase()), None);
+        }
+        assert_eq!(lookup_zt_call(b"fPlaySetTank"), Some(ZtCall::PlaySetTank));
+        for name in [&b""[..], b"fMove", b"fPlay", b"fHalt", b"fMoveSlow", b"fWalkx"] {
+            assert_eq!(lookup_zt_call(name), None);
+        }
     }
 
     #[test]
