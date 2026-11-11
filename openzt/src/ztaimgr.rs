@@ -30,10 +30,11 @@ use openzt_detour::generated::{
     ztaimgr::{
         F_CAUGHT_PREY, F_CAUGHT_PREY_F, F_DIE, F_DIE_F, F_EXIT_BUILDING, F_EXIT_BUILDING_F, F_HATCH, F_HATCH_F, F_KILL_PREY, F_KILL_PREY_F, F_SHOW_PREDATOR, F_SHOW_PREDATOR_F,
     },
-    ztanimal::{CONSUME as ZTANIMAL_CONSUME, FINISH_HATCH},
+    ztaimgr::{F_FACE_TOWARD_FOOD, F_FACE_TOWARD_FOOD_F, F_FACE_TOWARD_TARGET, F_FACE_TOWARD_TARGET_F},
+    ztanimal::{CONSUME as ZTANIMAL_CONSUME, FACE_TOWARD_FOOD, FINISH_HATCH},
     ztguest::F_ROUTINE as ZTGUEST_F_ROUTINE,
     zthabitat::TRIGGER_DEATH_ARRIVED,
-    ztunit::{F_ZOO_MESSAGE_TILE_0, GET_PREDATOR_UNIT, GET_TARGET_UNIT as ZTUNIT_GET_TARGET_UNIT, SET_IS_REMOVED as ZTUNIT_SET_IS_REMOVED},
+    ztunit::{FACE_TOWARD_TARGET, FACE_TOWARD_TARGET_UNIT, F_ZOO_MESSAGE_TILE_0, GET_PREDATOR_UNIT, GET_TARGET_UNIT as ZTUNIT_GET_TARGET_UNIT, SET_IS_REMOVED as ZTUNIT_SET_IS_REMOVED},
     ztmapview::PREPARE_TO_DELETE_ENTITY,
     ztui_general::GET_MAPVIEW,
 };
@@ -470,6 +471,35 @@ pub unsafe fn f_exit_building(unit: u32, done: *const bool) -> bool {
     unsafe { building_transition(unit, done, ENTITY_VTABLE_EXIT_BUILDING) }
 }
 
+/// `fFaceTowardFood`: an animal faces its food; anything else just finishes. Always reports success.
+pub unsafe fn f_face_toward_food(unit: u32, done: *const bool) -> bool {
+    if unsafe { is_animal(unit) } {
+        unsafe { FACE_TOWARD_FOOD.original()(unit as *const u32) };
+    }
+    unsafe { set_done(done) };
+    true
+}
+
+/// `fFaceTowardTarget`: staff and guests face their target by position, other units face their target
+/// unit; a non-unit just finishes. `false` (defer to vanilla) for a staff/guest target that is not a unit
+/// type, where vanilla calls `faceTowardTarget` with a null `this`.
+pub unsafe fn f_face_toward_target(unit: u32, done: *const bool) -> bool {
+    let is_staff = unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTSTAFF) };
+    let is_guest = unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTGUEST) };
+    let is_unit = unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) };
+    if !is_unit {
+        if is_staff || is_guest {
+            return false;
+        }
+    } else if is_staff || is_guest {
+        unsafe { FACE_TOWARD_TARGET.original()(unit as *const u32) };
+    } else {
+        unsafe { FACE_TOWARD_TARGET_UNIT.original()(unit as *const u32) };
+    }
+    unsafe { set_done(done) };
+    true
+}
+
 fn call_done_flag(call: u32) -> *const bool {
     (call + CALL_DONE_FLAG_OFFSET) as *const bool
 }
@@ -650,6 +680,32 @@ mod ztaimgr_detours {
         }
     }
 
+    #[detour(F_FACE_TOWARD_FOOD)]
+    unsafe extern "stdcall" fn f_face_toward_food_detour(unit: *const u8, done: *const u8) -> u32 {
+        unsafe { f_face_toward_food(unit as u32, done as *const bool) as u32 }
+    }
+
+    #[detour(F_FACE_TOWARD_FOOD_F)]
+    unsafe extern "stdcall" fn f_face_toward_food_f_detour(call: i32, unit: *const u8) {
+        unsafe { f_face_toward_food(unit as u32, call_done_flag(call as u32)) };
+    }
+
+    #[detour(F_FACE_TOWARD_TARGET)]
+    unsafe extern "stdcall" fn f_face_toward_target_detour(unit: *const c_void, done: *const u8) -> u32 {
+        if unsafe { f_face_toward_target(unit as u32, done as *const bool) } {
+            1
+        } else {
+            unsafe { F_FACE_TOWARD_TARGET_DETOUR.call(unit, done) }
+        }
+    }
+
+    #[detour(F_FACE_TOWARD_TARGET_F)]
+    unsafe extern "stdcall" fn f_face_toward_target_f_detour(call: i32, unit: *const c_void) {
+        if !unsafe { f_face_toward_target(unit as u32, call_done_flag(call as u32)) } {
+            unsafe { F_FACE_TOWARD_TARGET_F_DETOUR.call(call, unit) };
+        }
+    }
+
     /// `fSprayF` only forwards to the `return 1` stub `BFAIMgr::fFaceDirection`: nothing to do.
     #[detour(F_SPRAY_F)]
     unsafe extern "stdcall" fn f_spray_f_detour(_call: i32, _unit: *const u32) {}
@@ -749,6 +805,14 @@ mod ztaimgr_detours {
             unsafe { super::F_DIE_DETOUR.call(unit, done) }
         }
 
+        pub(crate) fn f_face_toward_food(unit: *const u8, done: *const u8) -> u32 {
+            unsafe { super::F_FACE_TOWARD_FOOD_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_face_toward_target(unit: *const std::ffi::c_void, done: *const u8) -> u32 {
+            unsafe { super::F_FACE_TOWARD_TARGET_DETOUR.call(unit, done) }
+        }
+
         pub(crate) fn f_guest_routine(unit: *const u32, done: *const bool) -> bool {
             unsafe { super::F_GUEST_ROUTINE_DETOUR.call(unit, done) }
         }
@@ -811,7 +875,7 @@ pub(crate) mod live_support {
 
     pub(crate) use super::{f_enter_building, f_exit_building, f_hatch, f_return_to_building, f_show_predator};
     pub(crate) use ztaimgr_detours::test_real::{
-        f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
+        f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_face_toward_food as real_f_face_toward_food, f_face_toward_target as real_f_face_toward_target, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
     };
     pub(crate) use ztaimgr_detours::test_real::{
         f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,

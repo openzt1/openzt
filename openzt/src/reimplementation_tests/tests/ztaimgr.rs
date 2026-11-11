@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use openzt_detour::generated::ztaimgr::{
-    CONVERT_CONSTANT_PARAM, F_CAUGHT_PREY, F_DIE, F_EXIT_BUILDING, F_KILL_PREY, F_END_TRICK, F_ENTER_BUILDING, F_GUEST_ROUTINE, F_GUIDE_ROUTINE, F_KEEPER_ROUTINE, F_MAINT_ROUTINE, F_RETURN_TO_BUILDING, GET_RANDOM_X, GET_RANDOM_Y,
+    CONVERT_CONSTANT_PARAM, F_CAUGHT_PREY, F_DIE, F_EXIT_BUILDING, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_TARGET, F_KILL_PREY, F_END_TRICK, F_ENTER_BUILDING, F_GUEST_ROUTINE, F_GUIDE_ROUTINE, F_KEEPER_ROUTINE, F_MAINT_ROUTINE, F_RETURN_TO_BUILDING, GET_RANDOM_X, GET_RANDOM_Y,
     IS_FAST_MOVE_FUNCTION, IS_MEDIUM_MOVE_FUNCTION, IS_SLOW_MOVE_FUNCTION,
 };
 
@@ -355,6 +355,19 @@ pub(crate) fn run_ztaimgr_building_and_trick_handlers_test(failure_log: &mut Opt
         let real = run_pole(*unit, |u, d| live_support::real_f_die(u as *const i32, d as *const u8));
         if (rust.0 & 0xff, rust.1, rust.2) != (real.0 & 0xff, real.1, real.2) {
             failures.push(format!("fDie {label}: rust {rust:?} != real {real:?}"));
+        }
+        let rust = run_pole(*unit, |u, d| unsafe { F_FACE_TOWARD_FOOD.hooked()(u as *const u8, d as *const u8) });
+        let real = run_pole(*unit, |u, d| live_support::real_f_face_toward_food(u as *const u8, d as *const u8));
+        if (rust.0 & 0xff, rust.1, rust.2) != (real.0 & 0xff, real.1, real.2) {
+            failures.push(format!("fFaceTowardFood {label}: rust {rust:?} != real {real:?}"));
+        }
+        // Only a non-unit, non-staff/guest target avoids the real `faceTowardTarget` helpers.
+        if matches!(kind, None | Some(Kind::Scenery)) {
+            let rust = run_pole(*unit, |u, d| unsafe { F_FACE_TOWARD_TARGET.hooked()(u as *const std::ffi::c_void, d as *const u8) });
+            let real = run_pole(*unit, |u, d| live_support::real_f_face_toward_target(u as *const std::ffi::c_void, d as *const u8));
+            if (rust.0 & 0xff, rust.1, rust.2) != (real.0 & 0xff, real.1, real.2) {
+                failures.push(format!("fFaceTowardTarget {label}: rust {rust:?} != real {real:?}"));
+            }
         }
         let predator = run_pole(*unit, |u, d| unsafe { live_support::f_show_predator(u as u32, d) });
         let hatch = run_pole(*unit, |u, d| unsafe { live_support::f_hatch(u as u32, d) });
