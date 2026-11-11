@@ -30,7 +30,11 @@ use openzt_detour::generated::{
     ztaimgr::{
         F_CAUGHT_PREY, F_CAUGHT_PREY_F, F_DIE, F_DIE_F, F_EXIT_BUILDING, F_EXIT_BUILDING_F, F_HATCH, F_HATCH_F, F_KILL_PREY, F_KILL_PREY_F, F_SHOW_PREDATOR, F_SHOW_PREDATOR_F,
     },
-    bfaimgr::{EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F},
+    bfaimgr::{
+        EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_FACE_DIRECTION_F, F_FLY_REVERSE_F, F_HALT_F, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F, F_MOVE_REVERSE_F,
+        F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F, F_MOVE_WITH_SOUND_F, F_PLAY_PING_PONG_F, F_PLAY_REVERSE_F, F_PLAY_SET_F, F_PLAY_SET_PROB_F, F_PLAY_SOUND_F,
+        F_PLAY_SPECIAL_F, F_PLAY_STOP_AT_END_F, F_PLAY_TIME_F, F_PLAY_WITH_BASE_F, F_PLAY_WITH_SOUND_F, F_SET_BASE_F,
+    },
     ztaimgr::{EXECUTE_CALL, F_DUST_BALL_F, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_FOOD_F, F_FACE_TOWARD_TARGET, F_FACE_TOWARD_TARGET_F, F_PLAY_SET_TANK_F, F_TARGET_BUILDING_F},
     ztanimal::{CONSUME as ZTANIMAL_CONSUME, FACE_TOWARD_FOOD, FINISH_HATCH},
     ztguest::F_ROUTINE as ZTGUEST_F_ROUTINE,
@@ -593,16 +597,152 @@ unsafe fn dispatch_zt_call(this: u32, which: ZtCall, call: u32, unit: u32) {
     }
 }
 
-/// `ZTAIMgr::executeCall`: dispatches the ZT-specific names; anything else is passed to `BFAIMgr`'s chain
-/// (`fall_through`) with the uncast unit. Afterwards the call's result flag is copied to `done`.
-pub unsafe fn execute_call(this: u32, call: u32, unit: u32, done: *mut u8, fall_through: impl FnOnce()) {
+/// `ZTAIMgr::executeCall`: dispatches the ZT-specific names; anything else goes to the `BFAIMgr` chain
+/// ([`execute_base_call`]) with the uncast unit. Afterwards the call's result flag is copied to `done`.
+pub unsafe fn execute_call(this: u32, call: u32, unit: u32, done: *mut u8) {
     let name = unsafe { &*(call as *const RawCallString) }.bytes();
     let unit_cast = if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } { unit } else { 0 };
     match lookup_zt_call(name) {
         Some(which) => unsafe { dispatch_zt_call(this, which, call, unit_cast) },
-        None => fall_through(),
+        None => {
+            unsafe { execute_base_call(this, call, unit, done) };
+        }
     }
     unsafe { done.write_volatile(get_from_memory::<u8>(call + CALL_DONE_FLAG_OFFSET)) };
+}
+
+/// Function names `BFAIMgr::executeCall` handles. Two literals alias `fPlaySpecial` (`fPlaySp`), `fPlayPingPong`
+/// (`fPingPong`) and `fPlayWithSound` (`fPlaySFX`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BaseCall {
+    Play,
+    SetBase,
+    PlayWithBase,
+    MoveEntityDelta,
+    MoveEntitySpecial,
+    PlayTime,
+    PlaySound,
+    PlaySpecial,
+    PlaySetProb,
+    PlaySetTerrain,
+    PlayReverse,
+    PlayPingPong,
+    PlayWithSound,
+    PlayStopAtEnd,
+    PlaySet,
+    MoveSlow,
+    MoveMedium,
+    Move,
+    MoveReverse,
+    MoveFast,
+    MoveWithSound,
+    FaceDirection,
+    Fly,
+    FlyReverse,
+    KeepControl,
+    Halt,
+}
+
+/// Exact, case-sensitive match of a call name against the names the base chain tests.
+pub fn lookup_base_call(name: &[u8]) -> Option<BaseCall> {
+    Some(match name {
+        b"fPlay" => BaseCall::Play,
+        b"fSetBase" => BaseCall::SetBase,
+        b"fPlayWithBase" => BaseCall::PlayWithBase,
+        b"fMoveEntityDelta" => BaseCall::MoveEntityDelta,
+        b"fMoveEntitySpecial" => BaseCall::MoveEntitySpecial,
+        b"fPlayTime" => BaseCall::PlayTime,
+        b"fPlaySound" => BaseCall::PlaySound,
+        b"fPlaySpecial" | b"fPlaySp" => BaseCall::PlaySpecial,
+        b"fPlaySetProb" => BaseCall::PlaySetProb,
+        b"fPlaySetTerrain" => BaseCall::PlaySetTerrain,
+        b"fPlayReverse" => BaseCall::PlayReverse,
+        b"fPlayPingPong" | b"fPingPong" => BaseCall::PlayPingPong,
+        b"fPlayWithSound" | b"fPlaySFX" => BaseCall::PlayWithSound,
+        b"fPlayStopAtEnd" => BaseCall::PlayStopAtEnd,
+        b"fPlaySet" => BaseCall::PlaySet,
+        b"fMoveSlow" => BaseCall::MoveSlow,
+        b"fMoveMedium" => BaseCall::MoveMedium,
+        b"fMove" => BaseCall::Move,
+        b"fMoveReverse" => BaseCall::MoveReverse,
+        b"fMoveFast" => BaseCall::MoveFast,
+        b"fMoveWithSound" => BaseCall::MoveWithSound,
+        b"fFaceDirection" => BaseCall::FaceDirection,
+        b"fFly" => BaseCall::Fly,
+        b"fFlyReverse" => BaseCall::FlyReverse,
+        b"fKeepControl" => BaseCall::KeepControl,
+        b"fHalt" => BaseCall::Halt,
+        _ => return None,
+    })
+}
+
+/// `BFAIMgr::fPlayF` takes four stack arguments `(call, unit, 0, 0)` (`RET 0x10`); its `generated.rs` entry
+/// lists three, so it is called at its address with the real shape.
+type PlayFn = unsafe extern "thiscall" fn(*const u32, u32, u32, u32, u32) -> u32;
+const F_PLAY_F_ADDRESS: u32 = 0x0044_0b92;
+/// `BFAIMgr::fFlyF` takes three stack arguments `(call, unit, 0)` (`RET 0xc`); its entry lists two.
+type FlyFn = unsafe extern "thiscall" fn(*const u32, u32, u32, u32) -> u32;
+const F_FLY_F_ADDRESS: u32 = 0x0049_9886;
+/// `BFAIMgr` vtable slot `fPlaySetTerrainF(call, unit)`, which `ZTAIMgr` overrides.
+const BFAIMGR_VTABLE_PLAY_SET_TERRAIN: u32 = 0x14;
+
+/// `BFAIMgr::executeCall`: dispatches a call by name and returns the low byte of the handler's result (`0`
+/// for an unknown name). The play family receives the unit as given; move/fly/halt handlers get the unit
+/// only if its type is a `ZTUnitType`, else null. The call's result flag is copied to `done`.
+pub unsafe fn execute_base_call(this: u32, call: u32, unit: u32, done: *mut u8) -> u8 {
+    let name = unsafe { &*(call as *const RawCallString) }.bytes();
+    let unit_cast = if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } { unit } else { 0 };
+    let result = match lookup_base_call(name) {
+        Some(which) => unsafe { dispatch_base_call(this, which, call, unit, unit_cast) },
+        None => 0,
+    };
+    unsafe { done.write_volatile(get_from_memory::<u8>(call + CALL_DONE_FLAG_OFFSET)) };
+    result
+}
+
+unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, unit_cast: u32) -> u8 {
+    let (t, c) = (this as *const u32, call as *const u32);
+    let (u, uc) = (unit as *const u32, unit_cast as *const u32);
+    unsafe {
+        match which {
+            BaseCall::Play => mem::transmute::<u32, PlayFn>(F_PLAY_F_ADDRESS)(t, call, unit, 0, 0) as u8,
+            BaseCall::SetBase => F_SET_BASE_F.original()(t, c, u) as u8,
+            BaseCall::PlayWithBase => F_PLAY_WITH_BASE_F.original()(t, c, u, 0, 0) as u8,
+            BaseCall::MoveEntityDelta => F_MOVE_ENTITY_DELTA_F.original()(t, c, u) as u8,
+            BaseCall::MoveEntitySpecial => F_MOVE_ENTITY_SPECIAL_F.original()(t, c, u) as u8,
+            BaseCall::PlayTime => F_PLAY_TIME_F.original()(t, c, u) as u8,
+            BaseCall::PlaySound => F_PLAY_SOUND_F.original()(t, c, u) as u8,
+            BaseCall::PlaySpecial => F_PLAY_SPECIAL_F.original()(t, c, u) as u8,
+            BaseCall::PlaySetProb => F_PLAY_SET_PROB_F.original()(c, u) as u8,
+            BaseCall::PlaySetTerrain => {
+                let vtable = get_from_memory::<u32>(this);
+                let target = get_from_memory::<u32>(vtable + BFAIMGR_VTABLE_PLAY_SET_TERRAIN);
+                mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target)(this, call, unit) as u8
+            }
+            BaseCall::PlayReverse => F_PLAY_REVERSE_F.original()(t, c, u) as u8,
+            BaseCall::PlayPingPong => F_PLAY_PING_PONG_F.original()(t, c, u) as u8,
+            BaseCall::PlayWithSound => F_PLAY_WITH_SOUND_F.original()(c, u) as u8,
+            BaseCall::PlayStopAtEnd => F_PLAY_STOP_AT_END_F.original()(t, c, u) as u8,
+            BaseCall::PlaySet => F_PLAY_SET_F.original()(c, u) as u8,
+            BaseCall::MoveSlow => F_MOVE_SLOW_F.original()(t, call as i32, uc as *const i32) as u8,
+            BaseCall::MoveMedium => F_MOVE_MEDIUM_F.original()(t, call as i32, uc as *const i32) as u8,
+            BaseCall::Move => F_MOVE_F.original()(t, c, uc, false) as u8,
+            BaseCall::MoveReverse => {
+                let reverse = mem::transmute::<u32, unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> u32>(F_MOVE_REVERSE_F.address);
+                reverse(t, c, uc) as u8
+            }
+            BaseCall::MoveFast => F_MOVE_FAST_F.original()(t, call as i32, uc as *const i32) as u8,
+            BaseCall::MoveWithSound => F_MOVE_WITH_SOUND_F.original()(t, c, uc) as u8,
+            BaseCall::FaceDirection => F_FACE_DIRECTION_F.original()(c, u) as u8,
+            BaseCall::Fly => mem::transmute::<u32, FlyFn>(F_FLY_F_ADDRESS)(t, call, unit_cast, 0) as u8,
+            BaseCall::FlyReverse => F_FLY_REVERSE_F.original()(t, c, uc) as u8,
+            BaseCall::KeepControl => (unit_cast != 0) as u8,
+            BaseCall::Halt => {
+                let halt = mem::transmute::<u32, unsafe extern "stdcall" fn(*const u32, *const u32) -> u32>(F_HALT_F.address);
+                halt(c, uc) as u8
+            }
+        }
+    }
 }
 
 fn call_done_flag(call: u32) -> *const bool {
@@ -813,11 +953,12 @@ mod ztaimgr_detours {
 
     #[detour(EXECUTE_CALL)]
     unsafe extern "thiscall" fn execute_call_detour(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) {
-        unsafe {
-            execute_call(this as u32, call as u32, unit as u32, done as *mut u8, || {
-                BFAIMGR_EXECUTE_CALL.original()(this, call, unit, done);
-            })
-        }
+        unsafe { execute_call(this as u32, call as u32, unit as u32, done as *mut u8) }
+    }
+
+    #[detour(BFAIMGR_EXECUTE_CALL)]
+    unsafe extern "thiscall" fn bfaimgr_execute_call_detour(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) -> u32 {
+        unsafe { execute_base_call(this as u32, call as u32, unit as u32, done as *mut u8) as u32 }
     }
 
     /// `fSprayF` only forwards to the `return 1` stub `BFAIMgr::fFaceDirection`: nothing to do.
@@ -907,6 +1048,10 @@ mod ztaimgr_detours {
             unsafe { super::EXECUTE_CALL_DETOUR.call(this, call, unit, done) }
         }
 
+        pub(crate) fn base_execute_call(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) -> u32 {
+            unsafe { super::BFAIMGR_EXECUTE_CALL_DETOUR.call(this, call, unit, done) }
+        }
+
         pub(crate) fn f_exit_building(unit: *const i32, done: *const u8) {
             unsafe { super::F_EXIT_BUILDING_DETOUR.call(unit, done) }
         }
@@ -993,7 +1138,7 @@ pub(crate) mod live_support {
 
     pub(crate) use super::{f_enter_building, f_exit_building, f_hatch, f_return_to_building, f_show_predator};
     pub(crate) use ztaimgr_detours::test_real::{
-        execute_call as real_execute_call, f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_face_toward_food as real_f_face_toward_food, f_face_toward_target as real_f_face_toward_target, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
+        base_execute_call as real_base_execute_call, execute_call as real_execute_call, f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_face_toward_food as real_f_face_toward_food, f_face_toward_target as real_f_face_toward_target, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
     };
     pub(crate) use ztaimgr_detours::test_real::{
         f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,
@@ -1053,6 +1198,52 @@ mod tests {
         assert_eq!(lookup_zt_call(b"fPlaySetTank"), Some(ZtCall::PlaySetTank));
         for name in [&b""[..], b"fMove", b"fPlay", b"fHalt", b"fMoveSlow", b"fWalkx"] {
             assert_eq!(lookup_zt_call(name), None);
+        }
+    }
+
+    #[test]
+    fn base_call_lookup_covers_every_name_and_nothing_near() {
+        let names: [(&[u8], BaseCall); 28] = [
+            (b"fPlay", BaseCall::Play),
+            (b"fSetBase", BaseCall::SetBase),
+            (b"fPlayWithBase", BaseCall::PlayWithBase),
+            (b"fMoveEntityDelta", BaseCall::MoveEntityDelta),
+            (b"fMoveEntitySpecial", BaseCall::MoveEntitySpecial),
+            (b"fPlayTime", BaseCall::PlayTime),
+            (b"fPlaySound", BaseCall::PlaySound),
+            (b"fPlaySpecial", BaseCall::PlaySpecial),
+            (b"fPlaySp", BaseCall::PlaySpecial),
+            (b"fPlaySetProb", BaseCall::PlaySetProb),
+            (b"fPlaySetTerrain", BaseCall::PlaySetTerrain),
+            (b"fPlayReverse", BaseCall::PlayReverse),
+            (b"fPlayPingPong", BaseCall::PlayPingPong),
+            (b"fPingPong", BaseCall::PlayPingPong),
+            (b"fPlayWithSound", BaseCall::PlayWithSound),
+            (b"fPlaySFX", BaseCall::PlayWithSound),
+            (b"fPlayStopAtEnd", BaseCall::PlayStopAtEnd),
+            (b"fPlaySet", BaseCall::PlaySet),
+            (b"fMoveSlow", BaseCall::MoveSlow),
+            (b"fMoveMedium", BaseCall::MoveMedium),
+            (b"fMove", BaseCall::Move),
+            (b"fMoveReverse", BaseCall::MoveReverse),
+            (b"fMoveFast", BaseCall::MoveFast),
+            (b"fMoveWithSound", BaseCall::MoveWithSound),
+            (b"fFaceDirection", BaseCall::FaceDirection),
+            (b"fFly", BaseCall::Fly),
+            (b"fKeepControl", BaseCall::KeepControl),
+            (b"fHalt", BaseCall::Halt),
+        ];
+        for (name, expected) in names {
+            assert_eq!(lookup_base_call(name), Some(expected), "{}", String::from_utf8_lossy(name));
+            assert_eq!(lookup_base_call(&name.to_ascii_lowercase()), None);
+            let mut longer = name.to_vec();
+            longer.push(b'x');
+            assert!(lookup_base_call(&longer).is_none(), "{}", String::from_utf8_lossy(&longer));
+        }
+        assert_eq!(lookup_base_call(b"fFlyReverse"), Some(BaseCall::FlyReverse));
+        // Neighbouring names that are prefixes of a handled name, or ZT-only names, are not base calls.
+        for name in [&b""[..], b"fPla", b"fPlayS", b"fPlaySe", b"fMov", b"fWalk", b"fRun", b"fDie", b"fHal"] {
+            assert_eq!(lookup_base_call(name), None, "{}", String::from_utf8_lossy(name));
         }
     }
 
