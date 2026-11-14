@@ -593,16 +593,14 @@ mod marketing_config_reimplementation {
         values(ini, section, key).into_iter().next()
     }
 
-    fn first_parse<T: std::str::FromStr>(ini: &Ini, section: &str, key: &str) -> Option<T> {
-        first(ini, section, key)?.parse().ok()
-    }
+    use crate::bfconfigfile::ini_compat::{float_or, int_or};
 
     /// One `[<block>] name=/cost=/benefit=` funding-level entry.
     fn load_funding_level(ini: &Ini, block: &str) -> ZTMarketingFundingLevel {
         ZTMarketingFundingLevel {
-            name: first_parse(ini, block, "name").unwrap_or_default(),
-            benefit: first_parse(ini, block, "benefit").unwrap_or_default(),
-            cost: first_parse(ini, block, "cost").unwrap_or_default(),
+            name: int_or(ini, block, "name", 0),
+            benefit: int_or(ini, block, "benefit", 0),
+            cost: float_or(ini, block, "cost", 0.0),
         }
     }
 

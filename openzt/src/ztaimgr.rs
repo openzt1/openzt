@@ -31,6 +31,19 @@ use openzt_detour::generated::{
         F_CAUGHT_PREY, F_CAUGHT_PREY_F, F_DIE, F_DIE_F, F_EXIT_BUILDING, F_EXIT_BUILDING_F, F_HATCH, F_HATCH_F, F_KILL_PREY, F_KILL_PREY_F, F_SHOW_PREDATOR, F_SHOW_PREDATOR_F,
     },
     bfaimgr::{
+        CALL_DONE as BFAIMGR_CALL_DONE, CHECK_PATH as BFAIMGR_CHECK_PATH, GET_EVENTS as BFAIMGR_GET_EVENTS, CONSTRUCTOR as BFAIMGR_CONSTRUCTOR, F_PLAY_SET, GET_PATH_1 as BFAIMGR_GET_PATH_1,
+        LOAD as BFAIMGR_LOAD, LOAD_DATA as BFAIMGR_LOAD_DATA, REMOVE_ENTITIES as BFAIMGR_REMOVE_ENTITIES, SAVE as BFAIMGR_SAVE, SEND_EVENT as BFAIMGR_SEND_EVENT, UPDATE as BFAIMGR_UPDATE,
+    },
+    bfinifile::READ as BFINIFILE_READ,
+    gxmixer::GET_ANIM as GXMIXER_GET_ANIM,
+    bfpathfinder::SET_NODE_MAX,
+    standalone::OPERATOR_NEW,
+    ztaimgr::{CREATE as ZTAIMGR_CREATE, INIT_AIPARAMS as ZTAIMGR_INIT_AIPARAMS},
+    bfeventmgr::{GET_EVENTS as BFEVENTMGR_GET_EVENTS, LOAD as BFEVENTMGR_LOAD, POST_EVENT as BFEVENTMGR_POST_EVENT, SAVE as BFEVENTMGR_SAVE, UPDATE as BFEVENTMGR_UPDATE},
+    standalone::{DEALLOCATE as READ_BYTES_FROM_FILE, WRITE_BYTES_TO_FILE},
+    ztaimgr::UPDATE as ZTAIMGR_UPDATE,
+    ztmainttaskpool::LISTEN as ZTMAINTTASKPOOL_LISTEN,
+    bfaimgr::{
         EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_FACE_DIRECTION_F, F_FLY_REVERSE_F, F_HALT_F, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F, F_MOVE_REVERSE_F,
         F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F, F_MOVE_WITH_SOUND_F, F_PLAY_PING_PONG_F, F_PLAY_REVERSE_F, F_PLAY_SET_F, F_PLAY_SET_PROB_F, F_PLAY_SOUND_F,
         F_PLAY_SPECIAL_F, F_PLAY_STOP_AT_END_F, F_PLAY_TIME_F, F_PLAY_WITH_BASE_F, F_PLAY_WITH_SOUND_F, F_SET_BASE_F,
@@ -48,7 +61,8 @@ use tracing::error;
 
 use crate::{
     globals::{get_module_base, globals},
-    util::get_from_memory,
+    util::{get_from_memory, low_byte_bool, save_to_memory},
+    vanilla_string::VanillaString,
 };
 
 /// `ZTAIMgr` dword read by [`get_random_x`] for a guest.
@@ -248,8 +262,8 @@ pub unsafe fn remove_entity(entity: u32) -> bool {
     }
     let vtable = get_from_memory::<u32>(world);
     let target = get_from_memory::<u32>(vtable + WORLD_MGR_VTABLE_REMOVE_ENTITY);
-    let remove = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, bool) -> bool>(target) };
-    remove(world, entity, true)
+    let remove = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, bool) -> u32>(target) };
+    low_byte_bool(remove(world, entity, true))
 }
 
 /// Calls a no-argument thiscall virtual at `slot` of the entity's own vtable.
@@ -592,7 +606,11 @@ unsafe fn dispatch_zt_call(this: u32, which: ZtCall, call: u32, unit: u32) {
             ZtCall::Hatch => F_HATCH_F.hooked()(c, u),
             ZtCall::EndTrick => F_END_TRICK_F.hooked()(c, u),
             ZtCall::ReturnToBuilding => F_RETURN_TO_BUILDING_F.hooked()(c, u),
-            ZtCall::PlaySetTank => drop(F_PLAY_SET_TANK_F.original()(c, unit as *const c_void)),
+            ZtCall::PlaySetTank => {
+                if f_play_set_tank(call, unit, play_set_vanilla).is_none() {
+                    let _ = F_PLAY_SET_TANK_F.original()(c, unit as *const c_void);
+                }
+            }
         }
     }
 }
@@ -747,6 +765,426 @@ unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, u
 
 fn call_done_flag(call: u32) -> *const bool {
     (call + CALL_DONE_FLAG_OFFSET) as *const bool
+}
+
+/// `BFAIMgr` tick accumulator remainder (`+0xe8`), tick counter (`+0xec`) and divisor (`+0xe4`).
+const OFFSET_AI_TICK_REMAINDER: u32 = 0xe8;
+const OFFSET_AI_TICK_COUNT: u32 = 0xec;
+const OFFSET_AI_TICK_DIVISOR: u32 = 0xe4;
+/// `BFAIMgr`'s embedded `BFEventMgr` (`+0xa0`) and the path-cache tree container (`{head*, size}` at `+0x12c`).
+const OFFSET_EVENT_MGR: u32 = 0xa0;
+const OFFSET_PATH_CACHE: u32 = 0x12c;
+/// Pool size class of the path-cache tree nodes.
+const PATH_CACHE_NODE_SIZE: u32 = 0x18;
+/// Globals (RVAs): next tick at which the path cache is flushed, and the flush interval in ticks.
+const RVA_PATH_CACHE_NEXT_FLUSH: u32 = 0x0023_94b4;
+const RVA_PATH_CACHE_FLUSH_INTERVAL: u32 = 0x0023_9028;
+/// `ZTMaintTaskPool` instance (`DAT_00638f99 + 7`) that `ZTAIMgr::update` pumps.
+const RVA_MAINT_TASK_POOL: u32 = 0x0023_8fa0;
+/// `BFAIMgr` vtable slot `removeEntities`, `BFEntity` vtable slot `update(dt)`, `ZTShowMgr` vtable slot `update`.
+const AI_VTABLE_REMOVE_ENTITIES: u32 = 0x40;
+const ENTITY_VTABLE_UPDATE: u32 = 0x28;
+const SHOW_MGR_VTABLE_UPDATE: u32 = 0x4;
+/// `BFWorldMgr` entity vector begin/end pointers.
+const WORLD_ENTITY_BEGIN: u32 = 0x80;
+const WORLD_ENTITY_END: u32 = 0x84;
+
+/// RVAs of the `GLOBAL_ZTWorldMgr` and `GLOBAL_ZTShowMgr` pointer cells. Read on every call, as vanilla
+/// does, so the live tests can point them at fakes for one call.
+const RVA_GLOBAL_WORLD_MGR: u32 = 0x0023_8040;
+const RVA_GLOBAL_SHOW_MGR: u32 = 0x0023_9008;
+
+fn read_global_pointer(rva: u32) -> u32 {
+    get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + rva)
+}
+
+/// `BFAIMgr::update(dt)`: advances the tick accumulator, flushes the path cache on its interval, removes
+/// flagged entities, ticks every entity and pumps the event manager. A zero divisor is a divide fault in
+/// vanilla; here it skips the tick instead.
+pub unsafe fn bfaimgr_update(this: u32, dt: u32) {
+    let divisor = get_from_memory::<u32>(this + OFFSET_AI_TICK_DIVISOR);
+    if divisor == 0 {
+        return;
+    }
+    let base = get_module_base("zoo.exe") as u32;
+    let total = dt.wrapping_add(get_from_memory::<u32>(this + OFFSET_AI_TICK_REMAINDER));
+    save_to_memory(this + OFFSET_AI_TICK_REMAINDER, total % divisor);
+    let ticks = get_from_memory::<u32>(this + OFFSET_AI_TICK_COUNT).wrapping_add(total / divisor);
+    save_to_memory(this + OFFSET_AI_TICK_COUNT, ticks);
+    if ticks >= get_from_memory::<u32>(base + RVA_PATH_CACHE_NEXT_FLUSH) {
+        crate::vanilla_rbtree::rb_tree_clear(this + OFFSET_PATH_CACHE, PATH_CACHE_NODE_SIZE);
+        let interval = get_from_memory::<u32>(base + RVA_PATH_CACHE_FLUSH_INTERVAL);
+        save_to_memory(base + RVA_PATH_CACHE_NEXT_FLUSH, get_from_memory::<u32>(this + OFFSET_AI_TICK_COUNT).wrapping_add(interval));
+    }
+    let world = read_global_pointer(RVA_GLOBAL_WORLD_MGR);
+    unsafe { call_entity_virtual(this, AI_VTABLE_REMOVE_ENTITIES) };
+    let count = (get_from_memory::<u32>(world + WORLD_ENTITY_END).wrapping_sub(get_from_memory::<u32>(world + WORLD_ENTITY_BEGIN)) as i32) >> 2;
+    for index in 0..count.max(0) as u32 {
+        let entity = get_from_memory::<u32>(get_from_memory::<u32>(world + WORLD_ENTITY_BEGIN) + index * 4);
+        if entity != 0 {
+            let vtable = get_from_memory::<u32>(entity);
+            let target = get_from_memory::<u32>(vtable + ENTITY_VTABLE_UPDATE);
+            let update = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32)>(target) };
+            update(entity, dt);
+        }
+    }
+    unsafe { BFEVENTMGR_UPDATE.original()((this + OFFSET_EVENT_MGR) as *const u32) };
+}
+
+/// `ZTAIMgr::update(dt)`: pumps the maintenance task pool and the show manager, then the base update.
+pub unsafe fn ztaimgr_update(this: u32, dt: u32) {
+    let base = get_module_base("zoo.exe") as u32;
+    unsafe { ZTMAINTTASKPOOL_LISTEN.original()((base + RVA_MAINT_TASK_POOL) as *const i32) };
+    let show_mgr = read_global_pointer(RVA_GLOBAL_SHOW_MGR);
+    unsafe { call_entity_virtual(show_mgr, SHOW_MGR_VTABLE_UPDATE) };
+    unsafe { bfaimgr_update(this, dt) };
+}
+
+/// `BFAIMgr::save(file)`: writes the tick remainder and counter, then the event manager. Every write is
+/// attempted; the result is true only if all succeed.
+pub unsafe fn bfaimgr_save(this: u32, file: *const i8) -> bool {
+    let write = |offset: u32| unsafe { WRITE_BYTES_TO_FILE.hooked()((this + offset) as *const u32, 4, 1, file) == 1 };
+    let first = write(OFFSET_AI_TICK_REMAINDER);
+    let second = write(OFFSET_AI_TICK_COUNT);
+    let events = unsafe { BFEVENTMGR_SAVE.hooked()((this + OFFSET_EVENT_MGR) as *const u32, file) };
+    events && first && second
+}
+
+/// `BFWorldMgr` habitat-pointer vector begin/end, and the `BFWorldMgr` vtable slot run first when loading.
+const WORLD_HABITAT_BEGIN: u32 = 0x98;
+const WORLD_HABITAT_END: u32 = 0x9c;
+const WORLD_VTABLE_PRE_LOAD: u32 = 0x4;
+/// Habitat vtable slots: a check returning a success byte, then a no-argument finish step.
+const HABITAT_VTABLE_CHECK: u32 = 0x10;
+const HABITAT_VTABLE_FINISH: u32 = 0x58;
+/// Entity vtable slots run for each entity on load: `(0, 0)` reset, no-argument refresh, `(1, 0, 1)` unit fixup.
+const ENTITY_VTABLE_RESET: u32 = 0x110;
+const ENTITY_VTABLE_LOAD_REFRESH: u32 = 0x10c;
+const ENTITY_VTABLE_UNIT_FIXUP: u32 = 0x198;
+/// Entity fields touched on a full load: a byte vector's begin/end (`+0xdc`/`+0xe0`) and a flag byte (`+0xe8`).
+const OFFSET_ENTITY_VECTOR_BEGIN: u32 = 0xdc;
+const OFFSET_ENTITY_VECTOR_END: u32 = 0xe0;
+const OFFSET_ENTITY_FLAG: u32 = 0xe8;
+
+/// Calls the thiscall virtual at `slot` of `object`s vtable with `N` (at most three) `u32` arguments.
+unsafe fn call_virtual_args<const N: usize>(object: u32, slot: u32, args: [u32; N]) -> u32 {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(object) + slot);
+    unsafe {
+        match N {
+            0 => mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(target)(object),
+            1 => mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(target)(object, args[0]),
+            2 => mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target)(object, args[0], args[1]),
+            _ => mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32, u32) -> u32>(target)(object, args[0], args[1], args[2]),
+        }
+    }
+}
+
+/// `BFAIMgr::loadData(full)`: post-load pass over the world. When `full`, runs the world managers pre-load
+/// step first. Every habitat is checked (result ANDed over the low bytes) and finished, then every entity is
+/// reset and, on a full load, has its byte vector truncated, its flag set, is refreshed, and gets the unit
+/// fixup if its type is a `ZTUnitType`. The `this` pointer is unused.
+pub unsafe fn bfaimgr_load_data(full: bool) -> bool {
+    let world = read_global_pointer(RVA_GLOBAL_WORLD_MGR);
+    let mut ok = true;
+    if full {
+        unsafe { call_virtual_args(world, WORLD_VTABLE_PRE_LOAD, [0]) };
+    }
+    let mut cursor = get_from_memory::<u32>(world + WORLD_HABITAT_BEGIN);
+    while cursor != get_from_memory::<u32>(world + WORLD_HABITAT_END) {
+        let habitat = get_from_memory::<u32>(cursor);
+        if habitat != 0 {
+            ok &= unsafe { call_virtual_args(habitat, HABITAT_VTABLE_CHECK, []) } & 0xff != 0;
+        }
+        cursor += 4;
+    }
+    cursor = get_from_memory::<u32>(world + WORLD_HABITAT_BEGIN);
+    while cursor != get_from_memory::<u32>(world + WORLD_HABITAT_END) {
+        unsafe { call_virtual_args(get_from_memory::<u32>(cursor), HABITAT_VTABLE_FINISH, []) };
+        cursor += 4;
+    }
+    cursor = get_from_memory::<u32>(world + WORLD_ENTITY_BEGIN);
+    while cursor != get_from_memory::<u32>(world + WORLD_ENTITY_END) {
+        let entity = get_from_memory::<u32>(cursor);
+        if entity != 0 {
+            unsafe { call_virtual_args(entity, ENTITY_VTABLE_RESET, [0, 0]) };
+            if full {
+                let begin = get_from_memory::<u32>(entity + OFFSET_ENTITY_VECTOR_BEGIN);
+                if begin != get_from_memory::<u32>(entity + OFFSET_ENTITY_VECTOR_END) {
+                    save_to_memory(begin, 0u8);
+                    save_to_memory(entity + OFFSET_ENTITY_VECTOR_END, begin);
+                }
+                save_to_memory(entity + OFFSET_ENTITY_FLAG, 1u8);
+                unsafe { call_virtual_args(entity, ENTITY_VTABLE_LOAD_REFRESH, []) };
+                let entity_type = get_from_memory::<u32>(entity + OFFSET_ENTITY_TYPE);
+                let tag = get_module_base("zoo.exe") as u32 + RVA_TAG_ZTUNITTYPE;
+                if unsafe { call_virtual_args(entity_type, TYPE_VTABLE_IS_CAST_CLASS, [tag]) } & 0xff != 0 {
+                    unsafe { call_virtual_args(entity, ENTITY_VTABLE_UNIT_FIXUP, [1, 0, 1]) };
+                }
+            }
+        }
+        cursor += 4;
+    }
+    ok
+}
+
+/// Allocation size of a `ZTAIMgr`, its vtable and `BFEventListenerInterface` table (RVAs), and the vtable slot
+/// of `initAIParams`.
+const ZTAIMGR_SIZE: u32 = 0x150;
+const RVA_ZTAIMGR_VTABLE: u32 = 0x0023_5324;
+const RVA_ZTAIMGR_LISTENER_TABLE: u32 = 0x0023_2288;
+const AI_VTABLE_INIT_AI_PARAMS: u32 = 0x38;
+
+/// `ZTAIMgr::create()`: allocates the `0x150`-byte manager through vanilla `operator new` (vanilla frees it
+/// with the matching delete), runs the `BFAIMgr` constructor, installs the `ZTAIMgr` vtable and listener
+/// table, and runs `initAIParams` through the vtable. Returns the manager, or `0` if allocation failed.
+pub unsafe fn ztaimgr_create() -> u32 {
+    let this = unsafe { OPERATOR_NEW.original()(ZTAIMGR_SIZE) } as u32;
+    if this == 0 {
+        return 0;
+    }
+    unsafe { BFAIMGR_CONSTRUCTOR.original()(this as *const u32) };
+    let base = get_module_base("zoo.exe") as u32;
+    save_to_memory(this, base + RVA_ZTAIMGR_VTABLE);
+    save_to_memory(this + 8, base + RVA_ZTAIMGR_LISTENER_TABLE);
+    unsafe { call_virtual_args(this, AI_VTABLE_INIT_AI_PARAMS, []) };
+    this
+}
+
+/// `BFAIMgr`'s embedded `BFPathFinder` (`+0x10`): the map pointer, map row count and tile count it is pointed at
+/// before a search, and its search-node limit (`+0x4c` of the manager is the limit `checkPath` restores).
+const OFFSET_PATHFINDER: u32 = 0x10;
+const PATHFINDER_MAP: u32 = 0x8;
+const PATHFINDER_MAP_ROWS: u32 = 0xc;
+const PATHFINDER_TILE_COUNT: u32 = 0x10;
+const OFFSET_PATH_NODE_LIMIT: u32 = 0x4c;
+/// The pathfinder's result list head pointer (`+0x70` of the pathfinder, `+0x80` of the manager).
+const OFFSET_PATH_RESULT: u32 = 0x80;
+/// Node limit `checkPath` searches with.
+const CHECK_PATH_NODE_LIMIT: u32 = 100;
+/// `BFWorldMgr` map block (`+0x8`) and its column and row counts (`+0x2c`/`+0x30` into it).
+const WORLD_MAP: u32 = 0x8;
+const MAP_COLUMNS: u32 = 0x2c;
+const MAP_ROWS: u32 = 0x30;
+/// Offset of the position inside a `BFTile`, and the `BFPathFinder` vtable slot `findPath`.
+const TILE_POSITION: u32 = 0x34;
+const PATHFINDER_VTABLE_FIND_PATH: u32 = 0x0;
+
+/// `BFAIMgr::checkPath(from, to, unit)`: whether a path exists. Points the pathfinder at the world map, runs a
+/// 100-node `findPath` (virtual) between the two tile positions, restores the node limit and reports whether the
+/// pathfinder's result list is non-empty. Vanilla copies the result list into a temporary pool list before
+/// counting it, then frees the copy; the copy has no other effect, so the port tests the source list directly.
+/// The result is the low byte only (`AL`), like the vanilla function.
+pub unsafe fn bfaimgr_check_path(this: u32, from: u32, to: u32, unit: u32) -> u32 {
+    let world = read_global_pointer(RVA_GLOBAL_WORLD_MGR);
+    let finder = this + OFFSET_PATHFINDER;
+    let map = world.wrapping_add(WORLD_MAP);
+    if map != 0 {
+        save_to_memory(finder + PATHFINDER_MAP, map);
+        let rows = get_from_memory::<u32>(map + MAP_ROWS);
+        save_to_memory(finder + PATHFINDER_MAP_ROWS, rows);
+        let columns = get_from_memory::<u32>(map + MAP_COLUMNS);
+        save_to_memory(finder + PATHFINDER_TILE_COUNT, columns.wrapping_mul(rows));
+    }
+    let saved_limit = get_from_memory::<u32>(this + OFFSET_PATH_NODE_LIMIT);
+    unsafe { SET_NODE_MAX.hooked()(finder as *const u32, CHECK_PATH_NODE_LIMIT) };
+    let find_path_target = get_from_memory::<u32>(get_from_memory::<u32>(finder) + PATHFINDER_VTABLE_FIND_PATH);
+    let find_path = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32, u32, u32) -> u32>(find_path_target) };
+    find_path(finder, from + TILE_POSITION, to + TILE_POSITION, unit, 0);
+    unsafe { SET_NODE_MAX.hooked()(finder as *const u32, saved_limit) };
+    let list = get_from_memory::<u32>(this + OFFSET_PATH_RESULT);
+    u32::from(get_from_memory::<u32>(list) != list)
+}
+
+/// `BFEntity` fields `callDone` reads: the flag byte at `+0xf8`, the embedded `GXMixer` at `+0x74`, and inside the
+/// mixer the flag byte at `+0x60` and the two dwords at `+0x28`/`+0x18` that `callDone` compares.
+const OFFSET_ENTITY_CALL_DONE_FLAG: u32 = 0xf8;
+const OFFSET_ENTITY_MIXER: u32 = 0x74;
+const MIXER_FLAG: u32 = 0x60;
+const MIXER_CURSOR: u32 = 0x28;
+const MIXER_END: u32 = 0x18;
+
+/// `BFAIMgr::callDone(entity)`: true when the entity is flagged and its animation mixer has run out of
+/// animations (the cursor equals its end, or `GXMixer::getAnim` finds none).
+pub unsafe fn bfaimgr_call_done(entity: u32) -> bool {
+    if entity == 0 || get_from_memory::<u8>(entity + OFFSET_ENTITY_CALL_DONE_FLAG) == 0 {
+        return false;
+    }
+    let mixer = entity + OFFSET_ENTITY_MIXER;
+    if get_from_memory::<u8>(mixer + MIXER_FLAG) == 0 {
+        return false;
+    }
+    if get_from_memory::<u32>(mixer + MIXER_CURSOR) == get_from_memory::<u32>(mixer + MIXER_END) {
+        return true;
+    }
+    unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) }.is_null()
+}
+
+/// Entity vtable slots `removeEntities` tests and clears: `isRemoved`, `isRemovedUndo` and `setIsRemoved(a, b)`.
+const ENTITY_VTABLE_IS_REMOVED: u32 = 0xac;
+const ENTITY_VTABLE_IS_REMOVED_UNDO: u32 = 0xb0;
+const ENTITY_VTABLE_SET_IS_REMOVED: u32 = 0xa8;
+/// `BFAIMgr` vtable slot `removeEntity(entity)`.
+const AI_VTABLE_REMOVE_ENTITY: u32 = 0x44;
+
+/// `BFAIMgr::removeEntities()`: sweeps the world's entity list. An entity flagged removed is handed to the
+/// manager's `removeEntity` (which takes it out of the list, so the index and count step back), unless it is
+/// flagged undo-removed, in which case the world removes it without destroying it and the flag is cleared.
+/// The count is taken once; the list pointer is re-read for every entity.
+pub unsafe fn bfaimgr_remove_entities(this: u32) {
+    let world = read_global_pointer(RVA_GLOBAL_WORLD_MGR);
+    let mut count = (get_from_memory::<u32>(world + WORLD_ENTITY_END).wrapping_sub(get_from_memory::<u32>(world + WORLD_ENTITY_BEGIN)) as i32) >> 2;
+    let mut index: i32 = 0;
+    if count <= 0 {
+        return;
+    }
+    loop {
+        let entity = get_from_memory::<u32>(get_from_memory::<u32>(world + WORLD_ENTITY_BEGIN).wrapping_add((index as u32).wrapping_mul(4)));
+        if entity != 0 && unsafe { call_virtual_args(entity, ENTITY_VTABLE_IS_REMOVED, []) } & 0xff != 0 {
+            if unsafe { call_virtual_args(entity, ENTITY_VTABLE_IS_REMOVED_UNDO, []) } & 0xff == 0 {
+                unsafe { call_virtual_args(this, AI_VTABLE_REMOVE_ENTITY, [entity]) };
+                index -= 1;
+                count -= 1;
+            } else {
+                let current_world = read_global_pointer(RVA_GLOBAL_WORLD_MGR);
+                unsafe { call_virtual_args(current_world, WORLD_MGR_VTABLE_REMOVE_ENTITY, [entity, 0]) };
+                unsafe { call_virtual_args(entity, ENTITY_VTABLE_SET_IS_REMOVED, [0, 0]) };
+            }
+        }
+        index += 1;
+        if index >= count {
+            break;
+        }
+    }
+}
+
+/// `BFAIMgr` vtable slot of the tile-pointer `getPath` overload's target, the position-based `getPath`.
+const AI_VTABLE_GET_PATH: u32 = 0x18;
+
+/// `BFAIMgr::getPath(from, to, unit, flag)` for tiles: forwards to the position-based `getPath` through the
+/// manager's vtable with both tiles replaced by their positions.
+pub unsafe fn bfaimgr_get_path_tiles(this: u32, from: u32, to: u32, unit: u32, flag: bool) -> bool {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VTABLE_GET_PATH);
+    let get_path = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32, u32, u32) -> u32>(target) };
+    low_byte_bool(get_path(this, from + TILE_POSITION, to + TILE_POSITION, unit, u32::from(flag)))
+}
+
+/// `ZTUnit` field `fPlaySetTank` compares against `4` to choose which parameter to play.
+const UNIT_TANK_SELECTOR_OFFSET: u32 = 0x258;
+/// Byte size of one `BFFunctionCall` parameter.
+const CALL_PARAM_SIZE: u32 = 0xc;
+
+/// `ZTAIMgr::fPlaySetTankF(call, unit)` with the `ZTUnitType` cast already applied to `unit`. A call with
+/// exactly two parameters clears the call's result flag and plays the last parameter's set when the unit's
+/// selector is `4`, the first otherwise (through `play_set(name, unit)`); any other parameter count returns
+/// `0` without touching the call. `None` (defer to vanilla) for a null `unit` with two parameters, where
+/// vanilla reads the selector through null.
+pub unsafe fn f_play_set_tank(call: u32, unit: u32, play_set: unsafe fn(u32, u32) -> u32) -> Option<u32> {
+    let function_call = unsafe { &*(call as *const RawFunctionCall) };
+    let (begin, end) = (function_call.params_begin as u32, function_call.params_end as u32);
+    if (end.wrapping_sub(begin) as i32) / CALL_PARAM_SIZE as i32 != 2 {
+        return Some(0);
+    }
+    save_to_memory(call + CALL_DONE_FLAG_OFFSET, 0u8);
+    if unit == 0 {
+        return None;
+    }
+    let name = if get_from_memory::<u32>(unit + UNIT_TANK_SELECTOR_OFFSET) == 4 { end - CALL_PARAM_SIZE } else { begin };
+    Some(unsafe { play_set(name, unit) })
+}
+
+/// `BFAIMgr::fPlaySet(name, unit, 1, 1)`, vanilla (stdcall; it ignores `ECX`).
+unsafe fn play_set_vanilla(name: u32, unit: u32) -> u32 {
+    unsafe { F_PLAY_SET.original()(name as *const i32, unit as *const c_void, 1, 1) }
+}
+
+/// `ZTAIMgr` fields `initAIParams` fills: guest and staff random-walk extents (x then y), then the animal and
+/// guest reset intervals.
+const OFFSET_ANIMAL_RESET_INTERVAL: u32 = 0x138;
+const OFFSET_GUEST_RESET_INTERVAL: u32 = 0x13c;
+/// Default for each random-walk extent, and the section the keys live in.
+const RANDOM_WALK_DEFAULT: i32 = 9;
+const AI_INI_SECTION: &str = "AI";
+
+/// The six `[AI]` parameters `ZTAIMgr::initAIParams` loads, in field order: guest x/y, staff x/y, animal reset
+/// interval, guest reset interval. `read(key, default)` reads one integer. Extents are at least `1`, intervals
+/// at least `0`.
+pub fn compute_ai_params(mut read: impl FnMut(&str, i32) -> i32) -> [i32; 6] {
+    let guest_x = read("mRandomXGuest", RANDOM_WALK_DEFAULT);
+    let guest_y = read("mRandomYGuest", RANDOM_WALK_DEFAULT);
+    let staff_x = read("mRandomXStaff", RANDOM_WALK_DEFAULT);
+    let staff_y = read("mRandomYStaff", RANDOM_WALK_DEFAULT);
+    let animal_reset = read("AnimalResetInterval", 0);
+    let guest_reset = read("GuestResetInterval", 0);
+    [guest_x.max(1), guest_y.max(1), staff_x.max(1), staff_y.max(1), animal_reset.max(0), guest_reset.max(0)]
+}
+
+/// `ZTAIMgr::initAIParams()`: loads the six parameters from the `[AI]` section of the game configuration.
+/// Returns `0` like vanilla (the low byte is cleared).
+pub unsafe fn ztaimgr_init_ai_params(this: u32) -> u32 {
+    let section = VanillaString::new(AI_INI_SECTION);
+    let values = compute_ai_params(|key, default| {
+        let key = VanillaString::new(key);
+        unsafe { BFINIFILE_READ.original()(section.as_ptr(), key.as_ptr(), default as u32) as i32 }
+    });
+    let offsets = [OFFSET_GUEST_RANDOM_X, OFFSET_GUEST_RANDOM_Y, OFFSET_STAFF_RANDOM_X, OFFSET_STAFF_RANDOM_Y, OFFSET_ANIMAL_RESET_INTERVAL, OFFSET_GUEST_RESET_INTERVAL];
+    for (offset, value) in offsets.into_iter().zip(values) {
+        save_to_memory(this + offset, value);
+    }
+    0
+}
+
+/// First save versions that carry the manager's tick fields (`>= 0x23`) and its event manager (`>= 0x61`).
+const SAVE_VERSION_TICKS: u32 = 0x23;
+const SAVE_VERSION_EVENTS: u32 = 0x61;
+
+/// `BFAIMgr::load(file, version)`: the mirror of `save`. From version `0x23` reads the tick remainder and counter
+/// (both reads are always attempted) and succeeds only if both returned one item; from version `0x61` also loads the
+/// embedded event manager, whose result is ignored. Earlier versions read nothing and succeed.
+pub unsafe fn bfaimgr_load(this: u32, file: *const u8, version: u32) -> u32 {
+    let mut ok = true;
+    if version >= SAVE_VERSION_TICKS {
+        let read = |offset: u32| unsafe { READ_BYTES_FROM_FILE.hooked()((this + offset) as *const u32, 4, 1, file) == 1 };
+        let remainder_read = read(OFFSET_AI_TICK_REMAINDER);
+        let counter_read = read(OFFSET_AI_TICK_COUNT);
+        ok = remainder_read && counter_read;
+    }
+    if version >= SAVE_VERSION_EVENTS {
+        unsafe { BFEVENTMGR_LOAD.hooked()((this + OFFSET_EVENT_MGR) as *const u32, file as *const u32, version) };
+    }
+    u32::from(ok)
+}
+
+/// `BFEventInfo`'s vtable (RVA) and size; the info block is the `BFEvent` record without its leading vtable word.
+const RVA_BFEVENT_INFO_VTABLE: u32 = 0x0023_5568;
+const BFEVENT_INFO_SIZE: usize = 0x18;
+/// The `BFAIMgr` listener overrides receive the `BFEventListenerInterface` subobject, `8` bytes into the manager;
+/// its event manager is at `+0x98` from there (`+0xa0` of the manager).
+const LISTENER_EVENT_MGR: u32 = 0x98;
+
+/// `BFAIMgr::sendEvent(...)` (the listener override, `this` = the subobject): packs its eight arguments into a
+/// `BFEventInfo` and posts it to the manager's event manager.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn bfaimgr_send_event(this: u32, kind: u16, target: u32, flag_b: u8, value_a: u32, flag_a: u8, value_b: u32, extra: u16, count: u16) {
+    let mut info = [0u8; BFEVENT_INFO_SIZE];
+    let base = info.as_mut_ptr();
+    unsafe {
+        (base as *mut u32).write_unaligned(get_module_base("zoo.exe") as u32 + RVA_BFEVENT_INFO_VTABLE);
+        (base.add(0x04) as *mut u32).write_unaligned(value_a);
+        (base.add(0x08) as *mut u32).write_unaligned(target);
+        (base.add(0x0c) as *mut u32).write_unaligned(value_b);
+        (base.add(0x10) as *mut u16).write_unaligned(extra);
+        (base.add(0x12) as *mut u16).write_unaligned(kind);
+        (base.add(0x14) as *mut u16).write_unaligned(count);
+        base.add(0x16).write(flag_a);
+        base.add(0x17).write(flag_b);
+        BFEVENTMGR_POST_EVENT.hooked()((this + LISTENER_EVENT_MGR) as *const u32, base as *const u32);
+    }
+}
+
+/// `BFAIMgr::getEvents(events, target, kind)` (the listener override, `this` = the subobject): collects the
+/// event manager's events for `target` and `kind` into `events`.
+pub unsafe fn bfaimgr_get_events(this: u32, events: *const c_void, target: u32, kind: i8) {
+    unsafe { BFEVENTMGR_GET_EVENTS.hooked()((this + LISTENER_EVENT_MGR) as *const u32, events, target as i32, kind) };
 }
 
 #[detour_mod]
@@ -998,6 +1436,73 @@ mod ztaimgr_detours {
         }
     }
 
+    #[detour(ZTAIMGR_UPDATE)]
+    unsafe extern "thiscall" fn ztaimgr_update_detour(this: *const u32, dt: u32) {
+        unsafe { ztaimgr_update(this as u32, dt) }
+    }
+
+    #[detour(BFAIMGR_UPDATE)]
+    unsafe extern "thiscall" fn bfaimgr_update_detour(this: *const u32, dt: u32) {
+        unsafe { bfaimgr_update(this as u32, dt) }
+    }
+
+    #[detour(BFAIMGR_SAVE)]
+    unsafe extern "thiscall" fn bfaimgr_save_detour(this: *const u32, file: *const i8) -> bool {
+        unsafe { bfaimgr_save(this as u32, file) }
+    }
+
+    #[detour(BFAIMGR_LOAD)]
+    unsafe extern "thiscall" fn bfaimgr_load_detour(this: *const u32, file: *const u8, version: u32) -> u32 {
+        unsafe { bfaimgr_load(this as u32, file, version) }
+    }
+
+    #[detour(BFAIMGR_SEND_EVENT)]
+    unsafe extern "thiscall" fn bfaimgr_send_event_detour(
+        this: *const u32, kind: u16, target: u32, flag_b: u8, value_a: u32, flag_a: u8, value_b: u32, extra: u16, count: u16,
+    ) {
+        unsafe { bfaimgr_send_event(this as u32, kind, target, flag_b, value_a, flag_a, value_b, extra, count) }
+    }
+
+    #[detour(BFAIMGR_GET_EVENTS)]
+    unsafe extern "thiscall" fn bfaimgr_get_events_detour(this: *const u32, events: *const c_void, target: u32, kind: i8) {
+        unsafe { bfaimgr_get_events(this as u32, events, target, kind) }
+    }
+
+    #[detour(BFAIMGR_CALL_DONE)]
+    unsafe extern "thiscall" fn bfaimgr_call_done_detour(_this: *const u32, entity: *const u32) -> bool {
+        unsafe { bfaimgr_call_done(entity as u32) }
+    }
+
+    #[detour(BFAIMGR_REMOVE_ENTITIES)]
+    unsafe extern "thiscall" fn bfaimgr_remove_entities_detour(this: *const u32) {
+        unsafe { bfaimgr_remove_entities(this as u32) }
+    }
+
+    #[detour(BFAIMGR_GET_PATH_1)]
+    unsafe extern "thiscall" fn bfaimgr_get_path_tiles_detour(this: *const u32, from: *const u32, to: *const u32, unit: *const u32, flag: bool) -> bool {
+        unsafe { bfaimgr_get_path_tiles(this as u32, from as u32, to as u32, unit as u32, flag) }
+    }
+
+    #[detour(ZTAIMGR_INIT_AIPARAMS)]
+    unsafe extern "thiscall" fn ztaimgr_init_ai_params_detour(this: *const u32) -> u32 {
+        unsafe { ztaimgr_init_ai_params(this as u32) }
+    }
+
+    #[detour(BFAIMGR_CHECK_PATH)]
+    unsafe extern "thiscall" fn bfaimgr_check_path_detour(this: *const u32, from: *const u32, to: *const u32, unit: *const u32) -> u32 {
+        unsafe { bfaimgr_check_path(this as u32, from as u32, to as u32, unit as u32) }
+    }
+
+    #[detour(BFAIMGR_LOAD_DATA)]
+    unsafe extern "thiscall" fn bfaimgr_load_data_detour(_this: *const u32, full: bool) -> bool {
+        unsafe { bfaimgr_load_data(full) }
+    }
+
+    #[detour(ZTAIMGR_CREATE)]
+    unsafe extern "stdcall" fn ztaimgr_create_detour() -> u32 {
+        unsafe { ztaimgr_create() }
+    }
+
     #[detour(REMOVE_ENTITY)]
     unsafe extern "thiscall" fn remove_entity_detour(_this: *const u32, entity: *const u32) -> bool {
         unsafe { remove_entity(entity as u32) }
@@ -1050,6 +1555,59 @@ mod ztaimgr_detours {
 
         pub(crate) fn base_execute_call(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) -> u32 {
             unsafe { super::BFAIMGR_EXECUTE_CALL_DETOUR.call(this, call, unit, done) }
+        }
+
+        pub(crate) fn bfaimgr_update(this: *const u32, dt: u32) {
+            unsafe { super::BFAIMGR_UPDATE_DETOUR.call(this, dt) }
+        }
+
+        pub(crate) fn ztaimgr_update(this: *const u32, dt: u32) {
+            unsafe { super::ZTAIMGR_UPDATE_DETOUR.call(this, dt) }
+        }
+
+        pub(crate) fn bfaimgr_save(this: *const u32, file: *const i8) -> bool {
+            unsafe { super::BFAIMGR_SAVE_DETOUR.call(this, file) }
+        }
+
+        pub(crate) fn bfaimgr_load_data(this: *const u32, full: bool) -> bool {
+            unsafe { super::BFAIMGR_LOAD_DATA_DETOUR.call(this, full) }
+        }
+
+        pub(crate) fn bfaimgr_load(this: *const u32, file: *const u8, version: u32) -> u32 {
+            unsafe { super::BFAIMGR_LOAD_DETOUR.call(this, file, version) }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn bfaimgr_send_event(this: *const u32, kind: u16, target: u32, flag_b: u8, value_a: u32, flag_a: u8, value_b: u32, extra: u16, count: u16) {
+            unsafe { super::BFAIMGR_SEND_EVENT_DETOUR.call(this, kind, target, flag_b, value_a, flag_a, value_b, extra, count) }
+        }
+
+        pub(crate) fn bfaimgr_get_events(this: *const u32, events: *const c_void, target: u32, kind: i8) {
+            unsafe { super::BFAIMGR_GET_EVENTS_DETOUR.call(this, events, target, kind) }
+        }
+
+        pub(crate) fn bfaimgr_call_done(this: *const u32, entity: *const u32) -> bool {
+            unsafe { super::BFAIMGR_CALL_DONE_DETOUR.call(this, entity) }
+        }
+
+        pub(crate) fn bfaimgr_remove_entities(this: *const u32) {
+            unsafe { super::BFAIMGR_REMOVE_ENTITIES_DETOUR.call(this) }
+        }
+
+        pub(crate) fn bfaimgr_get_path_tiles(this: *const u32, from: *const u32, to: *const u32, unit: *const u32, flag: bool) -> bool {
+            unsafe { super::BFAIMGR_GET_PATH_1_DETOUR.call(this, from, to, unit, flag) }
+        }
+
+        pub(crate) fn ztaimgr_init_ai_params(this: *const u32) -> u32 {
+            unsafe { super::ZTAIMGR_INIT_AIPARAMS_DETOUR.call(this) }
+        }
+
+        pub(crate) fn bfaimgr_check_path(this: *const u32, from: *const u32, to: *const u32, unit: *const u32) -> u32 {
+            unsafe { super::BFAIMGR_CHECK_PATH_DETOUR.call(this, from, to, unit) }
+        }
+
+        pub(crate) fn ztaimgr_create() -> u32 {
+            unsafe { super::ZTAIMGR_CREATE_DETOUR.call() }
         }
 
         pub(crate) fn f_exit_building(unit: *const i32, done: *const u8) {
@@ -1138,6 +1696,11 @@ pub(crate) mod live_support {
 
     pub(crate) use super::{f_enter_building, f_exit_building, f_hatch, f_return_to_building, f_show_predator};
     pub(crate) use ztaimgr_detours::test_real::{
+        bfaimgr_get_events as real_bfaimgr_get_events, bfaimgr_load as real_bfaimgr_load, bfaimgr_send_event as real_bfaimgr_send_event, bfaimgr_call_done as real_bfaimgr_call_done, bfaimgr_check_path as real_bfaimgr_check_path, bfaimgr_get_path_tiles as real_bfaimgr_get_path_tiles,
+        bfaimgr_remove_entities as real_bfaimgr_remove_entities, ztaimgr_init_ai_params as real_ztaimgr_init_ai_params, bfaimgr_load_data as real_bfaimgr_load_data, bfaimgr_save as real_bfaimgr_save, bfaimgr_update as real_bfaimgr_update, ztaimgr_create as real_ztaimgr_create,
+        ztaimgr_update as real_ztaimgr_update,
+    };
+    pub(crate) use ztaimgr_detours::test_real::{
         base_execute_call as real_base_execute_call, execute_call as real_execute_call, f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_face_toward_food as real_f_face_toward_food, f_face_toward_target as real_f_face_toward_target, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
     };
     pub(crate) use ztaimgr_detours::test_real::{
@@ -1149,6 +1712,32 @@ pub(crate) mod live_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_params_use_defaults_keys_and_clamps() {
+        let mut keys = Vec::new();
+        let defaults = compute_ai_params(|key, default| {
+            keys.push((key.to_string(), default));
+            default
+        });
+        assert_eq!(defaults, [9, 9, 9, 9, 0, 0]);
+        let expected: Vec<(String, i32)> = [("mRandomXGuest", 9), ("mRandomYGuest", 9), ("mRandomXStaff", 9), ("mRandomYStaff", 9), ("AnimalResetInterval", 0), ("GuestResetInterval", 0)]
+            .iter()
+            .map(|(key, default)| (key.to_string(), *default))
+            .collect();
+        assert_eq!(keys, expected);
+        // Extents clamp up to 1, intervals up to 0, positive values pass through.
+        assert_eq!(compute_ai_params(|_, _| -5), [1, 1, 1, 1, 0, 0]);
+        assert_eq!(compute_ai_params(|_, _| 0), [1, 1, 1, 1, 0, 0]);
+        assert_eq!(compute_ai_params(|_, _| 25), [25; 6]);
+        let by_key = compute_ai_params(|key, _| match key {
+            "mRandomXGuest" => 3,
+            "mRandomYStaff" => -1,
+            "GuestResetInterval" => 40,
+            _ => 7,
+        });
+        assert_eq!(by_key, [3, 7, 7, 1, 7, 40]);
+    }
 
     fn string_of(bytes: &'static [u8]) -> RawCallString {
         let range = bytes.as_ptr_range();

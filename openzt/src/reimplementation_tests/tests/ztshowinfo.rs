@@ -1363,10 +1363,9 @@ fn install_empty_show_state_tree_header(show_info: u32) {
 /// pending-scripts node's full value-field set (seeded directly via [`find_or_insert_pending_script_node`]
 /// for `current`/`pending`, then [`increment_attendance`]/[`increment_receipts`] for the accumulator pairs -
 /// both already independently live-tested), and the eleven trailing scalars. The `BFEvent` array is left at
-/// zero elements deliberately - `BFEvent` itself is not reimplemented anywhere in this codebase, so this
-/// test exercises the array's own count-gating/allocation-skip path (`ev_count == 0`) rather than real
-/// element content, which is outside this stage's own scope (see the module doc comment's own note on why
-/// `BFEvent`'s per-element content isn't ported). Captures [`SAVE`]'s `.hooked()` output via `io_redirect`,
+/// zero elements deliberately, so this test exercises the array's own count-gating/allocation-skip path
+/// (`ev_count == 0`) rather than element content; `BFEvent`'s own save/load is covered by
+/// `BFEVENT_SAVE_LOAD`. Captures [`SAVE`]'s `.hooked()` output via `io_redirect`,
 /// replays it into a second fresh fixture's `.hooked()` [`LOAD`], and compares every field plus the
 /// roundtripped array/node contents.
 ///

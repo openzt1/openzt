@@ -4381,7 +4381,7 @@ fn nearest_clear_tile_oracle(tiles: &[u32], unit_ptr: u32, unit_tile: u32, rando
         }
         if random_animal != 0 {
             let reachable = low_byte_bool(unsafe {
-                BFAIMGR_CHECK_PATH.original()(ai_mgr_ptr as *const u32, animal_tile as *const u32, tile as *const u32, random_animal as *const u32)
+                BFAIMGR_CHECK_PATH.hooked()(ai_mgr_ptr as *const u32, animal_tile as *const u32, tile as *const u32, random_animal as *const u32)
             });
             if !reachable {
                 continue;
@@ -4527,7 +4527,7 @@ fn near_clear_tile_candidates(tiles: &[u32], unit_ptr: u32, unit_tile: u32, anim
         }
         if animal_ptr != 0 {
             let reachable = low_byte_bool(unsafe {
-                BFAIMGR_CHECK_PATH.original()(ai_mgr_ptr as *const u32, animal_tile as *const u32, tile as *const u32, animal_ptr as *const u32)
+                BFAIMGR_CHECK_PATH.hooked()(ai_mgr_ptr as *const u32, animal_tile as *const u32, tile as *const u32, animal_ptr as *const u32)
             });
             if !reachable {
                 continue;

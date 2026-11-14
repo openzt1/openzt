@@ -2268,8 +2268,8 @@ impl ZTTankExhibit {
     }
 
     /// Ports `ZTTankExhibit::loadProperties` (`0x00463a0e`): reads the tank settings globals out of
-    /// `tanks.cfg` (`[cost]` and `[tank]`). A key that is missing or does not parse leaves its global
-    /// untouched. `veryMurkyWaterPurity` and `extremelyMurkyWaterPurity` both write
+    /// `tanks.cfg` (`[cost]` and `[tank]`). A key that is missing leaves its global untouched; a present
+    /// key is converted the way `BFConfigFile::getInt`/`getFloat` convert it (non-numeric text is `0`). `veryMurkyWaterPurity` and `extremelyMurkyWaterPurity` both write
     /// [`VERY_MURKY_WATER_PURITY_RVA`], the second winning; nothing writes `DAT_006390b0`.
     pub fn load_properties() {
         let Some(ini) = ini_compat::read_cfg("tanks.cfg") else {
@@ -2278,7 +2278,8 @@ impl ZTTankExhibit {
         let base = get_module_base("zoo.exe") as u32;
         let float_settings: [(&str, &str, u32); 2] = [("cost", "saltWater", SALT_WATER_COST_RVA), ("cost", "freshWater", FRESH_WATER_COST_RVA)];
         for (section, key, rva) in float_settings {
-            if let Some(value) = ini_compat::first_parse::<f32>(&ini, section, key) {
+            let mut value = 0.0f32;
+            if ini_compat::get_float(&ini, section, key, &mut value) {
                 save_to_memory(base + rva, value);
             }
         }
@@ -2303,7 +2304,8 @@ impl ZTTankExhibit {
             ("tank", "waterPurityDecayTime", WATER_PURITY_TIMER_RELOAD_RVA),
         ];
         for (section, key, rva) in int_settings {
-            if let Some(value) = ini_compat::first_parse::<i32>(&ini, section, key) {
+            let mut value = 0i32;
+            if ini_compat::get_int(&ini, section, key, &mut value) {
                 save_to_memory(base + rva, value);
             }
         }
