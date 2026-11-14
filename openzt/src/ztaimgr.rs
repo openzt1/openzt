@@ -39,12 +39,13 @@ use openzt_detour::generated::{
     bfpathfinder::SET_NODE_MAX,
     standalone::OPERATOR_NEW,
     ztaimgr::{CREATE as ZTAIMGR_CREATE, INIT_AIPARAMS as ZTAIMGR_INIT_AIPARAMS},
+    bfunit::SET_MOVING,
     bfeventmgr::{GET_EVENTS as BFEVENTMGR_GET_EVENTS, LOAD as BFEVENTMGR_LOAD, POST_EVENT as BFEVENTMGR_POST_EVENT, SAVE as BFEVENTMGR_SAVE, UPDATE as BFEVENTMGR_UPDATE},
     standalone::{DEALLOCATE as READ_BYTES_FROM_FILE, WRITE_BYTES_TO_FILE},
     ztaimgr::UPDATE as ZTAIMGR_UPDATE,
     ztmainttaskpool::LISTEN as ZTMAINTTASKPOOL_LISTEN,
     bfaimgr::{
-        EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_FACE_DIRECTION_F, F_FLY_REVERSE_F, F_HALT_F, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F, F_MOVE_REVERSE_F,
+        EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_FACE_DIRECTION_F, F_FLY_F, F_FLY_REVERSE_F, F_HALT_F, F_PLAY_F, F_PLAY_WITH_SOUND, F_PLAY_SOUND, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F, F_MOVE_REVERSE_F,
         F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F, F_MOVE_WITH_SOUND_F, F_PLAY_PING_PONG_F, F_PLAY_REVERSE_F, F_PLAY_SET_F, F_PLAY_SET_PROB_F, F_PLAY_SOUND_F,
         F_PLAY_SPECIAL_F, F_PLAY_STOP_AT_END_F, F_PLAY_TIME_F, F_PLAY_WITH_BASE_F, F_PLAY_WITH_SOUND_F, F_SET_BASE_F,
     },
@@ -694,13 +695,6 @@ pub fn lookup_base_call(name: &[u8]) -> Option<BaseCall> {
     })
 }
 
-/// `BFAIMgr::fPlayF` takes four stack arguments `(call, unit, 0, 0)` (`RET 0x10`); its `generated.rs` entry
-/// lists three, so it is called at its address with the real shape.
-type PlayFn = unsafe extern "thiscall" fn(*const u32, u32, u32, u32, u32) -> u32;
-const F_PLAY_F_ADDRESS: u32 = 0x0044_0b92;
-/// `BFAIMgr::fFlyF` takes three stack arguments `(call, unit, 0)` (`RET 0xc`); its entry lists two.
-type FlyFn = unsafe extern "thiscall" fn(*const u32, u32, u32, u32) -> u32;
-const F_FLY_F_ADDRESS: u32 = 0x0049_9886;
 /// `BFAIMgr` vtable slot `fPlaySetTerrainF(call, unit)`, which `ZTAIMgr` overrides.
 const BFAIMGR_VTABLE_PLAY_SET_TERRAIN: u32 = 0x14;
 
@@ -723,13 +717,13 @@ unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, u
     let (u, uc) = (unit as *const u32, unit_cast as *const u32);
     unsafe {
         match which {
-            BaseCall::Play => mem::transmute::<u32, PlayFn>(F_PLAY_F_ADDRESS)(t, call, unit, 0, 0) as u8,
+            BaseCall::Play => F_PLAY_F.original()(t, c, u, 0, 0) as u8,
             BaseCall::SetBase => F_SET_BASE_F.original()(t, c, u) as u8,
             BaseCall::PlayWithBase => F_PLAY_WITH_BASE_F.original()(t, c, u, 0, 0) as u8,
             BaseCall::MoveEntityDelta => F_MOVE_ENTITY_DELTA_F.original()(t, c, u) as u8,
             BaseCall::MoveEntitySpecial => F_MOVE_ENTITY_SPECIAL_F.original()(t, c, u) as u8,
-            BaseCall::PlayTime => F_PLAY_TIME_F.original()(t, c, u) as u8,
-            BaseCall::PlaySound => F_PLAY_SOUND_F.original()(t, c, u) as u8,
+            BaseCall::PlayTime => F_PLAY_TIME_F.hooked()(t, c, u) as u8,
+            BaseCall::PlaySound => F_PLAY_SOUND_F.hooked()(t, c, u) as u8,
             BaseCall::PlaySpecial => F_PLAY_SPECIAL_F.original()(t, c, u) as u8,
             BaseCall::PlaySetProb => F_PLAY_SET_PROB_F.original()(c, u) as u8,
             BaseCall::PlaySetTerrain => {
@@ -737,11 +731,11 @@ unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, u
                 let target = get_from_memory::<u32>(vtable + BFAIMGR_VTABLE_PLAY_SET_TERRAIN);
                 mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target)(this, call, unit) as u8
             }
-            BaseCall::PlayReverse => F_PLAY_REVERSE_F.original()(t, c, u) as u8,
-            BaseCall::PlayPingPong => F_PLAY_PING_PONG_F.original()(t, c, u) as u8,
-            BaseCall::PlayWithSound => F_PLAY_WITH_SOUND_F.original()(c, u) as u8,
-            BaseCall::PlayStopAtEnd => F_PLAY_STOP_AT_END_F.original()(t, c, u) as u8,
-            BaseCall::PlaySet => F_PLAY_SET_F.original()(c, u) as u8,
+            BaseCall::PlayReverse => F_PLAY_REVERSE_F.hooked()(t, c, u) as u8,
+            BaseCall::PlayPingPong => F_PLAY_PING_PONG_F.hooked()(t, c, u) as u8,
+            BaseCall::PlayWithSound => F_PLAY_WITH_SOUND_F.hooked()(c, u) as u8,
+            BaseCall::PlayStopAtEnd => F_PLAY_STOP_AT_END_F.hooked()(t, c, u) as u8,
+            BaseCall::PlaySet => F_PLAY_SET_F.hooked()(c, u) as u8,
             BaseCall::MoveSlow => F_MOVE_SLOW_F.original()(t, call as i32, uc as *const i32) as u8,
             BaseCall::MoveMedium => F_MOVE_MEDIUM_F.original()(t, call as i32, uc as *const i32) as u8,
             BaseCall::Move => F_MOVE_F.original()(t, c, uc, false) as u8,
@@ -751,14 +745,17 @@ unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, u
             }
             BaseCall::MoveFast => F_MOVE_FAST_F.original()(t, call as i32, uc as *const i32) as u8,
             BaseCall::MoveWithSound => F_MOVE_WITH_SOUND_F.original()(t, c, uc) as u8,
-            BaseCall::FaceDirection => F_FACE_DIRECTION_F.original()(c, u) as u8,
-            BaseCall::Fly => mem::transmute::<u32, FlyFn>(F_FLY_F_ADDRESS)(t, call, unit_cast, 0) as u8,
-            BaseCall::FlyReverse => F_FLY_REVERSE_F.original()(t, c, uc) as u8,
+            BaseCall::FaceDirection => F_FACE_DIRECTION_F.hooked()(c, u) as u8,
+            BaseCall::Fly => F_FLY_F.original()(t, c, uc, 0) as u8,
+            BaseCall::FlyReverse => F_FLY_REVERSE_F.hooked()(t, c, uc) as u8,
             BaseCall::KeepControl => (unit_cast != 0) as u8,
-            BaseCall::Halt => {
-                let halt = mem::transmute::<u32, unsafe extern "stdcall" fn(*const u32, *const u32) -> u32>(F_HALT_F.address);
-                halt(c, uc) as u8
-            }
+            BaseCall::Halt => match f_halt_f(call, unit_cast) {
+                Some(result) => result,
+                None => {
+                    let halt = mem::transmute::<u32, unsafe extern "stdcall" fn(*const u32, *const u32) -> u32>(F_HALT_F.address);
+                    halt(c, uc) as u8
+                }
+            },
         }
     }
 }
@@ -1097,6 +1094,94 @@ unsafe fn play_set_vanilla(name: u32, unit: u32) -> u32 {
     unsafe { F_PLAY_SET.original()(name as *const i32, unit as *const c_void, 1, 1) }
 }
 
+/// `BFAIMgr` handler wrappers (stage 9, first slice): the `F` handlers that only unpack a call and forward.
+/// Their behavior halves (`fPlayF`, `fFlyF`, `fPlayTime`, `fPlaySound`, `fPlayWithSound`, `fPlaySet`,
+/// `fFaceDirection`) stay vanilla.
+///
+/// `BFAIMgr::fPlayTime(name, ms, unit, done, flag)` takes five stack arguments (`RET 0x14`); its `generated.rs`
+/// entry lists four, so it is called at its address with the real shape. `this` is passed in `ECX` as vanilla does.
+const F_PLAY_TIME_ADDRESS: u32 = 0x0042_4ee7;
+type PlayTimeFn = unsafe extern "thiscall" fn(u32, u32, u32, u32, u32, u32) -> u32;
+/// `BFAIMgr` vtable slot `convertConstantParam(param, unit)`.
+const AI_VTABLE_CONVERT_CONSTANT_PARAM: u32 = 0x34;
+/// Entity vtable slot `setStopAtEnd(bool)`.
+const ENTITY_VTABLE_SET_STOP_AT_END: u32 = 0xdc;
+/// Offset of the call's second flag byte, which `fPlayTimeF` forwards to `fPlayTime`.
+const CALL_FLAG_B_OFFSET: u32 = 0x19;
+/// Milliseconds per second: `fPlayTimeF` converts its duration parameter to milliseconds.
+const MILLIS_PER_SECOND: u32 = 1000;
+
+/// The call's parameter count, computed as vanilla does (signed byte span over the entry size).
+unsafe fn call_param_count(call: u32) -> i32 {
+    let function_call = unsafe { &*(call as *const RawFunctionCall) };
+    (function_call.params_end as u32).wrapping_sub(function_call.params_begin as u32) as i32 / CALL_PARAM_SIZE as i32
+}
+
+unsafe fn call_params_begin(call: u32) -> u32 {
+    unsafe { &*(call as *const RawFunctionCall) }.params_begin as u32
+}
+
+unsafe fn call_params_end(call: u32) -> u32 {
+    unsafe { &*(call as *const RawFunctionCall) }.params_end as u32
+}
+
+/// `fFaceDirectionF(call, unit)`: true for exactly one non-empty parameter. The real `fFaceDirection` it calls
+/// is a `return 1` stub, so nothing else happens (the call's flag is untouched).
+pub unsafe fn f_face_direction_f(call: u32) -> bool {
+    unsafe { call_param_count(call) == 1 && !(*(call_params_begin(call) as *const RawCallString)).bytes().is_empty() }
+}
+
+/// `fHaltF(call, unit)`: stops the unit's movement and finishes. `None` (defer to vanilla) for a null unit,
+/// where vanilla calls `setMoving` on null. Returns `1`, the low byte vanilla leaves in `AL`.
+pub unsafe fn f_halt_f(call: u32, unit: u32) -> Option<u8> {
+    if unit == 0 {
+        return None;
+    }
+    unsafe { SET_MOVING.hooked()(unit as *const u32, 0, 0) };
+    unsafe { set_done(call_done_flag(call)) };
+    Some(1)
+}
+
+/// `fPlaySetF(call, unit)`: exactly one parameter clears the call's result flag and plays that set (through
+/// `play_set(name, unit)`); any other count returns `0` without touching the call.
+pub unsafe fn f_play_set_f(call: u32, unit: u32, play_set: unsafe fn(u32, u32) -> u32) -> u32 {
+    if unsafe { call_param_count(call) } != 1 {
+        return 0;
+    }
+    save_to_memory(call + CALL_DONE_FLAG_OFFSET, 0u8);
+    unsafe { play_set(call_params_begin(call), unit) }
+}
+
+/// `fPlayStopAtEndF`'s first step: tells the unit to stop at the animation's end. `false` (defer) for a null unit.
+pub unsafe fn f_play_stop_at_end_prepare(unit: u32) -> bool {
+    if unit == 0 {
+        return false;
+    }
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(unit) + ENTITY_VTABLE_SET_STOP_AT_END);
+    let set_stop_at_end = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32)>(target) };
+    set_stop_at_end(unit, 1);
+    true
+}
+
+/// `fPlayTimeF(this, call, unit)`: exactly two parameters convert the second one (through the manager's
+/// `convertConstantParam` virtual) to milliseconds and call `fPlayTime(first, ms, unit, done, flagB)`; any other
+/// count returns `0`.
+pub unsafe fn f_play_time_f(this: u32, call: u32, unit: u32, play_time: unsafe fn(u32, u32, u32, u32, u32, u32) -> u32) -> u32 {
+    if unsafe { call_param_count(call) } != 2 {
+        return 0;
+    }
+    let begin = unsafe { call_params_begin(call) };
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VTABLE_CONVERT_CONSTANT_PARAM);
+    let convert = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target) };
+    let seconds = convert(this, begin + CALL_PARAM_SIZE, unit);
+    let flag_b = u32::from(get_from_memory::<u8>(call + CALL_FLAG_B_OFFSET));
+    unsafe { play_time(this, begin, seconds.wrapping_mul(MILLIS_PER_SECOND), unit, call + CALL_DONE_FLAG_OFFSET, flag_b) }
+}
+
+unsafe fn play_time_vanilla(this: u32, name: u32, millis: u32, unit: u32, done: u32, flag_b: u32) -> u32 {
+    unsafe { mem::transmute::<u32, PlayTimeFn>(F_PLAY_TIME_ADDRESS)(this, name, millis, unit, done, flag_b) }
+}
+
 /// `ZTAIMgr` fields `initAIParams` fills: guest and staff random-walk extents (x then y), then the animal and
 /// guest reset intervals.
 const OFFSET_ANIMAL_RESET_INTERVAL: u32 = 0x138;
@@ -1389,6 +1474,63 @@ mod ztaimgr_detours {
         }
     }
 
+    #[detour(F_FACE_DIRECTION_F)]
+    unsafe extern "stdcall" fn f_face_direction_f_detour(call: *const u32, _unit: *const u32) -> bool {
+        unsafe { f_face_direction_f(call as u32) }
+    }
+
+    #[detour(F_PLAY_SET_F)]
+    unsafe extern "stdcall" fn f_play_set_f_detour(call: *const u32, unit: *const u32) -> bool {
+        low_byte_bool(unsafe { f_play_set_f(call as u32, unit as u32, play_set_vanilla) })
+    }
+
+    #[detour(F_PLAY_REVERSE_F)]
+    unsafe extern "thiscall" fn f_play_reverse_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        unsafe { F_PLAY_F.original()(this, call, unit, 1, 0) }
+    }
+
+    #[detour(F_PLAY_PING_PONG_F)]
+    unsafe extern "thiscall" fn f_play_ping_pong_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        unsafe { F_PLAY_F.original()(this, call, unit, 0, 1) }
+    }
+
+    #[detour(F_PLAY_STOP_AT_END_F)]
+    unsafe extern "thiscall" fn f_play_stop_at_end_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        if !unsafe { f_play_stop_at_end_prepare(unit as u32) } {
+            return unsafe { F_PLAY_STOP_AT_END_F_DETOUR.call(this, call, unit) };
+        }
+        unsafe { F_PLAY_F.original()(this, call, unit, 0, 0) }
+    }
+
+    #[detour(F_FLY_REVERSE_F)]
+    unsafe extern "thiscall" fn f_fly_reverse_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        unsafe { F_FLY_F.original()(this, call, unit, 1) }
+    }
+
+    #[detour(F_PLAY_WITH_SOUND_F)]
+    unsafe extern "stdcall" fn f_play_with_sound_f_detour(call: *const u32, unit: *const u32) -> bool {
+        let call = call as u32;
+        let result = unsafe {
+            F_PLAY_WITH_SOUND.original()(call_params_begin(call), call_params_end(call).wrapping_sub(CALL_PARAM_SIZE), unit as *const i32, (call + CALL_DONE_FLAG_OFFSET) as *const u8)
+        };
+        low_byte_bool(result)
+    }
+
+    #[detour(F_PLAY_SOUND_F)]
+    unsafe extern "thiscall" fn f_play_sound_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        let call = call as u32;
+        if unsafe { call_param_count(call) } != 1 {
+            return false;
+        }
+        let result = unsafe { F_PLAY_SOUND.original()(this, call_params_begin(call) as *const i8, unit as *const i32, (call + CALL_DONE_FLAG_OFFSET) as *const u8) };
+        low_byte_bool(result)
+    }
+
+    #[detour(F_PLAY_TIME_F)]
+    unsafe extern "thiscall" fn f_play_time_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        low_byte_bool(unsafe { f_play_time_f(this as u32, call as u32, unit as u32, play_time_vanilla) })
+    }
+
     #[detour(EXECUTE_CALL)]
     unsafe extern "thiscall" fn execute_call_detour(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) {
         unsafe { execute_call(this as u32, call as u32, unit as u32, done as *mut u8) }
@@ -1646,6 +1788,38 @@ mod ztaimgr_detours {
             unsafe { super::F_GUIDE_ROUTINE_DETOUR.call(unit, done) }
         }
 
+        pub(crate) fn f_face_direction_f(call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_FACE_DIRECTION_F_DETOUR.call(call, unit) }
+        }
+
+        pub(crate) fn f_play_set_f(call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_PLAY_SET_F_DETOUR.call(call, unit) }
+        }
+
+        pub(crate) fn f_play_reverse_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_PLAY_REVERSE_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_play_ping_pong_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_PLAY_PING_PONG_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_play_stop_at_end_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_PLAY_STOP_AT_END_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_fly_reverse_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_FLY_REVERSE_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_play_sound_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_PLAY_SOUND_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_play_time_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_PLAY_TIME_F_DETOUR.call(this, call, unit) }
+        }
+
         pub(crate) fn f_keeper_routine(unit: *const u32, done: *const bool) -> bool {
             unsafe { super::F_KEEPER_ROUTINE_DETOUR.call(unit, done) }
         }
@@ -1706,6 +1880,10 @@ pub(crate) mod live_support {
     pub(crate) use ztaimgr_detours::test_real::{
         f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,
         f_keeper_routine as real_f_keeper_routine, f_maint_routine as real_f_maint_routine, f_return_to_building as real_f_return_to_building,
+    };
+    pub(crate) use ztaimgr_detours::test_real::{
+        f_face_direction_f as real_f_face_direction_f, f_fly_reverse_f as real_f_fly_reverse_f, f_play_ping_pong_f as real_f_play_ping_pong_f, f_play_reverse_f as real_f_play_reverse_f,
+        f_play_set_f as real_f_play_set_f, f_play_sound_f as real_f_play_sound_f, f_play_stop_at_end_f as real_f_play_stop_at_end_f, f_play_time_f as real_f_play_time_f,
     };
 }
 
