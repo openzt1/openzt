@@ -146,6 +146,9 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTAIMGR_BFAIMGR_GET_PATH_TILES", run: tests::ztaimgr::run_ztaimgr_bfaimgr_get_path_tiles_test },
             RegisteredTest { name: "ZTAIMGR_BFAIMGR_CALL_DONE", run: tests::ztaimgr::run_ztaimgr_bfaimgr_call_done_test },
             RegisteredTest { name: "ZTAIMGR_F_PLAY_SET_TANK", run: tests::ztaimgr::run_ztaimgr_f_play_set_tank_test },
+            RegisteredTest { name: "ZTAIMGR_F_PLAY_SET_TERRAIN_F", run: tests::ztaimgr::run_ztaimgr_f_play_set_terrain_f_test },
+            RegisteredTest { name: "ZTAIMGR_F_DUST_BALL", run: tests::ztaimgr::run_ztaimgr_f_dust_ball_test },
+            RegisteredTest { name: "ZTAIMGR_F_TARGET_BUILDING", run: tests::ztaimgr::run_ztaimgr_f_target_building_test },
             RegisteredTest { name: "ZTAIMGR_BASE_WRAPPER_GUARDS", run: tests::ztaimgr::run_ztaimgr_base_wrapper_guards_test },
             RegisteredTest { name: "ZTAIMGR_BASE_WRAPPER_FORWARDING", run: tests::ztaimgr::run_ztaimgr_base_wrapper_forwarding_test },
         ]);

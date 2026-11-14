@@ -15,7 +15,7 @@ use openzt_detour::generated::{
     ztui_general::GET_MAPVIEW,
     ztworldmgr::{BOX_UP_AND_FIND_APLACE_FOR_ANIMAL, FIND_APLACE_FOR_STAFF_MEMBER},
     gxmixer::UPDATE as GXMIXER_UPDATE,
-    msvc_std_basic_string::COMPARE as BASIC_STRING_ASSIGN_RANGE,
+    msvc_std_basic_string::BASIC_STRING_RANGE,
     msvc_std_vectorbyte::VECTORBYTE,
     standalone::SET_NEEDS_ORDER_RECALCULATE,
     ztui_tankmodify::FETCH_VALUES_FROM_TANK,
@@ -788,7 +788,7 @@ impl ZTTankExhibit {
     fn find_entity_type(name: &[u8]) -> Option<u32> {
         fn build_string(string: &mut [u32; 3], text: &[u8]) {
             let begin = text.as_ptr() as u32;
-            unsafe { BASIC_STRING_ASSIGN_RANGE.original()(string.as_mut_ptr() as *const std::ffi::c_void, begin as *const u32, (begin + text.len() as u32) as i32) };
+            unsafe { BASIC_STRING_RANGE.original()(string.as_mut_ptr() as *const std::ffi::c_void, begin as *const u32, (begin + text.len() as u32) as i32) };
         }
         fn free_string(string: &[u32; 3]) {
             free_event_vector_buffer(string[0], string[2].wrapping_sub(string[0]));

@@ -18,7 +18,10 @@
 //! Windows layout differs from the macOS build (`ZTAIMgr` fields sit `+4` later, entity-type fields `+0x18`
 //! later), so every offset here comes from the Windows decompile, never the macOS one.
 
-use std::{ffi::c_void, mem};
+use std::{
+    ffi::{c_void, CStr},
+    mem,
+};
 
 use openzt_detour::generated::{
     ztaimgr::{
@@ -35,21 +38,25 @@ use openzt_detour::generated::{
         LOAD as BFAIMGR_LOAD, LOAD_DATA as BFAIMGR_LOAD_DATA, REMOVE_ENTITIES as BFAIMGR_REMOVE_ENTITIES, SAVE as BFAIMGR_SAVE, SEND_EVENT as BFAIMGR_SEND_EVENT, UPDATE as BFAIMGR_UPDATE,
     },
     bfinifile::READ as BFINIFILE_READ,
-    gxmixer::GET_ANIM as GXMIXER_GET_ANIM,
+    gxmixer::{CLEAR_ALL as GXMIXER_CLEAR_ALL, GET_ANIM as GXMIXER_GET_ANIM},
     bfpathfinder::SET_NODE_MAX,
     standalone::OPERATOR_NEW,
     ztaimgr::{CREATE as ZTAIMGR_CREATE, INIT_AIPARAMS as ZTAIMGR_INIT_AIPARAMS},
+    bfmap::MOVE_ENTITY_DELTA as BFMAP_MOVE_ENTITY_DELTA,
     bfunit::SET_MOVING,
     bfeventmgr::{GET_EVENTS as BFEVENTMGR_GET_EVENTS, LOAD as BFEVENTMGR_LOAD, POST_EVENT as BFEVENTMGR_POST_EVENT, SAVE as BFEVENTMGR_SAVE, UPDATE as BFEVENTMGR_UPDATE},
     standalone::{DEALLOCATE as READ_BYTES_FROM_FILE, WRITE_BYTES_TO_FILE},
     ztaimgr::UPDATE as ZTAIMGR_UPDATE,
     ztmainttaskpool::LISTEN as ZTMAINTTASKPOOL_LISTEN,
     bfaimgr::{
-        EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_FACE_DIRECTION_F, F_FLY_F, F_FLY_REVERSE_F, F_HALT_F, F_PLAY_F, F_PLAY_WITH_SOUND, F_PLAY_SOUND, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F, F_MOVE_REVERSE_F,
+        EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_MOVE, F_PLAY_SPECIAL, F_FACE_DIRECTION_F, F_FLY_F, F_FLY_REVERSE_F, F_HALT_F, F_PLAY_F, F_PLAY_WITH_SOUND, F_PLAY_SOUND, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F, F_MOVE_REVERSE_F,
         F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F, F_MOVE_WITH_SOUND_F, F_PLAY_PING_PONG_F, F_PLAY_REVERSE_F, F_PLAY_SET_F, F_PLAY_SET_PROB_F, F_PLAY_SOUND_F,
         F_PLAY_SPECIAL_F, F_PLAY_STOP_AT_END_F, F_PLAY_TIME_F, F_PLAY_WITH_BASE_F, F_PLAY_WITH_SOUND_F, F_SET_BASE_F,
     },
-    ztaimgr::{EXECUTE_CALL, F_DUST_BALL_F, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_FOOD_F, F_FACE_TOWARD_TARGET, F_FACE_TOWARD_TARGET_F, F_PLAY_SET_TANK_F, F_TARGET_BUILDING_F},
+    ztaimgr::F_PLAY_SET_TERRAIN_F as ZTAIMGR_F_PLAY_SET_TERRAIN_F,
+    ztanimal::TARGET_BUILDING as ZTANIMAL_TARGET_BUILDING,
+    bfentitytype::{FIND_ANIM as BFENTITYTYPE_FIND_ANIM, FIND_SOUND as BFENTITYTYPE_FIND_SOUND},
+    ztaimgr::{EXECUTE_CALL, F_DUST_BALL_F, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_FOOD_F, F_FACE_TOWARD_TARGET, F_FACE_TOWARD_TARGET_F, F_DUST_BALL, F_PLAY_SET_TANK_F, F_TARGET_BUILDING, F_TARGET_BUILDING_F},
     ztanimal::{CONSUME as ZTANIMAL_CONSUME, FACE_TOWARD_FOOD, FINISH_HATCH},
     ztguest::F_ROUTINE as ZTGUEST_F_ROUTINE,
     zthabitat::TRIGGER_DEATH_ARRIVED,
@@ -599,11 +606,11 @@ unsafe fn dispatch_zt_call(this: u32, which: ZtCall, call: u32, unit: u32) {
             ZtCall::HidePredator => F_HIDE_PREDATOR_F.hooked()(c, unit as *const u8),
             ZtCall::EnterBuilding => F_ENTER_BUILDING_F.hooked()(c, u),
             ZtCall::ExitBuilding => F_EXIT_BUILDING_F.hooked()(c, u),
-            ZtCall::DustBall => F_DUST_BALL_F.original()(this as *const u32, c, u),
+            ZtCall::DustBall => F_DUST_BALL_F.hooked()(this as *const u32, c, u),
             ZtCall::KillPrey => F_KILL_PREY_F.hooked()(c, unit as *const u8),
             ZtCall::CaughtPrey => F_CAUGHT_PREY_F.hooked()(c, u),
             ZtCall::Die => F_DIE_F.hooked()(c, u),
-            ZtCall::TargetBuilding => drop(F_TARGET_BUILDING_F.original()(c, u)),
+            ZtCall::TargetBuilding => drop(F_TARGET_BUILDING_F.hooked()(this as *const u32, c, u)),
             ZtCall::Hatch => F_HATCH_F.hooked()(c, u),
             ZtCall::EndTrick => F_END_TRICK_F.hooked()(c, u),
             ZtCall::ReturnToBuilding => F_RETURN_TO_BUILDING_F.hooked()(c, u),
@@ -720,8 +727,8 @@ unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, u
             BaseCall::Play => F_PLAY_F.original()(t, c, u, 0, 0) as u8,
             BaseCall::SetBase => F_SET_BASE_F.original()(t, c, u) as u8,
             BaseCall::PlayWithBase => F_PLAY_WITH_BASE_F.original()(t, c, u, 0, 0) as u8,
-            BaseCall::MoveEntityDelta => F_MOVE_ENTITY_DELTA_F.original()(t, c, u) as u8,
-            BaseCall::MoveEntitySpecial => F_MOVE_ENTITY_SPECIAL_F.original()(t, c, u) as u8,
+            BaseCall::MoveEntityDelta => F_MOVE_ENTITY_DELTA_F.hooked()(t, c, u) as u8,
+            BaseCall::MoveEntitySpecial => F_MOVE_ENTITY_SPECIAL_F.hooked()(t, c, u) as u8,
             BaseCall::PlayTime => F_PLAY_TIME_F.hooked()(t, c, u) as u8,
             BaseCall::PlaySound => F_PLAY_SOUND_F.hooked()(t, c, u) as u8,
             BaseCall::PlaySpecial => F_PLAY_SPECIAL_F.original()(t, c, u) as u8,
@@ -1091,7 +1098,210 @@ pub unsafe fn f_play_set_tank(call: u32, unit: u32, play_set: unsafe fn(u32, u32
 
 /// `BFAIMgr::fPlaySet(name, unit, 1, 1)`, vanilla (stdcall; it ignores `ECX`).
 unsafe fn play_set_vanilla(name: u32, unit: u32) -> u32 {
-    unsafe { F_PLAY_SET.original()(name as *const i32, unit as *const c_void, 1, 1) }
+    u32::from(unsafe { F_PLAY_SET.original()(name as *const i32, unit as *const c_void, 1, 1) })
+}
+
+unsafe fn type_find_anim_vanilla(entity_type: u32, name: *const u8) -> bool {
+    !unsafe { BFENTITYTYPE_FIND_ANIM.original()(entity_type as *const u32, name.cast()) }.is_null()
+}
+
+unsafe fn type_find_sound_vanilla(entity_type: u32, name: *const u8) -> bool {
+    !unsafe { BFENTITYTYPE_FIND_SOUND.original()(entity_type as *const u32, name.cast()) }.is_null()
+}
+
+/// The string vanilla stores for "no animation / no sound" (`DAT_0063ba4c`).
+const NO_NAME: &[u8] = b"0";
+/// `ZTUnit` selector `fDustBall` reads (`3` surface ball, `4` submerged ball).
+const UNIT_BALL_SELECTOR_OFFSET: u32 = 0x258;
+
+/// The vanilla calls `fDustBall` makes, so a test can substitute recording stand-ins.
+pub struct DustBallOps {
+    pub tile_flags: unsafe fn(u32) -> u8,
+    /// `BFEntityType::findAnim(type, name)`.
+    pub find_anim: unsafe fn(u32, *const u8) -> bool,
+    /// `BFEntityType::findSound(type, name)`.
+    pub find_sound: unsafe fn(u32, *const u8) -> bool,
+    /// `BFAIMgr::fPlaySpecial(this, anim, sound, 0, 1, extra, unit, done)` with vanilla strings.
+    pub play_special: unsafe fn(u32, u32, u32, u32, u32, u32) -> bool,
+    /// `fCaughtPrey(unit, done)`.
+    pub caught_prey: unsafe fn(u32, *const bool),
+}
+
+/// `ZTAIMgr::fDustBall(unit, done)`: plays the unit's dust/water ball effect. The effect name is `surfaceball`
+/// or `submergedball` for selectors `3`/`4`, else `dustball` on land and `waterball` on water. The animation
+/// and sound names are that name when the unit's type has it, else `dustball` when it has that, else `"0"`
+/// (none); `fPlaySpecial` plays them and, if it left the done flag set, the unit catches its prey.
+///
+/// `None` (defer to vanilla) for a null or non-`ZTUnitType` unit, where vanilla reads the selector through null.
+pub unsafe fn f_dust_ball(this: u32, unit: u32, done: *const bool, ops: &DustBallOps) -> Option<bool> {
+    if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+        return None;
+    }
+    let base: &'static CStr = match get_from_memory::<u32>(unit + UNIT_BALL_SELECTOR_OFFSET) {
+        3 => c"surfaceball",
+        4 => c"submergedball",
+        _ if unsafe { (ops.tile_flags)(unit) } & 3 == 0 => c"dustball",
+        _ => c"waterball",
+    };
+    let entity_type = get_from_memory::<u32>(unit + OFFSET_ENTITY_TYPE);
+    let pick = |find: unsafe fn(u32, *const u8) -> bool| -> &'static [u8] {
+        if unsafe { find(entity_type, base.as_ptr().cast()) } {
+            base.to_bytes()
+        } else if unsafe { find(entity_type, c"dustball".as_ptr().cast()) } {
+            b"dustball"
+        } else {
+            NO_NAME
+        }
+    };
+    let anim = VanillaString::from_bytes(pick(ops.find_anim));
+    let sound = VanillaString::from_bytes(pick(ops.find_sound));
+    let extra = VanillaString::from_bytes(NO_NAME);
+    let result = unsafe { (ops.play_special)(this, anim.as_ptr() as u32, sound.as_ptr() as u32, extra.as_ptr() as u32, unit, done as u32) };
+    drop(extra);
+    if unsafe { done.cast::<u8>().read_volatile() } != 0 {
+        unsafe { (ops.caught_prey)(unit, done) };
+    }
+    Some(result)
+}
+
+unsafe fn play_special_vanilla(this: u32, anim: u32, sound: u32, extra: u32, unit: u32, done: u32) -> bool {
+    unsafe { F_PLAY_SPECIAL.original()(this as *const u32, anim as *const i8, sound as *const i8, 0, 1, extra as *const i8, unit as *const i32, done as *const u8) }
+}
+
+unsafe fn caught_prey_hooked(unit: u32, done: *const bool) {
+    unsafe { F_CAUGHT_PREY.hooked()(unit as *const i32, done as *const u8) };
+}
+
+const DUST_BALL_VANILLA: DustBallOps = DustBallOps {
+    tile_flags: unit_tile_flags_vanilla,
+    find_anim: type_find_anim_vanilla,
+    find_sound: type_find_sound_vanilla,
+    play_special: play_special_vanilla,
+    caught_prey: caught_prey_hooked,
+};
+
+/// `ZTAnimal` byte `fTargetBuildingF` tests before calling `fTargetBuilding`.
+const ANIMAL_TARGETING_FLAG_OFFSET: u32 = 0x3b0;
+/// `ZTAnimal` byte recording that a building target was acquired.
+const ANIMAL_TARGET_ACQUIRED_OFFSET: u32 = 0x3b1;
+/// `ZTUnitType` dword passed to `fMove` as its speed argument.
+const UNIT_TYPE_MOVE_SPEED_OFFSET: u32 = 0x108;
+/// Entity vtable slot returning the animal's target-building name (a `{begin, end}` string).
+const ENTITY_VTABLE_TARGET_BUILDING_NAME: u32 = 0x128;
+/// `fMove`'s trailing constants for a building walk.
+const TARGET_BUILDING_MOVE_FLAG: u32 = 0;
+const TARGET_BUILDING_MOVE_LIMIT: u32 = 100;
+
+/// The vanilla calls `fTargetBuilding` makes, so a test can substitute recording stand-ins.
+pub struct TargetBuildingOps {
+    /// `ZTAnimal::targetBuilding(animal, true)`.
+    pub target_building: unsafe fn(u32) -> bool,
+    /// `BFAIMgr::fMove(this, none, 0, unit, done, name, speed, empty, 0, 100)` with vanilla strings.
+    pub f_move: unsafe fn(u32, u32, u32, u32, u32, u32, u32) -> bool,
+}
+
+/// `ZTAIMgr::fTargetBuilding(unit, done)`: finishes immediately (`done` set, result `0`) for a non-animal; for
+/// an animal without an acquired target, tries to acquire one (finishing with result `1` if that fails). Once a
+/// target is acquired, a `ZTUnitType` animal walks to the building named by its virtual `+0x128` through
+/// `fMove`, with the type's speed; any other type finishes with result `0`. Never defers.
+pub unsafe fn f_target_building(this: u32, unit: u32, done: *const bool, ops: &TargetBuildingOps) -> bool {
+    if unit == 0 || !unsafe { is_animal(unit) } {
+        unsafe { set_done(done) };
+        return false;
+    }
+    if get_from_memory::<u8>(unit + ANIMAL_TARGET_ACQUIRED_OFFSET) == 0 {
+        if !unsafe { (ops.target_building)(unit) } {
+            save_to_memory(unit + ANIMAL_TARGET_ACQUIRED_OFFSET, 0u8);
+            unsafe { set_done(done) };
+            return true;
+        }
+        save_to_memory(unit + ANIMAL_TARGET_ACQUIRED_OFFSET, 1u8);
+    }
+    let entity_type = get_from_memory::<u32>(unit + OFFSET_ENTITY_TYPE);
+    if entity_type == 0 || !unsafe { type_tag_check(entity_type, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+        unsafe { set_done(done) };
+        save_to_memory(unit + ANIMAL_TARGET_ACQUIRED_OFFSET, 0u8);
+        return false;
+    }
+    let name_string = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_TARGET_BUILDING_NAME) } as *const RawCallString;
+    let name = VanillaString::from_bytes(unsafe { &*name_string }.bytes());
+    let speed = get_from_memory::<u32>(entity_type + UNIT_TYPE_MOVE_SPEED_OFFSET);
+    let none = VanillaString::from_bytes(NO_NAME);
+    let empty = VanillaString::from_bytes(b"");
+    unsafe { (ops.f_move)(this, none.as_ptr() as u32, unit, done as u32, name.as_ptr() as u32, speed, empty.as_ptr() as u32) }
+}
+
+/// `ZTAIMgr::fTargetBuildingF(call, unit)`: finishes with result `0` for a non-animal; for an animal whose
+/// `+0x3b0` flag is set runs [`f_target_building`] on the call's result flag; otherwise clears the acquired
+/// flag, finishes and returns `1`.
+pub unsafe fn f_target_building_f(this: u32, call: u32, unit: u32, ops: &TargetBuildingOps) -> bool {
+    let done = call_done_flag(call);
+    if unit == 0 || !unsafe { is_animal(unit) } {
+        unsafe { set_done(done) };
+        return false;
+    }
+    if get_from_memory::<u8>(unit + ANIMAL_TARGETING_FLAG_OFFSET) != 0 {
+        return unsafe { f_target_building(this, unit, done, ops) };
+    }
+    unsafe { set_done(done) };
+    save_to_memory(unit + ANIMAL_TARGET_ACQUIRED_OFFSET, 0u8);
+    true
+}
+
+unsafe fn animal_target_building_vanilla(unit: u32) -> bool {
+    unsafe { ZTANIMAL_TARGET_BUILDING.original()(unit as *const u32, true) }
+}
+
+unsafe fn f_move_vanilla(this: u32, none: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32) -> bool {
+    unsafe {
+        F_MOVE.original()(
+            this as *const u32,
+            none as i32,
+            0,
+            unit as *const i32,
+            done as *const u8,
+            name as i32,
+            speed,
+            empty as *const i8,
+            TARGET_BUILDING_MOVE_FLAG,
+            TARGET_BUILDING_MOVE_LIMIT,
+        )
+    }
+}
+
+const TARGET_BUILDING_VANILLA: TargetBuildingOps = TargetBuildingOps { target_building: animal_target_building_vanilla, f_move: f_move_vanilla };
+
+/// `BFTile` byte whose low two bits mark a water tile.
+const TILE_WATER_FLAGS_OFFSET: u32 = 0x83;
+
+/// Terrain flag byte of the unit's tile, through the vanilla `BFEntity::getTile`.
+unsafe fn unit_tile_flags_vanilla(unit: u32) -> u8 {
+    let tile = unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) } as u32;
+    get_from_memory::<u8>(tile + TILE_WATER_FLAGS_OFFSET)
+}
+
+/// `ZTAIMgr::fPlaySetTerrainF(call, unit)` for the four-parameter form: clears the call's result flag, picks a
+/// set name by the unit's `+0x258` selector (`4` the fourth parameter, `3` the third, otherwise the first on a
+/// land tile and the second on a water tile) and plays it with `play_set(name, unit)`, returning its low byte.
+/// The name is a fresh vanilla string holding a copy of the parameter (vanilla starts from an empty string and
+/// assigns the parameter into it, so the contents match).
+///
+/// `None` (defer to vanilla) for any other parameter count, where vanilla forwards to `BFAIMgr`'s handler, and
+/// for a unit that is null or not a `ZTUnitType`, where vanilla reads the selector through null.
+pub unsafe fn f_play_set_terrain_f(call: u32, unit: u32, tile_flags: unsafe fn(u32) -> u8, play_set: unsafe fn(u32, u32) -> u32) -> Option<bool> {
+    if unsafe { call_param_count(call) } != 4 || !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+        return None;
+    }
+    save_to_memory(call + CALL_DONE_FLAG_OFFSET, 0u8);
+    let index = match get_from_memory::<u32>(unit + UNIT_TANK_SELECTOR_OFFSET) {
+        4 => 3,
+        3 => 2,
+        _ if unsafe { tile_flags(unit) } & 3 == 0 => 0,
+        _ => 1,
+    };
+    let param = unsafe { &*((call_params_begin(call) + index * CALL_PARAM_SIZE) as *const RawCallString) };
+    let name = VanillaString::from_bytes(param.bytes());
+    Some(low_byte_bool(unsafe { play_set(name.as_ptr() as u32, unit) }))
 }
 
 /// `BFAIMgr` handler wrappers (stage 9, first slice): the `F` handlers that only unpack a call and forward.
@@ -1140,6 +1350,97 @@ pub unsafe fn f_halt_f(call: u32, unit: u32) -> Option<u8> {
     unsafe { SET_MOVING.hooked()(unit as *const u32, 0, 0) };
     unsafe { set_done(call_done_flag(call)) };
     Some(1)
+}
+
+/// Unit fields read by `fMoveEntitySpecialF`: facing direction and tile-fraction position pair.
+const OFFSET_UNIT_DIRECTION: u32 = 0x12c;
+const OFFSET_UNIT_POS_X: u32 = 0x114;
+const OFFSET_UNIT_POS_Y: u32 = 0x118;
+/// Byte cleared by `fMoveEntityDeltaF` on a `ZTUnitType` unit.
+const OFFSET_UNIT_MOVE_FLAG: u32 = 0x20d;
+/// `GLOBAL_ZTWorldMgr`'s embedded `BFMap` sits at `+8`.
+const OFFSET_WORLD_MAP: u32 = 8;
+
+unsafe fn move_entity_delta_vanilla(map: u32, unit: u32, delta: *const [i32; 3]) {
+    unsafe { BFMAP_MOVE_ENTITY_DELTA.original()(map as *const u32, unit as *const u32, delta as *const i32) };
+}
+
+/// The three call parameters converted through the manager's `convertConstantParam` virtual, in order, or
+/// `None` unless the call has exactly three.
+unsafe fn convert_three_params(this: u32, call: u32, unit: u32) -> Option<[i32; 3]> {
+    if unsafe { call_param_count(call) } != 3 {
+        return None;
+    }
+    let begin = unsafe { call_params_begin(call) };
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VTABLE_CONVERT_CONSTANT_PARAM);
+    let convert = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> i32>(target) };
+    Some([convert(this, begin, unit), convert(this, begin + 0xc, unit), convert(this, begin + 0x18, unit)])
+}
+
+/// `fMoveEntityDeltaF(call, unit)`: clears the unit's mixer (and, on a `ZTUnitType` unit, its `+0x20d` byte),
+/// then with exactly three parameters moves the unit by that delta. Returns `0` or `1`. `None` (defer) for a
+/// null unit, where vanilla faults inside `clearAll`.
+pub unsafe fn f_move_entity_delta_f(
+    this: u32, call: u32, unit: u32, clear_all: unsafe fn(u32), move_delta: unsafe fn(u32, u32, *const [i32; 3]),
+) -> Option<u8> {
+    if unit == 0 {
+        return None;
+    }
+    if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+        save_to_memory(unit + OFFSET_UNIT_MOVE_FLAG, 0u8);
+    }
+    unsafe { clear_all(unit + 0x74) };
+    let map = read_global_pointer(RVA_GLOBAL_WORLD_MGR).wrapping_add(OFFSET_WORLD_MAP);
+    if map == 0 {
+        return Some(0);
+    }
+    let Some(delta) = (unsafe { convert_three_params(this, call, unit) }) else {
+        return Some(0);
+    };
+    unsafe { move_delta(map, unit, &delta) };
+    Some(1)
+}
+
+/// The delta `fMoveEntitySpecialF` passes to `moveEntityDelta`: the first two parameters rotated by the
+/// unit's facing (`2`: `(b, -a)`, `6`: `(-b, a)`, `0`: `(-a, -b)`, anything else `(a, b)`), re-centered on the
+/// unit's sub-tile position (`pos % 64`, C remainder) around `0x20`; the third parameter passes through.
+pub fn special_move_delta(params: [i32; 3], direction: i32, pos_x: i32, pos_y: i32) -> [i32; 3] {
+    let [a, b, c] = params;
+    let (x, y) = match direction {
+        2 => (b, a.wrapping_neg()),
+        6 => (b.wrapping_neg(), a),
+        0 => (a.wrapping_neg(), b.wrapping_neg()),
+        _ => (a, b),
+    };
+    [x.wrapping_sub(pos_x % 64).wrapping_add(0x20), y.wrapping_sub(pos_y % 64).wrapping_add(0x20), c]
+}
+
+/// `fMoveEntitySpecialF(call, unit)`: with exactly three parameters, moves the unit by `special_move_delta`.
+/// Returns `0` or `1`. `None` (defer) for a null unit when the move would run (vanilla reads the unit's fields).
+pub unsafe fn f_move_entity_special_f(this: u32, call: u32, unit: u32, move_delta: unsafe fn(u32, u32, *const [i32; 3])) -> Option<u8> {
+    if unsafe { call_param_count(call) } != 3 {
+        return Some(0);
+    }
+    let map = read_global_pointer(RVA_GLOBAL_WORLD_MGR).wrapping_add(OFFSET_WORLD_MAP);
+    if map == 0 {
+        return Some(0);
+    }
+    if unit == 0 {
+        return None;
+    }
+    let params = unsafe { convert_three_params(this, call, unit) }?;
+    let delta = special_move_delta(
+        params,
+        get_from_memory::<i32>(unit + OFFSET_UNIT_DIRECTION),
+        get_from_memory::<i32>(unit + OFFSET_UNIT_POS_X),
+        get_from_memory::<i32>(unit + OFFSET_UNIT_POS_Y),
+    );
+    unsafe { move_delta(map, unit, &delta) };
+    Some(1)
+}
+
+unsafe fn clear_mixer_vanilla(mixer: u32) {
+    unsafe { GXMIXER_CLEAR_ALL.original()(mixer as *const u32) };
 }
 
 /// `fPlaySetF(call, unit)`: exactly one parameter clears the call's result flag and plays that set (through
@@ -1474,9 +1775,58 @@ mod ztaimgr_detours {
         }
     }
 
+    #[detour(ZTAIMGR_F_PLAY_SET_TERRAIN_F)]
+    unsafe extern "thiscall" fn f_play_set_terrain_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        match unsafe { f_play_set_terrain_f(call as u32, unit as u32, unit_tile_flags_vanilla, play_set_vanilla) } {
+            Some(result) => result,
+            None => unsafe { ZTAIMGR_F_PLAY_SET_TERRAIN_F_DETOUR.call(this, call, unit) },
+        }
+    }
+
+    #[detour(F_DUST_BALL)]
+    unsafe extern "thiscall" fn f_dust_ball_detour(this: *const u32, unit: *const i32, done: *const i8) -> bool {
+        match unsafe { f_dust_ball(this as u32, unit as u32, done as *const bool, &DUST_BALL_VANILLA) } {
+            Some(result) => result,
+            None => unsafe { F_DUST_BALL_DETOUR.call(this, unit, done) },
+        }
+    }
+
+    #[detour(F_DUST_BALL_F)]
+    unsafe extern "thiscall" fn f_dust_ball_f_detour(this: *const u32, call: i32, unit: *const i32) {
+        if unsafe { f_dust_ball(this as u32, unit as u32, call_done_flag(call as u32), &DUST_BALL_VANILLA) }.is_none() {
+            unsafe { F_DUST_BALL_F_DETOUR.call(this, call, unit) };
+        }
+    }
+
+    #[detour(F_TARGET_BUILDING)]
+    unsafe extern "thiscall" fn f_target_building_detour(this: *const u32, unit: *const u32, done: *const u8) -> bool {
+        unsafe { f_target_building(this as u32, unit as u32, done as *const bool, &TARGET_BUILDING_VANILLA) }
+    }
+
+    #[detour(F_TARGET_BUILDING_F)]
+    unsafe extern "thiscall" fn f_target_building_f_detour(this: *const u32, call: i32, unit: *const i32) -> bool {
+        unsafe { f_target_building_f(this as u32, call as u32, unit as u32, &TARGET_BUILDING_VANILLA) }
+    }
+
     #[detour(F_FACE_DIRECTION_F)]
     unsafe extern "stdcall" fn f_face_direction_f_detour(call: *const u32, _unit: *const u32) -> bool {
         unsafe { f_face_direction_f(call as u32) }
+    }
+
+    #[detour(F_MOVE_ENTITY_DELTA_F)]
+    unsafe extern "thiscall" fn f_move_entity_delta_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> u32 {
+        match unsafe { f_move_entity_delta_f(this as u32, call as u32, unit as u32, clear_mixer_vanilla, move_entity_delta_vanilla) } {
+            Some(result) => result as u32,
+            None => unsafe { F_MOVE_ENTITY_DELTA_F_DETOUR.call(this, call, unit) },
+        }
+    }
+
+    #[detour(F_MOVE_ENTITY_SPECIAL_F)]
+    unsafe extern "thiscall" fn f_move_entity_special_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> u32 {
+        match unsafe { f_move_entity_special_f(this as u32, call as u32, unit as u32, move_entity_delta_vanilla) } {
+            Some(result) => result as u32,
+            None => unsafe { F_MOVE_ENTITY_SPECIAL_F_DETOUR.call(this, call, unit) },
+        }
     }
 
     #[detour(F_PLAY_SET_F)]
@@ -1820,6 +2170,10 @@ mod ztaimgr_detours {
             unsafe { super::F_PLAY_TIME_F_DETOUR.call(this, call, unit) }
         }
 
+        pub(crate) fn f_move_entity_special_f(this: *const u32, call: *const u32, unit: *const u32) -> u32 {
+            unsafe { super::F_MOVE_ENTITY_SPECIAL_F_DETOUR.call(this, call, unit) }
+        }
+
         pub(crate) fn f_keeper_routine(unit: *const u32, done: *const bool) -> bool {
             unsafe { super::F_KEEPER_ROUTINE_DETOUR.call(unit, done) }
         }
@@ -1882,7 +2236,7 @@ pub(crate) mod live_support {
         f_keeper_routine as real_f_keeper_routine, f_maint_routine as real_f_maint_routine, f_return_to_building as real_f_return_to_building,
     };
     pub(crate) use ztaimgr_detours::test_real::{
-        f_face_direction_f as real_f_face_direction_f, f_fly_reverse_f as real_f_fly_reverse_f, f_play_ping_pong_f as real_f_play_ping_pong_f, f_play_reverse_f as real_f_play_reverse_f,
+        f_face_direction_f as real_f_face_direction_f, f_fly_reverse_f as real_f_fly_reverse_f, f_move_entity_special_f as real_f_move_entity_special_f, f_play_ping_pong_f as real_f_play_ping_pong_f, f_play_reverse_f as real_f_play_reverse_f,
         f_play_set_f as real_f_play_set_f, f_play_sound_f as real_f_play_sound_f, f_play_stop_at_end_f as real_f_play_stop_at_end_f, f_play_time_f as real_f_play_time_f,
     };
 }
@@ -1890,6 +2244,17 @@ pub(crate) mod live_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn special_move_delta_rotates_by_direction_and_recenters() {
+        assert_eq!(special_move_delta([3, 5, 9], 1, 0, 0), [3 + 0x20, 5 + 0x20, 9]);
+        assert_eq!(special_move_delta([3, 5, 9], 2, 0, 0), [5 + 0x20, -3 + 0x20, 9]);
+        assert_eq!(special_move_delta([3, 5, 9], 6, 0, 0), [-5 + 0x20, 3 + 0x20, 9]);
+        assert_eq!(special_move_delta([3, 5, 9], 0, 0, 0), [-3 + 0x20, -5 + 0x20, 9]);
+        // C remainder: negative positions keep their sign, and only the low six bits of magnitude count.
+        assert_eq!(special_move_delta([0, 0, 0], 1, 70, -70), [-6 + 0x20, 6 + 0x20, 0]);
+        assert_eq!(special_move_delta([0, 0, 0], 1, -64, 64), [0x20, 0x20, 0]);
+    }
 
     #[test]
     fn ai_params_use_defaults_keys_and_clamps() {
