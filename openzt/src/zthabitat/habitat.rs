@@ -1628,7 +1628,7 @@ impl ZTHabitat {
     ///    shape.
     /// 4. when `check_path` is set and an animal was given (real vanilla's own parameter is what the
     ///    plan glosses as `check_occupied`, but it gates exactly this), `BFAIMgr::checkPath`
-    ///    ([`BFAIMGR_CHECK_PATH`] undetoured `.original()` call-through) must report the animal's
+    ///    ([`BFAIMGR_CHECK_PATH`] `.hooked()` call into the ported `checkPath`) must report the animal's
     ///    current tile reaches the candidate.
     ///
     /// The animal's current tile ([`BFENTITY_GET_TILE`], a pure field read) and the AI-mgr global are
@@ -1654,7 +1654,7 @@ impl ZTHabitat {
             }
             if check_path && animal_ptr != 0 {
                 let reachable = low_byte_bool(unsafe {
-                    BFAIMGR_CHECK_PATH.original()(
+                    BFAIMGR_CHECK_PATH.hooked()(
                         ai_mgr_ptr as *const u32,
                         animal_tile as *const u32,
                         tile as *const u32,
@@ -1854,7 +1854,7 @@ impl ZTHabitat {
     ///    [`Self::get_adjacent_clear_tile`] and [`Self::get_near_clear_tile`] all use full-width
     ///    `!=` against the same global;
     /// 5. when the [`Self::get_random_animal`] draw returned a real animal,
-    ///    `BFAIMgr::checkPath` ([`BFAIMGR_CHECK_PATH`] undetoured `.original()` call-through) must
+    ///    `BFAIMgr::checkPath` ([`BFAIMGR_CHECK_PATH`] `.hooked()` call into the ported `checkPath`) must
     ///    report that animal's current tile reaches the candidate - the mover is the drawn animal
     ///    itself (`checkPath(mgr, getTile(animal), tile, animal)`), the same settled shape
     ///    [`Self::get_near_clear_tile`]'s `.asm` shows explicitly.
@@ -1910,7 +1910,7 @@ impl ZTHabitat {
             }
             if random_animal != 0 {
                 let reachable = low_byte_bool(unsafe {
-                    BFAIMGR_CHECK_PATH.original()(
+                    BFAIMGR_CHECK_PATH.hooked()(
                         ai_mgr_ptr as *const u32,
                         animal_tile as *const u32,
                         tile as *const u32,
@@ -1967,7 +1967,7 @@ impl ZTHabitat {
     /// 6. squared Cartesian distance from `unit`'s tile **below 10** (unsigned compare against the
     ///    literal, `.asm` `CMP %EAX, 0xa` / `JC`; either tile null -> `0x7fffffff`);
     /// 7. when `animal_ptr` is non-null, `BFAIMgr::checkPath`
-    ///    ([`BFAIMGR_CHECK_PATH`] undetoured `.original()` call-through) must report the animal's
+    ///    ([`BFAIMGR_CHECK_PATH`] `.hooked()` call into the ported `checkPath`) must report the animal's
     ///    current tile reaches the candidate - the mover is the animal itself;
     /// 8. bit `0x4` of the flag byte at `tile+0x85` clear (the same unconfirmed-flag read
     ///    [`Self::get_num_sickly_animals`]/[`Self::get_nearest_sick_animal`] make; reproduced raw -
@@ -2041,7 +2041,7 @@ impl ZTHabitat {
             }
             if animal_ptr != 0 {
                 let reachable = low_byte_bool(unsafe {
-                    BFAIMGR_CHECK_PATH.original()(
+                    BFAIMGR_CHECK_PATH.hooked()(
                         ai_mgr_ptr as *const u32,
                         animal_tile as *const u32,
                         tile as *const u32,
@@ -8651,7 +8651,11 @@ mod tests {
 
         let plan = unsafe { ref_from_memory::<ZTHabitat>(self_ptr) }.portal_dispatch_plan();
         let fences: Vec<u32> = plan.iter().map(|d| d.fence_ptr).collect();
-        assert_eq!(fences, vec![0xa000_0001, 0xb000_0001]);
+        // The walk is in ascending neighbor-pointer order, and the allocator decides which of the two
+        // leaked habitats has the lower address.
+        let mut expected = [(neighbor_a, 0xa000_0001), (neighbor_b, 0xb000_0001)];
+        expected.sort_by_key(|&(pointer, _)| pointer);
+        assert_eq!(fences, expected.iter().map(|&(_, fence)| fence).collect::<Vec<u32>>());
     }
 
     /// `ZTHabitat_resize.asm`'s null-argument default: the owned-tile sentinel's own `next` node's

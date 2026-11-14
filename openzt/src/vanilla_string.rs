@@ -23,6 +23,11 @@ impl VanillaString {
     /// trailing allocator argument is an uninitialized/unused stack slot in vanilla's own call site too,
     /// passed as `0` here).
     pub(crate) fn new(s: &str) -> Self {
+        Self::from_bytes(s.as_bytes())
+    }
+
+    /// [`Self::new`] for arbitrary bytes (a call parameter need not be UTF-8).
+    pub(crate) fn from_bytes(s: &[u8]) -> Self {
         let mut this = VanillaString { ptr: std::ptr::null_mut(), len: 0, capacity: 0 };
         let start = s.as_ptr();
         let end = unsafe { start.add(s.len()) };

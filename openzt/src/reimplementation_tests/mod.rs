@@ -107,6 +107,7 @@ pub fn init() {
         // `ZTShowScriptMgr::load`/`ZTShowScript::load` against real save data. A prior session tried this
         // and hit a process crash during `run_load_live_zoo` itself - see this function's own diagnostics
         // for what was found.
+        crate::bfevent::init();
         crate::ztshowscriptmgr::init();
         crate::ztshow::init();
         crate::ztshowstate::init();
@@ -120,6 +121,10 @@ pub fn init() {
         // ZTSHOWMGR_* tests drive the hooked addresses directly via `.hooked()`.
         crate::ztshowmgr::init();
         crate::ztshowui::init();
+
+        // ZTAIMgr leaf-method detours (getRandomX/Y, the move-speed classifiers, convertConstantParam,
+        // removeEntity), installed here for the same reason as the blocks above.
+        crate::ztaimgr::init();
 
         // ztawardmgr's own-method detours (ADD_AWARD/GET_AWARD/SAVE/LOAD/START) are deliberately NOT
         // installed here - ZTAWARDMGR_ADD_AWARD_SAVE_LOAD/START/GET_AWARD rely on `.original()` reaching

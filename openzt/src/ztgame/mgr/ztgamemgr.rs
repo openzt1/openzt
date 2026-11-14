@@ -76,7 +76,6 @@ use openzt_detour::generated::{
         SET_ANIMAL_RATING as ZTUI_MAIN_SET_ANIMAL_RATING, SET_DATE_TEXT as ZTUI_MAIN_SET_DATE_TEXT, SET_GUEST_RATING as ZTUI_MAIN_SET_GUEST_RATING,
         SET_MONEY_TEXT as ZTUI_MAIN_SET_MONEY_TEXT, SET_ZOO_RATING as ZTUI_MAIN_SET_ZOO_RATING, UNPAUSE_GAME as ZTUI_MAIN_UNPAUSE_GAME,
     },
-    bfaimgr::LOAD_DATA as BFAIMGR_LOAD_DATA,
     bfinifile::READ,
 };
 use tracing::info;
@@ -451,7 +450,7 @@ impl ZTGameMgr {
         });
 
         if is_new_game {
-            unsafe { BFAIMGR_LOAD_DATA.original()(globals().ztaimgr_ptr(), false) };
+            unsafe { crate::ztaimgr::bfaimgr_load_data(false) };
         }
 
         unsafe { ref_from_memory::<ZooStatus>(zoostatus_ptr) }.rating_checks();

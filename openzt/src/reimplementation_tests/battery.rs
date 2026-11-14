@@ -128,6 +128,30 @@ pub(super) mod detour_zoo_main {
         tests.extend([RegisteredTest { name: "MENUMUSICHANDLER_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_original_routes_to_trampoline_test }]);
         tests.push(RegisteredTest { name: "AMBIENTS_DETOURS_ENABLED", run: tests::ambients::run_ambients_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
+        tests.extend([
+            RegisteredTest { name: "ZTAIMGR_DETOURS_ENABLED", run: tests::ztaimgr::run_ztaimgr_detours_enabled_test },
+            RegisteredTest { name: "ZTAIMGR_GET_RANDOM_XY", run: tests::ztaimgr::run_ztaimgr_get_random_xy_test },
+            RegisteredTest { name: "ZTAIMGR_MOVE_FUNCTIONS", run: tests::ztaimgr::run_ztaimgr_move_functions_test },
+            RegisteredTest { name: "ZTAIMGR_CONVERT_CONSTANT_PARAM", run: tests::ztaimgr::run_ztaimgr_convert_constant_param_test },
+            RegisteredTest { name: "ZTAIMGR_BUILDING_AND_TRICK_HANDLERS", run: tests::ztaimgr::run_ztaimgr_building_and_trick_handlers_test },
+            RegisteredTest { name: "ZTAIMGR_EXECUTE_CALL", run: tests::ztaimgr::run_ztaimgr_execute_call_test },
+            RegisteredTest { name: "ZTAIMGR_BASE_EXECUTE_CALL", run: tests::ztaimgr::run_ztaimgr_base_execute_call_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_UPDATE", run: tests::ztaimgr::run_ztaimgr_bfaimgr_update_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_SAVE", run: tests::ztaimgr::run_ztaimgr_bfaimgr_save_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_LOAD_DATA", run: tests::ztaimgr::run_ztaimgr_bfaimgr_load_data_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_REMOVE_ENTITIES", run: tests::ztaimgr::run_ztaimgr_bfaimgr_remove_entities_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_LOAD", run: tests::ztaimgr::run_ztaimgr_bfaimgr_load_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_SEND_EVENT", run: tests::ztaimgr::run_ztaimgr_bfaimgr_send_event_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_GET_EVENTS", run: tests::ztaimgr::run_ztaimgr_bfaimgr_get_events_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_GET_PATH_TILES", run: tests::ztaimgr::run_ztaimgr_bfaimgr_get_path_tiles_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_CALL_DONE", run: tests::ztaimgr::run_ztaimgr_bfaimgr_call_done_test },
+            RegisteredTest { name: "ZTAIMGR_F_PLAY_SET_TANK", run: tests::ztaimgr::run_ztaimgr_f_play_set_tank_test },
+            RegisteredTest { name: "ZTAIMGR_F_PLAY_SET_TERRAIN_F", run: tests::ztaimgr::run_ztaimgr_f_play_set_terrain_f_test },
+            RegisteredTest { name: "ZTAIMGR_F_DUST_BALL", run: tests::ztaimgr::run_ztaimgr_f_dust_ball_test },
+            RegisteredTest { name: "ZTAIMGR_F_TARGET_BUILDING", run: tests::ztaimgr::run_ztaimgr_f_target_building_test },
+            RegisteredTest { name: "ZTAIMGR_BASE_WRAPPER_GUARDS", run: tests::ztaimgr::run_ztaimgr_base_wrapper_guards_test },
+            RegisteredTest { name: "ZTAIMGR_BASE_WRAPPER_FORWARDING", run: tests::ztaimgr::run_ztaimgr_base_wrapper_forwarding_test },
+        ]);
         #[cfg(debug_assertions)]
         tests.extend([RegisteredTest { name: "ZTSOUNDSCAPE_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztsoundscape::run_ztsoundscape_original_routes_to_trampoline_test }]);
         tests.extend([
@@ -153,6 +177,9 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSHOWSCRIPTSTATE_SAVE_LOAD_ROUNDTRIP", run: tests::ztshowscriptstate::run_ztshowscriptstate_save_load_roundtrip_test },
             RegisteredTest { name: "ZTSHOWSCRIPTSTATE_SET_NEXT_ITEM", run: tests::ztshowscriptstate::run_ztshowscriptstate_set_next_item_test },
             RegisteredTest { name: "ZTSHOWSCRIPTSTATE_CREATE_OR_FIND", run: tests::ztshowscriptstate::run_ztshowscriptstate_create_or_find_test },
+            RegisteredTest { name: "BFEVENT_DETOURS_ENABLED", run: tests::bfevent::run_bfevent_detours_enabled_test },
+            RegisteredTest { name: "BFEVENT_CONSTRUCT_INIT", run: tests::bfevent::run_bfevent_construct_init_test },
+            RegisteredTest { name: "BFEVENT_SAVE_LOAD", run: tests::bfevent::run_bfevent_save_load_test },
             RegisteredTest { name: "ZTSHOWINFO_DETOURS_ENABLED", run: tests::ztshowinfo::run_ztshowinfo_detours_enabled_test },
             RegisteredTest { name: "ZTSHOWINFO_STATUS_PREDICATES_LIVE", run: tests::ztshowinfo::run_ztshowinfo_status_predicates_live_test },
             RegisteredTest { name: "ZTSHOWINFO_ACCUMULATORS_LIVE", run: tests::ztshowinfo::run_ztshowinfo_accumulators_live_test },
@@ -205,6 +232,10 @@ pub(super) mod detour_zoo_main {
             // ATTRACTIVENESS/HAS_KEEPER_ASSIGNED run before the others: both share a
             // `characteristics_dirty` side effect (see their own doc comments), so running them
             // first settles that flag before any other test reads the same live habitats.
+            RegisteredTest { name: "ZTAIMGR_UPDATE", run: tests::ztaimgr::run_ztaimgr_update_test },
+            RegisteredTest { name: "ZTAIMGR_CREATE", run: tests::ztaimgr::run_ztaimgr_create_test },
+            RegisteredTest { name: "ZTAIMGR_INIT_AI_PARAMS", run: tests::ztaimgr::run_ztaimgr_init_ai_params_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_CHECK_PATH", run: tests::ztaimgr::run_ztaimgr_bfaimgr_check_path_test },
             RegisteredTest { name: "ZTHABITATMGR_DETOURS_ENABLED", run: tests::zthabitatmgr::run_zthabitatmgr_detours_enabled_test },
             RegisteredTest { name: "ZTTANKEXHIBIT_DETOURS_ENABLED", run: tests::zthabitatmgr::run_tankexhibit_detours_enabled_test },
             RegisteredTest { name: "ZTVIEWINGAREA_GRID_WRITERS_MATCH_REAL_LIVE", run: tests::ztviewingarea::run_ztviewingarea_grid_writers_live_test },

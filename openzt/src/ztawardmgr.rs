@@ -194,9 +194,7 @@ fn first(ini: &Ini, section: &str, key: &str) -> Option<String> {
     values(ini, section, key).into_iter().next()
 }
 
-fn first_parse<T: std::str::FromStr>(ini: &Ini, section: &str, key: &str) -> Option<T> {
-    first(ini, section, key)?.parse().ok()
-}
+use crate::bfconfigfile::ini_compat::int_or;
 
 /// Reimplementation of `ZTAwardMgr::start`'s resource parse. `BFResource::find(this, "award", ".cfg")`
 /// (per `ZTAwardMgr_start.c`) is a **multi-file** lookup, not a single fixed path: the real `awards/`
@@ -232,15 +230,15 @@ pub fn start() -> bool {
     let mut any = false;
     for path in candidates {
         let Some(ini) = read_cfg(&path) else { continue };
-        let version: i32 = first_parse(&ini, "Version", "version").unwrap_or_default();
+        let version: i32 = int_or(&ini, "Version", "version", 0);
         if version <= 0 {
             continue;
         }
         for section in values(&ini, "Awards", "award") {
-            let id: i32 = first_parse(&ini, &section, "id").unwrap_or_default();
-            let name_id: i32 = first_parse(&ini, &section, "nameID").unwrap_or_default();
+            let id: i32 = int_or(&ini, &section, "id", 0);
+            let name_id: i32 = int_or(&ini, &section, "nameID", 0);
             if id != 0 && name_id != 0 {
-                let tooltip_id = first_parse(&ini, &section, "tooltipID").unwrap_or_default();
+                let tooltip_id = int_or(&ini, &section, "tooltipID", 0);
                 let icon = first(&ini, &section, "icon").unwrap_or_default();
                 state.awards.insert(id, AwardData { name_id, tooltip_id, icon });
                 any = true;
