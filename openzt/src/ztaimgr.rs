@@ -24,6 +24,12 @@ use std::{
 };
 
 use openzt_detour::generated::{
+    bfaimgr::{F_FLY, F_MOVE_REVERSE_F, F_PLAY_TIME},
+    bfbehaviorset::INIT_CHILD as BFBEHAVIORSET_INIT_CHILD,
+    bfbscall::{CONSTRUCTOR as BFBSCALL_CONSTRUCTOR, COPY_0X43E90E as BFBSCALL_COPY},
+    bfentity::SET_BS as BFENTITY_SET_BS,
+    msvc_std_basic_string::{ASSIGN_RANGE_0X406C55, BASIC_STRING_0},
+    msvc_std_vectorbasic_string::{ERASE_RANGE_0X410AC3, PUSH_BACK_0X4FCEF5},
     ztaimgr::{
         CONVERT_CONSTANT_PARAM, F_END_TRICK, F_END_TRICK_F, F_ENTER_BUILDING, F_ENTER_BUILDING_F, F_GUEST_ROUTINE, F_GUEST_ROUTINE_F, F_GUIDE_ROUTINE, F_GUIDE_ROUTINE_F,
         F_HIDE_PREDATOR, F_HIDE_PREDATOR_F, F_KEEPER_ROUTINE, F_KEEPER_ROUTINE_F, F_MAINT_ROUTINE, F_MAINT_ROUTINE_F, F_RETURN_TO_BUILDING, F_RETURN_TO_BUILDING_F, F_SPRAY_F,
@@ -43,14 +49,19 @@ use openzt_detour::generated::{
     standalone::OPERATOR_NEW,
     ztaimgr::{CREATE as ZTAIMGR_CREATE, INIT_AIPARAMS as ZTAIMGR_INIT_AIPARAMS},
     bfmap::MOVE_ENTITY_DELTA as BFMAP_MOVE_ENTITY_DELTA,
-    bfunit::SET_MOVING,
+    bfunit::{GET_PATH_COST as BFUNIT_GET_PATH_COST, SET_MOVING, STOP as BFUNIT_STOP},
+    bfmap::GET_NEIGHBORS as BFMAP_GET_NEIGHBORS,
+    msvc_std::RAND,
+    poolalloc::DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4,
+    bfentity::{FIND_ANIM as BFENTITY_FIND_ANIM, FIND_SOUND as BFENTITY_FIND_SOUND},
+    gxmixer::{SET_BASE_0 as GXMIXER_SET_BASE, SET_SET as GXMIXER_SET_SET},
     bfeventmgr::{GET_EVENTS as BFEVENTMGR_GET_EVENTS, LOAD as BFEVENTMGR_LOAD, POST_EVENT as BFEVENTMGR_POST_EVENT, SAVE as BFEVENTMGR_SAVE, UPDATE as BFEVENTMGR_UPDATE},
     standalone::{DEALLOCATE as READ_BYTES_FROM_FILE, WRITE_BYTES_TO_FILE},
     ztaimgr::UPDATE as ZTAIMGR_UPDATE,
     ztmainttaskpool::LISTEN as ZTMAINTTASKPOOL_LISTEN,
     bfaimgr::{
-        EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_MOVE, F_PLAY_SPECIAL, F_FACE_DIRECTION_F, F_FLY_F, F_FLY_REVERSE_F, F_HALT_F, F_PLAY_F, F_PLAY_WITH_SOUND, F_PLAY_SOUND, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F, F_MOVE_REVERSE_F,
-        F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F, F_MOVE_WITH_SOUND_F, F_PLAY_PING_PONG_F, F_PLAY_REVERSE_F, F_PLAY_SET_F, F_PLAY_SET_PROB_F, F_PLAY_SOUND_F,
+        EXECUTE_CALL as BFAIMGR_EXECUTE_CALL, F_MOVE, F_PLAY_SPECIAL, F_FACE_DIRECTION_F, F_FLY_F, F_FLY_REVERSE_F, F_HALT_F, F_PLAY_F, F_PLAY_WITH_SOUND, F_PLAY_SOUND, F_MOVE_ENTITY_DELTA_F, F_MOVE_ENTITY_SPECIAL_F, F_MOVE_F,
+        F_MOVE_FAST_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F, F_MOVE_WITH_SOUND_F, F_PLAY_PING_PONG_F, F_PLAY_REVERSE_F, F_PLAY_SET_F, F_PLAY_SET_PROB, F_PLAY_SET_PROB_F, F_RANDOM_WALK, F_PLAY_SOUND_F,
         F_PLAY_SPECIAL_F, F_PLAY_STOP_AT_END_F, F_PLAY_TIME_F, F_PLAY_WITH_BASE_F, F_PLAY_WITH_SOUND_F, F_SET_BASE_F,
     },
     ztaimgr::F_PLAY_SET_TERRAIN_F as ZTAIMGR_F_PLAY_SET_TERRAIN_F,
@@ -592,9 +603,9 @@ unsafe fn dispatch_zt_call(this: u32, which: ZtCall, call: u32, unit: u32) {
     let (c, u) = (call as i32, unit as *const i32);
     unsafe {
         match which {
-            ZtCall::MoveSlow => drop(F_MOVE_SLOW_F.original()(this as *const u32, c, u)),
-            ZtCall::MoveMedium => drop(F_MOVE_MEDIUM_F.original()(this as *const u32, c, u)),
-            ZtCall::MoveFast => drop(F_MOVE_FAST_F.original()(this as *const u32, c, u)),
+            ZtCall::MoveSlow => drop(F_MOVE_SLOW_F.hooked()(this as *const u32, c, u)),
+            ZtCall::MoveMedium => drop(F_MOVE_MEDIUM_F.hooked()(this as *const u32, c, u)),
+            ZtCall::MoveFast => drop(F_MOVE_FAST_F.hooked()(this as *const u32, c, u)),
             ZtCall::Spray => F_SPRAY_F.hooked()(c, unit as *const u32),
             ZtCall::KeeperRoutine => F_KEEPER_ROUTINE_F.hooked()(call, u),
             ZtCall::GuestRoutine => F_GUEST_ROUTINE_F.hooked()(call, unit),
@@ -724,15 +735,15 @@ unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, u
     let (u, uc) = (unit as *const u32, unit_cast as *const u32);
     unsafe {
         match which {
-            BaseCall::Play => F_PLAY_F.original()(t, c, u, 0, 0) as u8,
-            BaseCall::SetBase => F_SET_BASE_F.original()(t, c, u) as u8,
-            BaseCall::PlayWithBase => F_PLAY_WITH_BASE_F.original()(t, c, u, 0, 0) as u8,
+            BaseCall::Play => F_PLAY_F.hooked()(t, c, u, 0, 0) as u8,
+            BaseCall::SetBase => F_SET_BASE_F.hooked()(t, c, u) as u8,
+            BaseCall::PlayWithBase => F_PLAY_WITH_BASE_F.hooked()(t, c, u, 0, 0) as u8,
             BaseCall::MoveEntityDelta => F_MOVE_ENTITY_DELTA_F.hooked()(t, c, u) as u8,
             BaseCall::MoveEntitySpecial => F_MOVE_ENTITY_SPECIAL_F.hooked()(t, c, u) as u8,
             BaseCall::PlayTime => F_PLAY_TIME_F.hooked()(t, c, u) as u8,
             BaseCall::PlaySound => F_PLAY_SOUND_F.hooked()(t, c, u) as u8,
-            BaseCall::PlaySpecial => F_PLAY_SPECIAL_F.original()(t, c, u) as u8,
-            BaseCall::PlaySetProb => F_PLAY_SET_PROB_F.original()(c, u) as u8,
+            BaseCall::PlaySpecial => F_PLAY_SPECIAL_F.hooked()(t, c, u) as u8,
+            BaseCall::PlaySetProb => F_PLAY_SET_PROB_F.hooked()(c, u) as u8,
             BaseCall::PlaySetTerrain => {
                 let vtable = get_from_memory::<u32>(this);
                 let target = get_from_memory::<u32>(vtable + BFAIMGR_VTABLE_PLAY_SET_TERRAIN);
@@ -743,17 +754,14 @@ unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, u
             BaseCall::PlayWithSound => F_PLAY_WITH_SOUND_F.hooked()(c, u) as u8,
             BaseCall::PlayStopAtEnd => F_PLAY_STOP_AT_END_F.hooked()(t, c, u) as u8,
             BaseCall::PlaySet => F_PLAY_SET_F.hooked()(c, u) as u8,
-            BaseCall::MoveSlow => F_MOVE_SLOW_F.original()(t, call as i32, uc as *const i32) as u8,
-            BaseCall::MoveMedium => F_MOVE_MEDIUM_F.original()(t, call as i32, uc as *const i32) as u8,
-            BaseCall::Move => F_MOVE_F.original()(t, c, uc, false) as u8,
-            BaseCall::MoveReverse => {
-                let reverse = mem::transmute::<u32, unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> u32>(F_MOVE_REVERSE_F.address);
-                reverse(t, c, uc) as u8
-            }
-            BaseCall::MoveFast => F_MOVE_FAST_F.original()(t, call as i32, uc as *const i32) as u8,
-            BaseCall::MoveWithSound => F_MOVE_WITH_SOUND_F.original()(t, c, uc) as u8,
+            BaseCall::MoveSlow => F_MOVE_SLOW_F.hooked()(t, call as i32, uc as *const i32) as u8,
+            BaseCall::MoveMedium => F_MOVE_MEDIUM_F.hooked()(t, call as i32, uc as *const i32) as u8,
+            BaseCall::Move => F_MOVE_F.hooked()(t, c, uc, false) as u8,
+            BaseCall::MoveReverse => F_MOVE_REVERSE_F.hooked()(t, c, uc) as u8,
+            BaseCall::MoveFast => F_MOVE_FAST_F.hooked()(t, call as i32, uc as *const i32) as u8,
+            BaseCall::MoveWithSound => F_MOVE_WITH_SOUND_F.hooked()(t, c, uc) as u8,
             BaseCall::FaceDirection => F_FACE_DIRECTION_F.hooked()(c, u) as u8,
-            BaseCall::Fly => F_FLY_F.original()(t, c, uc, 0) as u8,
+            BaseCall::Fly => F_FLY_F.hooked()(t, c, uc, 0) as u8,
             BaseCall::FlyReverse => F_FLY_REVERSE_F.hooked()(t, c, uc) as u8,
             BaseCall::KeepControl => (unit_cast != 0) as u8,
             BaseCall::Halt => match f_halt_f(call, unit_cast) {
@@ -1096,9 +1104,9 @@ pub unsafe fn f_play_set_tank(call: u32, unit: u32, play_set: unsafe fn(u32, u32
     Some(unsafe { play_set(name, unit) })
 }
 
-/// `BFAIMgr::fPlaySet(name, unit, 1, 1)`, vanilla (stdcall; it ignores `ECX`).
+/// `BFAIMgr::fPlaySet(name, unit, 1, 1)` (stdcall; it ignores `ECX`).
 unsafe fn play_set_vanilla(name: u32, unit: u32) -> u32 {
-    u32::from(unsafe { F_PLAY_SET.original()(name as *const i32, unit as *const c_void, 1, 1) })
+    u32::from(unsafe { F_PLAY_SET.hooked()(name as *const i32, unit as *const c_void, 1, 1) })
 }
 
 unsafe fn type_find_anim_vanilla(entity_type: u32, name: *const u8) -> bool {
@@ -1165,7 +1173,7 @@ pub unsafe fn f_dust_ball(this: u32, unit: u32, done: *const bool, ops: &DustBal
 }
 
 unsafe fn play_special_vanilla(this: u32, anim: u32, sound: u32, extra: u32, unit: u32, done: u32) -> bool {
-    unsafe { F_PLAY_SPECIAL.original()(this as *const u32, anim as *const i8, sound as *const i8, 0, 1, extra as *const i8, unit as *const i32, done as *const u8) }
+    unsafe { F_PLAY_SPECIAL.hooked()(this as *const u32, anim as *const i8, sound as *const i8, 0, 1, extra as *const i8, unit as *const i32, done as *const u8) }
 }
 
 unsafe fn caught_prey_hooked(unit: u32, done: *const bool) {
@@ -1248,13 +1256,1571 @@ pub unsafe fn f_target_building_f(this: u32, call: u32, unit: u32, ops: &TargetB
     true
 }
 
+/// Which of the three fixed-speed `fMove` wrappers is running. Each reads the same members at consecutive
+/// slots/offsets: slow, medium, fast.
+#[derive(Clone, Copy)]
+pub enum MoveSpeed {
+    Slow = 0,
+    Medium = 1,
+    Fast = 2,
+}
+
+/// Entity vtable slot of the slow variant's move-name string (`{begin, end}`); medium/fast follow at `+4`/`+8`.
+const ENTITY_VTABLE_MOVE_NAME_SLOW: u32 = 0x120;
+/// Entity vtable slot of the slow variant's move limit; medium/fast follow at `+4`/`+8`.
+const ENTITY_VTABLE_MOVE_LIMIT_SLOW: u32 = 0x140;
+/// `ZTUnitType` speed dword of the slow variant; medium/fast follow at `+4`/`+8`.
+const UNIT_TYPE_SPEED_SLOW_OFFSET: u32 = 0x100;
+
+/// The vanilla call `fMoveSlowF`/`fMoveMediumF`/`fMoveFastF` make, so a test can substitute a recorder.
+/// `BFAIMgr::fMove(this, first_param, seconds, unit, done, name, speed, empty, 0, limit)`.
+pub struct MoveSpeedOps {
+    pub f_move: unsafe fn(u32, u32, u32, u32, u32, u32, u32, u32, u32) -> bool,
+}
+
+/// `BFAIMgr::fMoveSlowF`/`fMoveMediumF`/`fMoveFastF(call, unit)`: needs exactly two parameters, the first
+/// non-empty, a non-null unit and a `ZTUnitType` type; converts the second parameter through the manager's
+/// vtable `+0x34`, copies the unit's per-speed move name into a vanilla string and calls `fMove` with the
+/// type's per-speed speed, an empty string (vanilla builds a `vector<byte>` with capacity 8 and size 0, which
+/// `fMove` reads the same way), `0`, and the unit's per-speed limit. Every failed gate returns `false`
+/// without side effects; vanilla never defers.
+pub unsafe fn f_move_speed_f(this: u32, call: u32, unit: u32, speed: MoveSpeed, ops: &MoveSpeedOps) -> bool {
+    if unit == 0 || unsafe { call_param_count(call) } != 2 {
+        return false;
+    }
+    let begin = unsafe { call_params_begin(call) };
+    if unsafe { &*(begin as *const RawCallString) }.bytes().is_empty() {
+        return false;
+    }
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VTABLE_CONVERT_CONSTANT_PARAM);
+    let convert = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target) };
+    let seconds = convert(this, begin + CALL_PARAM_SIZE, unit);
+    let entity_type = get_from_memory::<u32>(unit + OFFSET_ENTITY_TYPE);
+    if entity_type == 0 || !unsafe { type_tag_check(entity_type, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
+        return false;
+    }
+    let step = speed as u32 * 4;
+    let name_string = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_MOVE_NAME_SLOW + step) } as *const RawCallString;
+    let name = VanillaString::from_bytes(unsafe { &*name_string }.bytes());
+    let speed_value = get_from_memory::<u32>(entity_type + UNIT_TYPE_SPEED_SLOW_OFFSET + step);
+    let limit = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_MOVE_LIMIT_SLOW + step) };
+    let empty = VanillaString::from_bytes(b"");
+    unsafe { (ops.f_move)(this, begin, seconds, unit, call + CALL_DONE_FLAG_OFFSET, name.as_ptr() as u32, speed_value, empty.as_ptr() as u32, limit) }
+}
+
+unsafe fn f_move_vanilla_speed(this: u32, first: u32, seconds: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32, limit: u32) -> bool {
+    unsafe { F_MOVE.hooked()(this as *const u32, first as i32, seconds as i32, unit as *const i32, done as *const u8, name as i32, speed, empty as *const i8, 0, limit) }
+}
+
+const MOVE_SPEED_VANILLA: MoveSpeedOps = MoveSpeedOps { f_move: f_move_vanilla_speed };
+
+/// The vanilla call `fMoveF`/`fMoveWithSoundF` make, so a test can substitute a recorder.
+/// `BFAIMgr::fMove(this, first_param, a2, unit, done, name, speed, extra, reverse, limit)`; `name` and `extra`
+/// are vanilla strings.
+pub struct MoveOps {
+    pub f_move: unsafe fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> bool,
+}
+
+unsafe fn f_move_vanilla_full(this: u32, first: u32, a2: u32, unit: u32, done: u32, name: u32, speed: u32, extra: u32, reverse: u32, limit: u32) -> bool {
+    unsafe { F_MOVE.hooked()(this as *const u32, first as i32, a2 as i32, unit as *const i32, done as *const u8, name as i32, speed, extra as *const i8, reverse, limit) }
+}
+
+const MOVE_VANILLA: MoveOps = MoveOps { f_move: f_move_vanilla_full };
+
+/// `fMove` limit when the call carries no limit parameter.
+const DEFAULT_MOVE_LIMIT: u32 = 100;
+/// Parameter-entry offsets read by `fMoveF`/`fMoveWithSoundF`.
+const PARAM_1: u32 = CALL_PARAM_SIZE;
+const PARAM_2: u32 = CALL_PARAM_SIZE * 2;
+const PARAM_3: u32 = CALL_PARAM_SIZE * 3;
+const PARAM_4: u32 = CALL_PARAM_SIZE * 4;
+const PARAM_5: u32 = CALL_PARAM_SIZE * 5;
+
+unsafe fn convert_param(this: u32, param: u32, unit: u32) -> u32 {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VTABLE_CONVERT_CONSTANT_PARAM);
+    let convert = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target) };
+    convert(this, param, unit)
+}
+
+unsafe fn param_string(param: u32) -> VanillaString {
+    VanillaString::from_bytes(unsafe { &*(param as *const RawCallString) }.bytes())
+}
+
+/// `BFAIMgr::fMoveF(call, unit, reverse)`: four or five parameters, the first non-empty, a non-null unit.
+/// Converts parameter 1 (times 1000), 3 and (when present) 4, copies parameter 2 into a vanilla string and
+/// calls `fMove(params, ms, unit, done, name, speed, empty, reverse, limit)` with `limit` defaulting to 100.
+/// Vanilla also builds a string from the unit's `+0x120` virtual and tests the type twice; neither result is
+/// used, so the port skips them. Failed gates return false.
+pub unsafe fn f_move_f(this: u32, call: u32, unit: u32, reverse: bool, ops: &MoveOps) -> bool {
+    if unit == 0 {
+        return false;
+    }
+    let count = unsafe { call_param_count(call) } as u32;
+    let begin = unsafe { call_params_begin(call) };
+    if !(4..=5).contains(&count) || unsafe { &*(begin as *const RawCallString) }.bytes().is_empty() {
+        return false;
+    }
+    let millis = unsafe { convert_param(this, begin + PARAM_1, unit) }.wrapping_mul(MILLIS_PER_SECOND);
+    let name = unsafe { param_string(begin + PARAM_2) };
+    let speed = unsafe { convert_param(this, begin + PARAM_3, unit) };
+    let limit = if count == 5 { unsafe { convert_param(this, begin + PARAM_4, unit) } } else { DEFAULT_MOVE_LIMIT };
+    let empty = VanillaString::from_bytes(b"");
+    unsafe { (ops.f_move)(this, begin, millis, unit, call + CALL_DONE_FLAG_OFFSET, name.as_ptr() as u32, speed, empty.as_ptr() as u32, u32::from(reverse), limit) }
+}
+
+/// `BFAIMgr::fMoveWithSoundF(call, unit)`: five or six parameters, the first non-empty, a non-null unit.
+/// Converts parameter 1 (seconds, unscaled), 3 and (when present) 5, copies parameters 2 and 4 into vanilla
+/// strings and calls `fMove(params, seconds, unit, done, name, speed, sound, 0, limit)`.
+pub unsafe fn f_move_with_sound_f(this: u32, call: u32, unit: u32, ops: &MoveOps) -> bool {
+    if unit == 0 {
+        return false;
+    }
+    let count = unsafe { call_param_count(call) } as u32;
+    let begin = unsafe { call_params_begin(call) };
+    if !(5..=6).contains(&count) || unsafe { &*(begin as *const RawCallString) }.bytes().is_empty() {
+        return false;
+    }
+    let seconds = unsafe { convert_param(this, begin + PARAM_1, unit) };
+    let name = unsafe { param_string(begin + PARAM_2) };
+    let speed = unsafe { convert_param(this, begin + PARAM_3, unit) };
+    let sound = unsafe { param_string(begin + PARAM_4) };
+    let limit = if count == 6 { unsafe { convert_param(this, begin + PARAM_5, unit) } } else { DEFAULT_MOVE_LIMIT };
+    unsafe { (ops.f_move)(this, begin, seconds, unit, call + CALL_DONE_FLAG_OFFSET, name.as_ptr() as u32, speed, sound.as_ptr() as u32, 0, limit) }
+}
+
+/// `BFAIMgr::fMove` (`0x0043646e`) unit fields. Flag bytes: `+0xf8` moving, `+0xf9` stopped/arrived,
+/// `+0xd7`, `+0x20c`, `+0x20d` (finished at once), `+0x20e` (cog goal invalid). `+0x154` is the pointer to the
+/// target list's sentinel node, `+0x15c` the embedded `BFCogGoal`, `+0x170`/`+0x1bc` state words, `+0x74` the
+/// `GXMixer` and `+0x8c`/`+0x9c` a pair of values compared before restarting a move.
+const UNIT_MOVING: u32 = 0xf8;
+const UNIT_STOPPED: u32 = 0xf9;
+const UNIT_FLAG_D7: u32 = 0xd7;
+const UNIT_FLAG_20C: u32 = 0x20c;
+const UNIT_FINISHED: u32 = 0x20d;
+const UNIT_COG_INVALID: u32 = 0x20e;
+const UNIT_TARGET_LIST: u32 = 0x154;
+const UNIT_COG_GOAL: u32 = 0x15c;
+const UNIT_STATE: u32 = 0x170;
+const UNIT_STATE_2: u32 = 0x1bc;
+const UNIT_MIXER: u32 = 0x74;
+const UNIT_MIXER_FLAG: u32 = 0xd4;
+const UNIT_POS_A: u32 = 0x8c;
+const UNIT_POS_B: u32 = 0x9c;
+const COG_GOAL_FLAG_OFFSET: u32 = 0x4c;
+/// Entity vtable slots `fMove` calls.
+const ENTITY_VT_HAS_TARGET: u32 = 0x180;
+const ENTITY_VT_CAN_PLAY: u32 = 0x184;
+const ENTITY_VT_PREPARE: u32 = 0x1b0;
+const ENTITY_VT_FIND_ANIM: u32 = 0x130;
+const ENTITY_VT_FIND_ANIM_SECOND: u32 = 0x134;
+const ENTITY_VT_SET_SPEED: u32 = 0x1c0;
+const ENTITY_VT_SET_LIMIT: u32 = 0x1c4;
+/// `BFCogGoal` vtable slots: `valid`, `clearTarget`, `clearTargetSub`.
+const COG_VT_VALID: u32 = 0x0;
+const COG_VT_CLEAR_TARGET: u32 = 0xc;
+const COG_VT_CLEAR_TARGET_SUB: u32 = 0x1c;
+/// `BFCogGoal::reachedTarget`, `BFAIMgr::fPlay` and `GXMixerLink::duration`, called by address.
+const COG_REACHED_TARGET_ADDRESS: u32 = 0x0043_6207;
+const AI_PLAY_ADDRESS: u32 = 0x0042_296d;
+const LINK_DURATION_ADDRESS: u32 = 0x0042_514c;
+/// Vector helpers: 12-byte-element `push_back(vec, &element)` and the vector's buffer teardown.
+const LINK_VECTOR_PUSH_BACK_ADDRESS: u32 = 0x0040_dfe1;
+const LINK_VECTOR_TEARDOWN_ADDRESS: u32 = 0x0040_2970;
+/// `GLOBAL_BFAnimCache` cell and the string cell `fMove` compares the extra string against.
+const RVA_ANIM_CACHE: u32 = 0x0023_8044;
+const RVA_NO_SOUND_STRING: u32 = 0x0023_950c;
+const ANIM_REFCOUNT_OFFSET: u32 = 0x20;
+const ANIM_STAMP_OFFSET: u32 = 0x1c;
+const ANIM_CACHE_STAMP_OFFSET: u32 = 0x20;
+const LINK_SIZE: u32 = 0xc;
+
+/// The arguments of `BFAIMgr::fMove` in stack order.
+pub struct FMoveArgs {
+    pub this: u32,
+    pub first_param: u32,
+    pub seconds: i32,
+    pub unit: u32,
+    pub done: *const u8,
+    pub name: u32,
+    pub speed: u32,
+    pub extra: u32,
+    pub reverse: u32,
+    pub limit: u32,
+}
+
+/// The vanilla pieces `fMove` leans on, so a test can substitute recorders. The animation-link and mixer work
+/// (`GXMixerLink`s in `PoolAlloc`-backed vectors) lives behind `play_single` and `play_pair`.
+pub struct FMoveOps {
+    pub stop: unsafe fn(u32, i8, i8),
+    pub set_moving: unsafe fn(u32, i8, i8),
+    pub reached_target: unsafe fn(u32) -> bool,
+    /// The extra string equals vanilla's "no sound" string.
+    pub is_no_sound: unsafe fn(u32) -> bool,
+    pub find_sound: unsafe fn(u32, u32) -> u32,
+    /// `(unit, anim, flag, sound)`: sets the unit's mixer base to a single link.
+    pub play_single: unsafe fn(u32, u32, u8, u32),
+    /// `(this, unit, first_anim, second_anim, flag, sound, seconds)`: builds the two link vectors, repeats the
+    /// second link to fill `seconds` and plays them; the result is `fPlay`'s low byte.
+    pub play_pair: unsafe fn(u32, u32, u32, u32, u8, u32, i32) -> bool,
+}
+
+unsafe fn vcall0(object: u32, slot: u32) -> u32 {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(object) + slot);
+    let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(target) };
+    method(object)
+}
+
+unsafe fn vcall1(object: u32, slot: u32, arg: u32) -> u32 {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(object) + slot);
+    let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(target) };
+    method(object, arg)
+}
+
+/// Number of nodes between the target list's first node and its sentinel.
+unsafe fn target_list_count(unit: u32) -> u32 {
+    let sentinel = get_from_memory::<u32>(unit + UNIT_TARGET_LIST);
+    let mut node = get_from_memory::<u32>(sentinel);
+    let mut count = 0;
+    while node != sentinel {
+        count += 1;
+        node = get_from_memory::<u32>(node);
+    }
+    count
+}
+
+/// Vanilla ends `fMove` through the same four-write sequence in several places.
+unsafe fn finish_stopped(unit: u32, done: *const u8) {
+    unsafe { vcall1(unit, ENTITY_VT_SET_SPEED, 0) };
+    save_to_memory(unit + UNIT_STOPPED, 1u8);
+    unsafe { (done as *mut u8).write_volatile(1) };
+    save_to_memory(unit + UNIT_MOVING, 0u8);
+}
+
+/// `BFAIMgr::fMove`: drives a unit's movement state machine and starts its move animation. Returns the low byte
+/// vanilla leaves in `AL`.
+///
+/// The paths, in order: a finished unit completes at once; a stopped unit with an empty target list that can
+/// play re-checks its cog goal (an invalid goal sets `+0x20e` and clears the done flag); a stopped unit with
+/// targets starts the move by resolving the animation (and, for a nonzero duration, a second one), looking the
+/// extra string up as a sound, mixing the animations and storing the speed and limit; a moving unit with too
+/// few targets, or a reached target, stops; otherwise it keeps moving. Vanilla also builds a `vector<byte>`
+/// argument the port does not need.
+pub unsafe fn f_move(args: &FMoveArgs, ops: &FMoveOps) -> bool {
+    let (unit, done) = (args.unit, args.done);
+    let cog = unit + UNIT_COG_GOAL;
+    let state = get_from_memory::<u32>(unit + UNIT_STATE);
+    let has_target = unsafe { vcall0(unit, ENTITY_VT_HAS_TARGET) } as u8 != 0;
+    if state == 1 {
+        unsafe { vcall1(unit, ENTITY_VT_PREPARE, args.first_param) };
+    }
+    if get_from_memory::<u8>(unit + UNIT_FINISHED) != 0 {
+        unsafe { (done as *mut u8).write_volatile(1) };
+        return true;
+    }
+    let invalid_cog = || -> bool {
+        save_to_memory(unit + UNIT_COG_INVALID, 1u8);
+        unsafe { (done as *mut u8).write_volatile(0) };
+        true
+    };
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) != 0
+        && get_from_memory::<u8>(unit + UNIT_COG_INVALID) == 0
+        && unsafe { target_list_count(unit) } == 0
+        && unsafe { vcall0(unit, ENTITY_VT_CAN_PLAY) } as u8 != 0
+    {
+        if unsafe { vcall0(cog, COG_VT_VALID) } as u8 == 0 {
+            return invalid_cog();
+        }
+        if get_from_memory::<u8>(cog + COG_GOAL_FLAG_OFFSET) == 0 || state == 1 {
+            return true;
+        }
+        return invalid_cog();
+    }
+
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) != 0 && unsafe { target_list_count(unit) } != 0 {
+        if unsafe { target_list_count(unit) } <= 1 && get_from_memory::<u32>(unit + UNIT_STATE_2) != 3 {
+            unsafe { finish_stopped(unit, done) };
+            unsafe { (ops.stop)(unit, 1, 1) };
+            return true;
+        }
+        unsafe { (done as *mut u8).write_volatile(0) };
+        let (anim_second, anim_first) = if args.seconds == 0 {
+            (0, unsafe { vcall1(unit, ENTITY_VT_FIND_ANIM, args.name) })
+        } else {
+            let second = unsafe { vcall1(unit, ENTITY_VT_FIND_ANIM, args.name) };
+            (second, unsafe { vcall0(unit, ENTITY_VT_FIND_ANIM_SECOND) })
+        };
+        if anim_first == 0 {
+            return false;
+        }
+        let extra_empty = get_from_memory::<u32>(args.extra) == get_from_memory::<u32>(args.extra + 4);
+        let sound = if unsafe { (ops.is_no_sound)(args.extra) } || extra_empty { 0 } else { unsafe { (ops.find_sound)(unit, args.extra) } };
+        let flag = args.reverse as u8;
+        let played = if anim_second == 0 {
+            unsafe { (ops.play_single)(unit, anim_first, flag, sound) };
+            true
+        } else {
+            unsafe { (ops.play_pair)(args.this, unit, anim_first, anim_second, flag, sound, args.seconds) }
+        };
+        unsafe { vcall1(unit, ENTITY_VT_SET_SPEED, args.speed) };
+        unsafe { vcall1(unit, ENTITY_VT_SET_LIMIT, args.limit) };
+        save_to_memory(unit + UNIT_MOVING, 1u8);
+        save_to_memory(unit + UNIT_STOPPED, 0u8);
+        return played;
+    }
+
+    if get_from_memory::<u8>(unit + UNIT_MOVING) == 0 {
+        return true;
+    }
+    if has_target {
+        if unsafe { target_list_count(unit) } <= 1 {
+            unsafe { vcall0(cog, COG_VT_CLEAR_TARGET) };
+            unsafe { vcall0(cog, COG_VT_CLEAR_TARGET_SUB) };
+            save_to_memory(unit + UNIT_STOPPED, 1u8);
+            unsafe { (done as *mut u8).write_volatile(1) };
+            save_to_memory(unit + UNIT_MOVING, 0u8);
+            return true;
+        }
+    } else if unsafe { target_list_count(unit) } == 0 || unsafe { (ops.reached_target)(cog) } {
+        unsafe { finish_stopped(unit, done) };
+        unsafe { (ops.stop)(unit, 1, 0) };
+        return true;
+    }
+    if get_from_memory::<u8>(unit + UNIT_FLAG_20C) == 0
+        && (get_from_memory::<u8>(unit + UNIT_FLAG_D7) != 0 || (args.seconds != 0 && get_from_memory::<u32>(unit + UNIT_POS_B) == get_from_memory::<u32>(unit + UNIT_POS_A)))
+    {
+        unsafe { (ops.set_moving)(unit, 1, 0) };
+    }
+    true
+}
+
+unsafe fn stop_vanilla(unit: u32, a: i8, b: i8) {
+    unsafe { BFUNIT_STOP.hooked()(unit as *const u32, a, b) }
+}
+
+unsafe fn set_moving_vanilla(unit: u32, a: i8, b: i8) {
+    unsafe { SET_MOVING.hooked()(unit as *const u32, a, b) }
+}
+
+unsafe fn reached_target_vanilla(cog: u32) -> bool {
+    let reached = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32) -> u32>(COG_REACHED_TARGET_ADDRESS) };
+    (unsafe { reached(cog) }) as u8 != 0
+}
+
+/// Whether the string at `string` has exactly the bytes of vanilla's "no sound" string.
+unsafe fn is_no_sound_vanilla(string: u32) -> bool {
+    let cell = get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + RVA_NO_SOUND_STRING);
+    if cell == 0 {
+        return false;
+    }
+    let (begin, end) = (get_from_memory::<u32>(string), get_from_memory::<u32>(string + 4));
+    let (none_begin, none_end) = (get_from_memory::<u32>(cell), get_from_memory::<u32>(cell + 4));
+    if end.wrapping_sub(begin) != none_end.wrapping_sub(none_begin) {
+        return false;
+    }
+    let len = (end - begin) as usize;
+    len == 0 || unsafe { std::slice::from_raw_parts(begin as *const u8, len) == std::slice::from_raw_parts(none_begin as *const u8, len) }
+}
+
+unsafe fn find_sound_vanilla(unit: u32, string: u32) -> u32 {
+    unsafe { BFENTITY_FIND_SOUND.hooked()(unit as *const u32, string as *const std::ffi::c_void) as u32 }
+}
+
+/// `GXMixerLink(anim, flag, sound)`: `{anim, sound, flag}`, taking a reference on the animation and stamping it
+/// with the animation cache's current counter.
+fn make_link(anim: u32, flag: u8, sound: u32) -> [u32; 3] {
+    save_to_memory(anim + ANIM_REFCOUNT_OFFSET, get_from_memory::<u32>(anim + ANIM_REFCOUNT_OFFSET).wrapping_add(1));
+    let cache = get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + RVA_ANIM_CACHE);
+    save_to_memory(anim + ANIM_STAMP_OFFSET, get_from_memory::<u32>(cache + ANIM_CACHE_STAMP_OFFSET));
+    [anim, sound, u32::from(flag)]
+}
+
+fn release_anim(anim: u32) {
+    if anim != 0 {
+        save_to_memory(anim + ANIM_REFCOUNT_OFFSET, get_from_memory::<u32>(anim + ANIM_REFCOUNT_OFFSET).wrapping_sub(1));
+    }
+}
+
+/// A vanilla `vector<GXMixerLink>` header; its buffer belongs to vanilla's allocator and is released by the
+/// vanilla teardown.
+struct LinkVector([u32; 3]);
+
+impl LinkVector {
+    fn with(link: &[u32; 3]) -> Self {
+        let mut vector = LinkVector([0; 3]);
+        vector.push(link);
+        vector
+    }
+
+    fn ptr(&self) -> u32 {
+        self.0.as_ptr() as u32
+    }
+
+    fn push(&mut self, link: &[u32; 3]) {
+        let push = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32)>(LINK_VECTOR_PUSH_BACK_ADDRESS) };
+        unsafe { push(self.0.as_mut_ptr() as u32, link.as_ptr() as u32) };
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0[0] == self.0[1]
+    }
+}
+
+impl Drop for LinkVector {
+    fn drop(&mut self) {
+        let mut element = self.0[0];
+        while element != self.0[1] {
+            release_anim(get_from_memory::<u32>(element));
+            element += LINK_SIZE;
+        }
+        if self.0[0] == 0 {
+            return;
+        }
+        let teardown = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32)>(LINK_VECTOR_TEARDOWN_ADDRESS) };
+        unsafe { teardown(self.0.as_mut_ptr() as u32) };
+    }
+}
+
+unsafe fn play_single_vanilla(unit: u32, anim: u32, flag: u8, sound: u32) {
+    let link = make_link(anim, flag, sound);
+    {
+        let vector = LinkVector::with(&link);
+        save_to_memory(unit + UNIT_MIXER_FLAG, 0u8);
+        unsafe { GXMIXER_SET_BASE.hooked()((unit + UNIT_MIXER) as *const u32, vector.ptr() as *const i32, 1) };
+    }
+    release_anim(link[0]);
+}
+
+unsafe fn play_pair_vanilla(this: u32, unit: u32, anim_first: u32, anim_second: u32, flag: u8, sound: u32, seconds: i32) -> bool {
+    let first_link = make_link(anim_first, 0, 0);
+    let first = LinkVector::with(&first_link);
+    let second_link = make_link(anim_second, flag, sound);
+    let mut second = LinkVector::with(&second_link);
+    let mut played = false;
+    if !second.is_empty() && !first.is_empty() {
+        let duration_fn = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32) -> i32>(LINK_DURATION_ADDRESS) };
+        let duration = unsafe { duration_fn(second_link.as_ptr() as u32, 0) };
+        let mut remaining = seconds.wrapping_sub(duration);
+        while remaining > 0 {
+            second.push(&second_link);
+            remaining = remaining.wrapping_sub(duration);
+            if duration == 0 {
+                break;
+            }
+        }
+        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
+        let mut scratch = anim_first;
+        played = (unsafe { play(this, second.ptr(), first.ptr(), unit, &mut scratch, 0) }) as u8 != 0;
+    }
+    drop(second);
+    release_anim(second_link[0]);
+    drop(first);
+    release_anim(first_link[0]);
+    played
+}
+
+const F_MOVE_VANILLA_OPS: FMoveOps = FMoveOps {
+    stop: stop_vanilla,
+    set_moving: set_moving_vanilla,
+    reached_target: reached_target_vanilla,
+    is_no_sound: is_no_sound_vanilla,
+    find_sound: find_sound_vanilla,
+    play_single: play_single_vanilla,
+    play_pair: play_pair_vanilla,
+};
+
+/// The three vanilla strings `fPlaySpecial` compares its string arguments against: the "no animation/sound"
+/// string (`[0x0063950c]`) and the two special play-mode strings (`[0x00643620]` reverse, `[0x00643624]`
+/// ping-pong).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpecialString {
+    None,
+    Reverse,
+    PingPong,
+    /// The vanilla strings at `[0x0064bdac]` and `[0x0064bda8]`, the two plain play-mode names `fPlaySpecialF`
+    /// compares its fifth parameter against (the second also sets the call's second flag). Their text is not
+    /// identified.
+    ModeA,
+    ModeB,
+}
+
+const RVA_PLAY_REVERSE_STRING: u32 = 0x0024_3620;
+const RVA_PLAY_PING_PONG_STRING: u32 = 0x0024_3624;
+const RVA_PLAY_MODE_A_STRING: u32 = 0x0024_bdac;
+const RVA_PLAY_MODE_B_STRING: u32 = 0x0024_bda8;
+const UNIT_TYPE: u32 = 0x128;
+const AI_DEFAULT_ANIM: u32 = 0xd0;
+const ENTITY_VT_DEFAULT_ANIM: u32 = 0x8c;
+
+/// The arguments of `BFAIMgr::fPlaySpecial` in stack order. `seconds` is the duration (unsigned in vanilla's
+/// zero test, signed in its arithmetic) and `count` the repeat count.
+pub struct FPlaySpecialArgs {
+    pub this: u32,
+    pub anim_name: u32,
+    pub sound_name: u32,
+    pub seconds: u32,
+    pub count: i32,
+    pub special: u32,
+    pub unit: u32,
+    pub done: *const u8,
+}
+
+/// The vanilla pieces `fPlaySpecial` leans on. `acquire_first` builds the first link and its vector from the
+/// unit's default animation (kept alive until `release_first`, as vanilla keeps it through every exit);
+/// `play_links` builds the second vector, repeats it to fill the duration or count and plays both, returning
+/// `None` when either vector ends up empty.
+pub struct FPlaySpecialOps {
+    pub is_string: unsafe fn(SpecialString, u32) -> bool,
+    pub find_anim: unsafe fn(u32, u32) -> u32,
+    pub find_sound: unsafe fn(u32, u32) -> u32,
+    pub acquire_first: unsafe fn(u32) -> u32,
+    pub release_first: unsafe fn(u32),
+    /// `(this, unit, first handle, anim, reverse, sound, ping_pong, seconds, count)`.
+    pub play_links: unsafe fn(u32, u32, u32, u32, bool, u32, bool, u32, i32) -> Option<bool>,
+}
+
+fn string_is_empty(string: u32) -> bool {
+    get_from_memory::<u32>(string) == get_from_memory::<u32>(string + 4)
+}
+
+/// `BFAIMgr::fPlaySpecial(anim_name, sound_name, seconds, count, special, unit, done)`.
+///
+/// Gate: unless the animation name is the "none" string, a call with no repeat count and either no sound
+/// name or no duration must name a special mode (`special` equal to the reverse or ping-pong string), else it
+/// fails. A unit that is not stopped just finishes (marking itself stopped when it is moving and its two
+/// position words match). Otherwise the unit's default animation (virtual `+0x8c`) seeds the first link; the
+/// animation is `findAnim(anim_name)`, falling back to the manager's default animation (`this + 0xd0`) only when
+/// the name is the "none" string and the sound name is a real, non-empty name; the sound is `findSound(sound_name)`
+/// unless it is "none" or empty. The result is `fPlay`'s, and the unit is marked moving and not stopped.
+///
+/// A positive duration with a zero animation duration never ends, as in vanilla.
+pub unsafe fn f_play_special(args: &FPlaySpecialArgs, ops: &FPlaySpecialOps) -> bool {
+    let (unit, done) = (args.unit, args.done);
+    let is = |which, string| unsafe { (ops.is_string)(which, string) };
+    if !is(SpecialString::None, args.anim_name) {
+        let sound_is_none = is(SpecialString::None, args.sound_name);
+        let gated = args.count == 0 && (sound_is_none || args.seconds == 0);
+        if gated && !(is(SpecialString::Reverse, args.special) || is(SpecialString::PingPong, args.special)) {
+            return false;
+        }
+    }
+    let reverse = is(SpecialString::Reverse, args.special);
+    let ping_pong = !reverse && is(SpecialString::PingPong, args.special);
+
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) == 0 {
+        if get_from_memory::<u8>(unit + UNIT_MOVING) != 0 && get_from_memory::<u32>(unit + UNIT_POS_B) == get_from_memory::<u32>(unit + UNIT_POS_A) {
+            save_to_memory(unit + UNIT_STOPPED, 1u8);
+            unsafe { (done as *mut u8).write_volatile(1) };
+            save_to_memory(unit + UNIT_MOVING, 0u8);
+        }
+        return true;
+    }
+    if get_from_memory::<u32>(unit + UNIT_TYPE) == 0 {
+        return false;
+    }
+    let first_anim = unsafe { vcall1(unit, ENTITY_VT_DEFAULT_ANIM, 0) };
+    if first_anim == 0 {
+        return false;
+    }
+    let first = unsafe { (ops.acquire_first)(first_anim) };
+    let named = !is(SpecialString::None, args.anim_name);
+    let mut anim = if named { unsafe { (ops.find_anim)(unit, args.anim_name) } } else { 0 };
+    if anim == 0 && (named || is(SpecialString::None, args.sound_name) || string_is_empty(args.sound_name)) {
+        unsafe { (ops.release_first)(first) };
+        return false;
+    }
+    let sound = if is(SpecialString::None, args.sound_name) || string_is_empty(args.sound_name) { 0 } else { unsafe { (ops.find_sound)(unit, args.sound_name) } };
+    if anim == 0 {
+        anim = get_from_memory::<u32>(args.this + AI_DEFAULT_ANIM);
+    }
+    let played = unsafe { (ops.play_links)(args.this, unit, first, anim, reverse, sound, ping_pong, args.seconds, args.count) };
+    unsafe { (ops.release_first)(first) };
+    match played {
+        None => false,
+        Some(result) => {
+            save_to_memory(unit + UNIT_MOVING, 1u8);
+            save_to_memory(unit + UNIT_STOPPED, 0u8);
+            unsafe { (done as *mut u8).write_volatile(0) };
+            result
+        }
+    }
+}
+
+unsafe fn special_string_is(which: SpecialString, string: u32) -> bool {
+    let rva = match which {
+        SpecialString::None => RVA_NO_SOUND_STRING,
+        SpecialString::Reverse => RVA_PLAY_REVERSE_STRING,
+        SpecialString::PingPong => RVA_PLAY_PING_PONG_STRING,
+        SpecialString::ModeA => RVA_PLAY_MODE_A_STRING,
+        SpecialString::ModeB => RVA_PLAY_MODE_B_STRING,
+    };
+    let cell = get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + rva);
+    if cell == 0 {
+        return false;
+    }
+    let (begin, end) = (get_from_memory::<u32>(string), get_from_memory::<u32>(string + 4));
+    let (other_begin, other_end) = (get_from_memory::<u32>(cell), get_from_memory::<u32>(cell + 4));
+    if end.wrapping_sub(begin) != other_end.wrapping_sub(other_begin) {
+        return false;
+    }
+    let len = (end - begin) as usize;
+    len == 0 || unsafe { std::slice::from_raw_parts(begin as *const u8, len) == std::slice::from_raw_parts(other_begin as *const u8, len) }
+}
+
+unsafe fn entity_find_anim_vanilla(unit: u32, name: u32) -> u32 {
+    unsafe { BFENTITY_FIND_ANIM.hooked()(unit as *const u32, name as *const std::ffi::c_void) as u32 }
+}
+
+/// The first link and its one-element vector, held across `fPlaySpecial`'s body.
+struct FirstLinks {
+    link: [u32; 3],
+    vector: Option<LinkVector>,
+    second: LinkVector,
+}
+
+impl Drop for FirstLinks {
+    fn drop(&mut self) {
+        self.second = LinkVector([0; 3]);
+        self.vector = None;
+        release_anim(self.link[0]);
+    }
+}
+
+unsafe fn acquire_first_vanilla(anim: u32) -> u32 {
+    let link = make_link(anim, 0, 0);
+    let vector = Some(LinkVector::with(&link));
+    Box::into_raw(Box::new(FirstLinks { link, vector, second: LinkVector([0; 3]) })) as u32
+}
+
+unsafe fn release_first_vanilla(handle: u32) {
+    drop(unsafe { Box::from_raw(handle as *mut FirstLinks) });
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn play_links_vanilla(this: u32, unit: u32, first: u32, anim: u32, reverse: bool, sound: u32, ping_pong: bool, seconds: u32, count: i32) -> Option<bool> {
+    let first = unsafe { &*(first as *const FirstLinks) };
+    let first_vector = first.vector.as_ref()?;
+    let main_link = make_link(anim, u8::from(reverse), sound);
+    let mut second = LinkVector::with(&main_link);
+    let tail_link = make_link(anim, 1, 0);
+    if ping_pong {
+        second.push(&tail_link);
+    }
+    let mut played = None;
+    if !second.is_empty() && !first_vector.is_empty() {
+        if seconds != 0 {
+            let duration_fn = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32) -> i32>(LINK_DURATION_ADDRESS) };
+            let duration = unsafe { duration_fn(main_link.as_ptr() as u32, 0) };
+            let mut remaining = (seconds as i32).wrapping_sub(duration);
+            if ping_pong {
+                remaining = remaining.wrapping_sub(duration);
+            }
+            while remaining > 0 {
+                second.push(&main_link);
+                remaining = remaining.wrapping_sub(duration);
+                if ping_pong {
+                    second.push(&tail_link);
+                    remaining = remaining.wrapping_sub(duration);
+                }
+            }
+        } else {
+            for _ in 0..count.wrapping_sub(1).max(0) {
+                second.push(&main_link);
+                if ping_pong {
+                    second.push(&tail_link);
+                }
+            }
+        }
+        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
+        let mut scratch = 0u32;
+        played = Some((unsafe { play(this, second.ptr(), first_vector.ptr(), unit, &mut scratch, 0) }) as u8 != 0);
+    }
+    drop(second);
+    release_anim(tail_link[0]);
+    release_anim(main_link[0]);
+    played
+}
+
+const F_PLAY_SPECIAL_VANILLA_OPS: FPlaySpecialOps = FPlaySpecialOps {
+    is_string: special_string_is,
+    find_anim: entity_find_anim_vanilla,
+    find_sound: find_sound_vanilla,
+    acquire_first: acquire_first_vanilla,
+    release_first: release_first_vanilla,
+    play_links: play_links_vanilla,
+};
+
+/// `BFAIMgr` field the play handlers use as their loop cursor: the pointer to the parameter being resolved.
+const AI_PARAM_CURSOR: u32 = 0xcc;
+const UNIT_DIRECTION: u32 = 0x12c;
+const ENTITY_VT_DIR_TO_SET: u32 = 0x80;
+const MIXER_COUNT_A: u32 = 0x28;
+const MIXER_COUNT_B: u32 = 0x18;
+const CALL_RESULT_FLAG: u32 = 0x18;
+
+/// The vanilla pieces `fPlayF`/`fPlayWithBaseF`/`fSetBaseF` lean on. `acquire_first` seeds the first link vector
+/// (`first_anim`, flag 0, sound 0) and returns a handle that owns it and the second vector; `add_anim` appends
+/// `(anim, reverse, 0)` (and, for ping-pong, `(anim, 1, 0)`) to the second vector; `play` runs `fPlay(this,
+/// second, first, unit, scratch, with_base)` and returns `None` when either vector is empty.
+pub struct PlayOps {
+    pub find_anim: unsafe fn(u32, u32) -> u32,
+    pub mixer_anim: unsafe fn(u32) -> u32,
+    pub acquire_first: unsafe fn(u32) -> u32,
+    pub release_first: unsafe fn(u32),
+    pub add_anim: unsafe fn(u32, u32, bool, bool),
+    pub play: unsafe fn(u32, u32, u32, bool) -> Option<bool>,
+    /// `fSetBaseF`'s mixer work: `(unit, anim)` builds the one-link vector, clears the mixer, resolves the set
+    /// through the unit's `+0x80` virtual and installs set and base.
+    pub set_base: unsafe fn(u32, u32),
+}
+
+/// The "not stopped" prefix shared by `fPlayF` and `fPlayWithBaseF`: `Some(result)` when the unit is not
+/// stopped. A moving unit whose mixer counters match (or that has no animation) is stopped and finishes the
+/// call; either way the result is true.
+unsafe fn play_not_stopped(call: u32, unit: u32, ops: &PlayOps) -> Option<bool> {
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) != 0 {
+        return None;
+    }
+    if get_from_memory::<u8>(unit + UNIT_MOVING) != 0 {
+        let mixer = unit + UNIT_MIXER;
+        if get_from_memory::<u32>(mixer + MIXER_COUNT_A) == get_from_memory::<u32>(mixer + MIXER_COUNT_B) || unsafe { (ops.mixer_anim)(mixer) } == 0 {
+            save_to_memory(unit + UNIT_STOPPED, 1u8);
+            save_to_memory(call + CALL_RESULT_FLAG, 1u8);
+            save_to_memory(unit + UNIT_MOVING, 0u8);
+        }
+    }
+    Some(true)
+}
+
+/// Resolves every parameter from `from` on with `findAnim`, adding each hit to the second vector. The cursor
+/// field in the manager follows the walk, as in vanilla.
+unsafe fn add_param_anims(this: u32, call: u32, unit: u32, handle: u32, from: u32, reverse: bool, ping_pong: bool, ops: &PlayOps) {
+    let end = unsafe { call_params_end(call) };
+    save_to_memory(this + AI_PARAM_CURSOR, from);
+    while get_from_memory::<u32>(this + AI_PARAM_CURSOR) != end {
+        let anim = unsafe { (ops.find_anim)(unit, get_from_memory::<u32>(this + AI_PARAM_CURSOR)) };
+        if anim != 0 {
+            unsafe { (ops.add_anim)(handle, anim, reverse, ping_pong) };
+        }
+        save_to_memory(this + AI_PARAM_CURSOR, get_from_memory::<u32>(this + AI_PARAM_CURSOR) + CALL_PARAM_SIZE);
+    }
+}
+
+unsafe fn finish_play(call: u32, unit: u32, handle: u32, with_base: bool, this: u32, ops: &PlayOps) -> bool {
+    let played = unsafe { (ops.play)(this, unit, handle, with_base) };
+    unsafe { (ops.release_first)(handle) };
+    match played {
+        None => false,
+        Some(result) => {
+            save_to_memory(unit + UNIT_MOVING, 1u8);
+            save_to_memory(unit + UNIT_STOPPED, 0u8);
+            save_to_memory(call + CALL_RESULT_FLAG, 0u8);
+            result
+        }
+    }
+}
+
+/// `BFAIMgr::fPlayF(call, unit, reverse, ping_pong)`: needs at least one parameter. A stopped unit with a type
+/// seeds the first link from its default animation (virtual `+0x8c`), resolves each parameter as an
+/// animation into the second vector and plays them; see [`play_not_stopped`] for a unit that is not stopped.
+pub unsafe fn f_play_f(this: u32, call: u32, unit: u32, reverse: bool, ping_pong: bool, ops: &PlayOps) -> bool {
+    if unsafe { call_param_count(call) } < 1 {
+        return false;
+    }
+    if let Some(result) = unsafe { play_not_stopped(call, unit, ops) } {
+        return result;
+    }
+    if get_from_memory::<u32>(unit + UNIT_TYPE) == 0 {
+        return false;
+    }
+    let default_anim = unsafe { vcall1(unit, ENTITY_VT_DEFAULT_ANIM, 0) };
+    if default_anim == 0 {
+        return false;
+    }
+    let handle = unsafe { (ops.acquire_first)(default_anim) };
+    unsafe { add_param_anims(this, call, unit, handle, call_params_begin(call), reverse, ping_pong, ops) };
+    unsafe { finish_play(call, unit, handle, false, this, ops) }
+}
+
+/// `BFAIMgr::fPlayWithBaseF(call, unit, reverse, ping_pong)`: needs at least two parameters. The first names
+/// the base animation (the first link; the call fails if it does not resolve), the rest are played over it.
+pub unsafe fn f_play_with_base_f(this: u32, call: u32, unit: u32, reverse: bool, ping_pong: bool, ops: &PlayOps) -> bool {
+    if unsafe { call_param_count(call) } < 2 {
+        return false;
+    }
+    if let Some(result) = unsafe { play_not_stopped(call, unit, ops) } {
+        return result;
+    }
+    if get_from_memory::<u32>(unit + UNIT_TYPE) == 0 {
+        return false;
+    }
+    let begin = unsafe { call_params_begin(call) };
+    save_to_memory(this + AI_PARAM_CURSOR, begin);
+    let base = unsafe { (ops.find_anim)(unit, begin) };
+    if base == 0 {
+        return false;
+    }
+    let handle = unsafe { (ops.acquire_first)(base) };
+    unsafe { add_param_anims(this, call, unit, handle, begin + CALL_PARAM_SIZE, reverse, ping_pong, ops) };
+    unsafe { finish_play(call, unit, handle, true, this, ops) }
+}
+
+/// `BFAIMgr::fSetBaseF(call, unit)`: exactly one parameter. A unit that is not stopped returns true untouched.
+/// Otherwise the parameter is resolved and, when found, installed as the mixer's set and base; the unit is
+/// then marked stopped and not moving and the call finished whether or not the lookup found anything, and the
+/// result is whether it did.
+pub unsafe fn f_set_base_f(this: u32, call: u32, unit: u32, ops: &PlayOps) -> bool {
+    if unsafe { call_param_count(call) } != 1 {
+        return false;
+    }
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) == 0 {
+        return true;
+    }
+    if get_from_memory::<u32>(unit + UNIT_TYPE) == 0 {
+        return false;
+    }
+    let param = unsafe { call_params_begin(call) };
+    save_to_memory(this + AI_PARAM_CURSOR, param);
+    let anim = unsafe { (ops.find_anim)(unit, param) };
+    let found = anim != 0;
+    if found {
+        unsafe { (ops.set_base)(unit, anim) };
+    }
+    save_to_memory(unit + UNIT_MOVING, 0u8);
+    save_to_memory(unit + UNIT_STOPPED, 1u8);
+    save_to_memory(call + CALL_RESULT_FLAG, 1u8);
+    found
+}
+
+unsafe fn mixer_anim_vanilla(mixer: u32) -> u32 {
+    unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) as u32 }
+}
+
+unsafe fn add_anim_vanilla(handle: u32, anim: u32, reverse: bool, ping_pong: bool) {
+    let links = unsafe { &mut *(handle as *mut FirstLinks) };
+    let link = make_link(anim, u8::from(reverse), 0);
+    links.second.push(&link);
+    if ping_pong {
+        let tail = make_link(anim, 1, 0);
+        links.second.push(&tail);
+        release_anim(tail[0]);
+    }
+    release_anim(link[0]);
+}
+
+unsafe fn play_vanilla(this: u32, unit: u32, handle: u32, with_base: bool) -> Option<bool> {
+    let links = unsafe { &*(handle as *const FirstLinks) };
+    let first = links.vector.as_ref()?;
+    if links.second.is_empty() || first.is_empty() {
+        return None;
+    }
+    let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
+    let mut scratch = 0u32;
+    Some((unsafe { play(this, links.second.ptr(), first.ptr(), unit, &mut scratch, u32::from(with_base)) }) as u8 != 0)
+}
+
+unsafe fn set_base_vanilla(unit: u32, anim: u32) {
+    let link = make_link(anim, 0, 0);
+    {
+        let vector = LinkVector::with(&link);
+        let mixer = unit + UNIT_MIXER;
+        unsafe { GXMIXER_CLEAR_ALL.hooked()(mixer as *const u32) };
+        let direction = get_from_memory::<u32>(unit + UNIT_DIRECTION);
+        let mut out = 0u32;
+        let target = get_from_memory::<u32>(get_from_memory::<u32>(unit) + ENTITY_VT_DIR_TO_SET);
+        let dir_to_set = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, *mut u32, u32, u32) -> u32>(target) };
+        let set = dir_to_set(unit, direction, &mut out, anim, 0);
+        save_to_memory(unit + UNIT_MIXER_FLAG, 0u8);
+        unsafe { GXMIXER_SET_SET.hooked()(mixer as *const u32, set, out as u8) };
+        unsafe { GXMIXER_SET_BASE.hooked()(mixer as *const u32, vector.ptr() as *const i32, 1) };
+    }
+    release_anim(link[0]);
+}
+
+const PLAY_VANILLA_OPS: PlayOps = PlayOps {
+    find_anim: entity_find_anim_vanilla,
+    mixer_anim: mixer_anim_vanilla,
+    acquire_first: acquire_first_vanilla,
+    release_first: release_first_vanilla,
+    add_anim: add_anim_vanilla,
+    play: play_vanilla,
+    set_base: set_base_vanilla,
+};
+
+/// The vanilla call `fFlyF` makes: `fFly(this, unit, name, value, extra, done, reverse, limit)` with `name`
+/// and `extra` vanilla strings.
+pub struct FlyOps {
+    pub f_fly: unsafe fn(u32, u32, u32, u32, u32, u32, u32, u32) -> bool,
+}
+
+unsafe fn f_fly_vanilla(this: u32, unit: u32, name: u32, value: u32, extra: u32, done: u32, reverse: u32, limit: u32) -> bool {
+    unsafe { F_FLY.hooked()(this as *const u32, unit as *const u32, name as *const c_void, value as i32, extra as *const c_void, done as *const i8, reverse as i32, limit as i32) }
+}
+
+const FLY_VANILLA: FlyOps = FlyOps { f_fly: f_fly_vanilla };
+
+/// The arguments of `BFAIMgr::fFly` in stack order (`this` is unused by vanilla).
+pub struct FFlyArgs {
+    pub unit: u32,
+    pub name: u32,
+    pub value: u32,
+    pub extra: u32,
+    pub done: *const u8,
+    pub reverse: u32,
+    pub limit: u32,
+}
+
+/// The vanilla pieces `fFly` leans on: `BFUnit::stop`/`setMoving(unit, 1, 0)`, whether the extra string is the
+/// "no sound" string, `findSound(unit, extra)` and `(unit, anim, flag, sound)` setting the mixer base to one link.
+pub struct FlyCoreOps {
+    pub stop: unsafe fn(u32, i8, i8),
+    pub set_moving: unsafe fn(u32, i8, i8),
+    pub is_no_sound: unsafe fn(u32) -> bool,
+    pub find_sound: unsafe fn(u32, u32) -> u32,
+    pub play_single: unsafe fn(u32, u32, u8, u32),
+}
+
+/// A flying unit's position and destination words (`+0x114..` and `+0x1dc..`).
+const UNIT_FLY_POSITION: u32 = 0x114;
+const UNIT_FLY_TARGET: u32 = 0x1dc;
+
+/// `BFAIMgr::fFly(unit, name, value, extra, done, reverse, limit)`.
+///
+/// A unit that is not stopped and is moving: a unit not flagged `+0x20c` but flagged `+0xd7` is set moving; one
+/// at its destination (three words) has its speed set to `0`, is marked stopped and not moving, flags `done` and
+/// is stopped. Returns true.
+/// A stopped unit starts the move: the animation is `findAnim(name)` (false if none); the sound is
+/// `findSound(extra)` unless `extra` is the "no sound" string or empty; the mixer base becomes one link
+/// `(anim, sound, reverse)`; the speed and limit virtuals take `value` and `limit`; the unit is marked moving and
+/// not stopped. Returns true.
+pub unsafe fn f_fly(args: &FFlyArgs, ops: &FlyCoreOps) -> bool {
+    let unit = args.unit;
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) == 0 {
+        if get_from_memory::<u8>(unit + UNIT_MOVING) != 0 {
+            if get_from_memory::<u8>(unit + UNIT_FLAG_20C) == 0 && get_from_memory::<u8>(unit + UNIT_FLAG_D7) != 0 {
+                unsafe { (ops.set_moving)(unit, 1, 0) };
+                return true;
+            }
+            if (0..3).all(|word| get_from_memory::<u32>(unit + UNIT_FLY_POSITION + word * 4) == get_from_memory::<u32>(unit + UNIT_FLY_TARGET + word * 4)) {
+                unsafe { vcall1(unit, ENTITY_VT_SET_SPEED, 0) };
+                save_to_memory(unit + UNIT_STOPPED, 1u8);
+                unsafe { (args.done as *mut u8).write_volatile(1) };
+                save_to_memory(unit + UNIT_MOVING, 0u8);
+                unsafe { (ops.stop)(unit, 1, 0) };
+            }
+        }
+        return true;
+    }
+    let anim = unsafe { vcall1(unit, ENTITY_VT_FIND_ANIM, args.name) };
+    if anim == 0 {
+        return false;
+    }
+    let extra_empty = string_is_empty(args.extra);
+    let sound = if unsafe { (ops.is_no_sound)(args.extra) } || extra_empty { 0 } else { unsafe { (ops.find_sound)(unit, args.extra) } };
+    unsafe { (ops.play_single)(unit, anim, args.reverse as u8, sound) };
+    unsafe { vcall1(unit, ENTITY_VT_SET_SPEED, args.value) };
+    unsafe { vcall1(unit, ENTITY_VT_SET_LIMIT, args.limit) };
+    save_to_memory(unit + UNIT_MOVING, 1u8);
+    save_to_memory(unit + UNIT_STOPPED, 0u8);
+    true
+}
+
+const FLY_CORE_VANILLA: FlyCoreOps =
+    FlyCoreOps { stop: stop_vanilla, set_moving: set_moving_vanilla, is_no_sound: is_no_sound_vanilla, find_sound: find_sound_vanilla, play_single: play_single_vanilla };
+
+/// The vanilla pieces `fPlayWithSound` leans on: `BFEntity::findAnim(unit, name)`, `findSound(unit, name)` and
+/// `(unit, first_anim, second_anim, sound)`, which builds the two one-link vectors (`first_anim` with no flag or
+/// sound, `second_anim` with the sound) and plays them with `fPlay`, returning `None` when either vector ends up
+/// empty.
+pub struct PlayWithSoundOps {
+    pub find_anim: unsafe fn(u32, u32) -> u32,
+    pub find_sound: unsafe fn(u32, u32) -> u32,
+    pub play_two: unsafe fn(u32, u32, u32, u32) -> Option<bool>,
+}
+
+/// Unit field `fPlayWithSound` requires to be set before it plays anything (the entity type).
+const UNIT_TYPE_POINTER: u32 = 0x128;
+
+/// `BFAIMgr::fPlayWithSound(anim_name, sound_name, unit, done)` (`thiscall`, `this` unused, `RET 0x10`).
+///
+/// A unit that is not stopped: a moving unit whose two position words match is marked stopped and not moving and
+/// flags `done`; returns true either way. A stopped unit: false without an entity type (`+0x128`), without a
+/// default animation (virtual `+0x8c`) or when `anim_name` has no animation; otherwise plays the default
+/// animation and the named one with `findSound(sound_name)` through `fPlay`. When it played (both vectors
+/// non-empty) the unit is marked moving and not stopped and `done` is cleared. Returns `fPlay`'s result, false if
+/// nothing played.
+pub unsafe fn f_play_with_sound(anim_name: u32, sound_name: u32, unit: u32, done: *const u8, ops: &PlayWithSoundOps) -> bool {
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) == 0 {
+        if get_from_memory::<u8>(unit + UNIT_MOVING) != 0 && get_from_memory::<u32>(unit + UNIT_POS_B) == get_from_memory::<u32>(unit + UNIT_POS_A) {
+            save_to_memory(unit + UNIT_STOPPED, 1u8);
+            unsafe { (done as *mut u8).write_volatile(1) };
+            save_to_memory(unit + UNIT_MOVING, 0u8);
+        }
+        return true;
+    }
+    if get_from_memory::<u32>(unit + UNIT_TYPE_POINTER) == 0 {
+        return false;
+    }
+    let first = unsafe { vcall1(unit, ENTITY_VT_DEFAULT_ANIM, 0) };
+    if first == 0 {
+        return false;
+    }
+    let second = unsafe { (ops.find_anim)(unit, anim_name) };
+    if second == 0 {
+        return false;
+    }
+    let sound = unsafe { (ops.find_sound)(unit, sound_name) };
+    let Some(result) = (unsafe { (ops.play_two)(unit, first, second, sound) }) else {
+        return false;
+    };
+    save_to_memory(unit + UNIT_MOVING, 1u8);
+    save_to_memory(unit + UNIT_STOPPED, 0u8);
+    unsafe { (done as *mut u8).write_volatile(0) };
+    result
+}
+
+unsafe fn play_two_vanilla(unit: u32, first_anim: u32, second_anim: u32, sound: u32) -> Option<bool> {
+    let first_link = make_link(first_anim, 0, 0);
+    let first = LinkVector::with(&first_link);
+    let second_link = make_link(second_anim, 0, sound);
+    let second = LinkVector::with(&second_link);
+    let result = if second.is_empty() || first.is_empty() {
+        None
+    } else {
+        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
+        let mut scratch = 0u32;
+        Some((unsafe { play(0, second.ptr(), first.ptr(), unit, &mut scratch, 0) }) as u8 != 0)
+    };
+    drop(second);
+    release_anim(second_link[0]);
+    drop(first);
+    release_anim(first_link[0]);
+    result
+}
+
+const PLAY_WITH_SOUND_VANILLA: PlayWithSoundOps = PlayWithSoundOps { find_anim: entity_find_anim_vanilla, find_sound: find_sound_vanilla, play_two: play_two_vanilla };
+
+/// The vanilla pieces `fPlayTime` leans on: `BFEntity::findAnim(unit, name)` and `(unit, first_anim,
+/// second_anim, millis)`, which builds the two one-link vectors, repeats the second link while time remains and
+/// plays them with `fPlay`, returning `None` when either vector ends up empty.
+pub struct PlayTimeOps {
+    pub find_anim: unsafe fn(u32, u32) -> u32,
+    pub play_timed: unsafe fn(u32, u32, u32, i32) -> Option<bool>,
+}
+
+/// `BFAIMgr::fPlayTime(name, millis, unit, done, flag)` (`thiscall`, `this` unused, `RET 0x14`; the fifth
+/// argument's address is only `fPlay`'s scratch slot).
+///
+/// A unit that is not stopped: a moving unit whose two position words match is marked stopped and not moving and
+/// flags `done`; returns true either way. A stopped unit: false without an entity type (`+0x128`), without a
+/// default animation (virtual `+0x8c`) or when `name` has no animation; otherwise plays the default animation and
+/// the named one repeated to fill `millis`. When it played the unit is marked moving and not stopped and `done`
+/// is cleared. Returns `fPlay`'s result, false if nothing played.
+pub unsafe fn f_play_time(name: u32, millis: u32, unit: u32, done: *const u8, ops: &PlayTimeOps) -> bool {
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) == 0 {
+        if get_from_memory::<u8>(unit + UNIT_MOVING) != 0 && get_from_memory::<u32>(unit + UNIT_POS_B) == get_from_memory::<u32>(unit + UNIT_POS_A) {
+            save_to_memory(unit + UNIT_STOPPED, 1u8);
+            unsafe { (done as *mut u8).write_volatile(1) };
+            save_to_memory(unit + UNIT_MOVING, 0u8);
+        }
+        return true;
+    }
+    if get_from_memory::<u32>(unit + UNIT_TYPE_POINTER) == 0 {
+        return false;
+    }
+    let first = unsafe { vcall1(unit, ENTITY_VT_DEFAULT_ANIM, 0) };
+    if first == 0 {
+        return false;
+    }
+    let second = unsafe { (ops.find_anim)(unit, name) };
+    if second == 0 {
+        return false;
+    }
+    let Some(result) = (unsafe { (ops.play_timed)(unit, first, second, millis as i32) }) else {
+        return false;
+    };
+    save_to_memory(unit + UNIT_MOVING, 1u8);
+    save_to_memory(unit + UNIT_STOPPED, 0u8);
+    unsafe { (done as *mut u8).write_volatile(0) };
+    result
+}
+
+/// Repeats `second_anim`'s link while time remains: after the first, `remaining = millis - duration`, and each
+/// further link subtracts another `duration`; a zero duration stops after one extra link (unlike `fPlaySpecial`).
+unsafe fn play_timed_vanilla(unit: u32, first_anim: u32, second_anim: u32, millis: i32) -> Option<bool> {
+    let first_link = make_link(first_anim, 0, 0);
+    let first = LinkVector::with(&first_link);
+    let second_link = make_link(second_anim, 0, 0);
+    let mut second = LinkVector::with(&second_link);
+    let result = if second.is_empty() || first.is_empty() {
+        None
+    } else {
+        let duration_fn = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32) -> i32>(LINK_DURATION_ADDRESS) };
+        let duration = unsafe { duration_fn(second_link.as_ptr() as u32, 0) };
+        let mut remaining = millis.wrapping_sub(duration);
+        while remaining > 0 {
+            second.push(&second_link);
+            remaining = remaining.wrapping_sub(duration);
+            if duration == 0 {
+                break;
+            }
+        }
+        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
+        let mut scratch = 0u32;
+        Some((unsafe { play(0, second.ptr(), first.ptr(), unit, &mut scratch, 0) }) as u8 != 0)
+    };
+    drop(second);
+    release_anim(second_link[0]);
+    drop(first);
+    release_anim(first_link[0]);
+    result
+}
+
+const PLAY_TIME_VANILLA_OPS: PlayTimeOps = PlayTimeOps { find_anim: entity_find_anim_vanilla, play_timed: play_timed_vanilla };
+
+/// `BFAIMgr::fFlyF(call, unit, reverse)`: two or three parameters and a non-null unit. Copies parameter 0 into
+/// a vanilla string, converts parameter 1 and (when present) parameter 2 through the manager's vtable `+0x34`
+/// and calls `fFly(unit, name, value, empty, done, reverse, limit)` with `limit` defaulting to 100. Vanilla also
+/// builds a string from the unit's `+0x120` virtual and tests the type twice with unused results, and passes
+/// a `vector<byte>` the port replaces with an empty string.
+pub unsafe fn f_fly_f(this: u32, call: u32, unit: u32, reverse: u32, ops: &FlyOps) -> bool {
+    if unit == 0 {
+        return false;
+    }
+    let count = unsafe { call_param_count(call) } as u32;
+    if !(2..=3).contains(&count) {
+        return false;
+    }
+    let begin = unsafe { call_params_begin(call) };
+    let name = unsafe { param_string(begin) };
+    let value = unsafe { convert_param(this, begin + PARAM_1, unit) };
+    let limit = if count >= 3 { unsafe { convert_param(this, begin + PARAM_2, unit) } } else { DEFAULT_MOVE_LIMIT };
+    let empty = VanillaString::from_bytes(b"");
+    unsafe { (ops.f_fly)(this, unit, name.as_ptr() as u32, value, empty.as_ptr() as u32, call + CALL_DONE_FLAG_OFFSET, reverse, limit) }
+}
+
+/// A `(name, probability)` entry of the vector `BFAIMgr::fPlaySetProb` reads: a vanilla string and a weight,
+/// 16 bytes.
+#[repr(C)]
+struct SetProbEntry {
+    name: VanillaString,
+    probability: u32,
+}
+
+/// The vanilla calls `fPlaySetProbF` makes: the C-string-to-int conversion (`0x00405218`, `cdecl`) and
+/// `fPlaySetProb(vector, unit)` (`stdcall`).
+pub struct SetProbOps {
+    pub parse_int: unsafe fn(*const u8) -> u32,
+    pub play_set_prob: unsafe fn(u32, u32) -> bool,
+}
+
+unsafe fn parse_int_vanilla(text: *const u8) -> u32 {
+    let parse = unsafe { mem::transmute::<u32, unsafe extern "cdecl" fn(*const u8) -> u32>(0x0040_5218) };
+    unsafe { parse(text) }
+}
+
+unsafe fn play_set_prob_vanilla(vector: u32, unit: u32) -> bool {
+    (unsafe { F_PLAY_SET_PROB.hooked()(vector as *const i32, unit as *const std::ffi::c_void) }) as u8 != 0
+}
+
+const SET_PROB_VANILLA: SetProbOps = SetProbOps { parse_int: parse_int_vanilla, play_set_prob: play_set_prob_vanilla };
+
+/// The vanilla pieces `fPlaySetProb` leans on: the game's `rand()` (`0..=0x7fff`) and `fPlaySet(name, unit)`
+/// (called with the "child" flag and the `1` argument, returning its low byte).
+pub struct SetProbPickOps {
+    pub rand: unsafe fn() -> u32,
+    pub play_set: unsafe fn(u32, u32) -> u32,
+}
+
+const SET_PROB_ENTRY_SIZE: u32 = 16;
+const SET_PROB_WEIGHT_OFFSET: u32 = 0xc;
+/// The weights must sum to this for `fPlaySetProb` to pick anything.
+const SET_PROB_TOTAL: i32 = 100;
+
+/// `BFAIMgr::fPlaySetProb(entries, unit)`: `entries` is a `{begin, end, cap}` vector of 16-byte `(name, weight)`
+/// entries. With at least one entry and weights summing to exactly 100, rolls `rand() % 100 + 1` and walks the
+/// entries: the first whose weight covers the roll is played with `fPlaySet`; each miss subtracts that weight
+/// from the remaining total and, while the remainder is in `1..=100`, rerolls `rand() % remaining + 1`. Returns
+/// `fPlaySet`'s low byte, or false when nothing is played.
+pub unsafe fn f_play_set_prob(entries: u32, unit: u32, ops: &SetProbPickOps) -> bool {
+    let begin = get_from_memory::<u32>(entries);
+    let count = (get_from_memory::<u32>(entries + 4).wrapping_sub(begin) as i32) >> 4;
+    let weight = |index: i32| get_from_memory::<i32>(begin + index as u32 * SET_PROB_ENTRY_SIZE + SET_PROB_WEIGHT_OFFSET);
+    let total = (0..count).fold(0i32, |sum, index| sum.wrapping_add(weight(index)));
+    if count <= 0 || total != SET_PROB_TOTAL {
+        return false;
+    }
+    let mut roll = (unsafe { (ops.rand)() } as i32).wrapping_rem(100).wrapping_add(1);
+    let mut remaining = SET_PROB_TOTAL;
+    let mut current = weight(0);
+    for index in 0..count {
+        if roll <= current {
+            let name = unsafe { param_string(begin + index as u32 * SET_PROB_ENTRY_SIZE) };
+            return low_byte_bool(unsafe { (ops.play_set)(name.as_ptr() as u32, unit) });
+        }
+        remaining = remaining.wrapping_sub(current);
+        if 0 < remaining && remaining < SET_PROB_TOTAL + 1 {
+            roll = (unsafe { (ops.rand)() } as i32).wrapping_rem(remaining).wrapping_add(1);
+        }
+        if index + 1 < count {
+            current = weight(index + 1);
+        }
+    }
+    false
+}
+
+const SET_PROB_PICK_VANILLA: SetProbPickOps = SetProbPickOps { rand: random_vanilla, play_set: play_set_vanilla };
+
+/// A `BFBSCall` (a behavior-set name call): a vanilla `{begin, end, cap}` string plus a flag byte at `+0xc`,
+/// 16 bytes, owned through vanilla's allocator. Built by the vanilla constructor (`0x004109fe`, `RET 0x10`:
+/// the string by value, which the constructor copies and frees, then the flag) and freed like a string.
+#[repr(C)]
+pub struct BsCall {
+    words: [u32; 4],
+}
+
+impl BsCall {
+    unsafe fn new(name: &[u8], flag: u32) -> Self {
+        let moved = VanillaString::from_bytes(name);
+        let string = moved.as_ptr();
+        let (w0, w1, w2) = (get_from_memory::<u32>(string as u32), get_from_memory::<u32>(string as u32 + 4), get_from_memory::<u32>(string as u32 + 8));
+        mem::forget(moved);
+        let mut call = BsCall { words: [0; 4] };
+        unsafe { BFBSCALL_CONSTRUCTOR.original()(call.words.as_mut_ptr(), w0 as *const u32, w1 as *const u32, w2 as *const u32, flag as i8) };
+        call
+    }
+
+    pub fn as_ptr(&self) -> u32 {
+        self.words.as_ptr() as u32
+    }
+}
+
+impl Drop for BsCall {
+    fn drop(&mut self) {
+        unsafe { BASIC_STRING_0.original()(self.words.as_mut_ptr() as *const c_void) };
+    }
+}
+
+/// Entity fields `fPlaySet` reads: the "has a pending set" byte (`+0x6d`) and the pending `BFBSCall` (`+0xdc`,
+/// begin and end words at `+0xdc`/`+0xe0`); the behavior set embedded at `+0x14`.
+const ENTITY_HAS_PENDING_SET: u32 = 0x6d;
+const ENTITY_PENDING_BS_CALL: u32 = 0xdc;
+const ENTITY_BEHAVIOR_SET: u32 = 0x14;
+/// `setBS` clears the mixer by mode: `0` total, `1` everything, anything else leaves it. `fPlaySet` passes `2`.
+const SET_BS_NO_MIXER_CLEAR: u32 = 2;
+
+/// The vanilla calls `fPlaySet` makes on an entity, each taking `BFBSCall` pointers it copies (the callee frees
+/// its copy): `init_child(unit, name)` (`BFBehaviorSet::initChild` on the embedded set), `set_bs(unit, call,
+/// force, mode)` (`BFEntity::setBS`, `RET 0x18`) and `set_pending(unit, call, force)` (`ZTAnimal` pending-set
+/// setter, `RET 0x14`; returns whether it stored the call).
+pub struct PlaySetOps {
+    pub init_child: unsafe fn(u32, u32) -> bool,
+    pub set_bs: unsafe fn(u32, u32, u32, u32),
+    pub set_pending: unsafe fn(u32, u32, u32),
+}
+
+/// `BFAIMgr::fPlaySet(name, unit, child, flag)` (`stdcall`, `RET 0x10`): switches `unit` to the behavior set
+/// `name`. False for a null unit or an empty name. With `child` set, hands the name to the unit's behavior set
+/// (`initChild`) and returns its result. Otherwise builds a `BFBSCall` from the name and `flag` and returns true
+/// after: a unit with a pending set (`+0x6d`) and an empty pending call storing the call as pending; a unit
+/// without one and an empty pending call running `setBS(call)`; a unit without one and a non-empty pending call
+/// running `setBS(pending call)` and then storing the new call as pending. `force` is `0` throughout.
+pub unsafe fn f_play_set(name: u32, unit: u32, child: bool, flag: u32, ops: &PlaySetOps) -> bool {
+    if unit == 0 {
+        return false;
+    }
+    let name_text = unsafe { &*(name as *const RawCallString) }.bytes();
+    if name_text.is_empty() {
+        return false;
+    }
+    if child {
+        return unsafe { (ops.init_child)(unit, name) };
+    }
+    let call = unsafe { BsCall::new(name_text, flag) };
+    let pending = unit + ENTITY_PENDING_BS_CALL;
+    let pending_empty = get_from_memory::<u32>(pending) == get_from_memory::<u32>(pending + 4);
+    unsafe {
+        if get_from_memory::<u8>(unit + ENTITY_HAS_PENDING_SET) != 0 {
+            if pending_empty {
+                (ops.set_pending)(unit, call.as_ptr(), 0);
+            }
+        } else if pending_empty {
+            (ops.set_bs)(unit, call.as_ptr(), 0, SET_BS_NO_MIXER_CLEAR);
+        } else {
+            (ops.set_bs)(unit, pending, 0, SET_BS_NO_MIXER_CLEAR);
+            (ops.set_pending)(unit, call.as_ptr(), 0);
+        }
+    }
+    true
+}
+
+/// `ZTAnimal`'s pending-set setter (`0x004300f6`) has no `generated.rs` entry.
+const SET_PENDING_ADDRESS: u32 = 0x0043_00f6;
+
+/// Copies a `BFBSCall` through vanilla's copy constructor, for a callee that takes it by value and frees it.
+unsafe fn copy_bs_call(source: u32) -> [u32; 4] {
+    let mut copy = [0u32; 4];
+    unsafe { BFBSCALL_COPY.original()(copy.as_mut_ptr(), source as *const u32) };
+    copy
+}
+
+unsafe fn init_child_vanilla(unit: u32, name: u32) -> bool {
+    unsafe { BFBEHAVIORSET_INIT_CHILD.original()((unit + ENTITY_BEHAVIOR_SET) as *const u32, unit as i32, name as *const i32) }
+}
+
+unsafe fn set_bs_vanilla(unit: u32, call: u32, force: u32, mode: u32) {
+    let [w0, w1, w2, w3] = unsafe { copy_bs_call(call) };
+    unsafe { BFENTITY_SET_BS.original()(unit as *const u32, w0 as *const u32, w1 as *const u32, w2 as *const u32, w3 as i8, force as i8, mode as i32) };
+}
+
+unsafe fn set_pending_vanilla(unit: u32, call: u32, force: u32) {
+    let [w0, w1, w2, w3] = unsafe { copy_bs_call(call) };
+    let set_pending = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, u32, u32) -> u32>(SET_PENDING_ADDRESS) };
+    unsafe { set_pending(unit, w0, w1, w2, w3, force) };
+}
+
+const PLAY_SET_VANILLA: PlaySetOps = PlaySetOps { init_child: init_child_vanilla, set_bs: set_bs_vanilla, set_pending: set_pending_vanilla };
+
+/// `BFAIMgr::fPlaySetProbF(call, unit)`: an even number (at least two) of parameters, read as
+/// `(name, weight)` pairs. Each name is the parameter's C string (up to its NUL, not its recorded end) and
+/// each weight its converted text; `fPlaySetProb` then picks among them. The entry vector lives in Rust memory
+/// (vanilla only reads it) and each name string is built and freed through vanilla's allocator.
+pub unsafe fn f_play_set_prob_f(call: u32, unit: u32, ops: &SetProbOps) -> bool {
+    let count = unsafe { call_param_count(call) };
+    if count < 2 || count % 2 != 0 {
+        return false;
+    }
+    let begin = unsafe { call_params_begin(call) };
+    let mut entries: Vec<SetProbEntry> = Vec::with_capacity(count as usize / 2);
+    for pair in 0..count as u32 / 2 {
+        let name_text = get_from_memory::<u32>(begin + pair * 2 * CALL_PARAM_SIZE) as *const std::ffi::c_char;
+        let weight_text = get_from_memory::<u32>(begin + (pair * 2 + 1) * CALL_PARAM_SIZE) as *const u8;
+        let name = VanillaString::from_bytes(unsafe { std::ffi::CStr::from_ptr(name_text) }.to_bytes());
+        let probability = unsafe { (ops.parse_int)(weight_text) };
+        entries.push(SetProbEntry { name, probability });
+    }
+    let start = entries.as_ptr() as u32;
+    let header = [start, start + entries.len() as u32 * 16, start + entries.capacity() as u32 * 16];
+    unsafe { (ops.play_set_prob)(header.as_ptr() as u32, unit) }
+}
+
+/// `BFAIMgr::fRandomWalk` fields. Unit: position words (`+0x114`/`+0x118` in 1/64-tile units, `+0x11c` in
+/// 1/16-tile height units), the walking guard byte `+0x20f`. Manager: the extra random extents `+0xd4`/`+0xd8`.
+const UNIT_POS_Z: u32 = 0x11c;
+const UNIT_WALKING_GUARD: u32 = 0x20f;
+const AI_RANDOM_EXTRA_X: u32 = 0xd4;
+const AI_RANDOM_EXTRA_Y: u32 = 0xd8;
+/// `BFMap` fields: width (`+0x2c`), height (`+0x30`), tile array (`+0x38`, 0x8c-byte tiles).
+const MAP_WIDTH: u32 = 0x2c;
+const MAP_HEIGHT: u32 = 0x30;
+const MAP_TILES: u32 = 0x38;
+const MAP_TILE_SIZE: u32 = 0x8c;
+/// A tile's three position words.
+const TILE_POSITION_OFFSET: u32 = 0x34;
+/// Manager vtable slots: `getPath(start, goal, unit, flag)` and the two random extents of a unit.
+const AI_VT_GET_PATH: u32 = 0x18;
+const AI_VT_RANDOM_X: u32 = 0x20;
+const AI_VT_RANDOM_Y: u32 = 0x24;
+/// Unit vtable slots: `canWalkOn(tile, flag)`, `getDestination(&position)` and `setDestination(&position)`.
+const ENTITY_VT_CAN_WALK_ON: u32 = 0x168;
+const ENTITY_VT_GET_DESTINATION: u32 = 0x1f4;
+const ENTITY_VT_SET_DESTINATION: u32 = 0x1f8;
+/// RVAs of the "no destination" position triple and the path-cost limit.
+const RVA_NO_DESTINATION: u32 = 0x0023_9370;
+const RVA_PATH_COST_LIMIT: u32 = 0x0023_5494;
+
+/// The vanilla pieces `fRandomWalk` leans on, so a test can substitute recorders.
+pub struct RandomWalkOps {
+    /// The game's `rand()` (`0..=0x7fff`).
+    pub rand: unsafe fn() -> u32,
+    /// The world manager's pointer (the map is at `+8`).
+    pub world: unsafe fn() -> u32,
+    /// `BFMap::getNeighbors(map, tile)` as a plain list (the vanilla buffer is freed by the implementation).
+    pub neighbors: unsafe fn(u32, u32) -> Vec<u32>,
+    /// `BFUnit::getPathCost(unit, from_tile, to_tile)`.
+    pub path_cost: unsafe fn(u32, u32, u32) -> i32,
+    pub path_cost_limit: unsafe fn() -> i32,
+    pub no_destination: unsafe fn() -> [i32; 3],
+}
+
+unsafe fn vcall_walk(unit: u32, tile: u32) -> bool {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(unit) + ENTITY_VT_CAN_WALK_ON);
+    let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target) };
+    method(unit, tile, 1) as u8 != 0
+}
+
+unsafe fn vcall_path(this: u32, start: &[i32; 3], goal: &[i32; 3], unit: u32, flag: u32) -> bool {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VT_GET_PATH);
+    let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32, u32, u32) -> u32>(target) };
+    method(this, start.as_ptr() as u32, goal.as_ptr() as u32, unit, flag) as u8 != 0
+}
+
+/// The map's tile at tile coordinates `(x, y)`, or `0` outside the map.
+fn map_tile(map: u32, x: i32, y: i32) -> u32 {
+    let width = get_from_memory::<i32>(map + MAP_WIDTH);
+    if x < 0 || y < 0 || x >= width || y >= get_from_memory::<i32>(map + MAP_HEIGHT) {
+        return 0;
+    }
+    get_from_memory::<u32>(map + MAP_TILES).wrapping_add((y.wrapping_mul(width).wrapping_add(x) as u32).wrapping_mul(MAP_TILE_SIZE))
+}
+
+fn tile_position(tile: u32) -> [i32; 3] {
+    [get_from_memory::<i32>(tile + TILE_POSITION_OFFSET), get_from_memory::<i32>(tile + TILE_POSITION_OFFSET + 4), get_from_memory::<i32>(tile + TILE_POSITION_OFFSET + 8)]
+}
+
+/// `BFAIMgr::fRandomWalk(unit)`: for an idle unit (no queued targets), tries in turn to resume a standing
+/// destination (when it is not the unit's own tile), to walk to a random walkable tile on the border of a
+/// random-sized box around it, to walk to a random walkable neighbour whose path cost is under the limit, and
+/// finally to "walk" to its own position. The unit's `+0x20f` guard is set for the duration. The result is
+/// whether a path was started.
+///
+/// `None` (defer to vanilla) where vanilla divides by zero (a zero random extent or an empty neighbour list)
+/// or hands a null tile to `getNeighbors` (a unit off the map).
+pub unsafe fn f_random_walk(this: u32, unit: u32, ops: &RandomWalkOps) -> Option<bool> {
+    if unit == 0 || unsafe { target_list_count(unit) } != 0 {
+        return Some(false);
+    }
+    let map = unsafe { (ops.world)() }.wrapping_add(OFFSET_WORLD_MAP);
+    if map == 0 {
+        return Some(false);
+    }
+    save_to_memory(unit + UNIT_WALKING_GUARD, 1u8);
+
+    let div64 = |v: i32| v.wrapping_add((v >> 31) & 0x3f) >> 6;
+    let mut height = get_from_memory::<i32>(unit + UNIT_POS_Z);
+    if height < 0 {
+        height = height.wrapping_sub(15);
+    }
+    let start = [div64(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_X)), div64(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_Y)), height.wrapping_add((height >> 31) & 0xf) >> 4];
+    let start_tile = map_tile(map, start[0], start[1]);
+
+    let mut goal = unsafe { (ops.no_destination)() };
+    let get_destination = get_from_memory::<u32>(get_from_memory::<u32>(unit) + ENTITY_VT_GET_DESTINATION);
+    let get_destination = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(get_destination) };
+    let mut has_destination = get_destination(unit, goal.as_mut_ptr() as u32) as u8 != 0;
+    let queued = unsafe { target_list_count(unit) } != 0;
+    if has_destination && goal == start {
+        has_destination = false;
+    }
+    let set_destination = |goal: &[i32; 3]| {
+        let target = get_from_memory::<u32>(get_from_memory::<u32>(unit) + ENTITY_VT_SET_DESTINATION);
+        let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(target) };
+        method(unit, goal.as_ptr() as u32);
+    };
+
+    let mut result = queued;
+    if !queued && has_destination {
+        result = unsafe { vcall_path(this, &start, &goal, unit, 1) };
+    }
+
+    if !result && start_tile != 0 {
+        let range_x = unsafe { vcall1(this, AI_VT_RANDOM_X, unit) } as i32;
+        let range_y = unsafe { vcall1(this, AI_VT_RANDOM_Y, unit) } as i32;
+        if range_x == 0 || range_y == 0 {
+            return None;
+        }
+        let half_x = (unsafe { (ops.rand)() } as i32).wrapping_rem(range_x).wrapping_add(1).wrapping_add(get_from_memory::<i32>(this + AI_RANDOM_EXTRA_X));
+        let half_y = (unsafe { (ops.rand)() } as i32).wrapping_rem(range_y).wrapping_add(1).wrapping_add(get_from_memory::<i32>(this + AI_RANDOM_EXTRA_Y));
+        let mut candidates: Vec<u32> = Vec::new();
+        for dx in -half_x..=half_x {
+            for dy in -half_y..=half_y {
+                if dx != half_x && dx != -half_x && dy != half_y && dy != -half_y {
+                    continue;
+                }
+                let tile = map_tile(map, start[0].wrapping_add(dx), start[1].wrapping_add(dy));
+                if tile != 0 && unsafe { vcall_walk(unit, tile) } {
+                    candidates.push(tile);
+                }
+            }
+        }
+        if !candidates.is_empty() {
+            let pick = (unsafe { (ops.rand)() } as i32).wrapping_rem(candidates.len() as i32) as usize;
+            let tile = candidates[pick];
+            if tile != 0 {
+                goal = tile_position(tile);
+                set_destination(&goal);
+                result = unsafe { vcall_path(this, &start, &goal, unit, 0) };
+            }
+        }
+    }
+
+    if !result {
+        if start_tile == 0 {
+            return None;
+        }
+        let neighbors = unsafe { (ops.neighbors)(map, start_tile) };
+        if neighbors.is_empty() {
+            return None;
+        }
+        let first = (unsafe { (ops.rand)() } as i32).wrapping_rem(neighbors.len() as i32) as usize;
+        let mut index = first;
+        loop {
+            let tile = neighbors[index];
+            index += 1;
+            if unsafe { vcall_walk(unit, tile) } && unsafe { (ops.path_cost)(unit, start_tile, tile) } < unsafe { (ops.path_cost_limit)() } {
+                goal = tile_position(tile);
+                set_destination(&goal);
+                result = unsafe { vcall_path(this, &start, &goal, unit, 0) };
+            }
+            if result || index == first || index >= neighbors.len() {
+                break;
+            }
+        }
+    }
+    if !result {
+        result = unsafe { vcall_path(this, &start, &start, unit, 0) };
+    }
+    save_to_memory(unit + UNIT_WALKING_GUARD, 0u8);
+    Some(result)
+}
+
+unsafe fn random_vanilla() -> u32 {
+    unsafe { RAND.original()() }
+}
+
+unsafe fn world_vanilla() -> u32 {
+    read_global_pointer(RVA_GLOBAL_WORLD_MGR)
+}
+
+unsafe fn neighbors_vanilla(map: u32, tile: u32) -> Vec<u32> {
+    let mut header = [0u32; 3];
+    unsafe { BFMAP_GET_NEIGHBORS.original()(map as *const u32, header.as_mut_ptr() as *const u32, tile as i32) };
+    let (begin, end, cap) = (header[0], header[1], header[2]);
+    let list = (begin..end).step_by(4).map(get_from_memory::<u32>).collect();
+    if begin != 0 {
+        unsafe { POOLALLOC_DEALLOCATE_N_4.original()(begin as *const u32, ((cap - begin) >> 2) as i32) };
+    }
+    list
+}
+
+unsafe fn path_cost_vanilla(unit: u32, from: u32, to: u32) -> i32 {
+    (unsafe { BFUNIT_GET_PATH_COST.original()(unit as *const u32, from as i32, to as i32) }) as i32
+}
+
+unsafe fn path_cost_limit_vanilla() -> i32 {
+    get_from_memory::<i32>(get_module_base("zoo.exe") as u32 + RVA_PATH_COST_LIMIT)
+}
+
+unsafe fn no_destination_vanilla() -> [i32; 3] {
+    let base = get_module_base("zoo.exe") as u32 + RVA_NO_DESTINATION;
+    [get_from_memory::<i32>(base), get_from_memory::<i32>(base + 4), get_from_memory::<i32>(base + 8)]
+}
+
+const RANDOM_WALK_VANILLA: RandomWalkOps = RandomWalkOps {
+    rand: random_vanilla,
+    world: world_vanilla,
+    neighbors: neighbors_vanilla,
+    path_cost: path_cost_vanilla,
+    path_cost_limit: path_cost_limit_vanilla,
+    no_destination: no_destination_vanilla,
+};
+
 unsafe fn animal_target_building_vanilla(unit: u32) -> bool {
     unsafe { ZTANIMAL_TARGET_BUILDING.original()(unit as *const u32, true) }
 }
 
 unsafe fn f_move_vanilla(this: u32, none: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32) -> bool {
     unsafe {
-        F_MOVE.original()(
+        F_MOVE.hooked()(
             this as *const u32,
             none as i32,
             0,
@@ -1308,10 +2874,7 @@ pub unsafe fn f_play_set_terrain_f(call: u32, unit: u32, tile_flags: unsafe fn(u
 /// Their behavior halves (`fPlayF`, `fFlyF`, `fPlayTime`, `fPlaySound`, `fPlayWithSound`, `fPlaySet`,
 /// `fFaceDirection`) stay vanilla.
 ///
-/// `BFAIMgr::fPlayTime(name, ms, unit, done, flag)` takes five stack arguments (`RET 0x14`); its `generated.rs`
-/// entry lists four, so it is called at its address with the real shape. `this` is passed in `ECX` as vanilla does.
-const F_PLAY_TIME_ADDRESS: u32 = 0x0042_4ee7;
-type PlayTimeFn = unsafe extern "thiscall" fn(u32, u32, u32, u32, u32, u32) -> u32;
+/// `BFAIMgr::fPlayTime(name, ms, unit, done, flag)` takes five stack arguments (`RET 0x14`).
 /// `BFAIMgr` vtable slot `convertConstantParam(param, unit)`.
 const AI_VTABLE_CONVERT_CONSTANT_PARAM: u32 = 0x34;
 /// Entity vtable slot `setStopAtEnd(bool)`.
@@ -1479,8 +3042,190 @@ pub unsafe fn f_play_time_f(this: u32, call: u32, unit: u32, play_time: unsafe f
     unsafe { play_time(this, begin, seconds.wrapping_mul(MILLIS_PER_SECOND), unit, call + CALL_DONE_FLAG_OFFSET, flag_b) }
 }
 
+/// The animation name `fPlaySound` hands to `fPlaySpecial`: the text `0` (vanilla builds it in a temporary
+/// byte vector).
+const PLAY_SOUND_ANIM_NAME: &str = "0";
+
+/// `BFAIMgr::fPlaySound(sound, unit, done)`: plays a sound alone by calling `fPlaySpecial(anim "0", sound, 0, 0,
+/// plain-mode string)`. `mode_a` is the value of the `[0x0064bdac]` global (the string pointer vanilla passes);
+/// `play_special` is `fPlaySpecial`. Returns its result.
+pub unsafe fn f_play_sound(this: u32, sound: u32, unit: u32, done: *const u8, mode_a: u32, play_special: unsafe fn(&FPlaySpecialArgs) -> bool) -> bool {
+    let anim = VanillaString::new(PLAY_SOUND_ANIM_NAME);
+    let args = FPlaySpecialArgs { this, anim_name: anim.as_ptr() as u32, sound_name: sound, seconds: 0, count: 0, special: mode_a, unit, done };
+    unsafe { play_special(&args) }
+}
+
+/// The handlers `fPlaySpecialF` rewrites its call for and forwards to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SpecialHandler {
+    Play,
+    PlayReverse,
+    PlayPingPong,
+    PlayWithSound,
+    PlayTime,
+}
+
+/// The vanilla pieces `fPlaySpecialF` leans on. `convert(this, param, unit)` is the manager's
+/// `convertConstantParam` virtual; `replace_params(call, strings)` erases the call's parameters and appends a
+/// copy of each string; `set_name(call, text)` assigns the call's name; `forward` runs the handler (`fPlayF` with
+/// both flags clear for `Play`) on the rewritten call and returns its result; `play_special` is `fPlaySpecial`.
+pub struct PlaySpecialFOps {
+    pub is_string: unsafe fn(SpecialString, u32) -> bool,
+    pub convert: unsafe fn(u32, u32, u32) -> i32,
+    pub replace_params: unsafe fn(u32, &[u32]),
+    pub set_name: unsafe fn(u32, &[u8]),
+    pub forward: unsafe fn(SpecialHandler, u32, u32, u32) -> bool,
+    pub play_special: unsafe fn(&FPlaySpecialArgs) -> bool,
+}
+
+/// `BFAIMgr::fPlaySpecialF(call, unit)`: the five-parameter `(anim, sound, seconds, count, special)` form.
+///
+/// Fails unless the call has five parameters or its result flag is clear. Converts `seconds` (to milliseconds)
+/// and `count` through the manager, works on copies of parameters 0, 1 and 4, and then rewrites the call:
+/// - both numbers set: fails;
+/// - `count` set: `fPlaySpecial` as is;
+/// - `seconds` set, sound "none" and special one of the plain modes or "none": the call becomes
+///   `fPlayTime(anim, seconds)` with its second flag set when special is `ModeB`;
+/// - neither set, sound "none": the call becomes `fPlay`/`fPlayReverse`/`fPlayPingPong` by special (plain modes
+///   and "none" play, then every path ends in `fPlayPingPongF`, whose result is returned);
+/// - neither set, sound named, anim named: `fPlayWithSound(anim, sound)`;
+/// - neither set, sound named, anim "none": the second flag is set when special is `ModeB` and `fPlaySpecial`
+///   runs with no duration or count.
+/// Anything else is `fPlaySpecial(anim, sound, seconds, count, special)`.
+///
+/// `None` (defer to vanilla) for a call with fewer than five parameters and a clear flag, where vanilla reads
+/// past the parameter vector.
+pub unsafe fn f_play_special_f(this: u32, call: u32, unit: u32, ops: &PlaySpecialFOps) -> Option<bool> {
+    let count = unsafe { call_param_count(call) };
+    if count != 5 && get_from_memory::<u8>(call + CALL_DONE_FLAG_OFFSET) != 0 {
+        return Some(false);
+    }
+    if count < 5 {
+        return None;
+    }
+    let begin = unsafe { call_params_begin(call) };
+    let param = |index: u32| begin + index * CALL_PARAM_SIZE;
+    let duration_text = unsafe { param_string(param(2)) };
+    let seconds = unsafe { (ops.convert)(this, param(2), unit) }.wrapping_mul(MILLIS_PER_SECOND as i32);
+    let repeat = unsafe { (ops.convert)(this, param(3), unit) };
+    let (anim, sound, special) = unsafe { (param_string(param(0)), param_string(param(1)), param_string(param(4))) };
+
+    let is = |which, string: &VanillaString| unsafe { (ops.is_string)(which, string.as_ptr() as u32) };
+    let plain_special = || is(SpecialString::ModeA, &special) || is(SpecialString::ModeB, &special) || is(SpecialString::None, &special);
+    let play_special = |seconds: i32, repeat: i32| {
+        let args = FPlaySpecialArgs {
+            this,
+            anim_name: anim.as_ptr() as u32,
+            sound_name: sound.as_ptr() as u32,
+            seconds: seconds as u32,
+            count: repeat,
+            special: special.as_ptr() as u32,
+            unit,
+            done: (call + CALL_DONE_FLAG_OFFSET) as *const u8,
+        };
+        unsafe { (ops.play_special)(&args) }
+    };
+    let rewrite = |strings: &[u32], name: &[u8], handler| unsafe {
+        (ops.replace_params)(call, strings);
+        (ops.set_name)(call, name);
+        (ops.forward)(handler, this, call, unit)
+    };
+
+    if seconds != 0 && repeat != 0 {
+        return Some(false);
+    }
+    if repeat != 0 {
+        return Some(play_special(seconds, repeat));
+    }
+    let sound_is_none = is(SpecialString::None, &sound);
+    if seconds != 0 {
+        if sound_is_none && plain_special() {
+            unsafe { (ops.replace_params)(call, &[anim.as_ptr() as u32, duration_text.as_ptr() as u32]) };
+            unsafe { (ops.set_name)(call, b"fPlayTime") };
+            save_to_memory(call + CALL_FLAG_B_OFFSET, u8::from(is(SpecialString::ModeB, &special)));
+            return Some(unsafe { (ops.forward)(SpecialHandler::PlayTime, this, call, unit) });
+        }
+        return Some(play_special(seconds, 0));
+    }
+    if sound_is_none {
+        unsafe { (ops.replace_params)(call, &[anim.as_ptr() as u32]) };
+        if plain_special() {
+            unsafe { (ops.set_name)(call, b"fPlay") };
+            unsafe { (ops.forward)(SpecialHandler::Play, this, call, unit) };
+        } else if is(SpecialString::Reverse, &special) {
+            unsafe { (ops.set_name)(call, b"fPlayReverse") };
+            unsafe { (ops.forward)(SpecialHandler::PlayReverse, this, call, unit) };
+        } else if is(SpecialString::PingPong, &special) {
+            unsafe { (ops.set_name)(call, b"fPlayPingPong") };
+        }
+        return Some(unsafe { (ops.forward)(SpecialHandler::PlayPingPong, this, call, unit) });
+    }
+    if !is(SpecialString::None, &anim) {
+        return Some(rewrite(&[anim.as_ptr() as u32, sound.as_ptr() as u32], b"fPlayWithSound", SpecialHandler::PlayWithSound));
+    }
+    save_to_memory(call + CALL_FLAG_B_OFFSET, u8::from(is(SpecialString::ModeB, &special)));
+    Some(play_special(0, 0))
+}
+
+/// The call's parameter vector (`call + 0xc`) is a vanilla `vector<string>`.
+const CALL_PARAM_VECTOR_OFFSET: u32 = 0xc;
+
+unsafe fn convert_param_vanilla(this: u32, param: u32, unit: u32) -> i32 {
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VTABLE_CONVERT_CONSTANT_PARAM);
+    let convert = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> i32>(target) };
+    convert(this, param, unit)
+}
+
+unsafe fn replace_params_vanilla(call: u32, strings: &[u32]) {
+    let vector = call + CALL_PARAM_VECTOR_OFFSET;
+    unsafe { ERASE_RANGE_0X410AC3.original()(vector as *const u32, call_params_begin(call) as *const u32, call_params_end(call) as i32) };
+    for &string in strings {
+        unsafe { PUSH_BACK_0X4FCEF5.original()(vector as *const u32, string as *const i32) };
+    }
+}
+
+unsafe fn set_call_name_vanilla(call: u32, text: &[u8]) {
+    let begin = text.as_ptr() as u32;
+    unsafe { ASSIGN_RANGE_0X406C55.original()(call as *const c_void, begin as *const u32, (begin + text.len() as u32) as *const u32, call) };
+}
+
+unsafe fn forward_special_vanilla(handler: SpecialHandler, this: u32, call: u32, unit: u32) -> bool {
+    let (this, call, unit) = (this as *const u32, call as *const u32, unit as *const u32);
+    match handler {
+        SpecialHandler::Play => unsafe { F_PLAY_F.hooked()(this, call, unit, 0, 0) },
+        SpecialHandler::PlayReverse => unsafe { F_PLAY_REVERSE_F.hooked()(this, call, unit) },
+        SpecialHandler::PlayPingPong => unsafe { F_PLAY_PING_PONG_F.hooked()(this, call, unit) },
+        SpecialHandler::PlayWithSound => unsafe { F_PLAY_WITH_SOUND_F.hooked()(call, unit) },
+        SpecialHandler::PlayTime => unsafe { F_PLAY_TIME_F.hooked()(this, call, unit) },
+    }
+}
+
+unsafe fn play_special_f_forward(args: &FPlaySpecialArgs) -> bool {
+    unsafe {
+        F_PLAY_SPECIAL.hooked()(
+            args.this as *const u32,
+            args.anim_name as *const i8,
+            args.sound_name as *const i8,
+            args.seconds as i32,
+            args.count,
+            args.special as *const i8,
+            args.unit as *const i32,
+            args.done,
+        )
+    }
+}
+
+const PLAY_SPECIAL_F_VANILLA: PlaySpecialFOps = PlaySpecialFOps {
+    is_string: special_string_is,
+    convert: convert_param_vanilla,
+    replace_params: replace_params_vanilla,
+    set_name: set_call_name_vanilla,
+    forward: forward_special_vanilla,
+    play_special: play_special_f_forward,
+};
+
 unsafe fn play_time_vanilla(this: u32, name: u32, millis: u32, unit: u32, done: u32, flag_b: u32) -> u32 {
-    unsafe { mem::transmute::<u32, PlayTimeFn>(F_PLAY_TIME_ADDRESS)(this, name, millis, unit, done, flag_b) }
+    u32::from(unsafe { F_PLAY_TIME.hooked()(this as *const u32, name as *const c_void, millis as i32, unit as *const u32, done as *const i8, flag_b as i8) })
 }
 
 /// `ZTAIMgr` fields `initAIParams` fills: guest and staff random-walk extents (x then y), then the animal and
@@ -1798,6 +3543,83 @@ mod ztaimgr_detours {
         }
     }
 
+    #[detour(F_RANDOM_WALK)]
+    unsafe extern "thiscall" fn f_random_walk_detour(this: *const u32, unit: *const i32) -> u32 {
+        match unsafe { f_random_walk(this as u32, unit as u32, &RANDOM_WALK_VANILLA) } {
+            Some(result) => u32::from(result),
+            None => unsafe { F_RANDOM_WALK_DETOUR.call(this, unit) },
+        }
+    }
+
+    #[detour(F_FLY_F)]
+    unsafe extern "thiscall" fn f_fly_f_detour(this: *const u32, call: *const u32, unit: *const u32, reverse: i8) -> bool {
+        unsafe { f_fly_f(this as u32, call as u32, unit as u32, u32::from(reverse as u8), &FLY_VANILLA) }
+    }
+
+    #[detour(F_PLAY_SET_PROB_F)]
+    unsafe extern "stdcall" fn f_play_set_prob_f_detour(call: *const u32, unit: *const u32) -> bool {
+        unsafe { f_play_set_prob_f(call as u32, unit as u32, &SET_PROB_VANILLA) }
+    }
+
+    #[detour(F_PLAY_F)]
+    unsafe extern "thiscall" fn f_play_f_detour(this: *const u32, call: *const u32, unit: *const u32, reverse: i8, ping_pong: i8) -> bool {
+        unsafe { f_play_f(this as u32, call as u32, unit as u32, reverse != 0, ping_pong != 0, &PLAY_VANILLA_OPS) }
+    }
+
+    #[detour(F_PLAY_WITH_BASE_F)]
+    unsafe extern "thiscall" fn f_play_with_base_f_detour(this: *const u32, call: *const u32, unit: *const u32, reverse: i8, ping_pong: i8) -> bool {
+        unsafe { f_play_with_base_f(this as u32, call as u32, unit as u32, reverse != 0, ping_pong != 0, &PLAY_VANILLA_OPS) }
+    }
+
+    #[detour(F_SET_BASE_F)]
+    unsafe extern "thiscall" fn f_set_base_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        unsafe { f_set_base_f(this as u32, call as u32, unit as u32, &PLAY_VANILLA_OPS) }
+    }
+
+    #[detour(F_PLAY_SPECIAL)]
+    #[allow(clippy::too_many_arguments)]
+    unsafe extern "thiscall" fn f_play_special_detour(this: *const u32, anim: *const i8, sound: *const i8, seconds: i32, count: i32, special: *const i8, unit: *const i32, done: *const u8) -> bool {
+        let args = FPlaySpecialArgs { this: this as u32, anim_name: anim as u32, sound_name: sound as u32, seconds: seconds as u32, count, special: special as u32, unit: unit as u32, done };
+        unsafe { f_play_special(&args, &F_PLAY_SPECIAL_VANILLA_OPS) }
+    }
+
+    #[detour(F_MOVE)]
+    #[allow(clippy::too_many_arguments)]
+    unsafe extern "thiscall" fn f_move_detour(this: *const u32, first_param: i32, seconds: i32, unit: *const i32, done: *const u8, name: i32, speed: u32, extra: *const i8, reverse: u32, limit: u32) -> bool {
+        let args = FMoveArgs { this: this as u32, first_param: first_param as u32, seconds, unit: unit as u32, done, name: name as u32, speed, extra: extra as u32, reverse, limit };
+        unsafe { f_move(&args, &F_MOVE_VANILLA_OPS) }
+    }
+
+    #[detour(F_MOVE_F)]
+    unsafe extern "thiscall" fn f_move_f_detour(this: *const u32, call: *const u32, unit: *const u32, reverse: bool) -> u32 {
+        u32::from(unsafe { f_move_f(this as u32, call as u32, unit as u32, reverse, &MOVE_VANILLA) })
+    }
+
+    #[detour(F_MOVE_REVERSE_F)]
+    unsafe extern "thiscall" fn f_move_reverse_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        low_byte_bool(unsafe { F_MOVE_F.hooked()(this, call, unit, true) })
+    }
+
+    #[detour(F_MOVE_WITH_SOUND_F)]
+    unsafe extern "thiscall" fn f_move_with_sound_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> u32 {
+        u32::from(unsafe { f_move_with_sound_f(this as u32, call as u32, unit as u32, &MOVE_VANILLA) })
+    }
+
+    #[detour(F_MOVE_SLOW_F)]
+    unsafe extern "thiscall" fn f_move_slow_f_detour(this: *const u32, call: i32, unit: *const i32) -> u32 {
+        u32::from(unsafe { f_move_speed_f(this as u32, call as u32, unit as u32, MoveSpeed::Slow, &MOVE_SPEED_VANILLA) })
+    }
+
+    #[detour(F_MOVE_MEDIUM_F)]
+    unsafe extern "thiscall" fn f_move_medium_f_detour(this: *const u32, call: i32, unit: *const i32) -> u32 {
+        u32::from(unsafe { f_move_speed_f(this as u32, call as u32, unit as u32, MoveSpeed::Medium, &MOVE_SPEED_VANILLA) })
+    }
+
+    #[detour(F_MOVE_FAST_F)]
+    unsafe extern "thiscall" fn f_move_fast_f_detour(this: *const u32, call: i32, unit: *const i32) -> u32 {
+        u32::from(unsafe { f_move_speed_f(this as u32, call as u32, unit as u32, MoveSpeed::Fast, &MOVE_SPEED_VANILLA) })
+    }
+
     #[detour(F_TARGET_BUILDING)]
     unsafe extern "thiscall" fn f_target_building_detour(this: *const u32, unit: *const u32, done: *const u8) -> bool {
         unsafe { f_target_building(this as u32, unit as u32, done as *const bool, &TARGET_BUILDING_VANILLA) }
@@ -1836,12 +3658,12 @@ mod ztaimgr_detours {
 
     #[detour(F_PLAY_REVERSE_F)]
     unsafe extern "thiscall" fn f_play_reverse_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
-        unsafe { F_PLAY_F.original()(this, call, unit, 1, 0) }
+        unsafe { F_PLAY_F.hooked()(this, call, unit, 1, 0) }
     }
 
     #[detour(F_PLAY_PING_PONG_F)]
     unsafe extern "thiscall" fn f_play_ping_pong_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
-        unsafe { F_PLAY_F.original()(this, call, unit, 0, 1) }
+        unsafe { F_PLAY_F.hooked()(this, call, unit, 0, 1) }
     }
 
     #[detour(F_PLAY_STOP_AT_END_F)]
@@ -1849,21 +3671,25 @@ mod ztaimgr_detours {
         if !unsafe { f_play_stop_at_end_prepare(unit as u32) } {
             return unsafe { F_PLAY_STOP_AT_END_F_DETOUR.call(this, call, unit) };
         }
-        unsafe { F_PLAY_F.original()(this, call, unit, 0, 0) }
+        unsafe { F_PLAY_F.hooked()(this, call, unit, 0, 0) }
     }
 
     #[detour(F_FLY_REVERSE_F)]
     unsafe extern "thiscall" fn f_fly_reverse_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
-        unsafe { F_FLY_F.original()(this, call, unit, 1) }
+        unsafe { F_FLY_F.hooked()(this, call, unit, 1) }
     }
 
     #[detour(F_PLAY_WITH_SOUND_F)]
     unsafe extern "stdcall" fn f_play_with_sound_f_detour(call: *const u32, unit: *const u32) -> bool {
         let call = call as u32;
-        let result = unsafe {
-            F_PLAY_WITH_SOUND.original()(call_params_begin(call), call_params_end(call).wrapping_sub(CALL_PARAM_SIZE), unit as *const i32, (call + CALL_DONE_FLAG_OFFSET) as *const u8)
-        };
-        low_byte_bool(result)
+        unsafe {
+            F_PLAY_WITH_SOUND.hooked()(
+                call_params_begin(call) as *const c_void,
+                call_params_end(call).wrapping_sub(CALL_PARAM_SIZE) as *const c_void,
+                unit,
+                (call + CALL_DONE_FLAG_OFFSET) as *const i8,
+            )
+        }
     }
 
     #[detour(F_PLAY_SOUND_F)]
@@ -1872,13 +3698,56 @@ mod ztaimgr_detours {
         if unsafe { call_param_count(call) } != 1 {
             return false;
         }
-        let result = unsafe { F_PLAY_SOUND.original()(this, call_params_begin(call) as *const i8, unit as *const i32, (call + CALL_DONE_FLAG_OFFSET) as *const u8) };
+        let result = unsafe { F_PLAY_SOUND.hooked()(this, call_params_begin(call) as *const i8, unit as *const i32, (call + CALL_DONE_FLAG_OFFSET) as *const u8) };
         low_byte_bool(result)
     }
 
     #[detour(F_PLAY_TIME_F)]
     unsafe extern "thiscall" fn f_play_time_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
         low_byte_bool(unsafe { f_play_time_f(this as u32, call as u32, unit as u32, play_time_vanilla) })
+    }
+
+    #[detour(F_FLY)]
+    #[allow(clippy::too_many_arguments)]
+    unsafe extern "thiscall" fn f_fly_detour(
+        _this: *const u32, unit: *const u32, name: *const c_void, value: i32, extra: *const c_void, done: *const i8, reverse: i32, limit: i32,
+    ) -> bool {
+        let args = FFlyArgs { unit: unit as u32, name: name as u32, value: value as u32, extra: extra as u32, done: done as *const u8, reverse: reverse as u32, limit: limit as u32 };
+        unsafe { f_fly(&args, &FLY_CORE_VANILLA) }
+    }
+
+    #[detour(F_PLAY_WITH_SOUND)]
+    unsafe extern "stdcall" fn f_play_with_sound_detour(anim_name: *const c_void, sound_name: *const c_void, unit: *const u32, done: *const i8) -> bool {
+        unsafe { f_play_with_sound(anim_name as u32, sound_name as u32, unit as u32, done as *const u8, &PLAY_WITH_SOUND_VANILLA) }
+    }
+
+    #[detour(F_PLAY_TIME)]
+    unsafe extern "thiscall" fn f_play_time_detour(_this: *const u32, name: *const c_void, millis: i32, unit: *const u32, done: *const i8, _flag_b: i8) -> bool {
+        unsafe { f_play_time(name as u32, millis as u32, unit as u32, done as *const u8, &PLAY_TIME_VANILLA_OPS) }
+    }
+
+    #[detour(F_PLAY_SET)]
+    unsafe extern "stdcall" fn f_play_set_detour(name: *const i32, unit: *const c_void, child: i8, flag: u32) -> bool {
+        unsafe { f_play_set(name as u32, unit as u32, child != 0, flag, &PLAY_SET_VANILLA) }
+    }
+
+    #[detour(F_PLAY_SET_PROB)]
+    unsafe extern "stdcall" fn f_play_set_prob_detour(entries: *const i32, unit: *const std::ffi::c_void) -> u32 {
+        u32::from(unsafe { f_play_set_prob(entries as u32, unit as u32, &SET_PROB_PICK_VANILLA) })
+    }
+
+    #[detour(F_PLAY_SOUND)]
+    unsafe extern "thiscall" fn f_play_sound_detour(this: *const u32, sound: *const i8, unit: *const i32, done: *const u8) -> u32 {
+        let mode_a = get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + RVA_PLAY_MODE_A_STRING);
+        u32::from(unsafe { f_play_sound(this as u32, sound as u32, unit as u32, done, mode_a, play_special_f_forward) })
+    }
+
+    #[detour(F_PLAY_SPECIAL_F)]
+    unsafe extern "thiscall" fn f_play_special_f_detour(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+        match unsafe { f_play_special_f(this as u32, call as u32, unit as u32, &PLAY_SPECIAL_F_VANILLA) } {
+            Some(result) => result,
+            None => low_byte_bool(unsafe { F_PLAY_SPECIAL_F_DETOUR.call(this, call, unit) } as u32),
+        }
     }
 
     #[detour(EXECUTE_CALL)]

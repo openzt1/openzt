@@ -2205,3 +2205,1734 @@ pub(crate) fn run_ztaimgr_f_target_building_test(failure_log: &mut Option<std::f
     }
     finish_test(test_name, failures, failure_log)
 }
+
+/// `ZTAIMGR_F_MOVE_SPEED_F`: port only, over a recording `fMove` stand-in. Covers the gates of
+/// `fMoveSlowF`/`fMoveMediumF`/`fMoveFastF` (null unit, parameter count, empty first parameter, non-`ZTUnitType`
+/// type) and the per-speed name, speed and limit handed to `fMove`, with the converted seconds value.
+pub(crate) fn run_ztaimgr_f_move_speed_f_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_move_speed_f, MoveSpeed, MoveSpeedOps};
+    let test_name = "ZTAIMGR_F_MOVE_SPEED_F";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static CONVERTED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    unsafe fn f_move(this: u32, first: u32, seconds: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32, limit: u32) -> bool {
+        let entry = format!(
+            "move({this:#x},{},{seconds},{unit:#x},{done:#x},{},{speed:#x},{},{limit})",
+            unsafe { read_vanilla_string(first) },
+            unsafe { read_vanilla_string(name) },
+            unsafe { read_vanilla_string(empty) }
+        );
+        LOG.lock().unwrap().push(entry);
+        true
+    }
+    extern "thiscall" fn fake_convert(_this: u32, param: u32, _unit: u32) -> u32 {
+        CONVERTED.lock().unwrap().push(param);
+        7
+    }
+    extern "thiscall" fn fake_limit(_this: u32) -> u32 {
+        55
+    }
+    let ops = MoveSpeedOps { f_move };
+
+    let mut mgr_vtable = Box::new([0u32; 0x20]);
+    mgr_vtable[0x34 / 4] = fake_convert as *const () as usize as u32;
+    let mgr = Box::new([mgr_vtable.as_ptr() as u32]);
+    let this = mgr.as_ptr() as u32;
+
+    let text = "walk anim";
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.push(0);
+    let begin = bytes.as_ptr() as u32;
+    let name_string = Box::new([begin, begin + text.len() as u32, begin + text.len() as u32 + 1]);
+    FAKE_NAME_PTR.store(name_string.as_ptr() as u32, Ordering::Relaxed);
+
+    let mut unit = StringFixtureUnit::new(false, true);
+    for step in 0..3usize {
+        unit._vtable[0x120 / 4 + step] = fake_unit_name as *const () as usize as u32;
+        unit._vtable[0x140 / 4 + step] = fake_limit as *const () as usize as u32;
+        unit._ty[0x100 / 4 + step] = 0x100 + step as u32;
+    }
+    let call = Call::new("fWalk", &["anim", "3"]);
+    let first = call.raw[3];
+
+    for (speed, expected_speed) in [(MoveSpeed::Slow, 0x100u32), (MoveSpeed::Medium, 0x101), (MoveSpeed::Fast, 0x102)] {
+        LOG.lock().unwrap().clear();
+        CONVERTED.lock().unwrap().clear();
+        let result = unsafe { f_move_speed_f(this, call.ptr() as u32, unit.ptr(), speed, &ops) };
+        let expected = format!("move({this:#x},anim,7,{:#x},{:#x},walk anim,{expected_speed:#x},,55)", unit.ptr(), call.ptr() as u32 + 0x18);
+        if !result || *LOG.lock().unwrap() != vec![expected.clone()] || *CONVERTED.lock().unwrap() != vec![first + 12] {
+            failures.push(format!("speed {expected_speed:#x}: result {result}, log {:?}, converted {:x?}, expected {expected}", LOG.lock().unwrap(), CONVERTED.lock().unwrap()));
+        }
+    }
+
+    // Gates: nothing reaches fMove.
+    let one_param = Call::new("fWalk", &["anim"]);
+    let three_params = Call::new("fWalk", &["anim", "3", "x"]);
+    let empty_first = Call::new("fWalk", &["", "3"]);
+    let non_unit = StringFixtureUnit::new(false, false);
+    let cases: [(&str, u32, u32); 5] = [
+        ("null unit", call.ptr() as u32, 0),
+        ("one parameter", one_param.ptr() as u32, unit.ptr()),
+        ("three parameters", three_params.ptr() as u32, unit.ptr()),
+        ("empty first parameter", empty_first.ptr() as u32, unit.ptr()),
+        ("non-unit type", call.ptr() as u32, non_unit.ptr()),
+    ];
+    for (label, c, u) in cases {
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_move_speed_f(this, c, u, MoveSpeed::Fast, &ops) };
+        if result || !LOG.lock().unwrap().is_empty() {
+            failures.push(format!("{label}: result {result}, log {:?}", LOG.lock().unwrap()));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_MOVE_F`: port only, over a recording `fMove` stand-in. Covers `fMoveF`'s and
+/// `fMoveWithSoundF`'s gates (null unit, parameter-count windows, empty first parameter) and the converted
+/// values, strings, reverse flag and default/explicit limit handed to `fMove`.
+pub(crate) fn run_ztaimgr_f_move_f_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_move_f, f_move_with_sound_f, MoveOps};
+    let test_name = "ZTAIMGR_F_MOVE_F";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    unsafe fn f_move(this: u32, first: u32, a2: u32, unit: u32, done: u32, name: u32, speed: u32, extra: u32, reverse: u32, limit: u32) -> bool {
+        let entry = format!(
+            "move({this:#x},{},{a2},{unit:#x},{done:#x},{},{speed},{},{reverse},{limit})",
+            unsafe { read_vanilla_string(first) },
+            unsafe { read_vanilla_string(name) },
+            unsafe { read_vanilla_string(extra) }
+        );
+        LOG.lock().unwrap().push(entry);
+        true
+    }
+    // Converts a parameter by reading it as a decimal number.
+    extern "thiscall" fn fake_convert(_this: u32, param: u32, _unit: u32) -> u32 {
+        unsafe { read_vanilla_string(param) }.parse().unwrap_or(9999)
+    }
+    let ops = MoveOps { f_move };
+    let mut mgr_vtable = Box::new([0u32; 0x20]);
+    mgr_vtable[0x34 / 4] = fake_convert as *const () as usize as u32;
+    let mgr = Box::new([mgr_vtable.as_ptr() as u32]);
+    let this = mgr.as_ptr() as u32;
+    let unit = 0x5000_0000u32;
+
+    let run_f = |call: &Call, unit: u32, reverse: bool| -> (bool, Vec<String>) {
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_move_f(this, call.ptr() as u32, unit, reverse, &ops) };
+        (result, LOG.lock().unwrap().clone())
+    };
+    let run_s = |call: &Call, unit: u32| -> (bool, Vec<String>) {
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_move_with_sound_f(this, call.ptr() as u32, unit, &ops) };
+        (result, LOG.lock().unwrap().clone())
+    };
+
+    let four = Call::new("fMove", &["a", "2", "walk", "5"]);
+    let five = Call::new("fMove", &["a", "2", "walk", "5", "70"]);
+    for (label, call, reverse, expected_limit) in [("four", &four, false, 100), ("five", &five, true, 70)] {
+        let (result, log) = run_f(call, unit, reverse);
+        let expected = format!("move({this:#x},a,2000,{unit:#x},{:#x},walk,5,,{},{expected_limit})", call.ptr() as u32 + 0x18, u32::from(reverse));
+        if !result || log != vec![expected.clone()] {
+            failures.push(format!("fMoveF {label}: result {result}, log {log:?}, expected {expected}"));
+        }
+    }
+    let three = Call::new("fMove", &["a", "2", "walk"]);
+    let six = Call::new("fMove", &["a", "2", "walk", "5", "70", "1"]);
+    let empty_first = Call::new("fMove", &["", "2", "walk", "5"]);
+    for (label, call, u) in [("null unit", &four, 0), ("three", &three, unit), ("six", &six, unit), ("empty first", &empty_first, unit)] {
+        let (result, log) = run_f(call, u, false);
+        if result || !log.is_empty() {
+            failures.push(format!("fMoveF {label}: result {result}, log {log:?}"));
+        }
+    }
+
+    let sound5 = Call::new("fMove", &["a", "2", "walk", "5", "purr"]);
+    let sound6 = Call::new("fMove", &["a", "2", "walk", "5", "purr", "70"]);
+    for (label, call, expected_limit) in [("five", &sound5, 100), ("six", &sound6, 70)] {
+        let (result, log) = run_s(call, unit);
+        let expected = format!("move({this:#x},a,2,{unit:#x},{:#x},walk,5,purr,0,{expected_limit})", call.ptr() as u32 + 0x18);
+        if !result || log != vec![expected.clone()] {
+            failures.push(format!("fMoveWithSoundF {label}: result {result}, log {log:?}, expected {expected}"));
+        }
+    }
+    let sound7 = Call::new("fMove", &["a", "2", "walk", "5", "purr", "70", "1"]);
+    let sound_empty = Call::new("fMove", &["", "2", "walk", "5", "purr"]);
+    for (label, call, u) in [("null unit", &sound5, 0), ("four", &four, unit), ("seven", &sound7, unit), ("empty first", &sound_empty, unit)] {
+        let (result, log) = run_s(call, u);
+        if result || !log.is_empty() {
+            failures.push(format!("fMoveWithSoundF {label}: result {result}, log {log:?}"));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_MOVE`: port only, over a fake unit (own vtable, cog goal and target list) and recording
+/// stand-ins for the vanilla helpers. Checks every path of the `fMove` state machine: the order of virtual
+/// calls, the flag writes, the done flag, the arguments handed to the mixer helpers and the result.
+pub(crate) fn run_ztaimgr_f_move_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_move, FMoveArgs, FMoveOps};
+    let test_name = "ZTAIMGR_F_MOVE";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static HAS_TARGET: AtomicU32 = AtomicU32::new(0);
+    static CAN_PLAY: AtomicU32 = AtomicU32::new(0);
+    static VALID: AtomicU32 = AtomicU32::new(0);
+    static REACHED: AtomicU32 = AtomicU32::new(0);
+    static NO_SOUND: AtomicU32 = AtomicU32::new(0);
+    static ANIM_FIRST: AtomicU32 = AtomicU32::new(0);
+    static ANIM_SECOND: AtomicU32 = AtomicU32::new(0);
+    static PAIR_RESULT: AtomicU32 = AtomicU32::new(0);
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    extern "thiscall" fn v_has_target(_: u32) -> u32 {
+        log("has_target".into());
+        HAS_TARGET.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_can_play(_: u32) -> u32 {
+        log("can_play".into());
+        CAN_PLAY.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_prepare(_: u32, arg: u32) -> u32 {
+        log(format!("prepare({arg:#x})"));
+        0
+    }
+    extern "thiscall" fn v_find_anim(_: u32, name: u32) -> u32 {
+        log(format!("find_anim({name:#x})"));
+        ANIM_FIRST.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_find_anim_second(_: u32) -> u32 {
+        log("find_anim_second".into());
+        ANIM_SECOND.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_set_speed(_: u32, arg: u32) -> u32 {
+        log(format!("speed({arg})"));
+        0
+    }
+    extern "thiscall" fn v_set_limit(_: u32, arg: u32) -> u32 {
+        log(format!("limit({arg})"));
+        0
+    }
+    extern "thiscall" fn c_valid(_: u32) -> u32 {
+        log("cog_valid".into());
+        VALID.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn c_clear(_: u32) -> u32 {
+        log("cog_clear".into());
+        0
+    }
+    extern "thiscall" fn c_clear_sub(_: u32) -> u32 {
+        log("cog_clear_sub".into());
+        0
+    }
+    unsafe fn stop(_: u32, a: i8, b: i8) {
+        log(format!("stop({a},{b})"));
+    }
+    unsafe fn set_moving(_: u32, a: i8, b: i8) {
+        log(format!("set_moving({a},{b})"));
+    }
+    unsafe fn reached(_: u32) -> bool {
+        log("reached".into());
+        REACHED.load(Ordering::Relaxed) != 0
+    }
+    unsafe fn is_no_sound(_: u32) -> bool {
+        NO_SOUND.load(Ordering::Relaxed) != 0
+    }
+    unsafe fn find_sound(_: u32, _: u32) -> u32 {
+        log("find_sound".into());
+        77
+    }
+    unsafe fn play_single(_: u32, anim: u32, flag: u8, sound: u32) {
+        log(format!("single({anim:#x},{flag},{sound})"));
+    }
+    unsafe fn play_pair(_: u32, _: u32, first: u32, second: u32, flag: u8, sound: u32, seconds: i32) -> bool {
+        log(format!("pair({first:#x},{second:#x},{flag},{sound},{seconds})"));
+        PAIR_RESULT.load(Ordering::Relaxed) != 0
+    }
+    let ops = FMoveOps { stop, set_moving, reached_target: reached, is_no_sound, find_sound, play_single, play_pair };
+
+    let mut unit_vtable = Box::new([0u32; 0x80]);
+    unit_vtable[0x180 / 4] = v_has_target as *const () as usize as u32;
+    unit_vtable[0x184 / 4] = v_can_play as *const () as usize as u32;
+    unit_vtable[0x1b0 / 4] = v_prepare as *const () as usize as u32;
+    unit_vtable[0x130 / 4] = v_find_anim as *const () as usize as u32;
+    unit_vtable[0x134 / 4] = v_find_anim_second as *const () as usize as u32;
+    unit_vtable[0x1c0 / 4] = v_set_speed as *const () as usize as u32;
+    unit_vtable[0x1c4 / 4] = v_set_limit as *const () as usize as u32;
+    let mut cog_vtable = Box::new([0u32; 0x10]);
+    cog_vtable[0] = c_valid as *const () as usize as u32;
+    cog_vtable[0xc / 4] = c_clear as *const () as usize as u32;
+    cog_vtable[0x1c / 4] = c_clear_sub as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x200]);
+    block[0] = unit_vtable.as_ptr() as u32;
+    block[0x15c / 4] = cog_vtable.as_ptr() as u32;
+    let unit = block.as_ptr() as u32;
+
+    // A ring of `n` nodes around a sentinel (node 0); `+0x154` points at the sentinel.
+    let mut ring = vec![[0u32; 2]; 8];
+    let sentinel = ring.as_ptr() as u32;
+    let set_list = |ring: &mut Vec<[u32; 2]>, block: &mut Box<[u32; 0x200]>, n: usize| {
+        for i in 0..=n {
+            ring[i][0] = if i == n { sentinel } else { sentinel + (i as u32 + 1) * 8 };
+        }
+        block[0x154 / 4] = sentinel;
+    };
+    let byte = |block: &Box<[u32; 0x200]>, offset: usize| unsafe { *((block.as_ptr() as usize + offset) as *const u8) };
+    let set_byte = |block: &mut Box<[u32; 0x200]>, offset: usize, value: u8| unsafe { *((block.as_ptr() as usize + offset) as *mut u8) = value };
+
+    let empty_extra = Box::new([0x1000u32, 0x1000, 0x1000]);
+    let text_extra = Box::new([0x2000u32, 0x2003, 0x2004]);
+    let (empty_ptr, text_ptr) = (empty_extra.as_ptr() as u32, text_extra.as_ptr() as u32);
+    let this = 0x7777_0000u32;
+    let name = 0x3000u32;
+    let first = 0xa000u32;
+    let second = 0xb000u32;
+    let mut done = Box::new(0xaau8);
+    let done_ptr = done.as_mut() as *mut u8 as *const u8;
+
+    struct Case {
+        label: &'static str,
+        flags: &'static [(usize, u8)],
+        state: u32,
+        state2: u32,
+        list: usize,
+        seconds: i32,
+        extra: u32,
+        can_play: bool,
+        valid: bool,
+        has_target: bool,
+        expect_log: &'static [&'static str],
+        /// moving (`+0xf8`), stopped (`+0xf9`), done flag, cog invalid (`+0x20e`).
+        expect: (u8, u8, u8, u8),
+    }
+    let c = |label, flags, state, state2, list, seconds, extra, can_play, valid, has_target, expect_log, expect| Case { label, flags, state, state2, list, seconds, extra, can_play, valid, has_target, expect_log, expect };
+    let single: &[&str] = &["has_target", "find_anim(0x3000)", "single(0xa000,1,0)", "speed(9)", "limit(33)"];
+    // 0xf8 moving, 0xf9 stopped, 0xd7, 0x20c, 0x20d finished, 0x20e cog invalid, 0x1a8 = cog + 0x4c.
+    let cases = vec![
+        c("finished", &[(0x20d, 1)], 0, 0, 0, 0, empty_ptr, false, false, false, &["has_target"], (0, 0, 1, 0)),
+        c("finished prepares", &[(0x20d, 1)], 1, 0, 0, 0, empty_ptr, false, false, false, &["has_target", "prepare(0x5555)"], (0, 0, 1, 0)),
+        c("cog invalid", &[(0xf9, 1)], 0, 0, 0, 0, empty_ptr, true, false, false, &["has_target", "can_play", "cog_valid"], (0, 1, 0, 1)),
+        c("cog valid, no flag", &[(0xf9, 1)], 0, 0, 0, 0, empty_ptr, true, true, false, &["has_target", "can_play", "cog_valid"], (0, 1, 0xaa, 0)),
+        c("cog valid, flag, invalid", &[(0xf9, 1), (0x1a8, 1)], 0, 0, 0, 0, empty_ptr, true, true, false, &["has_target", "can_play", "cog_valid"], (0, 1, 0, 1)),
+        c("cog valid, flag, state 1", &[(0xf9, 1), (0x1a8, 1)], 1, 0, 0, 0, empty_ptr, true, true, false, &["has_target", "prepare(0x5555)", "can_play", "cog_valid"], (0, 1, 0xaa, 0)),
+        c("stopped, empty list, cannot play", &[(0xf9, 1)], 0, 0, 0, 0, empty_ptr, false, false, false, &["has_target", "can_play"], (0, 1, 0xaa, 0)),
+        c("one target stops", &[(0xf9, 1)], 0, 0, 1, 0, empty_ptr, false, false, false, &["has_target", "speed(0)", "stop(1,1)"], (0, 1, 1, 0)),
+        c("one target, state2 3 moves", &[(0xf9, 1)], 0, 3, 1, 0, empty_ptr, false, false, false, single, (1, 0, 0, 0)),
+        c("two targets single", &[(0xf9, 1)], 0, 0, 2, 0, empty_ptr, false, false, false, single, (1, 0, 0, 0)),
+        c("two targets sound", &[(0xf9, 1)], 0, 0, 2, 0, text_ptr, false, false, false, &["has_target", "find_anim(0x3000)", "find_sound", "single(0xa000,1,77)", "speed(9)", "limit(33)"], (1, 0, 0, 0)),
+        c("two targets pair", &[(0xf9, 1)], 0, 0, 2, 5, empty_ptr, false, false, false, &["has_target", "find_anim(0x3000)", "find_anim_second", "pair(0xa000,0xb000,1,0,5)", "speed(9)", "limit(33)"], (1, 0, 0, 0)),
+        c("moving one target has target", &[(0xf8, 1)], 0, 0, 1, 0, empty_ptr, false, false, true, &["has_target", "cog_clear", "cog_clear_sub"], (0, 1, 1, 0)),
+        c("moving empty list", &[(0xf8, 1)], 0, 0, 0, 0, empty_ptr, false, false, false, &["has_target", "speed(0)", "stop(1,0)"], (0, 1, 1, 0)),
+        c("moving d7", &[(0xf8, 1), (0xd7, 1)], 0, 0, 2, 0, empty_ptr, false, false, false, &["has_target", "reached", "set_moving(1,0)"], (1, 0, 0xaa, 0)),
+        c("moving d7 but 20c", &[(0xf8, 1), (0xd7, 1), (0x20c, 1)], 0, 0, 2, 0, empty_ptr, false, false, false, &["has_target", "reached"], (1, 0, 0xaa, 0)),
+        c("moving nothing to do", &[(0xf8, 1)], 0, 0, 2, 0, empty_ptr, false, false, false, &["has_target", "reached"], (1, 0, 0xaa, 0)),
+        c("idle", &[], 0, 0, 2, 0, empty_ptr, false, false, false, &["has_target"], (0, 0, 0xaa, 0)),
+    ];
+    for case in &cases {
+        for offset in [0xf8usize, 0xf9, 0xd7, 0x20c, 0x20d, 0x20e, 0x1a8] {
+            set_byte(&mut block, offset, 0);
+        }
+        for &(offset, value) in case.flags {
+            set_byte(&mut block, offset, value);
+        }
+        block[0x170 / 4] = case.state;
+        block[0x1bc / 4] = case.state2;
+        set_list(&mut ring, &mut block, case.list);
+        CAN_PLAY.store(u32::from(case.can_play), Ordering::Relaxed);
+        VALID.store(u32::from(case.valid), Ordering::Relaxed);
+        HAS_TARGET.store(u32::from(case.has_target), Ordering::Relaxed);
+        REACHED.store(0, Ordering::Relaxed);
+        NO_SOUND.store(0, Ordering::Relaxed);
+        PAIR_RESULT.store(1, Ordering::Relaxed);
+        // With a duration the first lookup returns the second animation and the next returns the first.
+        let (lookup, lookup_second) = if case.seconds != 0 { (second, first) } else { (first, 0) };
+        ANIM_FIRST.store(lookup, Ordering::Relaxed);
+        ANIM_SECOND.store(lookup_second, Ordering::Relaxed);
+        *done = 0xaa;
+        LOG.lock().unwrap().clear();
+        let args = FMoveArgs { this, first_param: 0x5555, seconds: case.seconds, unit, done: done_ptr, name, speed: 9, extra: case.extra, reverse: 1, limit: 33 };
+        let result = unsafe { f_move(&args, &ops) };
+        let got = (byte(&block, 0xf8), byte(&block, 0xf9), *done, byte(&block, 0x20e));
+        let expected_log: Vec<String> = case.expect_log.iter().map(|s| s.to_string()).collect();
+        if !result || *LOG.lock().unwrap() != expected_log || got != case.expect {
+            failures.push(format!("{}: result {result}, log {:?}, state {got:?}; expected log {expected_log:?}, state {:?}", case.label, LOG.lock().unwrap(), case.expect));
+        }
+    }
+
+    // A missing first animation fails without touching the flags.
+    for offset in [0xf8usize, 0xf9, 0xd7, 0x20c, 0x20d, 0x20e] {
+        set_byte(&mut block, offset, 0);
+    }
+    set_byte(&mut block, 0xf9, 1);
+    block[0x170 / 4] = 0;
+    set_list(&mut ring, &mut block, 2);
+    CAN_PLAY.store(0, Ordering::Relaxed);
+    HAS_TARGET.store(0, Ordering::Relaxed);
+    ANIM_FIRST.store(0, Ordering::Relaxed);
+    *done = 0xaa;
+    LOG.lock().unwrap().clear();
+    let args = FMoveArgs { this, first_param: 0x5555, seconds: 0, unit, done: done_ptr, name, speed: 9, extra: empty_ptr, reverse: 1, limit: 33 };
+    let result = unsafe { f_move(&args, &ops) };
+    if result || byte(&block, 0xf8) != 0 || byte(&block, 0xf9) != 1 || *done != 0 || *LOG.lock().unwrap() != vec!["has_target".to_string(), "find_anim(0x3000)".to_string()] {
+        failures.push(format!("missing animation: result {result}, log {:?}", LOG.lock().unwrap()));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_SPECIAL`: port only, over a fake unit and recording stand-ins. Covers the special-mode
+/// gate, the not-stopped path, the animation and sound resolution (including the default-animation fallback
+/// and its failure cases) and the flags and arguments handed to the link builder.
+pub(crate) fn run_ztaimgr_f_play_special_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_special, FPlaySpecialArgs, FPlaySpecialOps, SpecialString};
+    let test_name = "ZTAIMGR_F_PLAY_SPECIAL";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static FIND_ANIM_RESULT: AtomicU32 = AtomicU32::new(0);
+    static PLAY_RESULT: AtomicU32 = AtomicU32::new(0);
+    static PLAY_EMPTY: AtomicU32 = AtomicU32::new(0);
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    // Strings are identified by their begin word: 1 none, 2 reverse, 3 ping-pong, anything else a real name.
+    unsafe fn is_string(which: SpecialString, string: u32) -> bool {
+        let id = unsafe { *(string as *const u32) };
+        id == match which {
+            SpecialString::None => 1,
+            SpecialString::Reverse => 2,
+            SpecialString::PingPong => 3,
+            SpecialString::ModeA => 4,
+            SpecialString::ModeB => 5,
+        }
+    }
+    unsafe fn find_anim(_: u32, name: u32) -> u32 {
+        log(format!("find_anim({})", unsafe { *(name as *const u32) }));
+        FIND_ANIM_RESULT.load(Ordering::Relaxed)
+    }
+    unsafe fn find_sound(_: u32, name: u32) -> u32 {
+        log(format!("find_sound({})", unsafe { *(name as *const u32) }));
+        77
+    }
+    unsafe fn acquire_first(anim: u32) -> u32 {
+        log(format!("acquire({anim:#x})"));
+        0x42
+    }
+    unsafe fn release_first(handle: u32) {
+        log(format!("release({handle:#x})"));
+    }
+    unsafe fn play_links(_: u32, _: u32, first: u32, anim: u32, reverse: bool, sound: u32, ping_pong: bool, seconds: u32, count: i32) -> Option<bool> {
+        log(format!("links({first:#x},{anim:#x},{reverse},{sound},{ping_pong},{seconds},{count})"));
+        if PLAY_EMPTY.load(Ordering::Relaxed) != 0 {
+            None
+        } else {
+            Some(PLAY_RESULT.load(Ordering::Relaxed) != 0)
+        }
+    }
+    extern "thiscall" fn v_default_anim(_: u32, arg: u32) -> u32 {
+        log(format!("default_anim({arg})"));
+        0xd000
+    }
+    let ops = FPlaySpecialOps { is_string, find_anim, find_sound, acquire_first, release_first, play_links };
+
+    let mut vtable = Box::new([0u32; 0x80]);
+    vtable[0x8c / 4] = v_default_anim as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x200]);
+    block[0] = vtable.as_ptr() as u32;
+    block[0x128 / 4] = 1;
+    let unit = block.as_ptr() as u32;
+    let set_byte = |block: &mut Box<[u32; 0x200]>, offset: usize, value: u8| unsafe { *((block.as_ptr() as usize + offset) as *mut u8) = value };
+    let byte = |block: &Box<[u32; 0x200]>, offset: usize| unsafe { *((block.as_ptr() as usize + offset) as *const u8) };
+
+    // Strings are `{id, id (same end means empty), cap}`; a non-empty name has end != begin.
+    let none = Box::new([1u32, 1, 0]);
+    let none_nonempty = Box::new([1u32, 2, 0]);
+    let reverse = Box::new([2u32, 3, 0]);
+    let ping_pong = Box::new([3u32, 4, 0]);
+    let name = Box::new([10u32, 11, 0]);
+    let sound_name = Box::new([20u32, 21, 0]);
+    let empty_sound = Box::new([30u32, 30, 0]);
+    let none_ptr = none.as_ptr() as u32;
+    let _ = &none_nonempty;
+    let mut this_block = Box::new([0u32; 0x80]);
+    this_block[0xd0 / 4] = 0xdef0;
+    let this = this_block.as_ptr() as u32;
+    let mut done = Box::new(0xaau8);
+    let done_ptr = done.as_mut() as *mut u8 as *const u8;
+
+    struct Case {
+        label: &'static str,
+        anim: u32,
+        sound: u32,
+        seconds: u32,
+        count: i32,
+        special: u32,
+        stopped: u8,
+        moving: u8,
+        pos_equal: bool,
+        find_anim: u32,
+        play_result: bool,
+        play_empty: bool,
+        expect_result: bool,
+        expect_log: &'static [&'static str],
+        /// moving, stopped, done flag.
+        expect: (u8, u8, u8),
+    }
+    let n = name.as_ptr() as u32;
+    let s = sound_name.as_ptr() as u32;
+    let rev = reverse.as_ptr() as u32;
+    let pp = ping_pong.as_ptr() as u32;
+    let e = empty_sound.as_ptr() as u32;
+    let other = name.as_ptr() as u32;
+    #[rustfmt::skip]
+    let cases = vec![
+        Case { label: "gate fails", anim: n, sound: s, seconds: 0, count: 0, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0xa1, play_result: true, play_empty: false, expect_result: false, expect_log: &[], expect: (0, 1, 0xaa) },
+        Case { label: "gate bypassed by count", anim: n, sound: s, seconds: 0, count: 2, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0xa1, play_result: true, play_empty: false, expect_result: true,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "find_anim(10)", "find_sound(20)", "links(0x42,0xa1,false,77,false,0,2)", "release(0x42)"], expect: (1, 0, 0) },
+        Case { label: "reverse mode", anim: n, sound: s, seconds: 0, count: 0, special: rev, stopped: 1, moving: 0, pos_equal: false, find_anim: 0xa1, play_result: false, play_empty: false, expect_result: false,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "find_anim(10)", "find_sound(20)", "links(0x42,0xa1,true,77,false,0,0)", "release(0x42)"], expect: (1, 0, 0) },
+        Case { label: "ping-pong mode", anim: n, sound: s, seconds: 6, count: 0, special: pp, stopped: 1, moving: 0, pos_equal: false, find_anim: 0xa1, play_result: true, play_empty: false, expect_result: true,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "find_anim(10)", "find_sound(20)", "links(0x42,0xa1,false,77,true,6,0)", "release(0x42)"], expect: (1, 0, 0) },
+        Case { label: "none anim, real sound, default anim", anim: none_ptr, sound: s, seconds: 0, count: 1, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0, play_result: true, play_empty: false, expect_result: true,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "find_sound(20)", "links(0x42,0xdef0,false,77,false,0,1)", "release(0x42)"], expect: (1, 0, 0) },
+        Case { label: "none anim, empty sound", anim: none_ptr, sound: e, seconds: 0, count: 1, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0, play_result: true, play_empty: false, expect_result: false,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "release(0x42)"], expect: (0, 1, 0xaa) },
+        Case { label: "none anim, none sound", anim: none_ptr, sound: none_ptr, seconds: 0, count: 1, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0, play_result: true, play_empty: false, expect_result: false,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "release(0x42)"], expect: (0, 1, 0xaa) },
+        Case { label: "named anim not found", anim: n, sound: s, seconds: 0, count: 1, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0, play_result: true, play_empty: false, expect_result: false,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "find_anim(10)", "release(0x42)"], expect: (0, 1, 0xaa) },
+        Case { label: "empty sound is not looked up", anim: n, sound: e, seconds: 0, count: 1, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0xa1, play_result: true, play_empty: false, expect_result: true,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "find_anim(10)", "links(0x42,0xa1,false,0,false,0,1)", "release(0x42)"], expect: (1, 0, 0) },
+        Case { label: "empty vectors", anim: n, sound: s, seconds: 0, count: 1, special: other, stopped: 1, moving: 0, pos_equal: false, find_anim: 0xa1, play_result: true, play_empty: true, expect_result: false,
+               expect_log: &["default_anim(0)", "acquire(0xd000)", "find_anim(10)", "find_sound(20)", "links(0x42,0xa1,false,77,false,0,1)", "release(0x42)"], expect: (0, 1, 0xaa) },
+        Case { label: "not stopped, idle", anim: n, sound: s, seconds: 0, count: 1, special: other, stopped: 0, moving: 0, pos_equal: true, find_anim: 0xa1, play_result: true, play_empty: false, expect_result: true, expect_log: &[], expect: (0, 0, 0xaa) },
+        Case { label: "not stopped, moving, positions differ", anim: n, sound: s, seconds: 0, count: 1, special: other, stopped: 0, moving: 1, pos_equal: false, find_anim: 0xa1, play_result: true, play_empty: false, expect_result: true, expect_log: &[], expect: (1, 0, 0xaa) },
+        Case { label: "not stopped, moving, positions match", anim: n, sound: s, seconds: 0, count: 1, special: other, stopped: 0, moving: 1, pos_equal: true, find_anim: 0xa1, play_result: true, play_empty: false, expect_result: true, expect_log: &[], expect: (0, 1, 1) },
+    ];
+    for case in &cases {
+        set_byte(&mut block, 0xf8, case.moving);
+        set_byte(&mut block, 0xf9, case.stopped);
+        block[0x8c / 4] = 5;
+        block[0x9c / 4] = if case.pos_equal { 5 } else { 6 };
+        FIND_ANIM_RESULT.store(case.find_anim, Ordering::Relaxed);
+        PLAY_RESULT.store(u32::from(case.play_result), Ordering::Relaxed);
+        PLAY_EMPTY.store(u32::from(case.play_empty), Ordering::Relaxed);
+        *done = 0xaa;
+        LOG.lock().unwrap().clear();
+        let args = FPlaySpecialArgs { this, anim_name: case.anim, sound_name: case.sound, seconds: case.seconds, count: case.count, special: case.special, unit, done: done_ptr };
+        let result = unsafe { f_play_special(&args, &ops) };
+        let got = (byte(&block, 0xf8), byte(&block, 0xf9), *done);
+        let expected_log: Vec<String> = case.expect_log.iter().map(|s| s.to_string()).collect();
+        if result != case.expect_result || *LOG.lock().unwrap() != expected_log || got != case.expect {
+            failures.push(format!("{}: result {result}, log {:?}, state {got:?}; expected {}, {expected_log:?}, {:?}", case.label, LOG.lock().unwrap(), case.expect_result, case.expect));
+        }
+    }
+
+    // No unit type or no default animation: false before anything is built.
+    block[0x128 / 4] = 0;
+    set_byte(&mut block, 0xf9, 1);
+    LOG.lock().unwrap().clear();
+    let args = FPlaySpecialArgs { this, anim_name: n, sound_name: s, seconds: 0, count: 1, special: other, unit, done: done_ptr };
+    if unsafe { f_play_special(&args, &ops) } || !LOG.lock().unwrap().is_empty() {
+        failures.push(format!("no unit type: log {:?}", LOG.lock().unwrap()));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_F`: port only, over a fake unit and recording stand-ins. Covers `fPlayF`,
+/// `fPlayWithBaseF` and `fSetBaseF`: parameter-count gates, the not-stopped prefix, the cursor field, which
+/// animations reach the second vector with which flags, the `fPlay` base flag, the flag writes and results.
+pub(crate) fn run_ztaimgr_f_play_f_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_f, f_play_with_base_f, f_set_base_f, PlayOps};
+    let test_name = "ZTAIMGR_F_PLAY_F";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static MIXER_ANIM: AtomicU32 = AtomicU32::new(0);
+    static PLAY_RESULT: AtomicU32 = AtomicU32::new(0);
+    static PLAY_EMPTY: AtomicU32 = AtomicU32::new(0);
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    // A parameter's animation is its first word minus 1000, or 0 (not found) when that is zero.
+    unsafe fn find_anim(_: u32, param: u32) -> u32 {
+        let id = unsafe { *(param as *const u32) };
+        log(format!("find({id})"));
+        if id == 1000 { 0 } else { id }
+    }
+    unsafe fn mixer_anim(_: u32) -> u32 {
+        log("mixer_anim".into());
+        MIXER_ANIM.load(Ordering::Relaxed)
+    }
+    unsafe fn acquire_first(anim: u32) -> u32 {
+        log(format!("first({anim:#x})"));
+        0x42
+    }
+    unsafe fn release_first(_: u32) {
+        log("release".into());
+    }
+    unsafe fn add_anim(_: u32, anim: u32, reverse: bool, ping_pong: bool) {
+        log(format!("add({anim},{reverse},{ping_pong})"));
+    }
+    unsafe fn play(_: u32, _: u32, _: u32, with_base: bool) -> Option<bool> {
+        log(format!("play({with_base})"));
+        if PLAY_EMPTY.load(Ordering::Relaxed) != 0 { None } else { Some(PLAY_RESULT.load(Ordering::Relaxed) != 0) }
+    }
+    unsafe fn set_base(_: u32, anim: u32) {
+        log(format!("set_base({anim})"));
+    }
+    extern "thiscall" fn v_default_anim(_: u32, arg: u32) -> u32 {
+        log(format!("default({arg})"));
+        0xd000
+    }
+    let ops = PlayOps { find_anim, mixer_anim, acquire_first, release_first, add_anim, play, set_base };
+
+    let mut vtable = Box::new([0u32; 0x80]);
+    vtable[0x8c / 4] = v_default_anim as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x200]);
+    block[0] = vtable.as_ptr() as u32;
+    let unit = block.as_ptr() as u32;
+    let set_byte = |block: &mut Box<[u32; 0x200]>, offset: usize, value: u8| unsafe { *((block.as_ptr() as usize + offset) as *mut u8) = value };
+    let byte = |block: &Box<[u32; 0x200]>, offset: usize| unsafe { *((block.as_ptr() as usize + offset) as *const u8) };
+    let mut this_block = Box::new([0u32; 0x80]);
+    let this = this_block.as_ptr() as u32;
+
+    // `Call::new` strings hold bytes, so the animation id is carried by overwriting each parameter's begin word
+    // with the id after construction.
+    let make_call = |ids: &[u32]| -> Call {
+        let texts: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+        let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let call = Call::new("fPlay", &refs);
+        let begin = call.raw[3];
+        for (i, id) in ids.iter().enumerate() {
+            unsafe { *((begin + i as u32 * 12) as *mut u32) = *id };
+        }
+        call
+    };
+    let reset = |block: &mut Box<[u32; 0x200]>, stopped: u8, moving: u8| {
+        set_byte(block, 0xf8, moving);
+        set_byte(block, 0xf9, stopped);
+        block[0x128 / 4] = 1;
+        block[0x74 / 4 + 0x28 / 4] = 3;
+        block[0x74 / 4 + 0x18 / 4] = 4;
+    };
+
+    // fPlayF
+    let play_log = |entries: &[&str]| entries.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    struct Case {
+        label: &'static str,
+        ids: Vec<u32>,
+        stopped: u8,
+        moving: u8,
+        reverse: bool,
+        ping_pong: bool,
+        mixer_anim: u32,
+        play_result: bool,
+        play_empty: bool,
+        expect_result: bool,
+        expect_log: Vec<String>,
+        /// moving, stopped, call flag.
+        expect: (u8, u8, u8),
+    }
+    let cases = vec![
+        Case { label: "no params", ids: vec![], stopped: 1, moving: 0, reverse: false, ping_pong: false, mixer_anim: 0, play_result: true, play_empty: false, expect_result: false, expect_log: play_log(&[]), expect: (0, 1, 0xaa) },
+        Case { label: "not stopped idle", ids: vec![5], stopped: 0, moving: 0, reverse: false, ping_pong: false, mixer_anim: 0, play_result: true, play_empty: false, expect_result: true, expect_log: play_log(&[]), expect: (0, 0, 0xaa) },
+        Case { label: "not stopped moving, has anim", ids: vec![5], stopped: 0, moving: 1, reverse: false, ping_pong: false, mixer_anim: 9, play_result: true, play_empty: false, expect_result: true, expect_log: play_log(&["mixer_anim"]), expect: (1, 0, 0xaa) },
+        Case { label: "plays", ids: vec![5, 1000, 7], stopped: 1, moving: 0, reverse: true, ping_pong: false, mixer_anim: 0, play_result: true, play_empty: false, expect_result: true,
+               expect_log: play_log(&["default(0)", "first(0xd000)", "find(5)", "add(5,true,false)", "find(1000)", "find(7)", "add(7,true,false)", "play(false)", "release"]), expect: (1, 0, 0) },
+        Case { label: "ping-pong", ids: vec![5], stopped: 1, moving: 0, reverse: false, ping_pong: true, mixer_anim: 0, play_result: false, play_empty: false, expect_result: false,
+               expect_log: play_log(&["default(0)", "first(0xd000)", "find(5)", "add(5,false,true)", "play(false)", "release"]), expect: (1, 0, 0) },
+        Case { label: "nothing found", ids: vec![1000], stopped: 1, moving: 0, reverse: false, ping_pong: false, mixer_anim: 0, play_result: true, play_empty: true, expect_result: false,
+               expect_log: play_log(&["default(0)", "first(0xd000)", "find(1000)", "play(false)", "release"]), expect: (0, 1, 0xaa) },
+    ];
+    for case in &cases {
+        reset(&mut block, case.stopped, case.moving);
+        MIXER_ANIM.store(case.mixer_anim, Ordering::Relaxed);
+        PLAY_RESULT.store(u32::from(case.play_result), Ordering::Relaxed);
+        PLAY_EMPTY.store(u32::from(case.play_empty), Ordering::Relaxed);
+        let call = make_call(&case.ids);
+        call.raw_mut_flag(0xaa);
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_play_f(this, call.ptr() as u32, unit, case.reverse, case.ping_pong, &ops) };
+        let got = (byte(&block, 0xf8), byte(&block, 0xf9), call.flag());
+        if result != case.expect_result || *LOG.lock().unwrap() != case.expect_log || got != case.expect {
+            failures.push(format!("fPlayF {}: result {result}, log {:?}, state {got:?}; expected {}, {:?}, {:?}", case.label, LOG.lock().unwrap(), case.expect_result, case.expect_log, case.expect));
+        }
+    }
+    // The cursor ends at the parameter-vector end.
+    let call = make_call(&[5, 6]);
+    reset(&mut block, 1, 0);
+    let _ = unsafe { f_play_f(this, call.ptr() as u32, unit, false, false, &ops) };
+    if this_block[0xcc / 4] != call.raw[4] {
+        failures.push(format!("cursor ends at {:#x}, expected {:#x}", this_block[0xcc / 4], call.raw[4]));
+    }
+
+    // Moving unit stopped by a null mixer animation.
+    reset(&mut block, 0, 1);
+    block[0x74 / 4 + 0x28 / 4] = 1;
+    block[0x74 / 4 + 0x18 / 4] = 1;
+    MIXER_ANIM.store(0, Ordering::Relaxed);
+    let call = make_call(&[5]);
+    call.raw_mut_flag(0xaa);
+    LOG.lock().unwrap().clear();
+    let result = unsafe { f_play_f(this, call.ptr() as u32, unit, false, false, &ops) };
+    if !result || byte(&block, 0xf9) != 1 || byte(&block, 0xf8) != 0 || call.flag() != 1 || !LOG.lock().unwrap().is_empty() {
+        failures.push(format!("moving, equal counters: result {result}, log {:?}", LOG.lock().unwrap()));
+    }
+    reset(&mut block, 0, 1);
+    MIXER_ANIM.store(9, Ordering::Relaxed);
+    LOG.lock().unwrap().clear();
+    let result = unsafe { f_play_f(this, call.ptr() as u32, unit, false, false, &ops) };
+    if !result || byte(&block, 0xf9) != 0 || byte(&block, 0xf8) != 1 || *LOG.lock().unwrap() != play_log(&["mixer_anim"]) {
+        failures.push(format!("moving with animation: result {result}, log {:?}", LOG.lock().unwrap()));
+    }
+    // No unit type, no default animation.
+    reset(&mut block, 1, 0);
+    block[0x128 / 4] = 0;
+    LOG.lock().unwrap().clear();
+    if unsafe { f_play_f(this, call.ptr() as u32, unit, false, false, &ops) } || !LOG.lock().unwrap().is_empty() {
+        failures.push("fPlayF without unit type should fail silently".into());
+    }
+
+    // fPlayWithBaseF
+    reset(&mut block, 1, 0);
+    PLAY_RESULT.store(1, Ordering::Relaxed);
+    PLAY_EMPTY.store(0, Ordering::Relaxed);
+    let one = make_call(&[5]);
+    LOG.lock().unwrap().clear();
+    if unsafe { f_play_with_base_f(this, one.ptr() as u32, unit, false, false, &ops) } || !LOG.lock().unwrap().is_empty() {
+        failures.push("fPlayWithBaseF with one parameter should fail".into());
+    }
+    let missing_base = make_call(&[1000, 6]);
+    LOG.lock().unwrap().clear();
+    if unsafe { f_play_with_base_f(this, missing_base.ptr() as u32, unit, false, false, &ops) } || *LOG.lock().unwrap() != play_log(&["find(1000)"]) {
+        failures.push(format!("fPlayWithBaseF with a missing base: log {:?}", LOG.lock().unwrap()));
+    }
+    let with_base = make_call(&[4, 6, 1000, 8]);
+    with_base.raw_mut_flag(0xaa);
+    LOG.lock().unwrap().clear();
+    let result = unsafe { f_play_with_base_f(this, with_base.ptr() as u32, unit, true, true, &ops) };
+    let expected = play_log(&["find(4)", "first(0x4)", "find(6)", "add(6,true,true)", "find(1000)", "find(8)", "add(8,true,true)", "play(true)", "release"]);
+    if !result || *LOG.lock().unwrap() != expected || byte(&block, 0xf8) != 1 || byte(&block, 0xf9) != 0 || with_base.flag() != 0 {
+        failures.push(format!("fPlayWithBaseF: result {result}, log {:?}", LOG.lock().unwrap()));
+    }
+
+    // fSetBaseF
+    reset(&mut block, 1, 0);
+    let two = make_call(&[5, 6]);
+    LOG.lock().unwrap().clear();
+    if unsafe { f_set_base_f(this, two.ptr() as u32, unit, &ops) } || !LOG.lock().unwrap().is_empty() {
+        failures.push("fSetBaseF with two parameters should fail".into());
+    }
+    reset(&mut block, 0, 1);
+    let found = make_call(&[5]);
+    found.raw_mut_flag(0xaa);
+    if !unsafe { f_set_base_f(this, found.ptr() as u32, unit, &ops) } || byte(&block, 0xf8) != 1 || byte(&block, 0xf9) != 0 || found.flag() != 0xaa {
+        failures.push("fSetBaseF on a unit that is not stopped should return true untouched".into());
+    }
+    reset(&mut block, 1, 1);
+    LOG.lock().unwrap().clear();
+    let result = unsafe { f_set_base_f(this, found.ptr() as u32, unit, &ops) };
+    if !result || *LOG.lock().unwrap() != play_log(&["find(5)", "set_base(5)"]) || byte(&block, 0xf8) != 0 || byte(&block, 0xf9) != 1 || found.flag() != 1 {
+        failures.push(format!("fSetBaseF found: result {result}, log {:?}", LOG.lock().unwrap()));
+    }
+    reset(&mut block, 1, 1);
+    let missing = make_call(&[1000]);
+    missing.raw_mut_flag(0xaa);
+    LOG.lock().unwrap().clear();
+    let result = unsafe { f_set_base_f(this, missing.ptr() as u32, unit, &ops) };
+    if result || *LOG.lock().unwrap() != play_log(&["find(1000)"]) || byte(&block, 0xf8) != 0 || byte(&block, 0xf9) != 1 || missing.flag() != 1 {
+        failures.push(format!("fSetBaseF missing: result {result}, log {:?}", LOG.lock().unwrap()));
+    }
+    block[0x128 / 4] = 0;
+    LOG.lock().unwrap().clear();
+    if unsafe { f_set_base_f(this, found.ptr() as u32, unit, &ops) } || !LOG.lock().unwrap().is_empty() {
+        failures.push("fSetBaseF without a unit type should fail".into());
+    }
+    let _ = &mut this_block;
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_FLY_F`: port only, over recording stand-ins. Covers `fFlyF`'s gates and the converted values,
+/// strings, reverse flag and default/explicit limit handed to `fFly`, and `fPlaySetProbF`'s pair parsing:
+/// odd and short parameter counts, the names and weights of the entry vector, and the result.
+pub(crate) fn run_ztaimgr_f_fly_f_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_fly_f, f_play_set_prob_f, FlyOps, SetProbOps};
+    let test_name = "ZTAIMGR_F_FLY_F";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static PROB_RESULT: AtomicU32 = AtomicU32::new(0);
+    unsafe fn f_fly(this: u32, unit: u32, name: u32, value: u32, extra: u32, done: u32, reverse: u32, limit: u32) -> bool {
+        let entry = format!("fly({this:#x},{unit:#x},{},{value},{},{done:#x},{reverse},{limit})", unsafe { read_vanilla_string(name) }, unsafe { read_vanilla_string(extra) });
+        LOG.lock().unwrap().push(entry);
+        true
+    }
+    // Weights are plain decimal text.
+    unsafe fn parse_int(text: *const u8) -> u32 {
+        unsafe { std::ffi::CStr::from_ptr(text as *const _) }.to_str().unwrap().parse().unwrap_or(9999)
+    }
+    // Reads the entry vector: `{begin, end, cap}` of 16-byte `(string, weight)` entries.
+    unsafe fn play_set_prob(vector: u32, unit: u32) -> bool {
+        let (begin, end) = (unsafe { *(vector as *const u32) }, unsafe { *((vector + 4) as *const u32) });
+        let mut parts = Vec::new();
+        let mut entry = begin;
+        while entry < end {
+            parts.push(format!("{}={}", unsafe { read_vanilla_string(entry) }, unsafe { *((entry + 12) as *const u32) }));
+            entry += 16;
+        }
+        LOG.lock().unwrap().push(format!("prob({unit:#x},{})", parts.join(",")));
+        PROB_RESULT.load(Ordering::Relaxed) != 0
+    }
+    extern "thiscall" fn fake_convert(_this: u32, param: u32, _unit: u32) -> u32 {
+        unsafe { read_vanilla_string(param) }.parse().unwrap_or(9999)
+    }
+    let fly_ops = FlyOps { f_fly };
+    let prob_ops = SetProbOps { parse_int, play_set_prob };
+    let mut mgr_vtable = Box::new([0u32; 0x20]);
+    mgr_vtable[0x34 / 4] = fake_convert as *const () as usize as u32;
+    let mgr = Box::new([mgr_vtable.as_ptr() as u32]);
+    let this = mgr.as_ptr() as u32;
+    let unit = 0x5000_0000u32;
+
+    let two = Call::new("fFly", &["glide", "4"]);
+    let three = Call::new("fFly", &["glide", "4", "60"]);
+    for (label, call, reverse, limit) in [("two", &two, 0u32, 100u32), ("three", &three, 1, 60)] {
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_fly_f(this, call.ptr() as u32, unit, reverse, &fly_ops) };
+        let expected = format!("fly({this:#x},{unit:#x},glide,4,,{:#x},{reverse},{limit})", call.ptr() as u32 + 0x18);
+        if !result || *LOG.lock().unwrap() != vec![expected.clone()] {
+            failures.push(format!("fFlyF {label}: result {result}, log {:?}, expected {expected}", LOG.lock().unwrap()));
+        }
+    }
+    let one = Call::new("fFly", &["glide"]);
+    let four = Call::new("fFly", &["glide", "4", "60", "x"]);
+    for (label, call, u) in [("null unit", &two, 0), ("one", &one, unit), ("four", &four, unit)] {
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_fly_f(this, call.ptr() as u32, u, 0, &fly_ops) };
+        if result || !LOG.lock().unwrap().is_empty() {
+            failures.push(format!("fFlyF {label}: result {result}, log {:?}", LOG.lock().unwrap()));
+        }
+    }
+
+    // fPlaySetProbF
+    for (label, params, result_flag, expected) in [
+        ("pair", vec!["wave", "30", "nod", "70"], 1u32, Some("prob(0x5000,wave=30,nod=70)")),
+        ("single pair", vec!["wave", "100"], 0, Some("prob(0x5000,wave=100)")),
+        ("odd", vec!["wave", "30", "nod"], 1, None),
+        ("one", vec!["wave"], 1, None),
+        ("none", vec![], 1, None),
+    ] {
+        PROB_RESULT.store(result_flag, Ordering::Relaxed);
+        let call = Call::new("fPlaySetProb", &params);
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_play_set_prob_f(call.ptr() as u32, 0x5000, &prob_ops) };
+        let expected_log: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        let expected_result = expected.is_some() && result_flag != 0;
+        if result != expected_result || *LOG.lock().unwrap() != expected_log {
+            failures.push(format!("fPlaySetProbF {label}: result {result}, log {:?}, expected {expected_log:?}", LOG.lock().unwrap()));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_RANDOM_WALK`: port only, over a fake unit, manager, map and recording stand-ins. Covers each
+/// phase of `fRandomWalk`: queued targets, a standing destination, the random-box candidate walk, the neighbour
+/// walk with its path-cost limit, the fall-back to the unit's own position, the guard byte and the deferrals.
+pub(crate) fn run_ztaimgr_f_random_walk_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::{collections::VecDeque, sync::Mutex};
+
+    use crate::ztaimgr::{f_random_walk, RandomWalkOps};
+    let test_name = "ZTAIMGR_F_RANDOM_WALK";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static RAND: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+    static PATH_RESULTS: Mutex<VecDeque<bool>> = Mutex::new(VecDeque::new());
+    static WALKABLE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static NEIGHBORS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static HAS_DEST: AtomicU32 = AtomicU32::new(0);
+    static DEST: Mutex<[i32; 3]> = Mutex::new([0; 3]);
+    static ADD_TARGET: AtomicU32 = AtomicU32::new(0);
+    static RING: AtomicU32 = AtomicU32::new(0);
+    static RANGE: AtomicU32 = AtomicU32::new(1);
+    static WORLD: AtomicU32 = AtomicU32::new(0);
+    static TILE_BASE: AtomicU32 = AtomicU32::new(0);
+    static COST_LIMIT: AtomicU32 = AtomicU32::new(10);
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    fn index(tile: u32) -> u32 {
+        (tile - TILE_BASE.load(Ordering::Relaxed)) / 0x8c
+    }
+    fn triple(ptr: u32) -> [i32; 3] {
+        [unsafe { *(ptr as *const i32) }, unsafe { *((ptr + 4) as *const i32) }, unsafe { *((ptr + 8) as *const i32) }]
+    }
+    unsafe fn rand() -> u32 {
+        RAND.lock().unwrap().pop_front().expect("rand queue exhausted")
+    }
+    unsafe fn world() -> u32 {
+        WORLD.load(Ordering::Relaxed)
+    }
+    unsafe fn neighbors(_: u32, tile: u32) -> Vec<u32> {
+        log(format!("neighbors({})", index(tile)));
+        NEIGHBORS.lock().unwrap().iter().map(|i| TILE_BASE.load(Ordering::Relaxed) + i * 0x8c).collect()
+    }
+    unsafe fn path_cost(_: u32, from: u32, to: u32) -> i32 {
+        log(format!("cost({},{})", index(from), index(to)));
+        (index(to) % 100) as i32
+    }
+    unsafe fn cost_limit() -> i32 {
+        COST_LIMIT.load(Ordering::Relaxed) as i32
+    }
+    unsafe fn no_destination() -> [i32; 3] {
+        [-1, -1, -1]
+    }
+    extern "thiscall" fn v_walk(_: u32, tile: u32, flag: u32) -> u32 {
+        log(format!("walk({},{flag})", index(tile)));
+        u32::from(WALKABLE.lock().unwrap().contains(&index(tile)))
+    }
+    extern "thiscall" fn v_get_dest(_: u32, out: u32) -> u32 {
+        log("get_dest".into());
+        if ADD_TARGET.load(Ordering::Relaxed) != 0 {
+            let ring = RING.load(Ordering::Relaxed);
+            unsafe {
+                *(ring as *mut u32) = ring + 8;
+                *((ring + 8) as *mut u32) = ring;
+            }
+        }
+        if HAS_DEST.load(Ordering::Relaxed) != 0 {
+            let dest = *DEST.lock().unwrap();
+            for (i, v) in dest.iter().enumerate() {
+                unsafe { *((out + i as u32 * 4) as *mut i32) = *v };
+            }
+        }
+        HAS_DEST.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_set_dest(_: u32, goal: u32) -> u32 {
+        log(format!("set_dest({:?})", triple(goal)));
+        0
+    }
+    extern "thiscall" fn m_get_path(_: u32, start: u32, goal: u32, _: u32, flag: u32) -> u32 {
+        log(format!("path({:?},{:?},{flag})", triple(start), triple(goal)));
+        u32::from(PATH_RESULTS.lock().unwrap().pop_front().unwrap_or(false))
+    }
+    extern "thiscall" fn m_range(_: u32, _: u32) -> u32 {
+        RANGE.load(Ordering::Relaxed)
+    }
+    let ops = RandomWalkOps { rand, world, neighbors, path_cost, path_cost_limit: cost_limit, no_destination };
+
+    let mut unit_vtable = Box::new([0u32; 0x100]);
+    unit_vtable[0x168 / 4] = v_walk as *const () as usize as u32;
+    unit_vtable[0x1f4 / 4] = v_get_dest as *const () as usize as u32;
+    unit_vtable[0x1f8 / 4] = v_set_dest as *const () as usize as u32;
+    let mut mgr_vtable = Box::new([0u32; 0x20]);
+    mgr_vtable[0x18 / 4] = m_get_path as *const () as usize as u32;
+    mgr_vtable[0x20 / 4] = m_range as *const () as usize as u32;
+    mgr_vtable[0x24 / 4] = m_range as *const () as usize as u32;
+    let mut mgr = Box::new([0u32; 0x80]);
+    mgr[0] = mgr_vtable.as_ptr() as u32;
+    let this = mgr.as_ptr() as u32;
+
+    let mut tiles = vec![0u8; 20 * 20 * 0x8c];
+    for i in 0..400usize {
+        let base = i * 0x8c + 0x34;
+        for (k, v) in [(i % 20) as i32, (i / 20) as i32, 0].iter().enumerate() {
+            tiles[base + k * 4..base + k * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    TILE_BASE.store(tiles.as_ptr() as u32, Ordering::Relaxed);
+    let mut world_block = Box::new([0u32; 0x40]);
+    world_block[(8 + 0x2c) / 4] = 20;
+    world_block[(8 + 0x30) / 4] = 20;
+    world_block[(8 + 0x38) / 4] = tiles.as_ptr() as u32;
+    WORLD.store(world_block.as_ptr() as u32, Ordering::Relaxed);
+    let mut ring = vec![[0u32; 2]; 2];
+    RING.store(ring.as_ptr() as u32, Ordering::Relaxed);
+
+    let mut block = Box::new([0u32; 0x200]);
+    block[0] = unit_vtable.as_ptr() as u32;
+    block[0x154 / 4] = ring.as_ptr() as u32;
+    let unit = block.as_ptr() as u32;
+    // Unit at tile (5, 5), height cell 3.
+    block[0x114 / 4] = 5 * 64 + 10;
+    block[0x118 / 4] = 5 * 64;
+    block[0x11c / 4] = 3 * 16 + 2;
+    let guard = |block: &Box<[u32; 0x200]>| unsafe { *((block.as_ptr() as usize + 0x20f) as *const u8) };
+    let start = [5, 5, 3];
+    let tile_of = |x: i32, y: i32| (y * 20 + x) as u32;
+
+    struct Case {
+        label: &'static str,
+        add_target: bool,
+        dest: Option<[i32; 3]>,
+        paths: Vec<bool>,
+        walkable: Vec<u32>,
+        neighbors: Vec<u32>,
+        rands: Vec<u32>,
+        expect_result: Option<bool>,
+        expect_log: Vec<String>,
+    }
+    let case = |label, add_target, dest, paths: &[bool], walkable: Vec<u32>, neighbors: Vec<u32>, rands: &[u32], expect_result, expect_log: Vec<String>| Case {
+        label, add_target, dest, paths: paths.to_vec(), walkable, neighbors, rands: rands.to_vec(), expect_result, expect_log,
+    };
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    // Radius 1 box (rand 0 -> half extent 1): perimeter order dx -1..1, dy -1..1, skipping the centre.
+    let ring_tiles: Vec<u32> = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)].iter().map(|(dx, dy)| tile_of(5 + dx, 5 + dy)).collect();
+    let walk_log = |tiles: &[u32]| tiles.iter().map(|t| format!("walk({t},1)")).collect::<Vec<_>>();
+    let goal_of = |t: u32| [(t % 20) as i32, (t / 20) as i32, 0];
+    let mut radius_log = vec!["get_dest".to_string()];
+    radius_log.extend(walk_log(&ring_tiles));
+    let pick_goal = goal_of(ring_tiles[2]);
+    let mut radius_ok = radius_log.clone();
+    radius_ok.push(format!("set_dest({pick_goal:?})"));
+    radius_ok.push(format!("path({start:?},{pick_goal:?},0)"));
+    let mut fallback = radius_log.clone();
+    fallback.extend(s(&["neighbors(105)"]));
+    let cases = vec![
+        case("queued after get_dest", true, None, &[], vec![], vec![], &[], Some(true), s(&["get_dest"])),
+        case("standing destination", false, Some([9, 9, 9]), &[true], vec![], vec![], &[], Some(true), vec!["get_dest".to_string(), format!("path({start:?},[9, 9, 9],1)")]),
+        case("destination is own tile", false, Some(start), &[true], vec![tile_of(4, 6)], vec![], &[0, 0, 0], Some(true), {
+            let mut v = vec!["get_dest".to_string()];
+            v.extend(walk_log(&ring_tiles));
+            v.push(format!("set_dest({:?})", goal_of(tile_of(4, 6))));
+            v.push(format!("path({start:?},{:?},0)", goal_of(tile_of(4, 6))));
+            v
+        }),
+        case("radius walk picks a candidate", false, None, &[true], vec![ring_tiles[2], ring_tiles[5]], vec![], &[0, 0, 0], Some(true), radius_ok.clone()),
+        case("radius path fails, neighbours", false, None, &[false, true], vec![ring_tiles[2], 102], vec![101, 102], &[0, 0, 0, 1], Some(true), {
+            let mut v = radius_ok.clone();
+            v.push("neighbors(105)".into());
+            v.push("walk(102,1)".into());
+            v.push("cost(105,102)".into());
+            v.push(format!("set_dest({:?})", goal_of(102)));
+            v.push(format!("path({start:?},{:?},0)", goal_of(102)));
+            v
+        }),
+        case("neighbour over cost limit", false, None, &[false], vec![150, 160], vec![150, 160], &[0, 0, 0, 0], Some(false), {
+            let mut v = radius_log.clone();
+            v.push("neighbors(105)".into());
+            v.push("walk(150,1)".into());
+            v.push("cost(105,150)".into());
+            v.push("walk(160,1)".into());
+            v.push("cost(105,160)".into());
+            v.push(format!("path({start:?},{start:?},0)"));
+            v
+        }),
+        case("neighbour walk starts at the random index and does not wrap", false, None, &[false, false], vec![101, 102], vec![101, 102], &[0, 0, 1], Some(false), {
+            let mut v = radius_log.clone();
+            v.push("neighbors(105)".into());
+            v.push("walk(102,1)".into());
+            v.push("cost(105,102)".into());
+            v.push(format!("set_dest({:?})", goal_of(102)));
+            v.push(format!("path({start:?},{:?},0)", goal_of(102)));
+            v.push(format!("path({start:?},{start:?},0)"));
+            v
+        }),
+    ];
+    let _ = fallback;
+    for case in &cases {
+        let ring_ptr = ring.as_ptr() as u32;
+        ring[0][0] = ring_ptr;
+        ring[1][0] = 0;
+        *RAND.lock().unwrap() = case.rands.iter().copied().collect();
+        *PATH_RESULTS.lock().unwrap() = case.paths.iter().copied().collect();
+        *WALKABLE.lock().unwrap() = case.walkable.clone();
+        *NEIGHBORS.lock().unwrap() = case.neighbors.clone();
+        HAS_DEST.store(u32::from(case.dest.is_some()), Ordering::Relaxed);
+        *DEST.lock().unwrap() = case.dest.unwrap_or([0; 3]);
+        ADD_TARGET.store(u32::from(case.add_target), Ordering::Relaxed);
+        RANGE.store(1, Ordering::Relaxed);
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_random_walk(this, unit, &ops) };
+        if result != case.expect_result || *LOG.lock().unwrap() != case.expect_log || guard(&block) != 0 {
+            failures.push(format!("{}: result {result:?}, log {:?}, guard {}; expected {:?}, {:?}", case.label, LOG.lock().unwrap(), guard(&block), case.expect_result, case.expect_log));
+        }
+    }
+
+    // Gates and deferrals.
+    ring[0][0] = ring.as_ptr() as u32;
+    HAS_DEST.store(0, Ordering::Relaxed);
+    ADD_TARGET.store(0, Ordering::Relaxed);
+    LOG.lock().unwrap().clear();
+    if unsafe { f_random_walk(this, 0, &ops) } != Some(false) {
+        failures.push("null unit".into());
+    }
+    RANGE.store(0, Ordering::Relaxed);
+    *RAND.lock().unwrap() = VecDeque::new();
+    if unsafe { f_random_walk(this, unit, &ops) }.is_some() {
+        failures.push("zero random extent should defer".into());
+    }
+    RANGE.store(1, Ordering::Relaxed);
+    block[0x114 / 4] = 100 * 64;
+    if unsafe { f_random_walk(this, unit, &ops) }.is_some() {
+        failures.push("unit off the map should defer".into());
+    }
+    block[0x114 / 4] = 5 * 64 + 10;
+    *RAND.lock().unwrap() = VecDeque::from([0, 0, 0]);
+    *WALKABLE.lock().unwrap() = vec![];
+    *NEIGHBORS.lock().unwrap() = vec![];
+    if unsafe { f_random_walk(this, unit, &ops) }.is_some() {
+        failures.push("empty neighbour list should defer".into());
+    }
+    let _ = (&mut ring, &tiles, &world_block);
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_SPECIAL_F`: port only, over a fake call and recording stand-ins. Covers every branch of the
+/// five-parameter rewrite (which strings replace the parameters, the new name, the handler chain, the second
+/// flag and the `fPlaySpecial` arguments), the both-numbers failure and the parameter-count guards.
+pub(crate) fn run_ztaimgr_f_play_special_f_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_special_f, FPlaySpecialArgs, PlaySpecialFOps, SpecialHandler, SpecialString};
+    let test_name = "ZTAIMGR_F_PLAY_SPECIAL_F";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    unsafe fn text(string: u32) -> String {
+        let (begin, end) = (unsafe { *(string as *const u32) }, unsafe { *((string + 4) as *const u32) });
+        String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(begin as *const u8, (end - begin) as usize) }).into_owned()
+    }
+    // Strings are identified by content: none, rev, pp, ma, mb.
+    unsafe fn is_string(which: SpecialString, string: u32) -> bool {
+        let expected = match which {
+            SpecialString::None => "none",
+            SpecialString::Reverse => "rev",
+            SpecialString::PingPong => "pp",
+            SpecialString::ModeA => "ma",
+            SpecialString::ModeB => "mb",
+        };
+        unsafe { text(string) == expected }
+    }
+    unsafe fn convert(_: u32, param: u32, _: u32) -> i32 {
+        unsafe { text(param) }.parse().unwrap_or(0)
+    }
+    unsafe fn replace_params(_: u32, strings: &[u32]) {
+        log(format!("params[{}]", strings.iter().map(|s| unsafe { text(*s) }).collect::<Vec<_>>().join(",")));
+    }
+    unsafe fn set_name(_: u32, name: &[u8]) {
+        log(format!("name:{}", String::from_utf8_lossy(name)));
+    }
+    unsafe fn forward(handler: SpecialHandler, _: u32, _: u32, _: u32) -> bool {
+        log(format!("fwd:{handler:?}"));
+        true
+    }
+    unsafe fn play_special(args: &FPlaySpecialArgs) -> bool {
+        log(format!("special({},{},{},{},{})", unsafe { text(args.anim_name) }, unsafe { text(args.sound_name) }, args.seconds as i32, args.count, unsafe { text(args.special) }));
+        true
+    }
+    let ops = PlaySpecialFOps { is_string, convert, replace_params, set_name, forward, play_special };
+
+    let run = |params: [&str; 5]| -> (Option<bool>, Vec<String>, u8) {
+        LOG.lock().unwrap().clear();
+        let call = Call::new("fPlaySpecial", &params);
+        unsafe { *((call.ptr() as u32 + 0x19) as *mut u8) = 0xff };
+        let result = unsafe { f_play_special_f(0x1000, call.ptr() as u32, 0x2000, &ops) };
+        let flag_b = unsafe { *((call.ptr() as u32 + 0x19) as *const u8) };
+        (result, LOG.lock().unwrap().clone(), flag_b)
+    };
+    let s = |items: &[&str]| items.iter().map(|i| i.to_string()).collect::<Vec<_>>();
+
+    #[allow(clippy::type_complexity)]
+    let cases: Vec<([&str; 5], Option<bool>, Vec<String>, u8)> = vec![
+        (["a", "none", "0", "0", "ma"], Some(true), s(&["params[a]", "name:fPlay", "fwd:Play", "fwd:PlayPingPong"]), 0xff),
+        (["a", "none", "0", "0", "mb"], Some(true), s(&["params[a]", "name:fPlay", "fwd:Play", "fwd:PlayPingPong"]), 0xff),
+        (["a", "none", "0", "0", "none"], Some(true), s(&["params[a]", "name:fPlay", "fwd:Play", "fwd:PlayPingPong"]), 0xff),
+        (["a", "none", "0", "0", "rev"], Some(true), s(&["params[a]", "name:fPlayReverse", "fwd:PlayReverse", "fwd:PlayPingPong"]), 0xff),
+        (["a", "none", "0", "0", "pp"], Some(true), s(&["params[a]", "name:fPlayPingPong", "fwd:PlayPingPong"]), 0xff),
+        (["a", "none", "0", "0", "zz"], Some(true), s(&["params[a]", "fwd:PlayPingPong"]), 0xff),
+        (["a", "snd", "0", "0", "ma"], Some(true), s(&["params[a,snd]", "name:fPlayWithSound", "fwd:PlayWithSound"]), 0xff),
+        (["none", "snd", "0", "0", "mb"], Some(true), s(&["special(none,snd,0,0,mb)"]), 1),
+        (["none", "snd", "0", "0", "ma"], Some(true), s(&["special(none,snd,0,0,ma)"]), 0),
+        (["a", "none", "2", "0", "mb"], Some(true), s(&["params[a,2]", "name:fPlayTime", "fwd:PlayTime"]), 1),
+        (["a", "none", "2", "0", "ma"], Some(true), s(&["params[a,2]", "name:fPlayTime", "fwd:PlayTime"]), 0),
+        (["a", "none", "2", "0", "none"], Some(true), s(&["params[a,2]", "name:fPlayTime", "fwd:PlayTime"]), 0),
+        (["a", "none", "2", "0", "zz"], Some(true), s(&["special(a,none,2000,0,zz)"]), 0xff),
+        (["a", "snd", "2", "0", "ma"], Some(true), s(&["special(a,snd,2000,0,ma)"]), 0xff),
+        (["a", "none", "0", "3", "ma"], Some(true), s(&["special(a,none,0,3,ma)"]), 0xff),
+        (["a", "snd", "2", "3", "ma"], Some(false), s(&[]), 0xff),
+    ];
+    for (params, expected_result, expected_log, expected_flag_b) in cases {
+        let (result, entries, flag_b) = run(params);
+        if result != expected_result || entries != expected_log || flag_b != expected_flag_b {
+            failures.push(format!("{params:?}: got {result:?} {entries:?} flagB {flag_b:#x}, expected {expected_result:?} {expected_log:?} flagB {expected_flag_b:#x}"));
+        }
+    }
+
+    // Parameter-count guards: a set result flag with another count fails, a clear one defers.
+    LOG.lock().unwrap().clear();
+    let short = Call::new("fPlaySpecial", &["a", "none", "0", "0"]);
+    if unsafe { f_play_special_f(0x1000, short.ptr() as u32, 0x2000, &ops) } != None {
+        failures.push("four parameters with a clear flag should defer".to_string());
+    }
+    short.raw_mut_flag(1);
+    if unsafe { f_play_special_f(0x1000, short.ptr() as u32, 0x2000, &ops) } != Some(false) {
+        failures.push("four parameters with the flag set should fail".to_string());
+    }
+    if !LOG.lock().unwrap().is_empty() {
+        failures.push(format!("guards must not touch the ops: {:?}", LOG.lock().unwrap()));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_SOUND`: port only, over a recording `fPlaySpecial` stand-in. `fPlaySound` must call it with
+/// the animation text `0`, the caller's sound string, no duration or count, the plain-mode string pointer, the
+/// unit and the done pointer, and return its result.
+pub(crate) fn run_ztaimgr_f_play_sound_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_sound, FPlaySpecialArgs};
+    let test_name = "ZTAIMGR_F_PLAY_SOUND";
+    let mut failures: Vec<String> = Vec::new();
+
+    static SEEN: Mutex<Vec<(u32, String, u32, u32, i32, u32, u32, u32)>> = Mutex::new(Vec::new());
+    static RESULT: AtomicU32 = AtomicU32::new(0);
+    unsafe fn record(args: &FPlaySpecialArgs) -> bool {
+        let (begin, end) = (unsafe { *(args.anim_name as *const u32) }, unsafe { *((args.anim_name + 4) as *const u32) });
+        let anim = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(begin as *const u8, (end - begin) as usize) }).into_owned();
+        SEEN.lock().unwrap().push((args.this, anim, args.sound_name, args.seconds, args.count, args.special, args.unit, args.done as u32));
+        RESULT.load(Ordering::Relaxed) != 0
+    }
+
+    let done = [0u8; 4];
+    for result in [true, false] {
+        SEEN.lock().unwrap().clear();
+        RESULT.store(u32::from(result), Ordering::Relaxed);
+        let got = unsafe { f_play_sound(0x10, 0x20, 0x30, done.as_ptr(), 0x40, record) };
+        let expected = vec![(0x10, "0".to_string(), 0x20, 0, 0, 0x40, 0x30, done.as_ptr() as u32)];
+        if got != result || *SEEN.lock().unwrap() != expected {
+            failures.push(format!("result {got} (expected {result}), saw {:x?}, expected {expected:x?}", SEEN.lock().unwrap()));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_SET_PROB`: port only, over a scripted `rand` and a recording `fPlaySet`. Covers the first-roll
+/// hit, rerolls after misses (and how many `rand` calls each takes), the weight-sum and empty guards, and the
+/// returned low byte.
+pub(crate) fn run_ztaimgr_f_play_set_prob_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_set_prob, SetProbPickOps};
+    let test_name = "ZTAIMGR_F_PLAY_SET_PROB";
+    let mut failures: Vec<String> = Vec::new();
+
+    static RANDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static PLAYED: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+    static PLAY_RESULT: AtomicU32 = AtomicU32::new(1);
+    unsafe fn rand() -> u32 {
+        let mut rands = RANDS.lock().unwrap();
+        assert!(!rands.is_empty(), "rand called more often than scripted");
+        rands.remove(0)
+    }
+    unsafe fn play_set(name: u32, unit: u32) -> u32 {
+        let (begin, end) = (unsafe { *(name as *const u32) }, unsafe { *((name + 4) as *const u32) });
+        let text = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(begin as *const u8, (end - begin) as usize) }).into_owned();
+        PLAYED.lock().unwrap().push((text, unit));
+        PLAY_RESULT.load(Ordering::Relaxed)
+    }
+    let ops = SetProbPickOps { rand, play_set };
+
+    // Each entry is {begin, end, cap, weight} over a leaked name buffer.
+    let make = |entries: &[(&'static str, u32)]| -> Box<[u32]> {
+        entries
+            .iter()
+            .flat_map(|(name, weight)| {
+                let begin = name.as_ptr() as u32;
+                [begin, begin + name.len() as u32, begin + name.len() as u32, *weight]
+            })
+            .collect()
+    };
+    let run = |entries: &[(&'static str, u32)], rands: &[u32], result: u32| -> (bool, Vec<(String, u32)>, usize) {
+        let words = make(entries);
+        let header = [words.as_ptr() as u32, words.as_ptr() as u32 + words.len() as u32 * 4, words.as_ptr() as u32 + words.len() as u32 * 4];
+        *RANDS.lock().unwrap() = rands.to_vec();
+        PLAYED.lock().unwrap().clear();
+        PLAY_RESULT.store(result, Ordering::Relaxed);
+        let got = unsafe { f_play_set_prob(header.as_ptr() as u32, 0x99, &ops) };
+        let left = RANDS.lock().unwrap().len();
+        (got, PLAYED.lock().unwrap().clone(), left)
+    };
+    let one = |name: &str, unit: u32| vec![(name.to_string(), unit)];
+
+    let two = [("a", 30), ("b", 70)];
+    let three = [("x", 10), ("y", 10), ("z", 80)];
+    let checks: Vec<(&str, (bool, Vec<(String, u32)>, usize), (bool, Vec<(String, u32)>, usize))> = vec![
+        ("first roll hits", run(&two, &[0, 9], 1), (true, one("a", 0x99), 1)),
+        ("roll 30 is the edge of the first entry", run(&two, &[29, 9], 1), (true, one("a", 0x99), 1)),
+        ("reroll lands on the second", run(&two, &[40, 5], 1), (true, one("b", 0x99), 0)),
+        ("two rerolls", run(&three, &[95, 89, 79], 1), (true, one("z", 0x99), 0)),
+        ("play result 0 is false", run(&two, &[0], 0), (false, one("a", 0x99), 0)),
+        ("low byte only", run(&two, &[0], 0x100), (false, one("a", 0x99), 0)),
+        ("weights not 100", run(&[("a", 30), ("b", 60)], &[], 1), (false, vec![], 0)),
+        ("no entries", run(&[], &[], 1), (false, vec![], 0)),
+    ];
+    for (label, got, expected) in checks {
+        if got != expected {
+            failures.push(format!("{label}: got {got:?}, expected {expected:?}"));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_SET`: port only, over a fake unit and recording stand-ins for `initChild`, `setBS` and the
+/// pending-set setter. The `BFBSCall` is built by the real vanilla constructor, so the stand-ins also check its
+/// text and flag. Covers the null-unit and empty-name guards, the child path and all three non-child branches.
+pub(crate) fn run_ztaimgr_f_play_set_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_set, PlaySetOps};
+    let test_name = "ZTAIMGR_F_PLAY_SET";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static CHILD_RESULT: AtomicU32 = AtomicU32::new(0);
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    unsafe fn describe(call: u32) -> String {
+        let (begin, end) = (unsafe { *(call as *const u32) }, unsafe { *((call + 4) as *const u32) });
+        let text = String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(begin as *const u8, (end - begin) as usize) }).into_owned();
+        format!("{text}/{}", unsafe { *((call + 0xc) as *const u8) })
+    }
+    unsafe fn init_child(unit: u32, name: u32) -> bool {
+        log(format!("child({unit:#x},{})", unsafe { describe(name) }.split('/').next().unwrap()));
+        CHILD_RESULT.load(Ordering::Relaxed) != 0
+    }
+    unsafe fn set_bs(unit: u32, call: u32, force: u32, mode: u32) {
+        log(format!("setBS({unit:#x},{},{force},{mode})", unsafe { describe(call) }));
+    }
+    unsafe fn set_pending(unit: u32, call: u32, force: u32) {
+        log(format!("pending({unit:#x},{},{force})", unsafe { describe(call) }));
+    }
+    let ops = PlaySetOps { init_child, set_bs, set_pending };
+
+    // A fake unit: pending set byte at +0x6d, pending call {begin, end, cap, flag} at +0xdc.
+    let pending_text = b"old";
+    let mut block = Box::new([0u32; 0x80]);
+    let unit = block.as_ptr() as u32;
+    let configure = |block: &mut Box<[u32; 0x80]>, has_pending_set: bool, pending_present: bool| {
+        unsafe { *((block.as_ptr() as usize + 0x6d) as *mut u8) = u8::from(has_pending_set) };
+        let begin = pending_text.as_ptr() as u32;
+        block[0xdc / 4] = begin;
+        block[0xe0 / 4] = if pending_present { begin + 3 } else { begin };
+        block[0xe4 / 4] = begin + 3;
+        block[0xe8 / 4] = 0;
+    };
+    let name_text = b"walk";
+    let name = [name_text.as_ptr() as u32, name_text.as_ptr() as u32 + 4, name_text.as_ptr() as u32 + 4];
+    let empty_name = [name_text.as_ptr() as u32; 3];
+    let run = |unit: u32, name: &[u32; 3], child: bool| -> (bool, Vec<String>) {
+        LOG.lock().unwrap().clear();
+        let result = unsafe { f_play_set(name.as_ptr() as u32, unit, child, 1, &ops) };
+        (result, LOG.lock().unwrap().clone())
+    };
+    let s = |items: &[&str]| items.iter().map(|i| i.to_string()).collect::<Vec<_>>();
+    let pending_at = unit + 0xdc;
+    let _ = pending_at;
+
+    configure(&mut block, false, true);
+    let mut checks: Vec<(&str, (bool, Vec<String>), (bool, Vec<String>))> = vec![
+        ("null unit", run(0, &name, false), (false, vec![])),
+        ("empty name", run(unit, &empty_name, false), (false, vec![])),
+    ];
+    CHILD_RESULT.store(1, Ordering::Relaxed);
+    checks.push(("child true", run(unit, &name, true), (true, s(&[&format!("child({unit:#x},walk)")]))));
+    CHILD_RESULT.store(0, Ordering::Relaxed);
+    checks.push(("child false", run(unit, &name, true), (false, s(&[&format!("child({unit:#x},walk)")]))));
+
+    configure(&mut block, true, false);
+    checks.push(("pending set, empty pending", run(unit, &name, false), (true, s(&[&format!("pending({unit:#x},walk/1,0)")]))));
+    configure(&mut block, true, true);
+    checks.push(("pending set, pending present", run(unit, &name, false), (true, vec![])));
+    configure(&mut block, false, false);
+    checks.push(("no pending set, empty pending", run(unit, &name, false), (true, s(&[&format!("setBS({unit:#x},walk/1,0,2)")]))));
+    configure(&mut block, false, true);
+    checks.push((
+        "no pending set, pending present",
+        run(unit, &name, false),
+        (true, s(&[&format!("setBS({unit:#x},old/0,0,2)"), &format!("pending({unit:#x},walk/1,0)")])),
+    ));
+    for (label, got, expected) in checks {
+        if got != expected {
+            failures.push(format!("{label}: got {got:?}, expected {expected:?}"));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_FLY`: port only, over a fake unit with a fake vtable and recording stand-ins. Covers the three
+/// not-stopped outcomes (set moving, arrived, still flying) and the start path (no animation, no/none/named
+/// sound, the link arguments, speed and limit virtuals and the final flags).
+pub(crate) fn run_ztaimgr_f_fly_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_fly, FFlyArgs, FlyCoreOps};
+    let test_name = "ZTAIMGR_F_FLY";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static ANIM: AtomicU32 = AtomicU32::new(0);
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    extern "thiscall" fn v_find_anim(_: u32, name: u32) -> u32 {
+        log(format!("find_anim({name:#x})"));
+        ANIM.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_speed(_: u32, value: u32) -> u32 {
+        log(format!("speed({value})"));
+        0
+    }
+    extern "thiscall" fn v_limit(_: u32, value: u32) -> u32 {
+        log(format!("limit({value})"));
+        0
+    }
+    unsafe fn stop(_: u32, a: i8, b: i8) {
+        log(format!("stop({a},{b})"));
+    }
+    unsafe fn set_moving(_: u32, a: i8, b: i8) {
+        log(format!("moving({a},{b})"));
+    }
+    // A string whose first byte is `n` is the "no sound" string.
+    unsafe fn is_no_sound(string: u32) -> bool {
+        let begin = unsafe { *(string as *const u32) };
+        unsafe { *(begin as *const u8) == b'n' }
+    }
+    unsafe fn find_sound(_: u32, string: u32) -> u32 {
+        log(format!("find_sound({})", unsafe { *(*(string as *const u32) as *const u8) } as char));
+        0x77
+    }
+    unsafe fn play_single(_: u32, anim: u32, flag: u8, sound: u32) {
+        log(format!("single({anim:#x},{flag},{sound:#x})"));
+    }
+    let ops = FlyCoreOps { stop, set_moving, is_no_sound, find_sound, play_single };
+
+    let mut vtable = Box::new([0u32; 0x80]);
+    vtable[0x130 / 4] = v_find_anim as *const () as usize as u32;
+    vtable[0x1c0 / 4] = v_speed as *const () as usize as u32;
+    vtable[0x1c4 / 4] = v_limit as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x100]);
+    block[0] = vtable.as_ptr() as u32;
+    let unit = block.as_ptr() as u32;
+    let byte_at = |offset: u32| unsafe { *((unit + offset) as *const u8) };
+    let set_byte = |offset: u32, value: u8| unsafe { *((unit + offset) as *mut u8) = value };
+    let reset = |block: &mut Box<[u32; 0x100]>, stopped: u8, moving: u8, d7: u8, c20: u8, at_target: bool| {
+        set_byte(0xf9, stopped);
+        set_byte(0xf8, moving);
+        set_byte(0xd7, d7);
+        set_byte(0x20c, c20);
+        for word in 0..3 {
+            block[0x114 / 4 + word] = 10 + word as u32;
+            block[0x1dc / 4 + word] = if at_target { 10 + word as u32 } else { 99 };
+        }
+    };
+    let done = Box::new([0u8; 4]);
+    let letters = b"nxyz";
+    let none = [letters.as_ptr() as u32, letters.as_ptr() as u32 + 1, letters.as_ptr() as u32 + 1];
+    let named = [letters.as_ptr() as u32 + 1, letters.as_ptr() as u32 + 2, letters.as_ptr() as u32 + 2];
+    let empty = [letters.as_ptr() as u32 + 2; 3];
+    let run = |extra: &[u32; 3]| -> (bool, Vec<String>) {
+        LOG.lock().unwrap().clear();
+        let args = FFlyArgs { unit, name: 0x5a, value: 7, extra: extra.as_ptr() as u32, done: done.as_ptr(), reverse: 1, limit: 33 };
+        (unsafe { f_fly(&args, &ops) }, LOG.lock().unwrap().clone())
+    };
+    let s = |items: &[&str]| items.iter().map(|i| i.to_string()).collect::<Vec<_>>();
+
+    reset(&mut block, 0, 1, 1, 0, false);
+    let got = run(&none);
+    if got != (true, s(&["moving(1,0)"])) || byte_at(0xf8) != 1 {
+        failures.push(format!("set moving: {got:?}"));
+    }
+    reset(&mut block, 0, 1, 0, 0, false);
+    let got = run(&none);
+    if got != (true, vec![]) {
+        failures.push(format!("still flying: {got:?}"));
+    }
+    reset(&mut block, 0, 0, 1, 0, true);
+    let got = run(&none);
+    if got != (true, vec![]) {
+        failures.push(format!("not moving: {got:?}"));
+    }
+    reset(&mut block, 0, 1, 0, 0, true);
+    let got = run(&none);
+    if got != (true, s(&["speed(0)", "stop(1,0)"])) || byte_at(0xf9) != 1 || byte_at(0xf8) != 0 || done[0] != 1 {
+        failures.push(format!("arrived: {got:?}, stopped {} moving {} done {}", byte_at(0xf9), byte_at(0xf8), done[0]));
+    }
+
+    reset(&mut block, 1, 0, 0, 0, false);
+    ANIM.store(0, Ordering::Relaxed);
+    let got = run(&none);
+    if got != (false, s(&["find_anim(0x5a)"])) || byte_at(0xf8) != 0 {
+        failures.push(format!("no animation: {got:?}"));
+    }
+    ANIM.store(0x1234, Ordering::Relaxed);
+    for (label, extra, sound_log, sound) in [("none", &none, None, 0u32), ("empty", &empty, None, 0), ("named", &named, Some("find_sound(x)"), 0x77)] {
+        reset(&mut block, 1, 0, 0, 0, false);
+        let got = run(extra);
+        let mut expected = vec!["find_anim(0x5a)".to_string()];
+        expected.extend(sound_log.map(str::to_string));
+        expected.extend(s(&[&format!("single(0x1234,1,{sound:#x})"), "speed(7)", "limit(33)"]));
+        if got != (true, expected.clone()) || byte_at(0xf8) != 1 || byte_at(0xf9) != 0 {
+            failures.push(format!("start with {label} sound: {got:?}, expected {expected:?}, moving {} stopped {}", byte_at(0xf8), byte_at(0xf9)));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_WITH_SOUND`: port only, over a fake unit and recording stand-ins. Covers the not-stopped
+/// outcomes, each early failure (no entity type, no default animation, no animation) and the three play results
+/// with the flags and `done` byte they leave.
+pub(crate) fn run_ztaimgr_f_play_with_sound_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_with_sound, PlayWithSoundOps};
+    let test_name = "ZTAIMGR_F_PLAY_WITH_SOUND";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static DEFAULT_ANIM: AtomicU32 = AtomicU32::new(0);
+    static FOUND_ANIM: AtomicU32 = AtomicU32::new(0);
+    static PLAY_RESULT: AtomicU32 = AtomicU32::new(0); // 0 none, 1 false, 2 true
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    extern "thiscall" fn v_default_anim(_: u32, arg: u32) -> u32 {
+        log(format!("default({arg})"));
+        DEFAULT_ANIM.load(Ordering::Relaxed)
+    }
+    unsafe fn find_anim(_: u32, name: u32) -> u32 {
+        log(format!("find_anim({name:#x})"));
+        FOUND_ANIM.load(Ordering::Relaxed)
+    }
+    unsafe fn find_sound(_: u32, name: u32) -> u32 {
+        log(format!("find_sound({name:#x})"));
+        0x77
+    }
+    unsafe fn play_two(_: u32, first: u32, second: u32, sound: u32) -> Option<bool> {
+        log(format!("play({first:#x},{second:#x},{sound:#x})"));
+        match PLAY_RESULT.load(Ordering::Relaxed) {
+            0 => None,
+            1 => Some(false),
+            _ => Some(true),
+        }
+    }
+    let ops = PlayWithSoundOps { find_anim, find_sound, play_two };
+
+    let mut vtable = Box::new([0u32; 0x80]);
+    vtable[0x8c / 4] = v_default_anim as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x100]);
+    block[0] = vtable.as_ptr() as u32;
+    let unit = block.as_ptr() as u32;
+    let byte_at = |offset: u32| unsafe { *((unit + offset) as *const u8) };
+    let set_byte = |offset: u32, value: u8| unsafe { *((unit + offset) as *mut u8) = value };
+    let done = Box::new([5u8; 4]);
+    let setup = |block: &mut Box<[u32; 0x100]>, stopped: u8, moving: u8, positions_equal: bool, unit_type: u32| {
+        set_byte(0xf9, stopped);
+        set_byte(0xf8, moving);
+        block[0x8c / 4] = 1;
+        block[0x9c / 4] = if positions_equal { 1 } else { 2 };
+        block[0x128 / 4] = unit_type;
+        unsafe { *(done.as_ptr() as *mut u8) = 5 };
+    };
+    let run = || -> (bool, Vec<String>) {
+        LOG.lock().unwrap().clear();
+        (unsafe { f_play_with_sound(0xa1, 0xb2, unit, done.as_ptr(), &ops) }, LOG.lock().unwrap().clone())
+    };
+    let s = |items: &[&str]| items.iter().map(|i| i.to_string()).collect::<Vec<_>>();
+
+    setup(&mut block, 0, 0, true, 1);
+    let got = run();
+    if got != (true, vec![]) || byte_at(0xf9) != 0 || done[0] != 5 {
+        failures.push(format!("not moving: {got:?}"));
+    }
+    setup(&mut block, 0, 1, false, 1);
+    let got = run();
+    if got != (true, vec![]) || byte_at(0xf8) != 1 || done[0] != 5 {
+        failures.push(format!("moving, positions differ: {got:?}"));
+    }
+    setup(&mut block, 0, 1, true, 1);
+    let got = run();
+    if got != (true, vec![]) || byte_at(0xf9) != 1 || byte_at(0xf8) != 0 || done[0] != 1 {
+        failures.push(format!("arrived: {got:?}, stopped {} moving {} done {}", byte_at(0xf9), byte_at(0xf8), done[0]));
+    }
+
+    DEFAULT_ANIM.store(0x100, Ordering::Relaxed);
+    FOUND_ANIM.store(0x200, Ordering::Relaxed);
+    setup(&mut block, 1, 0, true, 0);
+    let got = run();
+    if got != (false, vec![]) {
+        failures.push(format!("no entity type: {got:?}"));
+    }
+    DEFAULT_ANIM.store(0, Ordering::Relaxed);
+    setup(&mut block, 1, 0, true, 1);
+    let got = run();
+    if got != (false, s(&["default(0)"])) {
+        failures.push(format!("no default animation: {got:?}"));
+    }
+    DEFAULT_ANIM.store(0x100, Ordering::Relaxed);
+    FOUND_ANIM.store(0, Ordering::Relaxed);
+    setup(&mut block, 1, 0, true, 1);
+    let got = run();
+    if got != (false, s(&["default(0)", "find_anim(0xa1)"])) {
+        failures.push(format!("no animation: {got:?}"));
+    }
+    FOUND_ANIM.store(0x200, Ordering::Relaxed);
+    for (label, result, expected_result, flags_set) in [("played true", 2, true, true), ("played false", 1, false, true), ("nothing played", 0, false, false)] {
+        PLAY_RESULT.store(result, Ordering::Relaxed);
+        setup(&mut block, 1, 0, true, 1);
+        let got = run();
+        let expected_log = s(&["default(0)", "find_anim(0xa1)", "find_sound(0xb2)", "play(0x100,0x200,0x77)"]);
+        let expected_flags = if flags_set { (1, 0, 0) } else { (0, 1, 5) };
+        if got != (expected_result, expected_log.clone()) || (byte_at(0xf8), byte_at(0xf9), done[0]) != expected_flags {
+            failures.push(format!("{label}: {got:?}, flags {:?}", (byte_at(0xf8), byte_at(0xf9), done[0])));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_PLAY_TIME`: port only, over a fake unit and recording stand-ins. Covers the not-stopped outcomes,
+/// each early failure, the milliseconds handed to the link builder and the three play results with the flags
+/// and `done` byte they leave.
+pub(crate) fn run_ztaimgr_f_play_time_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{f_play_time, PlayTimeOps};
+    let test_name = "ZTAIMGR_F_PLAY_TIME";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static DEFAULT_ANIM: AtomicU32 = AtomicU32::new(0);
+    static FOUND_ANIM: AtomicU32 = AtomicU32::new(0);
+    static PLAY_RESULT: AtomicU32 = AtomicU32::new(0); // 0 none, 1 false, 2 true
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    extern "thiscall" fn v_default_anim(_: u32, arg: u32) -> u32 {
+        log(format!("default({arg})"));
+        DEFAULT_ANIM.load(Ordering::Relaxed)
+    }
+    unsafe fn find_anim(_: u32, name: u32) -> u32 {
+        log(format!("find_anim({name:#x})"));
+        FOUND_ANIM.load(Ordering::Relaxed)
+    }
+    unsafe fn play_timed(_: u32, first: u32, second: u32, millis: i32) -> Option<bool> {
+        log(format!("play({first:#x},{second:#x},{millis})"));
+        match PLAY_RESULT.load(Ordering::Relaxed) {
+            0 => None,
+            1 => Some(false),
+            _ => Some(true),
+        }
+    }
+    let ops = PlayTimeOps { find_anim, play_timed };
+
+    let mut vtable = Box::new([0u32; 0x80]);
+    vtable[0x8c / 4] = v_default_anim as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x100]);
+    block[0] = vtable.as_ptr() as u32;
+    let unit = block.as_ptr() as u32;
+    let byte_at = |offset: u32| unsafe { *((unit + offset) as *const u8) };
+    let set_byte = |offset: u32, value: u8| unsafe { *((unit + offset) as *mut u8) = value };
+    let done = Box::new([5u8; 4]);
+    let setup = |block: &mut Box<[u32; 0x100]>, stopped: u8, moving: u8, positions_equal: bool, unit_type: u32| {
+        set_byte(0xf9, stopped);
+        set_byte(0xf8, moving);
+        block[0x8c / 4] = 1;
+        block[0x9c / 4] = if positions_equal { 1 } else { 2 };
+        block[0x128 / 4] = unit_type;
+        unsafe { *(done.as_ptr() as *mut u8) = 5 };
+    };
+    let run = || -> (bool, Vec<String>) {
+        LOG.lock().unwrap().clear();
+        (unsafe { f_play_time(0xa1, 7000, unit, done.as_ptr(), &ops) }, LOG.lock().unwrap().clone())
+    };
+    let s = |items: &[&str]| items.iter().map(|i| i.to_string()).collect::<Vec<_>>();
+
+    setup(&mut block, 0, 0, true, 1);
+    let got = run();
+    if got != (true, vec![]) || byte_at(0xf9) != 0 || done[0] != 5 {
+        failures.push(format!("not moving: {got:?}"));
+    }
+    setup(&mut block, 0, 1, false, 1);
+    let got = run();
+    if got != (true, vec![]) || byte_at(0xf8) != 1 || done[0] != 5 {
+        failures.push(format!("moving, positions differ: {got:?}"));
+    }
+    setup(&mut block, 0, 1, true, 1);
+    let got = run();
+    if got != (true, vec![]) || byte_at(0xf9) != 1 || byte_at(0xf8) != 0 || done[0] != 1 {
+        failures.push(format!("arrived: {got:?}, stopped {} moving {} done {}", byte_at(0xf9), byte_at(0xf8), done[0]));
+    }
+
+    DEFAULT_ANIM.store(0x100, Ordering::Relaxed);
+    FOUND_ANIM.store(0x200, Ordering::Relaxed);
+    setup(&mut block, 1, 0, true, 0);
+    let got = run();
+    if got != (false, vec![]) {
+        failures.push(format!("no entity type: {got:?}"));
+    }
+    DEFAULT_ANIM.store(0, Ordering::Relaxed);
+    setup(&mut block, 1, 0, true, 1);
+    let got = run();
+    if got != (false, s(&["default(0)"])) {
+        failures.push(format!("no default animation: {got:?}"));
+    }
+    DEFAULT_ANIM.store(0x100, Ordering::Relaxed);
+    FOUND_ANIM.store(0, Ordering::Relaxed);
+    setup(&mut block, 1, 0, true, 1);
+    let got = run();
+    if got != (false, s(&["default(0)", "find_anim(0xa1)"])) {
+        failures.push(format!("no animation: {got:?}"));
+    }
+    FOUND_ANIM.store(0x200, Ordering::Relaxed);
+    for (label, result, expected_result, flags_set) in [("played true", 2, true, true), ("played false", 1, false, true), ("nothing played", 0, false, false)] {
+        PLAY_RESULT.store(result, Ordering::Relaxed);
+        setup(&mut block, 1, 0, true, 1);
+        let got = run();
+        let expected_log = s(&["default(0)", "find_anim(0xa1)", "play(0x100,0x200,7000)"]);
+        let expected_flags = if flags_set { (1, 0, 0) } else { (0, 1, 5) };
+        if got != (expected_result, expected_log.clone()) || (byte_at(0xf8), byte_at(0xf9), done[0]) != expected_flags {
+            failures.push(format!("{label}: {got:?}, flags {:?}", (byte_at(0xf8), byte_at(0xf9), done[0])));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_MOVE_REVERSE_F`: calls the real `fMoveReverseF` address (hooked, so it enters the port, which
+/// forwards to the `fMoveF` port with `reverse` set) with a call of the wrong parameter count. `fMoveF` fails
+/// that call before touching the unit, so the result is `0` and the stack must come back balanced (`RET 8`).
+pub(crate) fn run_ztaimgr_f_move_reverse_f_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTAIMGR_F_MOVE_REVERSE_F";
+    let mut failures: Vec<String> = Vec::new();
+    let reverse = unsafe { std::mem::transmute::<u32, unsafe extern "thiscall" fn(u32, *const u32, u32) -> u32>(0x004a_75a7) };
+    let marker = std::hint::black_box(0x1357_9bdfu32);
+    for params in [&[][..], &["only"][..], &["a", "b", "c"][..]] {
+        let call = Call::new("fMoveReverse", params);
+        let result = unsafe { reverse(0x1000, call.ptr(), 0) };
+        if result as u8 != 0 {
+            failures.push(format!("{} parameters: result {result:#x}, expected 0", params.len()));
+        }
+    }
+    if std::hint::black_box(marker) != 0x1357_9bdf {
+        failures.push("marker corrupted".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
