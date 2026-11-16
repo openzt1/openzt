@@ -108,6 +108,8 @@ pub fn init() {
         // and hit a process crash during `run_load_live_zoo` itself - see this function's own diagnostics
         // for what was found.
         crate::bfevent::init();
+        crate::bfscriptmgr::init();
+        crate::bfbehaviorset::init();
         crate::ztshowscriptmgr::init();
         crate::ztshow::init();
         crate::ztshowstate::init();

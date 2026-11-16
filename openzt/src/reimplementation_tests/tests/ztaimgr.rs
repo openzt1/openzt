@@ -412,9 +412,70 @@ pub(crate) fn run_ztaimgr_building_and_trick_handlers_test(failure_log: &mut Opt
     finish_test(test_name, failures, failure_log)
 }
 
+/// `ZTAIMGR_F_WRAPPER_RETURNS`: each `ZTAIMgr::f*F` wrapper returns its handler's `AL` in vanilla (a tail call),
+/// and `ZTAIMgr::executeCall` passes that on. Compares the port's wrapper return against the real inner
+/// handler's return over every unit kind and a null unit, for the handlers whose real body is safe on the fake
+/// entities (the building, hatch, show/hide-predator and dust-ball handlers are excluded: their real bodies
+/// fault on a non-unit, or their inner is typed `void`). `fSprayF` forwards to a `return 1` stub.
+pub(crate) fn run_ztaimgr_f_wrapper_returns_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::ztaimgr::{
+        F_CAUGHT_PREY_F, F_DIE_F, F_END_TRICK_F, F_FACE_TOWARD_FOOD_F, F_FACE_TOWARD_TARGET_F, F_GUEST_ROUTINE_F, F_GUIDE_ROUTINE_F, F_KEEPER_ROUTINE_F, F_KILL_PREY_F, F_MAINT_ROUTINE_F, F_SPRAY_F,
+    };
+    let test_name = "ZTAIMGR_F_WRAPPER_RETURNS";
+    let fixture = Fixture::new();
+    let mut failures = Vec::new();
+    let mut targets: Vec<(String, Option<Kind>, *const u32)> = ALL_KINDS.iter().map(|k| (format!("{k:?}"), Some(*k), fixture.entity(*k))).collect();
+    targets.push(("null".to_string(), None, std::ptr::null()));
+
+    for (label, kind, unit) in &targets {
+        let mut check = |name: &str, wrapper: bool, real: u8| {
+            if wrapper as u8 != real {
+                failures.push(format!("{name} {label}: wrapper returned {wrapper}, real inner {real:#x}"));
+            }
+        };
+        let call = Call::new("f", &[]);
+        let c = call.ptr() as i32;
+        let u = *unit as u32;
+
+        check("fEndTrickF", unsafe { F_END_TRICK_F.hooked()(c, *unit as *const i32) }, run_pole(*unit, live_support::real_f_end_trick).0 as u8);
+        check("fKeeperRoutineF", unsafe { F_KEEPER_ROUTINE_F.hooked()(c as u32, *unit as *const i32) }, run_pole(*unit, live_support::real_f_keeper_routine).0 as u8);
+        if *kind != Some(Kind::Guest) {
+            check("fGuestRoutineF", unsafe { F_GUEST_ROUTINE_F.hooked()(c as u32, u) }, run_pole(*unit, live_support::real_f_guest_routine).0 as u8);
+        }
+        check("fMaintRoutineF", unsafe { F_MAINT_ROUTINE_F.hooked()(c as u32, u) }, run_pole(*unit, live_support::real_f_maint_routine).0 as u8);
+        check("fGuideRoutineF", unsafe { F_GUIDE_ROUTINE_F.hooked()(c as u32, u) }, run_pole(*unit, live_support::real_f_guide_routine).0 as u8);
+        check(
+            "fKillPreyF",
+            unsafe { F_KILL_PREY_F.hooked()(c, *unit as *const u8) },
+            run_pole(*unit, |u, d| live_support::real_f_kill_prey(u as *const u8, d as *const u8)).0 as u8,
+        );
+        check(
+            "fCaughtPreyF",
+            unsafe { F_CAUGHT_PREY_F.hooked()(c, *unit as *const i32) },
+            run_pole(*unit, |u, d| live_support::real_f_caught_prey(u as *const i32, d as *const u8)).0 as u8,
+        );
+        check("fDieF", unsafe { F_DIE_F.hooked()(c, *unit as *const i32) }, run_pole(*unit, |u, d| live_support::real_f_die(u as *const i32, d as *const u8)).0 as u8);
+        check(
+            "fFaceTowardFoodF",
+            unsafe { F_FACE_TOWARD_FOOD_F.hooked()(c, *unit as *const u8) },
+            run_pole(*unit, |u, d| live_support::real_f_face_toward_food(u as *const u8, d as *const u8)).0 as u8,
+        );
+        if matches!(kind, None | Some(Kind::Scenery)) {
+            check(
+                "fFaceTowardTargetF",
+                unsafe { F_FACE_TOWARD_TARGET_F.hooked()(c, *unit as *const std::ffi::c_void) },
+                run_pole(*unit, |u, d| live_support::real_f_face_toward_target(u as *const std::ffi::c_void, d as *const u8)).0 as u8,
+            );
+        }
+        check("fSprayF", unsafe { F_SPRAY_F.hooked()(c, *unit) }, 1);
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
 /// `ZTAIMGR_EXECUTE_CALL`: the real dispatch chain against the port for the names whose real handler is safe
 /// on a null or scenery unit (the cast unit is then null for every ZT handler), plus names that fall through
-/// the whole `BFAIMgr` chain. Compares the `done` byte, the call's own flag byte and entity-virtual calls.
+/// the whole `BFAIMgr` chain. Compares the returned `AL`, the `done` byte, the call's own flag byte and
+/// entity-virtual calls.
 pub(crate) fn run_ztaimgr_execute_call_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTAIMGR_EXECUTE_CALL";
     let fixture = Fixture::new();
@@ -431,12 +492,12 @@ pub(crate) fn run_ztaimgr_execute_call_test(failure_log: &mut Option<std::fs::Fi
                 reset_virtual_log();
                 let done = Box::new(0xabu8);
                 let (call_ptr, unit_ptr, done_ptr) = (call.ptr() as *const i8, unit as *const i32, &*done as *const u8);
-                if real {
-                    live_support::real_execute_call(fixture.this(), call_ptr, unit_ptr, done_ptr);
+                let returned = if real {
+                    live_support::real_execute_call(fixture.this(), call_ptr, unit_ptr, done_ptr)
                 } else {
-                    unsafe { EXECUTE_CALL.hooked()(fixture.this(), call_ptr, unit_ptr, done_ptr) };
-                }
-                outcomes.push((*done, call.raw[6] & 0xff, virtual_log()));
+                    unsafe { EXECUTE_CALL.hooked()(fixture.this(), call_ptr, unit_ptr, done_ptr) }
+                };
+                outcomes.push((returned, *done, call.raw[6] & 0xff, virtual_log()));
             }
             if outcomes[0] != outcomes[1] {
                 failures.push(format!("{name:?} {label}: rust {:?} != real {:?}", outcomes[0], outcomes[1]));

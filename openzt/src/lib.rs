@@ -143,6 +143,14 @@ pub(crate) use ztshow::ui as ztshowui;
 /// `BFEventMgr`'s event vectors hold by value.
 mod bfevent;
 
+/// bfscriptmgr module reimplements `BFScriptMgr::parseFunction`, the call-string parser behind
+/// `BFBehaviorSet::executeCall`.
+mod bfscriptmgr;
+
+/// bfbehaviorset module reimplements the small `BFBehaviorSet` methods (`setName`, `removeHead`, `clear`,
+/// `killChild`, `executeHead`, `executeCall`) that drive the AI behavior-script runner.
+mod bfbehaviorset;
+
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
 mod ztguest;
@@ -279,6 +287,8 @@ mod zoo_init {
             ztawardmgr::init();
             ztaimgr::init();
             bfevent::init();
+            bfscriptmgr::init();
+            bfbehaviorset::init();
             ztshow::init();
             ztguest::init();
             ambients::init();

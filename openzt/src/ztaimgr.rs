@@ -328,12 +328,21 @@ pub unsafe fn f_end_trick(unit: u32, done: *const bool) -> bool {
 /// `fEnterBuilding`/`fReturnToBuilding`. Returns `false` without acting when `unit` is null or not a unit
 /// type: vanilla then calls a virtual through a null object and faults, so the caller defers to it.
 unsafe fn building_transition(unit: u32, done: *const bool, slot: u32) -> bool {
+    unsafe { building_transition_al(unit, done, slot) }.is_some()
+}
+
+/// [`building_transition`] keeping the virtual's `AL`, which vanilla's handler returns unchanged (the virtuals
+/// are not bool functions, so it can be any byte). `None` when it defers to vanilla.
+unsafe fn building_transition_al(unit: u32, done: *const bool, slot: u32) -> Option<u8> {
     if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
-        return false;
+        return None;
     }
-    unsafe { call_entity_virtual(unit, slot) };
+    let vtable = get_from_memory::<u32>(unit);
+    let target = get_from_memory::<u32>(vtable + slot);
+    let method = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> u8>(target) };
+    let al = method(unit);
     unsafe { set_done(done) };
-    true
+    Some(al)
 }
 
 pub unsafe fn f_enter_building(unit: u32, done: *const bool) -> bool {
@@ -342,6 +351,21 @@ pub unsafe fn f_enter_building(unit: u32, done: *const bool) -> bool {
 
 pub unsafe fn f_return_to_building(unit: u32, done: *const bool) -> bool {
     unsafe { building_transition(unit, done, ENTITY_VTABLE_RETURN_TO_BUILDING) }
+}
+
+/// [`f_enter_building`] returning the entity virtual's `AL`.
+pub unsafe fn f_enter_building_al(unit: u32, done: *const bool) -> Option<u8> {
+    unsafe { building_transition_al(unit, done, ENTITY_VTABLE_ENTER_BUILDING) }
+}
+
+/// [`f_return_to_building`] returning the entity virtual's `AL`.
+pub unsafe fn f_return_to_building_al(unit: u32, done: *const bool) -> Option<u8> {
+    unsafe { building_transition_al(unit, done, ENTITY_VTABLE_RETURN_TO_BUILDING) }
+}
+
+/// [`f_exit_building`] returning the entity virtual's `AL`.
+pub unsafe fn f_exit_building_al(unit: u32, done: *const bool) -> Option<u8> {
+    unsafe { building_transition_al(unit, done, ENTITY_VTABLE_EXIT_BUILDING) }
 }
 
 /// `fHidePredator` for a guest: hides the guest's predator if it is an animal, then finishes. Returns
@@ -675,85 +699,29 @@ impl Handlers for VanillaHandlers {
                 Handler::MoveSlowF => F_MOVE_SLOW_F.hooked()(t, ci, ui),
                 Handler::MoveMediumF => F_MOVE_MEDIUM_F.hooked()(t, ci, ui),
                 Handler::MoveFastF => F_MOVE_FAST_F.hooked()(t, ci, ui),
-                Handler::SprayF => {
-                    F_SPRAY_F.hooked()(ci, u);
-                    0
-                }
-                Handler::KeeperRoutineF => {
-                    F_KEEPER_ROUTINE_F.hooked()(call, ui);
-                    0
-                }
-                Handler::GuestRoutineF => {
-                    F_GUEST_ROUTINE_F.hooked()(call, unit);
-                    0
-                }
-                Handler::GuideRoutineF => {
-                    F_GUIDE_ROUTINE_F.hooked()(call, unit);
-                    0
-                }
-                Handler::MaintRoutineF => {
-                    F_MAINT_ROUTINE_F.hooked()(call, unit);
-                    0
-                }
-                Handler::FaceTowardFoodF => {
-                    F_FACE_TOWARD_FOOD_F.hooked()(ci, unit as *const u8);
-                    0
-                }
-                Handler::FaceTowardTargetF => {
-                    F_FACE_TOWARD_TARGET_F.hooked()(ci, unit as *const c_void);
-                    0
-                }
-                Handler::ShowPredatorF => {
-                    F_SHOW_PREDATOR_F.hooked()(ci, ui);
-                    0
-                }
-                Handler::HidePredatorF => {
-                    F_HIDE_PREDATOR_F.hooked()(ci, unit as *const u8);
-                    0
-                }
-                Handler::EnterBuildingF => {
-                    F_ENTER_BUILDING_F.hooked()(ci, ui);
-                    0
-                }
-                Handler::ExitBuildingF => {
-                    F_EXIT_BUILDING_F.hooked()(ci, ui);
-                    0
-                }
-                Handler::DustBallF => {
-                    F_DUST_BALL_F.hooked()(t, ci, ui);
-                    0
-                }
-                Handler::KillPreyF => {
-                    F_KILL_PREY_F.hooked()(ci, unit as *const u8);
-                    0
-                }
-                Handler::CaughtPreyF => {
-                    F_CAUGHT_PREY_F.hooked()(ci, ui);
-                    0
-                }
-                Handler::DieF => {
-                    F_DIE_F.hooked()(ci, ui);
-                    0
-                }
+                Handler::SprayF => F_SPRAY_F.hooked()(ci, u) as u32,
+                Handler::KeeperRoutineF => F_KEEPER_ROUTINE_F.hooked()(call, ui) as u32,
+                Handler::GuestRoutineF => F_GUEST_ROUTINE_F.hooked()(call, unit) as u32,
+                Handler::GuideRoutineF => F_GUIDE_ROUTINE_F.hooked()(call, unit) as u32,
+                Handler::MaintRoutineF => F_MAINT_ROUTINE_F.hooked()(call, unit) as u32,
+                Handler::FaceTowardFoodF => F_FACE_TOWARD_FOOD_F.hooked()(ci, unit as *const u8) as u32,
+                Handler::FaceTowardTargetF => F_FACE_TOWARD_TARGET_F.hooked()(ci, unit as *const c_void) as u32,
+                Handler::ShowPredatorF => F_SHOW_PREDATOR_F.hooked()(ci, ui) as u32,
+                Handler::HidePredatorF => F_HIDE_PREDATOR_F.hooked()(ci, unit as *const u8) as u32,
+                Handler::EnterBuildingF => F_ENTER_BUILDING_F.hooked()(ci, ui) as u32,
+                Handler::ExitBuildingF => F_EXIT_BUILDING_F.hooked()(ci, ui) as u32,
+                Handler::DustBallF => F_DUST_BALL_F.hooked()(t, ci, ui) as u32,
+                Handler::KillPreyF => F_KILL_PREY_F.hooked()(ci, unit as *const u8) as u32,
+                Handler::CaughtPreyF => F_CAUGHT_PREY_F.hooked()(ci, ui) as u32,
+                Handler::DieF => F_DIE_F.hooked()(ci, ui) as u32,
                 Handler::TargetBuildingF => F_TARGET_BUILDING_F.hooked()(t, ci, ui) as u32,
-                Handler::HatchF => {
-                    F_HATCH_F.hooked()(ci, ui);
-                    0
-                }
-                Handler::EndTrickF => {
-                    F_END_TRICK_F.hooked()(ci, ui);
-                    0
-                }
-                Handler::ReturnToBuildingF => {
-                    F_RETURN_TO_BUILDING_F.hooked()(ci, ui);
-                    0
-                }
-                Handler::PlaySetTankF => {
-                    if f_play_set_tank(call, unit, play_set_vanilla).is_none() {
-                        let _ = F_PLAY_SET_TANK_F.original()(ci, unit as *const c_void);
-                    }
-                    0
-                }
+                Handler::HatchF => F_HATCH_F.hooked()(ci, ui) as u32,
+                Handler::EndTrickF => F_END_TRICK_F.hooked()(ci, ui) as u32,
+                Handler::ReturnToBuildingF => F_RETURN_TO_BUILDING_F.hooked()(ci, ui) as u32,
+                Handler::PlaySetTankF => match f_play_set_tank(call, unit, play_set_vanilla) {
+                    Some(result) => result,
+                    None => F_PLAY_SET_TANK_F.original()(ci, unit as *const c_void),
+                },
                 Handler::PlayF => F_PLAY_F.hooked()(t, c, u, trailing[0] as i8, trailing[1] as i8) as u32,
                 Handler::SetBaseF => F_SET_BASE_F.hooked()(t, c, u) as u32,
                 Handler::PlayWithBaseF => F_PLAY_WITH_BASE_F.hooked()(t, c, u, trailing[0] as i8, trailing[1] as i8) as u32,
@@ -813,25 +781,23 @@ pub fn zt_handler(which: ZtCall) -> Handler {
 }
 
 /// `ZTAIMgr::executeCall`: dispatches the ZT-specific names; anything else goes to the `BFAIMgr` chain
-/// ([`execute_base_call`]) with the uncast unit. Afterwards the call's result flag is copied to `done`.
-pub unsafe fn execute_call(this: u32, call: u32, unit: u32, done: *mut u8) {
+/// ([`execute_base_call`]) with the uncast unit. Afterwards the call's result flag is copied to `done`. Returns
+/// the handler's own result (vanilla leaves it in `AL`, and `BFBehaviorSet::executeCall` reads it).
+pub unsafe fn execute_call(this: u32, call: u32, unit: u32, done: *mut u8) -> u8 {
     unsafe { execute_call_with(&VanillaHandlers, this, call, unit, done) }
 }
 
 /// [`execute_call`] over an injectable handler table. ZT handlers receive the unit only if its type is a
 /// `ZTUnitType`, else null.
-pub unsafe fn execute_call_with(handlers: &dyn Handlers, this: u32, call: u32, unit: u32, done: *mut u8) {
+pub unsafe fn execute_call_with(handlers: &dyn Handlers, this: u32, call: u32, unit: u32, done: *mut u8) -> u8 {
     let name = unsafe { &*(call as *const RawCallString) }.bytes();
     let unit_cast = if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } { unit } else { 0 };
-    match lookup_zt_call(name) {
-        Some(which) => {
-            unsafe { handlers.invoke(zt_handler(which), this, call, unit_cast, [0, 0]) };
-        }
-        None => {
-            unsafe { execute_base_call_with(handlers, this, call, unit, done) };
-        }
-    }
+    let result = match lookup_zt_call(name) {
+        Some(which) => (unsafe { handlers.invoke(zt_handler(which), this, call, unit_cast, [0, 0]) }) as u8,
+        None => unsafe { execute_base_call_with(handlers, this, call, unit, done) },
+    };
     unsafe { done.write_volatile(get_from_memory::<u8>(call + CALL_DONE_FLAG_OFFSET)) };
+    result
 }
 
 /// Function names `BFAIMgr::executeCall` handles. Two literals alias `fPlaySpecial` (`fPlaySp`), `fPlayPingPong`
@@ -3988,49 +3954,53 @@ mod ztaimgr_detours {
 
     // `F` wrappers: `(call, unit)`, with the `done` flag at `call + 0x18`.
     #[detour(F_END_TRICK_F)]
-    unsafe extern "stdcall" fn f_end_trick_f_detour(call: i32, unit: *const i32) {
-        unsafe { f_end_trick(unit as u32, call_done_flag(call as u32)) };
+    unsafe extern "stdcall" fn f_end_trick_f_detour(call: i32, unit: *const i32) -> bool {
+        unsafe { f_end_trick(unit as u32, call_done_flag(call as u32)) }
     }
 
     #[detour(F_ENTER_BUILDING_F)]
-    unsafe extern "stdcall" fn f_enter_building_f_detour(call: i32, unit: *const i32) {
-        if !unsafe { f_enter_building(unit as u32, call_done_flag(call as u32)) } {
-            unsafe { F_ENTER_BUILDING_F_DETOUR.call(call, unit) };
+    unsafe extern "stdcall" fn f_enter_building_f_detour(call: i32, unit: *const i32) -> bool {
+        match unsafe { f_enter_building_al(unit as u32, call_done_flag(call as u32)) } {
+            Some(al) => al != 0,
+            None => unsafe { F_ENTER_BUILDING_F_DETOUR.call(call, unit) },
         }
     }
 
     #[detour(F_RETURN_TO_BUILDING_F)]
-    unsafe extern "stdcall" fn f_return_to_building_f_detour(call: i32, unit: *const i32) {
-        if !unsafe { f_return_to_building(unit as u32, call_done_flag(call as u32)) } {
-            unsafe { F_RETURN_TO_BUILDING_F_DETOUR.call(call, unit) };
+    unsafe extern "stdcall" fn f_return_to_building_f_detour(call: i32, unit: *const i32) -> bool {
+        match unsafe { f_return_to_building_al(unit as u32, call_done_flag(call as u32)) } {
+            Some(al) => al != 0,
+            None => unsafe { F_RETURN_TO_BUILDING_F_DETOUR.call(call, unit) },
         }
     }
 
     #[detour(F_HIDE_PREDATOR_F)]
-    unsafe extern "stdcall" fn f_hide_predator_f_detour(call: i32, unit: *const u8) {
-        if !unsafe { f_hide_predator(unit as u32, call_done_flag(call as u32)) } {
-            unsafe { F_HIDE_PREDATOR_F_DETOUR.call(call, unit) };
+    unsafe extern "stdcall" fn f_hide_predator_f_detour(call: i32, unit: *const u8) -> bool {
+        if unsafe { f_hide_predator(unit as u32, call_done_flag(call as u32)) } {
+            true
+        } else {
+            unsafe { F_HIDE_PREDATOR_F_DETOUR.call(call, unit) }
         }
     }
 
     #[detour(F_GUEST_ROUTINE_F)]
-    unsafe extern "stdcall" fn f_guest_routine_f_detour(call: u32, unit: u32) {
-        unsafe { f_guest_routine(unit, call_done_flag(call)) };
+    unsafe extern "stdcall" fn f_guest_routine_f_detour(call: u32, unit: u32) -> bool {
+        unsafe { f_guest_routine(unit, call_done_flag(call)) }
     }
 
     #[detour(F_MAINT_ROUTINE_F)]
-    unsafe extern "stdcall" fn f_maint_routine_f_detour(call: u32, unit: u32) {
-        unsafe { f_maint_routine(unit, call_done_flag(call)) };
+    unsafe extern "stdcall" fn f_maint_routine_f_detour(call: u32, unit: u32) -> bool {
+        unsafe { f_maint_routine(unit, call_done_flag(call)) }
     }
 
     #[detour(F_GUIDE_ROUTINE_F)]
-    unsafe extern "stdcall" fn f_guide_routine_f_detour(call: u32, unit: u32) {
-        unsafe { f_guide_routine(unit, call_done_flag(call)) };
+    unsafe extern "stdcall" fn f_guide_routine_f_detour(call: u32, unit: u32) -> bool {
+        unsafe { f_guide_routine(unit, call_done_flag(call)) }
     }
 
     #[detour(F_KEEPER_ROUTINE_F)]
-    unsafe extern "stdcall" fn f_keeper_routine_f_detour(call: u32, unit: *const i32) {
-        unsafe { f_keeper_routine(unit as u32, call_done_flag(call)) };
+    unsafe extern "stdcall" fn f_keeper_routine_f_detour(call: u32, unit: *const i32) -> bool {
+        unsafe { f_keeper_routine(unit as u32, call_done_flag(call)) }
     }
 
     // Prey/predator/death/hatch/exit handlers. Halves are `(unit, done)`; `F` wrappers are `(call, unit)`.
@@ -4043,9 +4013,10 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_SHOW_PREDATOR_F)]
-    unsafe extern "stdcall" fn f_show_predator_f_detour(call: i32, unit: *const i32) {
-        if unsafe { f_show_predator(unit as u32, call_done_flag(call as u32)) }.is_none() {
-            unsafe { F_SHOW_PREDATOR_F_DETOUR.call(call, unit) };
+    unsafe extern "stdcall" fn f_show_predator_f_detour(call: i32, unit: *const i32) -> bool {
+        match unsafe { f_show_predator(unit as u32, call_done_flag(call as u32)) } {
+            Some(result) => result,
+            None => unsafe { F_SHOW_PREDATOR_F_DETOUR.call(call, unit) },
         }
     }
 
@@ -4055,8 +4026,8 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_CAUGHT_PREY_F)]
-    unsafe extern "stdcall" fn f_caught_prey_f_detour(call: i32, unit: *const i32) {
-        unsafe { f_caught_prey(unit as u32, call_done_flag(call as u32)) };
+    unsafe extern "stdcall" fn f_caught_prey_f_detour(call: i32, unit: *const i32) -> bool {
+        unsafe { f_caught_prey(unit as u32, call_done_flag(call as u32)) }
     }
 
     #[detour(F_KILL_PREY)]
@@ -4065,8 +4036,8 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_KILL_PREY_F)]
-    unsafe extern "stdcall" fn f_kill_prey_f_detour(call: i32, unit: *const u8) {
-        unsafe { f_kill_prey(unit as u32, call_done_flag(call as u32)) };
+    unsafe extern "stdcall" fn f_kill_prey_f_detour(call: i32, unit: *const u8) -> bool {
+        unsafe { f_kill_prey(unit as u32, call_done_flag(call as u32)) }
     }
 
     #[detour(F_DIE)]
@@ -4075,8 +4046,8 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_DIE_F)]
-    unsafe extern "stdcall" fn f_die_f_detour(call: i32, unit: *const i32) {
-        unsafe { f_die(unit as u32, call_done_flag(call as u32)) };
+    unsafe extern "stdcall" fn f_die_f_detour(call: i32, unit: *const i32) -> bool {
+        unsafe { f_die(unit as u32, call_done_flag(call as u32)) }
     }
 
     #[detour(F_HATCH)]
@@ -4089,9 +4060,11 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_HATCH_F)]
-    unsafe extern "stdcall" fn f_hatch_f_detour(call: i32, unit: *const i32) {
-        if !unsafe { f_hatch(unit as u32, call_done_flag(call as u32)) } {
-            unsafe { F_HATCH_F_DETOUR.call(call, unit) };
+    unsafe extern "stdcall" fn f_hatch_f_detour(call: i32, unit: *const i32) -> bool {
+        if unsafe { f_hatch(unit as u32, call_done_flag(call as u32)) } {
+            true
+        } else {
+            unsafe { F_HATCH_F_DETOUR.call(call, unit) }
         }
     }
 
@@ -4103,9 +4076,10 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_EXIT_BUILDING_F)]
-    unsafe extern "stdcall" fn f_exit_building_f_detour(call: i32, unit: *const i32) {
-        if !unsafe { f_exit_building(unit as u32, call_done_flag(call as u32)) } {
-            unsafe { F_EXIT_BUILDING_F_DETOUR.call(call, unit) };
+    unsafe extern "stdcall" fn f_exit_building_f_detour(call: i32, unit: *const i32) -> bool {
+        match unsafe { f_exit_building_al(unit as u32, call_done_flag(call as u32)) } {
+            Some(al) => al != 0,
+            None => unsafe { F_EXIT_BUILDING_F_DETOUR.call(call, unit) },
         }
     }
 
@@ -4115,8 +4089,8 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_FACE_TOWARD_FOOD_F)]
-    unsafe extern "stdcall" fn f_face_toward_food_f_detour(call: i32, unit: *const u8) {
-        unsafe { f_face_toward_food(unit as u32, call_done_flag(call as u32)) };
+    unsafe extern "stdcall" fn f_face_toward_food_f_detour(call: i32, unit: *const u8) -> bool {
+        unsafe { f_face_toward_food(unit as u32, call_done_flag(call as u32)) }
     }
 
     #[detour(F_FACE_TOWARD_TARGET)]
@@ -4129,9 +4103,11 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_FACE_TOWARD_TARGET_F)]
-    unsafe extern "stdcall" fn f_face_toward_target_f_detour(call: i32, unit: *const c_void) {
-        if !unsafe { f_face_toward_target(unit as u32, call_done_flag(call as u32)) } {
-            unsafe { F_FACE_TOWARD_TARGET_F_DETOUR.call(call, unit) };
+    unsafe extern "stdcall" fn f_face_toward_target_f_detour(call: i32, unit: *const c_void) -> bool {
+        if unsafe { f_face_toward_target(unit as u32, call_done_flag(call as u32)) } {
+            true
+        } else {
+            unsafe { F_FACE_TOWARD_TARGET_F_DETOUR.call(call, unit) }
         }
     }
 
@@ -4152,9 +4128,10 @@ mod ztaimgr_detours {
     }
 
     #[detour(F_DUST_BALL_F)]
-    unsafe extern "thiscall" fn f_dust_ball_f_detour(this: *const u32, call: i32, unit: *const i32) {
-        if unsafe { f_dust_ball(this as u32, unit as u32, call_done_flag(call as u32), &DUST_BALL_VANILLA) }.is_none() {
-            unsafe { F_DUST_BALL_F_DETOUR.call(this, call, unit) };
+    unsafe extern "thiscall" fn f_dust_ball_f_detour(this: *const u32, call: i32, unit: *const i32) -> bool {
+        match unsafe { f_dust_ball(this as u32, unit as u32, call_done_flag(call as u32), &DUST_BALL_VANILLA) } {
+            Some(result) => result,
+            None => unsafe { F_DUST_BALL_F_DETOUR.call(this, call, unit) },
         }
     }
 
@@ -4366,8 +4343,8 @@ mod ztaimgr_detours {
     }
 
     #[detour(EXECUTE_CALL)]
-    unsafe extern "thiscall" fn execute_call_detour(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) {
-        unsafe { execute_call(this as u32, call as u32, unit as u32, done as *mut u8) }
+    unsafe extern "thiscall" fn execute_call_detour(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) -> bool {
+        unsafe { execute_call(this as u32, call as u32, unit as u32, done as *mut u8) != 0 }
     }
 
     #[detour(BFAIMGR_EXECUTE_CALL)]
@@ -4375,9 +4352,11 @@ mod ztaimgr_detours {
         unsafe { execute_base_call(this as u32, call as u32, unit as u32, done as *mut u8) as u32 }
     }
 
-    /// `fSprayF` only forwards to the `return 1` stub `BFAIMgr::fFaceDirection`: nothing to do.
+    /// `fSprayF` only forwards to the `return 1` stub `BFAIMgr::fFaceDirection`, so it returns 1.
     #[detour(F_SPRAY_F)]
-    unsafe extern "stdcall" fn f_spray_f_detour(_call: i32, _unit: *const u32) {}
+    unsafe extern "stdcall" fn f_spray_f_detour(_call: i32, _unit: *const u32) -> bool {
+        true
+    }
 
     #[detour(GET_RANDOM_X)]
     unsafe extern "thiscall" fn get_random_x_detour(this: *const u32, entity: *const u32) -> i32 {
@@ -4550,7 +4529,7 @@ mod ztaimgr_detours {
             unsafe { super::F_RETURN_TO_BUILDING_DETOUR.call(unit, done) }
         }
 
-        pub(crate) fn execute_call(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) {
+        pub(crate) fn execute_call(this: *const u32, call: *const i8, unit: *const i32, done: *const u8) -> bool {
             unsafe { super::EXECUTE_CALL_DETOUR.call(this, call, unit, done) }
         }
 

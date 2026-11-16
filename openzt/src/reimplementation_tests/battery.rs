@@ -134,6 +134,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTAIMGR_MOVE_FUNCTIONS", run: tests::ztaimgr::run_ztaimgr_move_functions_test },
             RegisteredTest { name: "ZTAIMGR_CONVERT_CONSTANT_PARAM", run: tests::ztaimgr::run_ztaimgr_convert_constant_param_test },
             RegisteredTest { name: "ZTAIMGR_BUILDING_AND_TRICK_HANDLERS", run: tests::ztaimgr::run_ztaimgr_building_and_trick_handlers_test },
+            RegisteredTest { name: "ZTAIMGR_F_WRAPPER_RETURNS", run: tests::ztaimgr::run_ztaimgr_f_wrapper_returns_test },
             RegisteredTest { name: "ZTAIMGR_EXECUTE_CALL", run: tests::ztaimgr::run_ztaimgr_execute_call_test },
             RegisteredTest { name: "ZTAIMGR_BASE_EXECUTE_CALL", run: tests::ztaimgr::run_ztaimgr_base_execute_call_test },
             RegisteredTest { name: "ZTAIMGR_BFAIMGR_UPDATE", run: tests::ztaimgr::run_ztaimgr_bfaimgr_update_test },
@@ -202,6 +203,13 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "BFEVENT_DETOURS_ENABLED", run: tests::bfevent::run_bfevent_detours_enabled_test },
             RegisteredTest { name: "BFEVENT_CONSTRUCT_INIT", run: tests::bfevent::run_bfevent_construct_init_test },
             RegisteredTest { name: "BFEVENT_SAVE_LOAD", run: tests::bfevent::run_bfevent_save_load_test },
+            RegisteredTest { name: "BFSCRIPTMGR_DETOURS_ENABLED", run: tests::bfscriptmgr::run_bfscriptmgr_detours_enabled_test },
+            RegisteredTest { name: "BFSCRIPTMGR_PARSE_FUNCTION", run: tests::bfscriptmgr::run_bfscriptmgr_parse_function_test },
+            RegisteredTest { name: "BFBEHAVIORSET_DETOURS_ENABLED", run: tests::bfbehaviorset::run_bfbehaviorset_detours_enabled_test },
+            RegisteredTest { name: "BFBEHAVIORSET_SET_NAME", run: tests::bfbehaviorset::run_bfbehaviorset_set_name_test },
+            RegisteredTest { name: "BFBEHAVIORSET_REMOVE_HEAD", run: tests::bfbehaviorset::run_bfbehaviorset_remove_head_test },
+            RegisteredTest { name: "BFBEHAVIORSET_CLEAR", run: tests::bfbehaviorset::run_bfbehaviorset_clear_test },
+            RegisteredTest { name: "BFBEHAVIORSET_KILL_CHILD", run: tests::bfbehaviorset::run_bfbehaviorset_kill_child_test },
             RegisteredTest { name: "ZTSHOWINFO_DETOURS_ENABLED", run: tests::ztshowinfo::run_ztshowinfo_detours_enabled_test },
             RegisteredTest { name: "ZTSHOWINFO_STATUS_PREDICATES_LIVE", run: tests::ztshowinfo::run_ztshowinfo_status_predicates_live_test },
             RegisteredTest { name: "ZTSHOWINFO_ACCUMULATORS_LIVE", run: tests::ztshowinfo::run_ztshowinfo_accumulators_live_test },
@@ -1087,6 +1095,8 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSHOW_GROUP3_TRICK_LIVE", run: tests::ztshow::run_ztshow_group3_trick_live_test },
             RegisteredTest { name: "ZTSHOWUI_FILL_TRICK_LISTS_LIVE", run: tests::ztshowui::run_ztshowui_fill_trick_lists_live_test },
             RegisteredTest { name: "ZTSHOWSCRIPT_CTOR_REGISTRATION_LIVE", run: tests::ztshowscriptmgr::run_ztshowscript_ctor_registration_live_test },
+            RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_CALL", run: tests::bfbehaviorset::run_bfbehaviorset_execute_call_test },
+            RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_HEAD", run: tests::bfbehaviorset::run_bfbehaviorset_execute_head_test },
             // Run last (see this test's own doc comment): a one-shot wiring smoke test for
             // set_new_game_defaults's is_new_game=true branch, which calls through GLOBAL_ZTAIMgr's real
             // vtable slot and so may have real side effects on live AI state.
