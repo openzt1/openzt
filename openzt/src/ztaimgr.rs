@@ -1,19 +1,24 @@
-//! `ZTAIMgr` leaf-method reimplementation: the vtable methods that read a handful of fields and return a
-//! value, with no allocation and no manager-owned state beyond a few `ZTAIMgr` dwords.
+//! `ZTAIMgr`/`BFAIMgr` reimplementation: the AI manager and the `executeCall` handlers it dispatches to.
 //!
 //! `ZTAIMgr` extends `BFAIMgr` (`BFAIMgr` -> `ZTAIMgr`, vtable `0x00635324`). The AI manager is a
 //! singleton (`GLOBAL_ZTAIMgr`) that un-ported vanilla code reaches through its vtable and reads by raw
 //! offset, so nothing here replaces the object: each detour reads and writes vanilla's own memory in place
-//! (style 1), and no struct is declared because only a few fixed dwords are touched (the offsets below).
+//! (style 1), and no struct is declared because only fixed dwords are touched (the offsets below).
 //!
-//! Also reimplemented: the thin handler halves `fEndTrick`, `fEnterBuilding`, `fReturnToBuilding`,
-//! `fHidePredator`, `fGuestRoutine`/`fMaintRoutine`/`fGuideRoutine`/`fKeeperRoutine`, their `F` wrappers and
-//! `fSprayF`. The entity `fRoutine` bodies stay vanilla; cases where vanilla faults on a null `this` defer to it.
+//! Reimplemented:
+//! - Manager methods: `getRandomX`/`getRandomY`, `isSlow`/`isMedium`/`isFastMoveFunction`,
+//!   `convertConstantParam` (partial override), `removeEntity`, `removeEntities`, `callDone`, the tile
+//!   `getPath` overload, `checkPath`, `initAIParams` (`ZTAIMgr`), `update` (both classes), `save`, `load`,
+//!   `loadData`, `create`, the `BFAIMgr` constructor and destructors, and the listener overrides
+//!   `sendEvent`/`getEvents`.
+//! - Both `executeCall` dispatch chains and every handler they reach, wrappers and behavior halves alike
+//!   (`fMove`, `fPlaySpecial`, `fPlaySet`, `fFly`, `fRandomWalk`, ...).
 //!
-//! Reimplemented: `getRandomX`/`getRandomY`, `isSlowMoveFunction`/`isMediumMoveFunction`/
-//! `isFastMoveFunction`, `convertConstantParam` (partial override, see below) and `removeEntity`.
-//! Not detoured: `init` (a bare `jmp [vtable+0x38]` thunk and the never-reached `BFAIMgr::init`),
-//! `removeEntities`, `callDone`, `initAIParams` and everything the `executeCall` dispatch chain reaches.
+//! Still vanilla: `BFAIMgr::fPlay` (`0x0042296d`) and its mixer helpers, the position-based `getPath`, the
+//! entity `fRoutine` bodies, `ZTAIMgr::init` (a bare `jmp [vtable+0x38]` thunk), and `BFAIMgr::init` with the
+//! `BFAIMgr::initAIParams` it dispatches to. The constructor calls those two once per manager, while the
+//! `BFAIMgr` vtable is still installed. Handlers defer to vanilla for inputs on
+//! which vanilla faults (typically a null or wrong-class `this`).
 //!
 //! Windows layout differs from the macOS build (`ZTAIMgr` fields sit `+4` later, entity-type fields `+0x18`
 //! later), so every offset here comes from the Windows decompile, never the macOS one.
@@ -24,7 +29,14 @@ use std::{
 };
 
 use openzt_detour::generated::{
-    bfaimgr::{F_FLY, F_MOVE_REVERSE_F, F_PLAY_TIME},
+    bfaimgr::{F_FLY, F_MOVE_REVERSE_F, F_PLAY as BFAIMGR_F_PLAY, F_PLAY_TIME},
+    bfcoggoal::REACHED_TARGET as BFCOGGOAL_REACHED_TARGET,
+    gxmixerlink::DURATION as LINK_DURATION,
+    ztanimal::SET_PENDING_BS_0X4300F6 as ZTANIMAL_SET_PENDING_BS,
+    ztcheat::ENTITY_REMOVED as ZTCHEAT_ENTITY_REMOVED,
+    ztguide::F_ROUTINE as ZTGUIDE_F_ROUTINE,
+    ztkeeper::F_ROUTINE as ZTKEEPER_F_ROUTINE,
+    standalone::{ATOI, TIME},
     bfbehaviorset::INIT_CHILD as BFBEHAVIORSET_INIT_CHILD,
     bfbscall::{CONSTRUCTOR as BFBSCALL_CONSTRUCTOR, COPY_0X43E90E as BFBSCALL_COPY},
     bfentity::SET_BS as BFENTITY_SET_BS,
@@ -40,13 +52,19 @@ use openzt_detour::generated::{
         F_CAUGHT_PREY, F_CAUGHT_PREY_F, F_DIE, F_DIE_F, F_EXIT_BUILDING, F_EXIT_BUILDING_F, F_HATCH, F_HATCH_F, F_KILL_PREY, F_KILL_PREY_F, F_SHOW_PREDATOR, F_SHOW_PREDATOR_F,
     },
     bfaimgr::{
-        CALL_DONE as BFAIMGR_CALL_DONE, CHECK_PATH as BFAIMGR_CHECK_PATH, GET_EVENTS as BFAIMGR_GET_EVENTS, CONSTRUCTOR as BFAIMGR_CONSTRUCTOR, F_PLAY_SET, GET_PATH_1 as BFAIMGR_GET_PATH_1,
+        CALL_DONE as BFAIMGR_CALL_DONE, CHECK_PATH as BFAIMGR_CHECK_PATH, GET_EVENTS as BFAIMGR_GET_EVENTS, CONSTRUCTOR as BFAIMGR_CONSTRUCTOR, DESTRUCTOR_0 as BFAIMGR_DESTRUCTOR_0, DESTRUCTOR_1 as BFAIMGR_DESTRUCTOR_1, INIT as BFAIMGR_INIT, INIT_AIPARAMS as BFAIMGR_INIT_AIPARAMS, F_PLAY_SET, GET_PATH_1 as BFAIMGR_GET_PATH_1,
         LOAD as BFAIMGR_LOAD, LOAD_DATA as BFAIMGR_LOAD_DATA, REMOVE_ENTITIES as BFAIMGR_REMOVE_ENTITIES, SAVE as BFAIMGR_SAVE, SEND_EVENT as BFAIMGR_SEND_EVENT, UPDATE as BFAIMGR_UPDATE,
     },
     bfinifile::READ as BFINIFILE_READ,
     gxmixer::{CLEAR_ALL as GXMIXER_CLEAR_ALL, GET_ANIM as GXMIXER_GET_ANIM},
     bfpathfinder::SET_NODE_MAX,
-    standalone::OPERATOR_NEW,
+    standalone::{OPERATOR_DELETE, OPERATOR_NEW},
+    bfpathfinder::{CONSTRUCTOR as BFPATHFINDER_CONSTRUCTOR, DESTRUCTOR as BFPATHFINDER_DESTRUCTOR},
+    gxlleanim::DESTRUCTOR as GXLLEANIM_DESTRUCTOR,
+    gxlleanimset::RELEASE_0 as GXLLEANIMSET_RELEASE,
+    msvc_std_tree20::CLEAR as TREE20_CLEAR,
+    msvc_std_vector_t_28::VECTOR_T_28,
+    poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE_N_28},
     ztaimgr::{CREATE as ZTAIMGR_CREATE, INIT_AIPARAMS as ZTAIMGR_INIT_AIPARAMS},
     bfmap::MOVE_ENTITY_DELTA as BFMAP_MOVE_ENTITY_DELTA,
     bfunit::{GET_PATH_COST as BFUNIT_GET_PATH_COST, SET_MOVING, STOP as BFUNIT_STOP},
@@ -55,7 +73,7 @@ use openzt_detour::generated::{
     poolalloc::DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4,
     bfentity::{FIND_ANIM as BFENTITY_FIND_ANIM, FIND_SOUND as BFENTITY_FIND_SOUND},
     gxmixer::{SET_BASE_0 as GXMIXER_SET_BASE, SET_SET as GXMIXER_SET_SET},
-    bfeventmgr::{GET_EVENTS as BFEVENTMGR_GET_EVENTS, LOAD as BFEVENTMGR_LOAD, POST_EVENT as BFEVENTMGR_POST_EVENT, SAVE as BFEVENTMGR_SAVE, UPDATE as BFEVENTMGR_UPDATE},
+    bfeventmgr::{CONSTRUCTOR as BFEVENTMGR_CONSTRUCTOR, GET_EVENTS as BFEVENTMGR_GET_EVENTS, LOAD as BFEVENTMGR_LOAD, POST_EVENT as BFEVENTMGR_POST_EVENT, SAVE as BFEVENTMGR_SAVE, UPDATE as BFEVENTMGR_UPDATE},
     standalone::{DEALLOCATE as READ_BYTES_FROM_FILE, WRITE_BYTES_TO_FILE},
     ztaimgr::UPDATE as ZTAIMGR_UPDATE,
     ztmainttaskpool::LISTEN as ZTMAINTTASKPOOL_LISTEN,
@@ -80,7 +98,7 @@ use tracing::error;
 
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, low_byte_bool, save_to_memory},
+    util::{get_from_memory, low_byte_bool, save_to_memory, LiveMemory},
     vanilla_string::VanillaString,
 };
 
@@ -124,11 +142,6 @@ const ENTITY_VTABLE_HIDE_PREDATOR: u32 = 0xcc;
 /// Offset of the `done` flag inside the call object the `F` wrappers receive.
 const CALL_DONE_FLAG_OFFSET: u32 = 0x18;
 
-/// `ZTGuide::fRoutine` and `ZTKeeper::fRoutine` (`thiscall(this, done)`): no `generated.rs` entry, so they
-/// are called by Ghidra address.
-const ZTGUIDE_F_ROUTINE_ADDRESS: u32 = 0x0058_a929;
-const ZTKEEPER_F_ROUTINE_ADDRESS: u32 = 0x004a_86ba;
-const RVA_TAG_ZTGUIDETYPE: u32 = 0x0023_8770;
 
 /// `ZTUnitType` dwords `convertConstantParam` returns, in `RANDOM_TIME_NAMES` order.
 const UNIT_TYPE_RANDOM_TIME_OFFSETS: [u32; 6] = [0x138, 0x13c, 0x140, 0x144, 0x148, 0x14c];
@@ -144,16 +157,13 @@ const RANDOM_TIME_NAMES: [&[u8]; 6] = [
     b"cRunRandomlyTime3",
 ];
 
-/// `ZTCheat::entityRemoved` (`cdecl`, one entity argument), the first thing `removeEntity` calls. Not in
-/// `generated.rs`, so it is called by its Ghidra address (code addresses need no base adjustment).
-const ZTCHEAT_ENTITY_REMOVED_ADDRESS: u32 = 0x0041_e1fd;
-
 /// A `{begin, end, capacity}` string as `BFFunctionCall` stores its name and each parameter.
 #[repr(C)]
 struct RawCallString {
     begin: *const u8,
     end: *const u8,
     capacity: *const u8,
+    _live: LiveMemory,
 }
 
 impl RawCallString {
@@ -172,6 +182,7 @@ struct RawFunctionCall {
     params_begin: *const RawCallString,
     params_end: *const RawCallString,
     params_capacity: *const RawCallString,
+    _live: LiveMemory,
 }
 
 impl RawFunctionCall {
@@ -260,7 +271,7 @@ pub unsafe fn convert_constant_param(name: *const c_void, entity: u32) -> Option
         return (unit_type != 0).then(|| get_from_memory::<i32>(unit_type + UNIT_TYPE_RANDOM_TIME_OFFSETS[index]));
     }
     if name == INFORM_GUEST_TIME_NAME {
-        let is_guide = unit_type != 0 && unsafe { type_tag_check(unit_type, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTGUIDETYPE) };
+        let is_guide = unit_type != 0 && unsafe { type_tag_check(unit_type, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTGUIDE) };
         return Some(if is_guide { get_from_memory::<i32>(unit_type + GUIDE_TYPE_INFORM_GUEST_TIME_OFFSET) } else { 0 });
     }
     None
@@ -270,8 +281,7 @@ pub unsafe fn convert_constant_param(name: *const c_void, entity: u32) -> Option
 /// dispatches the world manager's own `removeEntity(entity, true)`. Returns `false` if there is no world.
 pub unsafe fn remove_entity(entity: u32) -> bool {
     let world = globals().ztworldmgr_ptr() as u32;
-    let entity_removed = unsafe { mem::transmute::<u32, extern "cdecl" fn(u32)>(ZTCHEAT_ENTITY_REMOVED_ADDRESS) };
-    entity_removed(entity);
+    unsafe { ZTCHEAT_ENTITY_REMOVED.original()(entity as i32) };
     if world == 0 {
         return false;
     }
@@ -365,8 +375,7 @@ unsafe fn guest_f_routine(unit: u32, done: *const bool) {
 }
 
 unsafe fn guide_f_routine(unit: u32, done: *const bool) {
-    let routine = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, *const bool) -> u32>(ZTGUIDE_F_ROUTINE_ADDRESS) };
-    routine(unit, done);
+    unsafe { ZTGUIDE_F_ROUTINE.original()(unit as *const u32, done) };
 }
 
 pub unsafe fn f_guest_routine(unit: u32, done: *const bool) -> bool {
@@ -387,8 +396,7 @@ pub unsafe fn f_keeper_routine(unit: u32, done: *const bool) -> bool {
     if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTKEEPER) } {
         return false;
     }
-    let routine = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, *const bool) -> u32>(ZTKEEPER_F_ROUTINE_ADDRESS) };
-    routine(unit, done) as u8 != 0
+    unsafe { ZTKEEPER_F_ROUTINE.original()(unit as *const u32, done) }
 }
 
 /// `ZTUnit` field `fShowPredator` clears and `fCaughtPrey` stores the hunter's id into on the prey.
@@ -596,53 +604,231 @@ pub fn lookup_zt_call(name: &[u8]) -> Option<ZtCall> {
     })
 }
 
-/// Runs the handler for `which` the way the vanilla chain does. Handlers this crate has ported are reached
-/// through their wrapper address (`hooked()`, what a vanilla caller would run), so their own deferral to
-/// vanilla for faulting inputs still applies; the rest call the real wrappers.
-unsafe fn dispatch_zt_call(this: u32, which: ZtCall, call: u32, unit: u32) {
-    let (c, u) = (call as i32, unit as *const i32);
-    unsafe {
-        match which {
-            ZtCall::MoveSlow => drop(F_MOVE_SLOW_F.hooked()(this as *const u32, c, u)),
-            ZtCall::MoveMedium => drop(F_MOVE_MEDIUM_F.hooked()(this as *const u32, c, u)),
-            ZtCall::MoveFast => drop(F_MOVE_FAST_F.hooked()(this as *const u32, c, u)),
-            ZtCall::Spray => F_SPRAY_F.hooked()(c, unit as *const u32),
-            ZtCall::KeeperRoutine => F_KEEPER_ROUTINE_F.hooked()(call, u),
-            ZtCall::GuestRoutine => F_GUEST_ROUTINE_F.hooked()(call, unit),
-            ZtCall::GuideRoutine => F_GUIDE_ROUTINE_F.hooked()(call, unit),
-            ZtCall::MaintRoutine => F_MAINT_ROUTINE_F.hooked()(call, unit),
-            ZtCall::FaceTowardFood => F_FACE_TOWARD_FOOD_F.hooked()(c, unit as *const u8),
-            ZtCall::FaceTowardTarget => F_FACE_TOWARD_TARGET_F.hooked()(c, unit as *const c_void),
-            ZtCall::ShowPredator => F_SHOW_PREDATOR_F.hooked()(c, u),
-            ZtCall::HidePredator => F_HIDE_PREDATOR_F.hooked()(c, unit as *const u8),
-            ZtCall::EnterBuilding => F_ENTER_BUILDING_F.hooked()(c, u),
-            ZtCall::ExitBuilding => F_EXIT_BUILDING_F.hooked()(c, u),
-            ZtCall::DustBall => F_DUST_BALL_F.hooked()(this as *const u32, c, u),
-            ZtCall::KillPrey => F_KILL_PREY_F.hooked()(c, unit as *const u8),
-            ZtCall::CaughtPrey => F_CAUGHT_PREY_F.hooked()(c, u),
-            ZtCall::Die => F_DIE_F.hooked()(c, u),
-            ZtCall::TargetBuilding => drop(F_TARGET_BUILDING_F.hooked()(this as *const u32, c, u)),
-            ZtCall::Hatch => F_HATCH_F.hooked()(c, u),
-            ZtCall::EndTrick => F_END_TRICK_F.hooked()(c, u),
-            ZtCall::ReturnToBuilding => F_RETURN_TO_BUILDING_F.hooked()(c, u),
-            ZtCall::PlaySetTank => {
-                if f_play_set_tank(call, unit, play_set_vanilla).is_none() {
-                    let _ = F_PLAY_SET_TANK_F.original()(c, unit as *const c_void);
+/// The handler a dispatched call name reaches: one variant per `BFAIMgr`/`ZTAIMgr` `...F` wrapper.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Handler {
+    MoveSlowF,
+    MoveMediumF,
+    MoveFastF,
+    SprayF,
+    KeeperRoutineF,
+    GuestRoutineF,
+    GuideRoutineF,
+    MaintRoutineF,
+    FaceTowardFoodF,
+    FaceTowardTargetF,
+    ShowPredatorF,
+    HidePredatorF,
+    EnterBuildingF,
+    ExitBuildingF,
+    DustBallF,
+    KillPreyF,
+    CaughtPreyF,
+    DieF,
+    TargetBuildingF,
+    HatchF,
+    EndTrickF,
+    ReturnToBuildingF,
+    PlaySetTankF,
+    PlayF,
+    SetBaseF,
+    PlayWithBaseF,
+    MoveEntityDeltaF,
+    MoveEntitySpecialF,
+    PlayTimeF,
+    PlaySoundF,
+    PlaySpecialF,
+    PlaySetProbF,
+    PlayReverseF,
+    PlayPingPongF,
+    PlayWithSoundF,
+    PlayStopAtEndF,
+    PlaySetF,
+    MoveF,
+    MoveReverseF,
+    MoveWithSoundF,
+    FaceDirectionF,
+    FlyF,
+    FlyReverseF,
+    HaltF,
+}
+
+/// Where the dispatchers hand a call to a handler, so a test can record what they decide. `invoke(handler,
+/// this, call, unit, trailing)` runs the handler with the unit it was given and the constant trailing
+/// arguments the vanilla chain passes (`fPlayF`/`fPlayWithBaseF` `0, 0`, `fMoveF` `false`, `fFlyF` `0`; unused
+/// slots are `0`), and returns its result (`0` for a handler with none).
+pub trait Handlers {
+    unsafe fn invoke(&self, handler: Handler, this: u32, call: u32, unit: u32, trailing: [u32; 2]) -> u32;
+}
+
+/// The vanilla handlers. A handler this crate has ported is reached through its wrapper address (`hooked()`,
+/// what a vanilla caller would run), so its own deferral to vanilla for faulting inputs still applies; the rest
+/// call the real wrappers.
+struct VanillaHandlers;
+
+impl Handlers for VanillaHandlers {
+    unsafe fn invoke(&self, handler: Handler, this: u32, call: u32, unit: u32, trailing: [u32; 2]) -> u32 {
+        let (t, c, u) = (this as *const u32, call as *const u32, unit as *const u32);
+        let (ci, ui) = (call as i32, unit as *const i32);
+        unsafe {
+            match handler {
+                Handler::MoveSlowF => F_MOVE_SLOW_F.hooked()(t, ci, ui),
+                Handler::MoveMediumF => F_MOVE_MEDIUM_F.hooked()(t, ci, ui),
+                Handler::MoveFastF => F_MOVE_FAST_F.hooked()(t, ci, ui),
+                Handler::SprayF => {
+                    F_SPRAY_F.hooked()(ci, u);
+                    0
                 }
+                Handler::KeeperRoutineF => {
+                    F_KEEPER_ROUTINE_F.hooked()(call, ui);
+                    0
+                }
+                Handler::GuestRoutineF => {
+                    F_GUEST_ROUTINE_F.hooked()(call, unit);
+                    0
+                }
+                Handler::GuideRoutineF => {
+                    F_GUIDE_ROUTINE_F.hooked()(call, unit);
+                    0
+                }
+                Handler::MaintRoutineF => {
+                    F_MAINT_ROUTINE_F.hooked()(call, unit);
+                    0
+                }
+                Handler::FaceTowardFoodF => {
+                    F_FACE_TOWARD_FOOD_F.hooked()(ci, unit as *const u8);
+                    0
+                }
+                Handler::FaceTowardTargetF => {
+                    F_FACE_TOWARD_TARGET_F.hooked()(ci, unit as *const c_void);
+                    0
+                }
+                Handler::ShowPredatorF => {
+                    F_SHOW_PREDATOR_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::HidePredatorF => {
+                    F_HIDE_PREDATOR_F.hooked()(ci, unit as *const u8);
+                    0
+                }
+                Handler::EnterBuildingF => {
+                    F_ENTER_BUILDING_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::ExitBuildingF => {
+                    F_EXIT_BUILDING_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::DustBallF => {
+                    F_DUST_BALL_F.hooked()(t, ci, ui);
+                    0
+                }
+                Handler::KillPreyF => {
+                    F_KILL_PREY_F.hooked()(ci, unit as *const u8);
+                    0
+                }
+                Handler::CaughtPreyF => {
+                    F_CAUGHT_PREY_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::DieF => {
+                    F_DIE_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::TargetBuildingF => F_TARGET_BUILDING_F.hooked()(t, ci, ui) as u32,
+                Handler::HatchF => {
+                    F_HATCH_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::EndTrickF => {
+                    F_END_TRICK_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::ReturnToBuildingF => {
+                    F_RETURN_TO_BUILDING_F.hooked()(ci, ui);
+                    0
+                }
+                Handler::PlaySetTankF => {
+                    if f_play_set_tank(call, unit, play_set_vanilla).is_none() {
+                        let _ = F_PLAY_SET_TANK_F.original()(ci, unit as *const c_void);
+                    }
+                    0
+                }
+                Handler::PlayF => F_PLAY_F.hooked()(t, c, u, trailing[0] as i8, trailing[1] as i8) as u32,
+                Handler::SetBaseF => F_SET_BASE_F.hooked()(t, c, u) as u32,
+                Handler::PlayWithBaseF => F_PLAY_WITH_BASE_F.hooked()(t, c, u, trailing[0] as i8, trailing[1] as i8) as u32,
+                Handler::MoveEntityDeltaF => F_MOVE_ENTITY_DELTA_F.hooked()(t, c, u) as u32,
+                Handler::MoveEntitySpecialF => F_MOVE_ENTITY_SPECIAL_F.hooked()(t, c, u) as u32,
+                Handler::PlayTimeF => F_PLAY_TIME_F.hooked()(t, c, u) as u32,
+                Handler::PlaySoundF => F_PLAY_SOUND_F.hooked()(t, c, u) as u32,
+                Handler::PlaySpecialF => F_PLAY_SPECIAL_F.hooked()(t, c, u) as u32,
+                Handler::PlaySetProbF => F_PLAY_SET_PROB_F.hooked()(c, u) as u32,
+                Handler::PlayReverseF => F_PLAY_REVERSE_F.hooked()(t, c, u) as u32,
+                Handler::PlayPingPongF => F_PLAY_PING_PONG_F.hooked()(t, c, u) as u32,
+                Handler::PlayWithSoundF => F_PLAY_WITH_SOUND_F.hooked()(c, u) as u32,
+                Handler::PlayStopAtEndF => F_PLAY_STOP_AT_END_F.hooked()(t, c, u) as u32,
+                Handler::PlaySetF => F_PLAY_SET_F.hooked()(c, u) as u32,
+                Handler::MoveF => F_MOVE_F.hooked()(t, c, u, trailing[0] != 0),
+                Handler::MoveReverseF => F_MOVE_REVERSE_F.hooked()(t, c, u) as u32,
+                Handler::MoveWithSoundF => F_MOVE_WITH_SOUND_F.hooked()(t, c, u),
+                Handler::FaceDirectionF => F_FACE_DIRECTION_F.hooked()(c, u) as u32,
+                Handler::FlyF => F_FLY_F.hooked()(t, c, u, trailing[0] as i8) as u32,
+                Handler::FlyReverseF => F_FLY_REVERSE_F.hooked()(t, c, u) as u32,
+                Handler::HaltF => match f_halt_f(call, unit) {
+                    Some(result) => u32::from(result),
+                    None => F_HALT_F.original()(c, u) as u32,
+                },
             }
         }
+    }
+}
+
+/// The handler for a `ZTAIMgr` call name.
+pub fn zt_handler(which: ZtCall) -> Handler {
+    match which {
+        ZtCall::MoveSlow => Handler::MoveSlowF,
+        ZtCall::MoveMedium => Handler::MoveMediumF,
+        ZtCall::MoveFast => Handler::MoveFastF,
+        ZtCall::Spray => Handler::SprayF,
+        ZtCall::KeeperRoutine => Handler::KeeperRoutineF,
+        ZtCall::GuestRoutine => Handler::GuestRoutineF,
+        ZtCall::GuideRoutine => Handler::GuideRoutineF,
+        ZtCall::MaintRoutine => Handler::MaintRoutineF,
+        ZtCall::FaceTowardFood => Handler::FaceTowardFoodF,
+        ZtCall::FaceTowardTarget => Handler::FaceTowardTargetF,
+        ZtCall::ShowPredator => Handler::ShowPredatorF,
+        ZtCall::HidePredator => Handler::HidePredatorF,
+        ZtCall::EnterBuilding => Handler::EnterBuildingF,
+        ZtCall::ExitBuilding => Handler::ExitBuildingF,
+        ZtCall::DustBall => Handler::DustBallF,
+        ZtCall::KillPrey => Handler::KillPreyF,
+        ZtCall::CaughtPrey => Handler::CaughtPreyF,
+        ZtCall::Die => Handler::DieF,
+        ZtCall::TargetBuilding => Handler::TargetBuildingF,
+        ZtCall::Hatch => Handler::HatchF,
+        ZtCall::EndTrick => Handler::EndTrickF,
+        ZtCall::ReturnToBuilding => Handler::ReturnToBuildingF,
+        ZtCall::PlaySetTank => Handler::PlaySetTankF,
     }
 }
 
 /// `ZTAIMgr::executeCall`: dispatches the ZT-specific names; anything else goes to the `BFAIMgr` chain
 /// ([`execute_base_call`]) with the uncast unit. Afterwards the call's result flag is copied to `done`.
 pub unsafe fn execute_call(this: u32, call: u32, unit: u32, done: *mut u8) {
+    unsafe { execute_call_with(&VanillaHandlers, this, call, unit, done) }
+}
+
+/// [`execute_call`] over an injectable handler table. ZT handlers receive the unit only if its type is a
+/// `ZTUnitType`, else null.
+pub unsafe fn execute_call_with(handlers: &dyn Handlers, this: u32, call: u32, unit: u32, done: *mut u8) {
     let name = unsafe { &*(call as *const RawCallString) }.bytes();
     let unit_cast = if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } { unit } else { 0 };
     match lookup_zt_call(name) {
-        Some(which) => unsafe { dispatch_zt_call(this, which, call, unit_cast) },
+        Some(which) => {
+            unsafe { handlers.invoke(zt_handler(which), this, call, unit_cast, [0, 0]) };
+        }
         None => {
-            unsafe { execute_base_call(this, call, unit, done) };
+            unsafe { execute_base_call_with(handlers, this, call, unit, done) };
         }
     }
     unsafe { done.write_volatile(get_from_memory::<u8>(call + CALL_DONE_FLAG_OFFSET)) };
@@ -720,58 +906,76 @@ const BFAIMGR_VTABLE_PLAY_SET_TERRAIN: u32 = 0x14;
 /// for an unknown name). The play family receives the unit as given; move/fly/halt handlers get the unit
 /// only if its type is a `ZTUnitType`, else null. The call's result flag is copied to `done`.
 pub unsafe fn execute_base_call(this: u32, call: u32, unit: u32, done: *mut u8) -> u8 {
+    unsafe { execute_base_call_with(&VanillaHandlers, this, call, unit, done) }
+}
+
+/// [`execute_base_call`] over an injectable handler table.
+pub unsafe fn execute_base_call_with(handlers: &dyn Handlers, this: u32, call: u32, unit: u32, done: *mut u8) -> u8 {
     let name = unsafe { &*(call as *const RawCallString) }.bytes();
     let unit_cast = if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } { unit } else { 0 };
     let result = match lookup_base_call(name) {
-        Some(which) => unsafe { dispatch_base_call(this, which, call, unit, unit_cast) },
+        Some(which) => unsafe { dispatch_base_call(handlers, this, which, call, unit, unit_cast) },
         None => 0,
     };
     unsafe { done.write_volatile(get_from_memory::<u8>(call + CALL_DONE_FLAG_OFFSET)) };
     result
 }
 
-unsafe fn dispatch_base_call(this: u32, which: BaseCall, call: u32, unit: u32, unit_cast: u32) -> u8 {
-    let (t, c) = (this as *const u32, call as *const u32);
-    let (u, uc) = (unit as *const u32, unit_cast as *const u32);
-    unsafe {
-        match which {
-            BaseCall::Play => F_PLAY_F.hooked()(t, c, u, 0, 0) as u8,
-            BaseCall::SetBase => F_SET_BASE_F.hooked()(t, c, u) as u8,
-            BaseCall::PlayWithBase => F_PLAY_WITH_BASE_F.hooked()(t, c, u, 0, 0) as u8,
-            BaseCall::MoveEntityDelta => F_MOVE_ENTITY_DELTA_F.hooked()(t, c, u) as u8,
-            BaseCall::MoveEntitySpecial => F_MOVE_ENTITY_SPECIAL_F.hooked()(t, c, u) as u8,
-            BaseCall::PlayTime => F_PLAY_TIME_F.hooked()(t, c, u) as u8,
-            BaseCall::PlaySound => F_PLAY_SOUND_F.hooked()(t, c, u) as u8,
-            BaseCall::PlaySpecial => F_PLAY_SPECIAL_F.hooked()(t, c, u) as u8,
-            BaseCall::PlaySetProb => F_PLAY_SET_PROB_F.hooked()(c, u) as u8,
-            BaseCall::PlaySetTerrain => {
-                let vtable = get_from_memory::<u32>(this);
-                let target = get_from_memory::<u32>(vtable + BFAIMGR_VTABLE_PLAY_SET_TERRAIN);
-                mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target)(this, call, unit) as u8
-            }
-            BaseCall::PlayReverse => F_PLAY_REVERSE_F.hooked()(t, c, u) as u8,
-            BaseCall::PlayPingPong => F_PLAY_PING_PONG_F.hooked()(t, c, u) as u8,
-            BaseCall::PlayWithSound => F_PLAY_WITH_SOUND_F.hooked()(c, u) as u8,
-            BaseCall::PlayStopAtEnd => F_PLAY_STOP_AT_END_F.hooked()(t, c, u) as u8,
-            BaseCall::PlaySet => F_PLAY_SET_F.hooked()(c, u) as u8,
-            BaseCall::MoveSlow => F_MOVE_SLOW_F.hooked()(t, call as i32, uc as *const i32) as u8,
-            BaseCall::MoveMedium => F_MOVE_MEDIUM_F.hooked()(t, call as i32, uc as *const i32) as u8,
-            BaseCall::Move => F_MOVE_F.hooked()(t, c, uc, false) as u8,
-            BaseCall::MoveReverse => F_MOVE_REVERSE_F.hooked()(t, c, uc) as u8,
-            BaseCall::MoveFast => F_MOVE_FAST_F.hooked()(t, call as i32, uc as *const i32) as u8,
-            BaseCall::MoveWithSound => F_MOVE_WITH_SOUND_F.hooked()(t, c, uc) as u8,
-            BaseCall::FaceDirection => F_FACE_DIRECTION_F.hooked()(c, u) as u8,
-            BaseCall::Fly => F_FLY_F.hooked()(t, c, uc, 0) as u8,
-            BaseCall::FlyReverse => F_FLY_REVERSE_F.hooked()(t, c, uc) as u8,
-            BaseCall::KeepControl => (unit_cast != 0) as u8,
-            BaseCall::Halt => match f_halt_f(call, unit_cast) {
-                Some(result) => result,
-                None => {
-                    let halt = mem::transmute::<u32, unsafe extern "stdcall" fn(*const u32, *const u32) -> u32>(F_HALT_F.address);
-                    halt(c, uc) as u8
-                }
-            },
-        }
+/// How a base call name reaches its handler: which handler, whether it gets the cast unit (move, fly and halt
+/// handlers) or the unit as given (the play family), and the constant trailing arguments.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BaseRoute {
+    pub handler: Handler,
+    pub cast_unit: bool,
+    pub trailing: [u32; 2],
+}
+
+/// The route for a base call name; `None` for the two names the dispatcher handles itself
+/// (`fPlaySetTerrain`, through the manager's vtable, and `fKeepControl`).
+pub fn base_route(which: BaseCall) -> Option<BaseRoute> {
+    let route = |handler, cast_unit, trailing| Some(BaseRoute { handler, cast_unit, trailing });
+    match which {
+        BaseCall::Play => route(Handler::PlayF, false, [0, 0]),
+        BaseCall::SetBase => route(Handler::SetBaseF, false, [0, 0]),
+        BaseCall::PlayWithBase => route(Handler::PlayWithBaseF, false, [0, 0]),
+        BaseCall::MoveEntityDelta => route(Handler::MoveEntityDeltaF, false, [0, 0]),
+        BaseCall::MoveEntitySpecial => route(Handler::MoveEntitySpecialF, false, [0, 0]),
+        BaseCall::PlayTime => route(Handler::PlayTimeF, false, [0, 0]),
+        BaseCall::PlaySound => route(Handler::PlaySoundF, false, [0, 0]),
+        BaseCall::PlaySpecial => route(Handler::PlaySpecialF, false, [0, 0]),
+        BaseCall::PlaySetProb => route(Handler::PlaySetProbF, false, [0, 0]),
+        BaseCall::PlaySetTerrain => None,
+        BaseCall::PlayReverse => route(Handler::PlayReverseF, false, [0, 0]),
+        BaseCall::PlayPingPong => route(Handler::PlayPingPongF, false, [0, 0]),
+        BaseCall::PlayWithSound => route(Handler::PlayWithSoundF, false, [0, 0]),
+        BaseCall::PlayStopAtEnd => route(Handler::PlayStopAtEndF, false, [0, 0]),
+        BaseCall::PlaySet => route(Handler::PlaySetF, false, [0, 0]),
+        BaseCall::MoveSlow => route(Handler::MoveSlowF, true, [0, 0]),
+        BaseCall::MoveMedium => route(Handler::MoveMediumF, true, [0, 0]),
+        BaseCall::Move => route(Handler::MoveF, true, [0, 0]),
+        BaseCall::MoveReverse => route(Handler::MoveReverseF, true, [0, 0]),
+        BaseCall::MoveFast => route(Handler::MoveFastF, true, [0, 0]),
+        BaseCall::MoveWithSound => route(Handler::MoveWithSoundF, true, [0, 0]),
+        BaseCall::FaceDirection => route(Handler::FaceDirectionF, false, [0, 0]),
+        BaseCall::Fly => route(Handler::FlyF, true, [0, 0]),
+        BaseCall::FlyReverse => route(Handler::FlyReverseF, true, [0, 0]),
+        BaseCall::KeepControl => None,
+        BaseCall::Halt => route(Handler::HaltF, true, [0, 0]),
+    }
+}
+
+unsafe fn dispatch_base_call(handlers: &dyn Handlers, this: u32, which: BaseCall, call: u32, unit: u32, unit_cast: u32) -> u8 {
+    if let Some(route) = base_route(which) {
+        let target_unit = if route.cast_unit { unit_cast } else { unit };
+        return unsafe { handlers.invoke(route.handler, this, call, target_unit, route.trailing) } as u8;
+    }
+    match which {
+        BaseCall::PlaySetTerrain => unsafe {
+            let vtable = get_from_memory::<u32>(this);
+            let target = get_from_memory::<u32>(vtable + BFAIMGR_VTABLE_PLAY_SET_TERRAIN);
+            mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(target)(this, call, unit) as u8
+        },
+        _ => (unit_cast != 0) as u8,
     }
 }
 
@@ -954,11 +1158,121 @@ pub unsafe fn ztaimgr_create() -> u32 {
     if this == 0 {
         return 0;
     }
-    unsafe { BFAIMGR_CONSTRUCTOR.original()(this as *const u32) };
+    unsafe { BFAIMGR_CONSTRUCTOR.hooked()(this as *const u32) };
     let base = get_module_base("zoo.exe") as u32;
     save_to_memory(this, base + RVA_ZTAIMGR_VTABLE);
     save_to_memory(this + 8, base + RVA_ZTAIMGR_LISTENER_TABLE);
     unsafe { call_virtual_args(this, AI_VTABLE_INIT_AI_PARAMS, []) };
+    this
+}
+
+/// `BFAIMgr`'s vtable and listener table (RVAs), and the `BFMgr` vtable its destructor restores.
+const RVA_BFAIMGR_VTABLE: u32 = 0x0023_536c;
+const RVA_BFAIMGR_LISTENER_TABLE: u32 = 0x0023_2270;
+const RVA_BFMGR_VTABLE: u32 = 0x0023_55c0;
+/// Manager fields the constructor and destructor touch: the `GXLLEAnimSet` pointer, the embedded `BFEventMgr`
+/// (`+0xa0`; second event vector `+0xac`, listener tree `+0xc0`), and the path cache (`+0x12c`: head, size at
+/// `+0x130`, one flag byte at `+0x134`).
+const OFFSET_ANIM_SET: u32 = 0xd0;
+const OFFSET_EVENT_VECTOR_B: u32 = 0xac;
+const OFFSET_LISTENER_TREE: u32 = 0xc0;
+const OFFSET_PATH_CACHE_SIZE: u32 = 0x130;
+const OFFSET_PATH_CACHE_FLAG: u32 = 0x134;
+/// Pool freelist bucket for sizes `9..=0x18` (`DAT_00638008`): tree heads of `0x14`/`0x18` bytes.
+const RVA_POOL_FREELIST_BUCKET_2: u32 = 0x0023_8008;
+/// `GXLLEAnimSet` allocation size, and its animation elements (`+0x10` begin, `+0x14` end, `+0x18` capacity end).
+const ANIM_SET_SIZE: u32 = 0x28;
+const ANIM_ELEMENT_SIZE: u32 = 0x1c;
+const PATH_CACHE_HEAD_SIZE: u32 = 0x18;
+
+/// `BFAIMgr::BFAIMgr()` (`0x00525e90`): constructs the embedded `BFPathFinder` and `BFEventMgr`, builds the empty
+/// path-cache tree (head from `PoolAlloc`, size `0`), installs the `BFAIMgr` vtable and listener table (the
+/// `BFMgr` ones vanilla writes first are overwritten before anything reads them), allocates a zeroed
+/// `GXLLEAnimSet` (`0x28` bytes, `operator new`) into `+0xd0`, and runs `BFAIMgr::init`. A failed allocation
+/// stores a null set. `+0x134` is a stale stack byte in vanilla; it is zeroed here.
+pub unsafe fn bfaimgr_construct(this: u32) -> u32 {
+    let base = get_module_base("zoo.exe") as u32;
+    save_to_memory(this + 0x4, 0u8);
+    unsafe {
+        BFPATHFINDER_CONSTRUCTOR.original()((this + OFFSET_PATHFINDER) as *const u32, 0, 2);
+        BFEVENTMGR_CONSTRUCTOR.original()((this + OFFSET_EVENT_MGR) as *const u32);
+    }
+    let head = unsafe { POOLALLOC_ALLOCATE.original()(PATH_CACHE_HEAD_SIZE) } as u32;
+    save_to_memory(this + OFFSET_PATH_CACHE, head);
+    save_to_memory(this + OFFSET_PATH_CACHE_SIZE, 0u32);
+    save_to_memory(this + OFFSET_PATH_CACHE_FLAG, 0u8);
+    save_to_memory(head, 0u8);
+    save_to_memory(head + 4, 0u32);
+    save_to_memory(head + 8, head);
+    save_to_memory(head + 0xc, head);
+    save_to_memory(this, base + RVA_BFAIMGR_VTABLE);
+    save_to_memory(this + 8, base + RVA_BFAIMGR_LISTENER_TABLE);
+    let anim_set = unsafe { OPERATOR_NEW.original()(ANIM_SET_SIZE) } as u32;
+    if anim_set != 0 {
+        for offset in (0x10..=0x20).step_by(4) {
+            save_to_memory(anim_set + offset, 0u32);
+        }
+        save_to_memory(anim_set + 0x24, 0u8);
+        save_to_memory(anim_set + 0x25, 0u8);
+    }
+    save_to_memory(this + OFFSET_ANIM_SET, anim_set);
+    unsafe { bfaimgr_init(this) };
+    this
+}
+
+/// Returns a tree head of the `0x14`/`0x18` size class to vanilla's pool freelist (null is skipped).
+fn pool_free_bucket_2(node: u32) {
+    if node == 0 {
+        return;
+    }
+    let freelist = get_module_base("zoo.exe") as u32 + RVA_POOL_FREELIST_BUCKET_2;
+    save_to_memory(node, get_from_memory::<u32>(freelist));
+    save_to_memory(freelist, node);
+}
+
+/// `BFAIMgr::~BFAIMgr()` (`0x0050374b`): drops back to the `BFAIMgr` vtable, releases and frees the
+/// `GXLLEAnimSet` (`release`, the element destructor loop over what `release` left, the element buffer through
+/// `PoolAlloc::deallocate_n_28`, then `operator delete`), clears the path cache and returns its head to the
+/// freelist, runs the inlined `BFEventMgr` teardown (listener tree cleared and its head freed, both event
+/// vectors), destroys the `BFPathFinder`, and ends on the `BFMgr` vtable.
+pub unsafe fn bfaimgr_destruct(this: u32) -> u32 {
+    let base = get_module_base("zoo.exe") as u32;
+    save_to_memory(this, base + RVA_BFAIMGR_VTABLE);
+    save_to_memory(this + 8, base + RVA_BFAIMGR_LISTENER_TABLE);
+    let anim_set = get_from_memory::<u32>(this + OFFSET_ANIM_SET);
+    if anim_set != 0 {
+        unsafe { GXLLEANIMSET_RELEASE.original()(anim_set as *const c_void) };
+        let begin = get_from_memory::<u32>(anim_set + 0x10);
+        let end = get_from_memory::<u32>(anim_set + 0x14);
+        let mut element = begin;
+        while element != end {
+            unsafe { GXLLEANIM_DESTRUCTOR.original()(element as *const u32) };
+            element += ANIM_ELEMENT_SIZE;
+        }
+        let capacity = (get_from_memory::<u32>(anim_set + 0x18).wrapping_sub(begin) as i32) / ANIM_ELEMENT_SIZE as i32;
+        unsafe { DEALLOCATE_N_28.original()(begin as *const u32, capacity) };
+        unsafe { OPERATOR_DELETE.original()(anim_set) };
+    }
+    crate::vanilla_rbtree::rb_tree_clear(this + OFFSET_PATH_CACHE, PATH_CACHE_NODE_SIZE);
+    pool_free_bucket_2(get_from_memory::<u32>(this + OFFSET_PATH_CACHE));
+    unsafe { TREE20_CLEAR.original()((this + OFFSET_LISTENER_TREE) as *const u32) };
+    pool_free_bucket_2(get_from_memory::<u32>(this + OFFSET_LISTENER_TREE));
+    unsafe {
+        VECTOR_T_28.original()((this + OFFSET_EVENT_VECTOR_B) as *const u32);
+        VECTOR_T_28.original()((this + OFFSET_EVENT_MGR) as *const u32);
+        BFPATHFINDER_DESTRUCTOR.original()((this + OFFSET_PATHFINDER) as *const u32);
+    }
+    save_to_memory(this, base + RVA_BFMGR_VTABLE);
+    this
+}
+
+/// `BFAIMgr`'s deleting destructor (`0x00503857`, vtable slot 0): runs the destructor, then frees the object
+/// with `operator delete` when bit 0 of `flags` is set. Returns `this`.
+pub unsafe fn bfaimgr_deleting_destruct(this: u32, flags: u8) -> u32 {
+    unsafe { bfaimgr_destruct(this) };
+    if flags & 1 != 0 {
+        unsafe { OPERATOR_DELETE.original()(this) };
+    }
     this
 }
 
@@ -1231,12 +1545,11 @@ pub unsafe fn f_target_building(this: u32, unit: u32, done: *const bool, ops: &T
         save_to_memory(unit + ANIMAL_TARGET_ACQUIRED_OFFSET, 0u8);
         return false;
     }
-    let name_string = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_TARGET_BUILDING_NAME) } as *const RawCallString;
-    let name = VanillaString::from_bytes(unsafe { &*name_string }.bytes());
+    let name = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_TARGET_BUILDING_NAME) };
     let speed = get_from_memory::<u32>(entity_type + UNIT_TYPE_MOVE_SPEED_OFFSET);
     let none = VanillaString::from_bytes(NO_NAME);
-    let empty = VanillaString::from_bytes(b"");
-    unsafe { (ops.f_move)(this, none.as_ptr() as u32, unit, done as u32, name.as_ptr() as u32, speed, empty.as_ptr() as u32) }
+    let empty = EmptyName::new();
+    unsafe { (ops.f_move)(this, none.as_ptr() as u32, unit, done as u32, name, speed, empty.as_ptr()) }
 }
 
 /// `ZTAIMgr::fTargetBuildingF(call, unit)`: finishes with result `0` for a non-animal; for an animal whose
@@ -1280,7 +1593,7 @@ pub struct MoveSpeedOps {
 
 /// `BFAIMgr::fMoveSlowF`/`fMoveMediumF`/`fMoveFastF(call, unit)`: needs exactly two parameters, the first
 /// non-empty, a non-null unit and a `ZTUnitType` type; converts the second parameter through the manager's
-/// vtable `+0x34`, copies the unit's per-speed move name into a vanilla string and calls `fMove` with the
+/// vtable `+0x34`, passes the unit's per-speed move name as is and calls `fMove` with the
 /// type's per-speed speed, an empty string (vanilla builds a `vector<byte>` with capacity 8 and size 0, which
 /// `fMove` reads the same way), `0`, and the unit's per-speed limit. Every failed gate returns `false`
 /// without side effects; vanilla never defers.
@@ -1300,12 +1613,11 @@ pub unsafe fn f_move_speed_f(this: u32, call: u32, unit: u32, speed: MoveSpeed, 
         return false;
     }
     let step = speed as u32 * 4;
-    let name_string = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_MOVE_NAME_SLOW + step) } as *const RawCallString;
-    let name = VanillaString::from_bytes(unsafe { &*name_string }.bytes());
+    let name = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_MOVE_NAME_SLOW + step) };
     let speed_value = get_from_memory::<u32>(entity_type + UNIT_TYPE_SPEED_SLOW_OFFSET + step);
     let limit = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_MOVE_LIMIT_SLOW + step) };
-    let empty = VanillaString::from_bytes(b"");
-    unsafe { (ops.f_move)(this, begin, seconds, unit, call + CALL_DONE_FLAG_OFFSET, name.as_ptr() as u32, speed_value, empty.as_ptr() as u32, limit) }
+    let empty = EmptyName::new();
+    unsafe { (ops.f_move)(this, begin, seconds, unit, call + CALL_DONE_FLAG_OFFSET, name, speed_value, empty.as_ptr(), limit) }
 }
 
 unsafe fn f_move_vanilla_speed(this: u32, first: u32, seconds: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32, limit: u32) -> bool {
@@ -1346,8 +1658,25 @@ unsafe fn param_string(param: u32) -> VanillaString {
     VanillaString::from_bytes(unsafe { &*(param as *const RawCallString) }.bytes())
 }
 
+/// An empty `{begin, end, cap}` string over a static NUL byte. Consumers only read `begin`/`end` (and `begin`
+/// as a C string), so it stands in for a vanilla empty string without a vanilla allocation.
+struct EmptyName([u32; 3]);
+
+static EMPTY_NAME_BYTE: u8 = 0;
+
+impl EmptyName {
+    fn new() -> Self {
+        let byte = &EMPTY_NAME_BYTE as *const u8 as u32;
+        EmptyName([byte, byte, byte])
+    }
+
+    fn as_ptr(&self) -> u32 {
+        self.0.as_ptr() as u32
+    }
+}
+
 /// `BFAIMgr::fMoveF(call, unit, reverse)`: four or five parameters, the first non-empty, a non-null unit.
-/// Converts parameter 1 (times 1000), 3 and (when present) 4, copies parameter 2 into a vanilla string and
+/// Converts parameter 1 (times 1000), 3 and (when present) 4, passes parameter 2 as is and
 /// calls `fMove(params, ms, unit, done, name, speed, empty, reverse, limit)` with `limit` defaulting to 100.
 /// Vanilla also builds a string from the unit's `+0x120` virtual and tests the type twice; neither result is
 /// used, so the port skips them. Failed gates return false.
@@ -1361,15 +1690,15 @@ pub unsafe fn f_move_f(this: u32, call: u32, unit: u32, reverse: bool, ops: &Mov
         return false;
     }
     let millis = unsafe { convert_param(this, begin + PARAM_1, unit) }.wrapping_mul(MILLIS_PER_SECOND);
-    let name = unsafe { param_string(begin + PARAM_2) };
+    let name = begin + PARAM_2;
     let speed = unsafe { convert_param(this, begin + PARAM_3, unit) };
     let limit = if count == 5 { unsafe { convert_param(this, begin + PARAM_4, unit) } } else { DEFAULT_MOVE_LIMIT };
-    let empty = VanillaString::from_bytes(b"");
-    unsafe { (ops.f_move)(this, begin, millis, unit, call + CALL_DONE_FLAG_OFFSET, name.as_ptr() as u32, speed, empty.as_ptr() as u32, u32::from(reverse), limit) }
+    let empty = EmptyName::new();
+    unsafe { (ops.f_move)(this, begin, millis, unit, call + CALL_DONE_FLAG_OFFSET, name, speed, empty.as_ptr(), u32::from(reverse), limit) }
 }
 
 /// `BFAIMgr::fMoveWithSoundF(call, unit)`: five or six parameters, the first non-empty, a non-null unit.
-/// Converts parameter 1 (seconds, unscaled), 3 and (when present) 5, copies parameters 2 and 4 into vanilla
+/// Converts parameter 1 (seconds, unscaled), 3 and (when present) 5, passes parameters 2 and 4 as is as
 /// strings and calls `fMove(params, seconds, unit, done, name, speed, sound, 0, limit)`.
 pub unsafe fn f_move_with_sound_f(this: u32, call: u32, unit: u32, ops: &MoveOps) -> bool {
     if unit == 0 {
@@ -1381,12 +1710,41 @@ pub unsafe fn f_move_with_sound_f(this: u32, call: u32, unit: u32, ops: &MoveOps
         return false;
     }
     let seconds = unsafe { convert_param(this, begin + PARAM_1, unit) };
-    let name = unsafe { param_string(begin + PARAM_2) };
+    let name = begin + PARAM_2;
     let speed = unsafe { convert_param(this, begin + PARAM_3, unit) };
-    let sound = unsafe { param_string(begin + PARAM_4) };
+    let sound = begin + PARAM_4;
     let limit = if count == 6 { unsafe { convert_param(this, begin + PARAM_5, unit) } } else { DEFAULT_MOVE_LIMIT };
-    unsafe { (ops.f_move)(this, begin, seconds, unit, call + CALL_DONE_FLAG_OFFSET, name.as_ptr() as u32, speed, sound.as_ptr() as u32, 0, limit) }
+    unsafe { (ops.f_move)(this, begin, seconds, unit, call + CALL_DONE_FLAG_OFFSET, name, speed, sound, 0, limit) }
 }
+
+/// The vanilla mixer calls the animation-link helpers make, so a test can substitute recorders: `fPlay`, the
+/// link's duration, `GXMixer::clearAll`/`setSet`/`setBase`.
+pub(crate) struct MixerOps {
+    pub(crate) ai_play: unsafe fn(u32, u32, u32, u32, bool) -> bool,
+    pub(crate) duration: unsafe fn(u32) -> i32,
+    pub(crate) clear_all: unsafe fn(u32),
+    pub(crate) set_set: unsafe fn(u32, u32, u8),
+    pub(crate) set_base: unsafe fn(u32, u32),
+}
+
+unsafe fn link_duration_vanilla(link: u32) -> i32 {
+    unsafe { LINK_DURATION.original()(link as *const u32, 0) }
+}
+
+unsafe fn mixer_clear_all_vanilla(mixer: u32) {
+    unsafe { GXMIXER_CLEAR_ALL.hooked()(mixer as *const u32) };
+}
+
+unsafe fn mixer_set_set_vanilla(mixer: u32, set: u32, out: u8) {
+    unsafe { GXMIXER_SET_SET.hooked()(mixer as *const u32, set, out) };
+}
+
+unsafe fn mixer_set_base_vanilla(mixer: u32, vector: u32) {
+    unsafe { GXMIXER_SET_BASE.hooked()(mixer as *const u32, vector as *const i32, 1) };
+}
+
+pub(crate) const VANILLA_MIXER: MixerOps =
+    MixerOps { ai_play, duration: link_duration_vanilla, clear_all: mixer_clear_all_vanilla, set_set: mixer_set_set_vanilla, set_base: mixer_set_base_vanilla };
 
 /// `BFAIMgr::fMove` (`0x0043646e`) unit fields. Flag bytes: `+0xf8` moving, `+0xf9` stopped/arrived,
 /// `+0xd7`, `+0x20c`, `+0x20d` (finished at once), `+0x20e` (cog goal invalid). `+0x154` is the pointer to the
@@ -1419,13 +1777,12 @@ const ENTITY_VT_SET_LIMIT: u32 = 0x1c4;
 const COG_VT_VALID: u32 = 0x0;
 const COG_VT_CLEAR_TARGET: u32 = 0xc;
 const COG_VT_CLEAR_TARGET_SUB: u32 = 0x1c;
-/// `BFCogGoal::reachedTarget`, `BFAIMgr::fPlay` and `GXMixerLink::duration`, called by address.
-const COG_REACHED_TARGET_ADDRESS: u32 = 0x0043_6207;
-const AI_PLAY_ADDRESS: u32 = 0x0042_296d;
-const LINK_DURATION_ADDRESS: u32 = 0x0042_514c;
-/// Vector helpers: 12-byte-element `push_back(vec, &element)` and the vector's buffer teardown.
-const LINK_VECTOR_PUSH_BACK_ADDRESS: u32 = 0x0040_dfe1;
-const LINK_VECTOR_TEARDOWN_ADDRESS: u32 = 0x0040_2970;
+/// `BFAIMgr::fPlay(this, second, first, unit, scratch, with_base)`. Vanilla writes `1` to `scratch` and
+/// returns `true`; nothing reads the scratch byte, so it lives here.
+unsafe fn ai_play(this: u32, second: u32, first: u32, unit: u32, with_base: bool) -> bool {
+    let mut scratch = false;
+    unsafe { BFAIMGR_F_PLAY.original()(this as *const u32, second as *const c_void, first as *const c_void, unit as *const u32, &mut scratch, with_base) }
+}
 /// `GLOBAL_BFAnimCache` cell and the string cell `fMove` compares the extra string against.
 const RVA_ANIM_CACHE: u32 = 0x0023_8044;
 const RVA_NO_SOUND_STRING: u32 = 0x0023_950c;
@@ -1602,8 +1959,7 @@ unsafe fn set_moving_vanilla(unit: u32, a: i8, b: i8) {
 }
 
 unsafe fn reached_target_vanilla(cog: u32) -> bool {
-    let reached = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32) -> u32>(COG_REACHED_TARGET_ADDRESS) };
-    (unsafe { reached(cog) }) as u8 != 0
+    unsafe { BFCOGGOAL_REACHED_TARGET.original()(cog as *const u32) }
 }
 
 /// Whether the string at `string` has exactly the bytes of vanilla's "no sound" string.
@@ -1640,76 +1996,125 @@ fn release_anim(anim: u32) {
     }
 }
 
-/// A vanilla `vector<GXMixerLink>` header; its buffer belongs to vanilla's allocator and is released by the
-/// vanilla teardown.
-struct LinkVector([u32; 3]);
+/// A `vector<GXMixerLink>` for vanilla's `fPlay`/`GXMixer::setBase`, which only read its `begin`/`end` and
+/// copy the links out. The links live in a Rust buffer; `header` is the `{begin, end, cap}` triple vanilla
+/// reads, refreshed after every push. Each stored link holds one animation reference (vanilla's copy
+/// constructor does the same), released on drop.
+struct LinkVector {
+    header: [u32; 3],
+    links: Vec<[u32; 3]>,
+}
 
 impl LinkVector {
+    fn empty() -> Self {
+        let mut vector = LinkVector { header: [0; 3], links: Vec::new() };
+        vector.refresh_header();
+        vector
+    }
+
     fn with(link: &[u32; 3]) -> Self {
-        let mut vector = LinkVector([0; 3]);
+        let mut vector = Self::empty();
         vector.push(link);
         vector
     }
 
-    fn ptr(&self) -> u32 {
-        self.0.as_ptr() as u32
+    fn refresh_header(&mut self) {
+        let begin = self.links.as_ptr() as u32;
+        self.header = [begin, begin + self.links.len() as u32 * LINK_SIZE, begin + self.links.capacity() as u32 * LINK_SIZE];
     }
 
+    fn ptr(&self) -> u32 {
+        self.header.as_ptr() as u32
+    }
+
+    /// Appends a copy of `link`: a new animation reference and the cache stamp, as vanilla's link copy does.
     fn push(&mut self, link: &[u32; 3]) {
-        let push = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32)>(LINK_VECTOR_PUSH_BACK_ADDRESS) };
-        unsafe { push(self.0.as_mut_ptr() as u32, link.as_ptr() as u32) };
+        self.links.push(make_link(link[0], link[2] as u8, link[1]));
+        self.refresh_header();
     }
 
     fn is_empty(&self) -> bool {
-        self.0[0] == self.0[1]
+        self.links.is_empty()
     }
 }
 
 impl Drop for LinkVector {
     fn drop(&mut self) {
-        let mut element = self.0[0];
-        while element != self.0[1] {
-            release_anim(get_from_memory::<u32>(element));
-            element += LINK_SIZE;
+        for link in &self.links {
+            release_anim(link[0]);
         }
-        if self.0[0] == 0 {
-            return;
-        }
-        let teardown = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32)>(LINK_VECTOR_TEARDOWN_ADDRESS) };
-        unsafe { teardown(self.0.as_mut_ptr() as u32) };
     }
 }
 
-unsafe fn play_single_vanilla(unit: u32, anim: u32, flag: u8, sound: u32) {
+/// Which of an animation's two links a repeat step appends: the main link, or the reversed tail a ping-pong
+/// adds after it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LinkKind {
+    Main,
+    Tail,
+}
+
+/// The links appended after the first to fill `total` milliseconds with an animation of `duration`. Starts from
+/// `total - duration` (minus another `duration` for ping-pong) and appends a main link, then a tail when
+/// ping-pong, subtracting `duration` for each, while the remainder is positive. `stop_after_one_on_zero`
+/// ends the sequence after one main link when `duration` is zero (`fMove`, `fPlayTime`); without it a zero
+/// duration never ends (`fPlaySpecial`, as in vanilla), so callers that do not trust the duration must bound
+/// the iteration.
+fn timed_repeat(total: i32, duration: i32, ping_pong: bool, stop_after_one_on_zero: bool) -> impl Iterator<Item = LinkKind> {
+    let mut remaining = total.wrapping_sub(duration);
+    if ping_pong {
+        remaining = remaining.wrapping_sub(duration);
+    }
+    let mut pending_tail = false;
+    let mut finished = false;
+    std::iter::from_fn(move || {
+        if pending_tail {
+            pending_tail = false;
+            remaining = remaining.wrapping_sub(duration);
+            return Some(LinkKind::Tail);
+        }
+        if finished || remaining <= 0 {
+            return None;
+        }
+        remaining = remaining.wrapping_sub(duration);
+        finished = stop_after_one_on_zero && duration == 0;
+        pending_tail = ping_pong;
+        Some(LinkKind::Main)
+    })
+}
+
+/// The links appended after the first when `fPlaySpecial` is given a repeat count: `count - 1` main links (none
+/// for a count below two), each followed by a tail when ping-pong.
+fn counted_repeat(count: i32, ping_pong: bool) -> impl Iterator<Item = LinkKind> {
+    (0..count.wrapping_sub(1).max(0)).flat_map(move |_| std::iter::once(LinkKind::Main).chain(ping_pong.then_some(LinkKind::Tail)))
+}
+
+pub(crate) unsafe fn play_single_with(m: &MixerOps, unit: u32, anim: u32, flag: u8, sound: u32) {
     let link = make_link(anim, flag, sound);
     {
         let vector = LinkVector::with(&link);
         save_to_memory(unit + UNIT_MIXER_FLAG, 0u8);
-        unsafe { GXMIXER_SET_BASE.hooked()((unit + UNIT_MIXER) as *const u32, vector.ptr() as *const i32, 1) };
+        unsafe { (m.set_base)(unit + UNIT_MIXER, vector.ptr()) };
     }
     release_anim(link[0]);
 }
 
-unsafe fn play_pair_vanilla(this: u32, unit: u32, anim_first: u32, anim_second: u32, flag: u8, sound: u32, seconds: i32) -> bool {
+unsafe fn play_single_vanilla(unit: u32, anim: u32, flag: u8, sound: u32) {
+    unsafe { play_single_with(&VANILLA_MIXER, unit, anim, flag, sound) }
+}
+
+pub(crate) unsafe fn play_pair_with(m: &MixerOps, this: u32, unit: u32, anim_first: u32, anim_second: u32, flag: u8, sound: u32, seconds: i32) -> bool {
     let first_link = make_link(anim_first, 0, 0);
     let first = LinkVector::with(&first_link);
     let second_link = make_link(anim_second, flag, sound);
     let mut second = LinkVector::with(&second_link);
     let mut played = false;
     if !second.is_empty() && !first.is_empty() {
-        let duration_fn = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32) -> i32>(LINK_DURATION_ADDRESS) };
-        let duration = unsafe { duration_fn(second_link.as_ptr() as u32, 0) };
-        let mut remaining = seconds.wrapping_sub(duration);
-        while remaining > 0 {
+        let duration = unsafe { (m.duration)(second_link.as_ptr() as u32) };
+        for _ in timed_repeat(seconds, duration, false, true) {
             second.push(&second_link);
-            remaining = remaining.wrapping_sub(duration);
-            if duration == 0 {
-                break;
-            }
         }
-        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
-        let mut scratch = anim_first;
-        played = (unsafe { play(this, second.ptr(), first.ptr(), unit, &mut scratch, 0) }) as u8 != 0;
+        played = unsafe { (m.ai_play)(this, second.ptr(), first.ptr(), unit, false) };
     }
     drop(second);
     release_anim(second_link[0]);
@@ -1718,7 +2123,11 @@ unsafe fn play_pair_vanilla(this: u32, unit: u32, anim_first: u32, anim_second: 
     played
 }
 
-const F_MOVE_VANILLA_OPS: FMoveOps = FMoveOps {
+unsafe fn play_pair_vanilla(this: u32, unit: u32, anim_first: u32, anim_second: u32, flag: u8, sound: u32, seconds: i32) -> bool {
+    unsafe { play_pair_with(&VANILLA_MIXER, this, unit, anim_first, anim_second, flag, sound, seconds) }
+}
+
+pub(crate) const F_MOVE_VANILLA_OPS: FMoveOps = FMoveOps {
     stop: stop_vanilla,
     set_moving: set_moving_vanilla,
     reached_target: reached_target_vanilla,
@@ -1879,24 +2288,24 @@ struct FirstLinks {
 
 impl Drop for FirstLinks {
     fn drop(&mut self) {
-        self.second = LinkVector([0; 3]);
+        self.second = LinkVector::empty();
         self.vector = None;
         release_anim(self.link[0]);
     }
 }
 
-unsafe fn acquire_first_vanilla(anim: u32) -> u32 {
+pub(crate) unsafe fn acquire_first_vanilla(anim: u32) -> u32 {
     let link = make_link(anim, 0, 0);
     let vector = Some(LinkVector::with(&link));
-    Box::into_raw(Box::new(FirstLinks { link, vector, second: LinkVector([0; 3]) })) as u32
+    Box::into_raw(Box::new(FirstLinks { link, vector, second: LinkVector::empty() })) as u32
 }
 
-unsafe fn release_first_vanilla(handle: u32) {
+pub(crate) unsafe fn release_first_vanilla(handle: u32) {
     drop(unsafe { Box::from_raw(handle as *mut FirstLinks) });
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn play_links_vanilla(this: u32, unit: u32, first: u32, anim: u32, reverse: bool, sound: u32, ping_pong: bool, seconds: u32, count: i32) -> Option<bool> {
+pub(crate) unsafe fn play_links_with(m: &MixerOps, this: u32, unit: u32, first: u32, anim: u32, reverse: bool, sound: u32, ping_pong: bool, seconds: u32, count: i32) -> Option<bool> {
     let first = unsafe { &*(first as *const FirstLinks) };
     let first_vector = first.vector.as_ref()?;
     let main_link = make_link(anim, u8::from(reverse), sound);
@@ -1908,36 +2317,26 @@ unsafe fn play_links_vanilla(this: u32, unit: u32, first: u32, anim: u32, revers
     let mut played = None;
     if !second.is_empty() && !first_vector.is_empty() {
         if seconds != 0 {
-            let duration_fn = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32) -> i32>(LINK_DURATION_ADDRESS) };
-            let duration = unsafe { duration_fn(main_link.as_ptr() as u32, 0) };
-            let mut remaining = (seconds as i32).wrapping_sub(duration);
-            if ping_pong {
-                remaining = remaining.wrapping_sub(duration);
-            }
-            while remaining > 0 {
-                second.push(&main_link);
-                remaining = remaining.wrapping_sub(duration);
-                if ping_pong {
-                    second.push(&tail_link);
-                    remaining = remaining.wrapping_sub(duration);
-                }
+            let duration = unsafe { (m.duration)(main_link.as_ptr() as u32) };
+            for kind in timed_repeat(seconds as i32, duration, ping_pong, false) {
+                second.push(if kind == LinkKind::Main { &main_link } else { &tail_link });
             }
         } else {
-            for _ in 0..count.wrapping_sub(1).max(0) {
-                second.push(&main_link);
-                if ping_pong {
-                    second.push(&tail_link);
-                }
+            for kind in counted_repeat(count, ping_pong) {
+                second.push(if kind == LinkKind::Main { &main_link } else { &tail_link });
             }
         }
-        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
-        let mut scratch = 0u32;
-        played = Some((unsafe { play(this, second.ptr(), first_vector.ptr(), unit, &mut scratch, 0) }) as u8 != 0);
+        played = Some(unsafe { (m.ai_play)(this, second.ptr(), first_vector.ptr(), unit, false) });
     }
     drop(second);
     release_anim(tail_link[0]);
     release_anim(main_link[0]);
     played
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn play_links_vanilla(this: u32, unit: u32, first: u32, anim: u32, reverse: bool, sound: u32, ping_pong: bool, seconds: u32, count: i32) -> Option<bool> {
+    unsafe { play_links_with(&VANILLA_MIXER, this, unit, first, anim, reverse, sound, ping_pong, seconds, count) }
 }
 
 const F_PLAY_SPECIAL_VANILLA_OPS: FPlaySpecialOps = FPlaySpecialOps {
@@ -2095,7 +2494,7 @@ unsafe fn mixer_anim_vanilla(mixer: u32) -> u32 {
     unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) as u32 }
 }
 
-unsafe fn add_anim_vanilla(handle: u32, anim: u32, reverse: bool, ping_pong: bool) {
+pub(crate) unsafe fn add_anim_vanilla(handle: u32, anim: u32, reverse: bool, ping_pong: bool) {
     let links = unsafe { &mut *(handle as *mut FirstLinks) };
     let link = make_link(anim, u8::from(reverse), 0);
     links.second.push(&link);
@@ -2107,33 +2506,39 @@ unsafe fn add_anim_vanilla(handle: u32, anim: u32, reverse: bool, ping_pong: boo
     release_anim(link[0]);
 }
 
-unsafe fn play_vanilla(this: u32, unit: u32, handle: u32, with_base: bool) -> Option<bool> {
+pub(crate) unsafe fn play_with(m: &MixerOps, this: u32, unit: u32, handle: u32, with_base: bool) -> Option<bool> {
     let links = unsafe { &*(handle as *const FirstLinks) };
     let first = links.vector.as_ref()?;
     if links.second.is_empty() || first.is_empty() {
         return None;
     }
-    let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
-    let mut scratch = 0u32;
-    Some((unsafe { play(this, links.second.ptr(), first.ptr(), unit, &mut scratch, u32::from(with_base)) }) as u8 != 0)
+    Some(unsafe { (m.ai_play)(this, links.second.ptr(), first.ptr(), unit, with_base) })
 }
 
-unsafe fn set_base_vanilla(unit: u32, anim: u32) {
+unsafe fn play_vanilla(this: u32, unit: u32, handle: u32, with_base: bool) -> Option<bool> {
+    unsafe { play_with(&VANILLA_MIXER, this, unit, handle, with_base) }
+}
+
+pub(crate) unsafe fn set_base_with(m: &MixerOps, unit: u32, anim: u32) {
     let link = make_link(anim, 0, 0);
     {
         let vector = LinkVector::with(&link);
         let mixer = unit + UNIT_MIXER;
-        unsafe { GXMIXER_CLEAR_ALL.hooked()(mixer as *const u32) };
+        unsafe { (m.clear_all)(mixer) };
         let direction = get_from_memory::<u32>(unit + UNIT_DIRECTION);
         let mut out = 0u32;
         let target = get_from_memory::<u32>(get_from_memory::<u32>(unit) + ENTITY_VT_DIR_TO_SET);
         let dir_to_set = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, *mut u32, u32, u32) -> u32>(target) };
         let set = dir_to_set(unit, direction, &mut out, anim, 0);
         save_to_memory(unit + UNIT_MIXER_FLAG, 0u8);
-        unsafe { GXMIXER_SET_SET.hooked()(mixer as *const u32, set, out as u8) };
-        unsafe { GXMIXER_SET_BASE.hooked()(mixer as *const u32, vector.ptr() as *const i32, 1) };
+        unsafe { (m.set_set)(mixer, set, out as u8) };
+        unsafe { (m.set_base)(mixer, vector.ptr()) };
     }
     release_anim(link[0]);
+}
+
+unsafe fn set_base_vanilla(unit: u32, anim: u32) {
+    unsafe { set_base_with(&VANILLA_MIXER, unit, anim) }
 }
 
 const PLAY_VANILLA_OPS: PlayOps = PlayOps {
@@ -2278,7 +2683,7 @@ pub unsafe fn f_play_with_sound(anim_name: u32, sound_name: u32, unit: u32, done
     result
 }
 
-unsafe fn play_two_vanilla(unit: u32, first_anim: u32, second_anim: u32, sound: u32) -> Option<bool> {
+pub(crate) unsafe fn play_two_with(m: &MixerOps, unit: u32, first_anim: u32, second_anim: u32, sound: u32) -> Option<bool> {
     let first_link = make_link(first_anim, 0, 0);
     let first = LinkVector::with(&first_link);
     let second_link = make_link(second_anim, 0, sound);
@@ -2286,15 +2691,17 @@ unsafe fn play_two_vanilla(unit: u32, first_anim: u32, second_anim: u32, sound: 
     let result = if second.is_empty() || first.is_empty() {
         None
     } else {
-        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
-        let mut scratch = 0u32;
-        Some((unsafe { play(0, second.ptr(), first.ptr(), unit, &mut scratch, 0) }) as u8 != 0)
+        Some(unsafe { (m.ai_play)(0, second.ptr(), first.ptr(), unit, false) })
     };
     drop(second);
     release_anim(second_link[0]);
     drop(first);
     release_anim(first_link[0]);
     result
+}
+
+unsafe fn play_two_vanilla(unit: u32, first_anim: u32, second_anim: u32, sound: u32) -> Option<bool> {
+    unsafe { play_two_with(&VANILLA_MIXER, unit, first_anim, second_anim, sound) }
 }
 
 const PLAY_WITH_SOUND_VANILLA: PlayWithSoundOps = PlayWithSoundOps { find_anim: entity_find_anim_vanilla, find_sound: find_sound_vanilla, play_two: play_two_vanilla };
@@ -2346,7 +2753,7 @@ pub unsafe fn f_play_time(name: u32, millis: u32, unit: u32, done: *const u8, op
 
 /// Repeats `second_anim`'s link while time remains: after the first, `remaining = millis - duration`, and each
 /// further link subtracts another `duration`; a zero duration stops after one extra link (unlike `fPlaySpecial`).
-unsafe fn play_timed_vanilla(unit: u32, first_anim: u32, second_anim: u32, millis: i32) -> Option<bool> {
+pub(crate) unsafe fn play_timed_with(m: &MixerOps, unit: u32, first_anim: u32, second_anim: u32, millis: i32) -> Option<bool> {
     let first_link = make_link(first_anim, 0, 0);
     let first = LinkVector::with(&first_link);
     let second_link = make_link(second_anim, 0, 0);
@@ -2354,19 +2761,11 @@ unsafe fn play_timed_vanilla(unit: u32, first_anim: u32, second_anim: u32, milli
     let result = if second.is_empty() || first.is_empty() {
         None
     } else {
-        let duration_fn = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32) -> i32>(LINK_DURATION_ADDRESS) };
-        let duration = unsafe { duration_fn(second_link.as_ptr() as u32, 0) };
-        let mut remaining = millis.wrapping_sub(duration);
-        while remaining > 0 {
+        let duration = unsafe { (m.duration)(second_link.as_ptr() as u32) };
+        for _ in timed_repeat(millis, duration, false, true) {
             second.push(&second_link);
-            remaining = remaining.wrapping_sub(duration);
-            if duration == 0 {
-                break;
-            }
         }
-        let play = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, *mut u32, u32) -> u32>(AI_PLAY_ADDRESS) };
-        let mut scratch = 0u32;
-        Some((unsafe { play(0, second.ptr(), first.ptr(), unit, &mut scratch, 0) }) as u8 != 0)
+        Some(unsafe { (m.ai_play)(0, second.ptr(), first.ptr(), unit, false) })
     };
     drop(second);
     release_anim(second_link[0]);
@@ -2375,10 +2774,13 @@ unsafe fn play_timed_vanilla(unit: u32, first_anim: u32, second_anim: u32, milli
     result
 }
 
+unsafe fn play_timed_vanilla(unit: u32, first_anim: u32, second_anim: u32, millis: i32) -> Option<bool> {
+    unsafe { play_timed_with(&VANILLA_MIXER, unit, first_anim, second_anim, millis) }
+}
+
 const PLAY_TIME_VANILLA_OPS: PlayTimeOps = PlayTimeOps { find_anim: entity_find_anim_vanilla, play_timed: play_timed_vanilla };
 
-/// `BFAIMgr::fFlyF(call, unit, reverse)`: two or three parameters and a non-null unit. Copies parameter 0 into
-/// a vanilla string, converts parameter 1 and (when present) parameter 2 through the manager's vtable `+0x34`
+/// `BFAIMgr::fFlyF(call, unit, reverse)`: two or three parameters and a non-null unit. Passes parameter 0 as is, converts parameter 1 and (when present) parameter 2 through the manager's vtable `+0x34`
 /// and calls `fFly(unit, name, value, empty, done, reverse, limit)` with `limit` defaulting to 100. Vanilla also
 /// builds a string from the unit's `+0x120` virtual and tests the type twice with unused results, and passes
 /// a `vector<byte>` the port replaces with an empty string.
@@ -2391,11 +2793,10 @@ pub unsafe fn f_fly_f(this: u32, call: u32, unit: u32, reverse: u32, ops: &FlyOp
         return false;
     }
     let begin = unsafe { call_params_begin(call) };
-    let name = unsafe { param_string(begin) };
     let value = unsafe { convert_param(this, begin + PARAM_1, unit) };
     let limit = if count >= 3 { unsafe { convert_param(this, begin + PARAM_2, unit) } } else { DEFAULT_MOVE_LIMIT };
-    let empty = VanillaString::from_bytes(b"");
-    unsafe { (ops.f_fly)(this, unit, name.as_ptr() as u32, value, empty.as_ptr() as u32, call + CALL_DONE_FLAG_OFFSET, reverse, limit) }
+    let empty = EmptyName::new();
+    unsafe { (ops.f_fly)(this, unit, begin, value, empty.as_ptr(), call + CALL_DONE_FLAG_OFFSET, reverse, limit) }
 }
 
 /// A `(name, probability)` entry of the vector `BFAIMgr::fPlaySetProb` reads: a vanilla string and a weight,
@@ -2414,8 +2815,7 @@ pub struct SetProbOps {
 }
 
 unsafe fn parse_int_vanilla(text: *const u8) -> u32 {
-    let parse = unsafe { mem::transmute::<u32, unsafe extern "cdecl" fn(*const u8) -> u32>(0x0040_5218) };
-    unsafe { parse(text) }
+    unsafe { ATOI.original()(text as *const i8) as u32 }
 }
 
 unsafe fn play_set_prob_vanilla(vector: u32, unit: u32) -> bool {
@@ -2444,28 +2844,39 @@ const SET_PROB_TOTAL: i32 = 100;
 pub unsafe fn f_play_set_prob(entries: u32, unit: u32, ops: &SetProbPickOps) -> bool {
     let begin = get_from_memory::<u32>(entries);
     let count = (get_from_memory::<u32>(entries + 4).wrapping_sub(begin) as i32) >> 4;
-    let weight = |index: i32| get_from_memory::<i32>(begin + index as u32 * SET_PROB_ENTRY_SIZE + SET_PROB_WEIGHT_OFFSET);
-    let total = (0..count).fold(0i32, |sum, index| sum.wrapping_add(weight(index)));
-    if count <= 0 || total != SET_PROB_TOTAL {
+    let weights: Vec<i32> = (0..count.max(0)).map(|index| get_from_memory::<i32>(begin + index as u32 * SET_PROB_ENTRY_SIZE + SET_PROB_WEIGHT_OFFSET)).collect();
+    let Some(index) = pick_set_prob(&weights, || unsafe { (ops.rand)() }) else {
         return false;
+    };
+    let name = unsafe { param_string(begin + index as u32 * SET_PROB_ENTRY_SIZE) };
+    low_byte_bool(unsafe { (ops.play_set)(name.as_ptr() as u32, unit) })
+}
+
+/// The entry `fPlaySetProb` plays, given the entries' weights and the game's `rand()`. Needs at least one entry
+/// and weights summing to exactly 100. Rolls `rand() % 100 + 1` and walks the entries: the first whose weight
+/// covers the roll is chosen; each miss subtracts that weight from the remaining total and, while the remainder
+/// is in `1..=100`, rerolls `rand() % remaining + 1`. `None` when nothing is chosen.
+fn pick_set_prob(weights: &[i32], mut rand: impl FnMut() -> u32) -> Option<usize> {
+    let total = weights.iter().fold(0i32, |sum, weight| sum.wrapping_add(*weight));
+    if weights.is_empty() || total != SET_PROB_TOTAL {
+        return None;
     }
-    let mut roll = (unsafe { (ops.rand)() } as i32).wrapping_rem(100).wrapping_add(1);
+    let mut roll = (rand() as i32).wrapping_rem(100).wrapping_add(1);
     let mut remaining = SET_PROB_TOTAL;
-    let mut current = weight(0);
-    for index in 0..count {
+    let mut current = weights[0];
+    for index in 0..weights.len() {
         if roll <= current {
-            let name = unsafe { param_string(begin + index as u32 * SET_PROB_ENTRY_SIZE) };
-            return low_byte_bool(unsafe { (ops.play_set)(name.as_ptr() as u32, unit) });
+            return Some(index);
         }
         remaining = remaining.wrapping_sub(current);
         if 0 < remaining && remaining < SET_PROB_TOTAL + 1 {
-            roll = (unsafe { (ops.rand)() } as i32).wrapping_rem(remaining).wrapping_add(1);
+            roll = (rand() as i32).wrapping_rem(remaining).wrapping_add(1);
         }
-        if index + 1 < count {
-            current = weight(index + 1);
+        if index + 1 < weights.len() {
+            current = weights[index + 1];
         }
     }
-    false
+    None
 }
 
 const SET_PROB_PICK_VANILLA: SetProbPickOps = SetProbPickOps { rand: random_vanilla, play_set: play_set_vanilla };
@@ -2553,9 +2964,6 @@ pub unsafe fn f_play_set(name: u32, unit: u32, child: bool, flag: u32, ops: &Pla
     true
 }
 
-/// `ZTAnimal`'s pending-set setter (`0x004300f6`) has no `generated.rs` entry.
-const SET_PENDING_ADDRESS: u32 = 0x0043_00f6;
-
 /// Copies a `BFBSCall` through vanilla's copy constructor, for a callee that takes it by value and frees it.
 unsafe fn copy_bs_call(source: u32) -> [u32; 4] {
     let mut copy = [0u32; 4];
@@ -2574,8 +2982,7 @@ unsafe fn set_bs_vanilla(unit: u32, call: u32, force: u32, mode: u32) {
 
 unsafe fn set_pending_vanilla(unit: u32, call: u32, force: u32) {
     let [w0, w1, w2, w3] = unsafe { copy_bs_call(call) };
-    let set_pending = unsafe { mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, u32, u32) -> u32>(SET_PENDING_ADDRESS) };
-    unsafe { set_pending(unit, w0, w1, w2, w3, force) };
+    unsafe { ZTANIMAL_SET_PENDING_BS.original()(unit as *const u32, w0 as *const u32, w1 as *const u32, w2 as *const u32, w3 as i8, force as i8) };
 }
 
 const PLAY_SET_VANILLA: PlaySetOps = PlaySetOps { init_child: init_child_vanilla, set_bs: set_bs_vanilla, set_pending: set_pending_vanilla };
@@ -2667,6 +3074,18 @@ fn tile_position(tile: u32) -> [i32; 3] {
     [get_from_memory::<i32>(tile + TILE_POSITION_OFFSET), get_from_memory::<i32>(tile + TILE_POSITION_OFFSET + 4), get_from_memory::<i32>(tile + TILE_POSITION_OFFSET + 8)]
 }
 
+/// The tile offsets on the border of the box `[-half_x, half_x] x [-half_y, half_y]`, in the order `fRandomWalk`
+/// tests them: `dx` ascending, then `dy` ascending (the centre and the interior are skipped).
+fn border_offsets(half_x: i32, half_y: i32) -> impl Iterator<Item = (i32, i32)> {
+    (-half_x..=half_x).flat_map(move |dx| (-half_y..=half_y).map(move |dy| (dx, dy))).filter(move |&(dx, dy)| dx == half_x || dx == -half_x || dy == half_y || dy == -half_y)
+}
+
+/// The neighbour indices `fRandomWalk` tries: from the random start index up to the end of the list. The scan
+/// does not wrap, so the entries before the start index are never tried.
+fn neighbor_scan(first: usize, len: usize) -> std::ops::Range<usize> {
+    first..len
+}
+
 /// `BFAIMgr::fRandomWalk(unit)`: for an idle unit (no queued targets), tries in turn to resume a standing
 /// destination (when it is not the unit's own tile), to walk to a random walkable tile on the border of a
 /// random-sized box around it, to walk to a random walkable neighbour whose path cost is under the limit, and
@@ -2721,15 +3140,10 @@ pub unsafe fn f_random_walk(this: u32, unit: u32, ops: &RandomWalkOps) -> Option
         let half_x = (unsafe { (ops.rand)() } as i32).wrapping_rem(range_x).wrapping_add(1).wrapping_add(get_from_memory::<i32>(this + AI_RANDOM_EXTRA_X));
         let half_y = (unsafe { (ops.rand)() } as i32).wrapping_rem(range_y).wrapping_add(1).wrapping_add(get_from_memory::<i32>(this + AI_RANDOM_EXTRA_Y));
         let mut candidates: Vec<u32> = Vec::new();
-        for dx in -half_x..=half_x {
-            for dy in -half_y..=half_y {
-                if dx != half_x && dx != -half_x && dy != half_y && dy != -half_y {
-                    continue;
-                }
-                let tile = map_tile(map, start[0].wrapping_add(dx), start[1].wrapping_add(dy));
-                if tile != 0 && unsafe { vcall_walk(unit, tile) } {
-                    candidates.push(tile);
-                }
+        for (dx, dy) in border_offsets(half_x, half_y) {
+            let tile = map_tile(map, start[0].wrapping_add(dx), start[1].wrapping_add(dy));
+            if tile != 0 && unsafe { vcall_walk(unit, tile) } {
+                candidates.push(tile);
             }
         }
         if !candidates.is_empty() {
@@ -2752,16 +3166,14 @@ pub unsafe fn f_random_walk(this: u32, unit: u32, ops: &RandomWalkOps) -> Option
             return None;
         }
         let first = (unsafe { (ops.rand)() } as i32).wrapping_rem(neighbors.len() as i32) as usize;
-        let mut index = first;
-        loop {
+        for index in neighbor_scan(first, neighbors.len()) {
             let tile = neighbors[index];
-            index += 1;
             if unsafe { vcall_walk(unit, tile) } && unsafe { (ops.path_cost)(unit, start_tile, tile) } < unsafe { (ops.path_cost_limit)() } {
                 goal = tile_position(tile);
                 set_destination(&goal);
                 result = unsafe { vcall_path(this, &start, &goal, unit, 0) };
             }
-            if result || index == first || index >= neighbors.len() {
+            if result {
                 break;
             }
         }
@@ -2865,16 +3277,10 @@ pub unsafe fn f_play_set_terrain_f(call: u32, unit: u32, tile_flags: unsafe fn(u
         _ if unsafe { tile_flags(unit) } & 3 == 0 => 0,
         _ => 1,
     };
-    let param = unsafe { &*((call_params_begin(call) + index * CALL_PARAM_SIZE) as *const RawCallString) };
-    let name = VanillaString::from_bytes(param.bytes());
-    Some(low_byte_bool(unsafe { play_set(name.as_ptr() as u32, unit) }))
+    let name = unsafe { call_params_begin(call) } + index * CALL_PARAM_SIZE;
+    Some(low_byte_bool(unsafe { play_set(name, unit) }))
 }
 
-/// `BFAIMgr` handler wrappers (stage 9, first slice): the `F` handlers that only unpack a call and forward.
-/// Their behavior halves (`fPlayF`, `fFlyF`, `fPlayTime`, `fPlaySound`, `fPlayWithSound`, `fPlaySet`,
-/// `fFaceDirection`) stay vanilla.
-///
-/// `BFAIMgr::fPlayTime(name, ms, unit, done, flag)` takes five stack arguments (`RET 0x14`).
 /// `BFAIMgr` vtable slot `convertConstantParam(param, unit)`.
 const AI_VTABLE_CONVERT_CONSTANT_PARAM: u32 = 0x34;
 /// Entity vtable slot `setStopAtEnd(bool)`.
@@ -3111,7 +3517,6 @@ pub unsafe fn f_play_special_f(this: u32, call: u32, unit: u32, ops: &PlaySpecia
     let (anim, sound, special) = unsafe { (param_string(param(0)), param_string(param(1)), param_string(param(4))) };
 
     let is = |which, string: &VanillaString| unsafe { (ops.is_string)(which, string.as_ptr() as u32) };
-    let plain_special = || is(SpecialString::ModeA, &special) || is(SpecialString::ModeB, &special) || is(SpecialString::None, &special);
     let play_special = |seconds: i32, repeat: i32| {
         let args = FPlaySpecialArgs {
             this,
@@ -3131,40 +3536,121 @@ pub unsafe fn f_play_special_f(this: u32, call: u32, unit: u32, ops: &PlaySpecia
         (ops.forward)(handler, this, call, unit)
     };
 
-    if seconds != 0 && repeat != 0 {
-        return Some(false);
-    }
-    if repeat != 0 {
-        return Some(play_special(seconds, repeat));
-    }
-    let sound_is_none = is(SpecialString::None, &sound);
-    if seconds != 0 {
-        if sound_is_none && plain_special() {
+    let facts = PlaySpecialFFacts {
+        seconds: seconds != 0,
+        repeat: repeat != 0,
+        sound_none: is(SpecialString::None, &sound),
+        anim_none: is(SpecialString::None, &anim),
+        special_mode_a: is(SpecialString::ModeA, &special),
+        special_mode_b: is(SpecialString::ModeB, &special),
+        special_none: is(SpecialString::None, &special),
+        special_reverse: is(SpecialString::Reverse, &special),
+        special_ping_pong: is(SpecialString::PingPong, &special),
+    };
+    match decide_play_special_f(facts) {
+        PlaySpecialFAction::Fail => Some(false),
+        PlaySpecialFAction::PlaySpecial { use_seconds, use_repeat } => Some(play_special(if use_seconds { seconds } else { 0 }, if use_repeat { repeat } else { 0 })),
+        PlaySpecialFAction::PlayTime { second_flag } => {
             unsafe { (ops.replace_params)(call, &[anim.as_ptr() as u32, duration_text.as_ptr() as u32]) };
             unsafe { (ops.set_name)(call, b"fPlayTime") };
-            save_to_memory(call + CALL_FLAG_B_OFFSET, u8::from(is(SpecialString::ModeB, &special)));
-            return Some(unsafe { (ops.forward)(SpecialHandler::PlayTime, this, call, unit) });
+            save_to_memory(call + CALL_FLAG_B_OFFSET, u8::from(second_flag));
+            Some(unsafe { (ops.forward)(SpecialHandler::PlayTime, this, call, unit) })
         }
-        return Some(play_special(seconds, 0));
-    }
-    if sound_is_none {
-        unsafe { (ops.replace_params)(call, &[anim.as_ptr() as u32]) };
-        if plain_special() {
-            unsafe { (ops.set_name)(call, b"fPlay") };
-            unsafe { (ops.forward)(SpecialHandler::Play, this, call, unit) };
-        } else if is(SpecialString::Reverse, &special) {
-            unsafe { (ops.set_name)(call, b"fPlayReverse") };
-            unsafe { (ops.forward)(SpecialHandler::PlayReverse, this, call, unit) };
-        } else if is(SpecialString::PingPong, &special) {
-            unsafe { (ops.set_name)(call, b"fPlayPingPong") };
+        PlaySpecialFAction::NoSound(kind) => {
+            unsafe { (ops.replace_params)(call, &[anim.as_ptr() as u32]) };
+            match kind {
+                NoSoundPlay::Plain => {
+                    unsafe { (ops.set_name)(call, b"fPlay") };
+                    unsafe { (ops.forward)(SpecialHandler::Play, this, call, unit) };
+                }
+                NoSoundPlay::Reverse => {
+                    unsafe { (ops.set_name)(call, b"fPlayReverse") };
+                    unsafe { (ops.forward)(SpecialHandler::PlayReverse, this, call, unit) };
+                }
+                NoSoundPlay::PingPong => unsafe { (ops.set_name)(call, b"fPlayPingPong") },
+                NoSoundPlay::Other => {}
+            }
+            Some(unsafe { (ops.forward)(SpecialHandler::PlayPingPong, this, call, unit) })
         }
-        return Some(unsafe { (ops.forward)(SpecialHandler::PlayPingPong, this, call, unit) });
+        PlaySpecialFAction::PlayWithSound => Some(rewrite(&[anim.as_ptr() as u32, sound.as_ptr() as u32], b"fPlayWithSound", SpecialHandler::PlayWithSound)),
+        PlaySpecialFAction::PlaySpecialNoAnim { second_flag } => {
+            save_to_memory(call + CALL_FLAG_B_OFFSET, u8::from(second_flag));
+            Some(play_special(0, 0))
+        }
     }
-    if !is(SpecialString::None, &anim) {
-        return Some(rewrite(&[anim.as_ptr() as u32, sound.as_ptr() as u32], b"fPlayWithSound", SpecialHandler::PlayWithSound));
+}
+
+/// What `fPlaySpecialF` has to decide on, with the string comparisons already made.
+#[derive(Clone, Copy, Default, Debug)]
+struct PlaySpecialFFacts {
+    seconds: bool,
+    repeat: bool,
+    sound_none: bool,
+    anim_none: bool,
+    special_mode_a: bool,
+    special_mode_b: bool,
+    special_none: bool,
+    special_reverse: bool,
+    special_ping_pong: bool,
+}
+
+/// How a call with no duration, no repeat count and the "none" sound is rewritten: by the fifth parameter, the
+/// plain modes and "none" give `fPlay`, then reverse and ping-pong their own names; any other value keeps the
+/// name. Every kind ends by forwarding to `fPlayPingPongF`, whose result is returned.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NoSoundPlay {
+    Plain,
+    Reverse,
+    PingPong,
+    Other,
+}
+
+/// The action `fPlaySpecialF` takes for a five-parameter call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlaySpecialFAction {
+    /// A duration and a repeat count together fail.
+    Fail,
+    /// `fPlaySpecial(anim, sound, seconds?, repeat?, special)`; an unused number is passed as `0`.
+    PlaySpecial { use_seconds: bool, use_repeat: bool },
+    /// Rewritten to `fPlayTime(anim, duration)`, with the call's second flag set for the second plain mode.
+    PlayTime { second_flag: bool },
+    NoSound(NoSoundPlay),
+    /// Rewritten to `fPlayWithSound(anim, sound)`.
+    PlayWithSound,
+    /// The "none" animation with a named sound: the second flag is set for the second plain mode and
+    /// `fPlaySpecial` runs with no duration or count.
+    PlaySpecialNoAnim { second_flag: bool },
+}
+
+fn decide_play_special_f(facts: PlaySpecialFFacts) -> PlaySpecialFAction {
+    let plain_special = facts.special_mode_a || facts.special_mode_b || facts.special_none;
+    if facts.seconds && facts.repeat {
+        return PlaySpecialFAction::Fail;
     }
-    save_to_memory(call + CALL_FLAG_B_OFFSET, u8::from(is(SpecialString::ModeB, &special)));
-    Some(play_special(0, 0))
+    if facts.repeat {
+        return PlaySpecialFAction::PlaySpecial { use_seconds: false, use_repeat: true };
+    }
+    if facts.seconds {
+        if facts.sound_none && plain_special {
+            return PlaySpecialFAction::PlayTime { second_flag: facts.special_mode_b };
+        }
+        return PlaySpecialFAction::PlaySpecial { use_seconds: true, use_repeat: false };
+    }
+    if facts.sound_none {
+        return PlaySpecialFAction::NoSound(if plain_special {
+            NoSoundPlay::Plain
+        } else if facts.special_reverse {
+            NoSoundPlay::Reverse
+        } else if facts.special_ping_pong {
+            NoSoundPlay::PingPong
+        } else {
+            NoSoundPlay::Other
+        });
+    }
+    if !facts.anim_none {
+        return PlaySpecialFAction::PlayWithSound;
+    }
+    PlaySpecialFAction::PlaySpecialNoAnim { second_flag: facts.special_mode_b }
 }
 
 /// The call's parameter vector (`call + 0xc`) is a vanilla `vector<string>`.
@@ -3262,6 +3748,135 @@ pub unsafe fn ztaimgr_init_ai_params(this: u32) -> u32 {
         save_to_memory(this + offset, value);
     }
     0
+}
+
+/// The `[AI]` parameters `BFAIMgr::initAIParams` loads. The first four fill the random-walk extents
+/// (`base_*` is the extra added to the roll, `random_*` the roll's range); the `show_*`/`ai_info_nth` flags drive
+/// the debug overlay; `clear_unreachable_freq` and `min_unreachable_count` go to two globals rather than the
+/// manager.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BfAiParams {
+    pub base_x: i32,
+    pub base_y: i32,
+    pub random_x: i32,
+    pub random_y: i32,
+    pub how_often: i32,
+    pub tick: i32,
+    pub status_period: i32,
+    pub goal_period: i32,
+    pub show_ai_info: i32,
+    pub show_name: i32,
+    pub show_position: i32,
+    pub show_status_vars: i32,
+    pub show_function_call: i32,
+    pub show_events: i32,
+    pub ai_info_nth: i32,
+    pub show_selected: i32,
+    pub show_frame: i32,
+    pub show_goal: i32,
+    pub variable_unit_speeds: i32,
+    pub allow_diagonal_moves: bool,
+    pub clear_unreachable_freq: i32,
+    pub min_unreachable_count: u8,
+}
+
+/// Reads every `BFAIMgr::initAIParams` key in vanilla's order: `read(key, default)` reads one integer. The
+/// two base extents are clamped to at least `0` and the two random extents to at least `1`;
+/// `AllowDiagonalMoves` is true only for the value `1`, and `MinUnreachableCount` keeps its low byte.
+pub fn compute_bf_ai_params(mut read: impl FnMut(&str, i32) -> i32) -> BfAiParams {
+    let base_x = read("BaseX", 1);
+    let base_y = read("BaseY", 1);
+    let random_x = read("RandomX", 5);
+    let random_y = read("RandomY", 5);
+    BfAiParams {
+        base_x: base_x.max(0),
+        base_y: base_y.max(0),
+        random_x: random_x.max(1),
+        random_y: random_y.max(1),
+        how_often: read("mAIHowOften", 1),
+        tick: read("mAITick", 1000),
+        status_period: read("mStatusPeriod", 1000),
+        goal_period: read("mGoalPeriod", 0),
+        show_ai_info: read("ShowAIInfo", 0),
+        show_name: read("ShowName", 1),
+        show_position: read("ShowPosition", 1),
+        show_status_vars: read("ShowStatusVars", 1),
+        show_function_call: read("ShowFunctionCall", 1),
+        show_events: read("ShowEvents", 1),
+        ai_info_nth: read("AIInfoNth", 100),
+        show_selected: read("ShowSelected", 0),
+        show_frame: read("ShowFrame", 0),
+        show_goal: read("ShowGoal", 0),
+        variable_unit_speeds: read("VariableUnitSpeeds", 1),
+        allow_diagonal_moves: read("AllowDiagonalMoves", 1) == 1,
+        clear_unreachable_freq: read("ClearUnreachableFreq", 5),
+        min_unreachable_count: read("MinUnreachableCount", 5) as u8,
+    }
+}
+
+/// Globals `initAIParams` writes: the clear-unreachable frequency (a dword) and the minimum unreachable count (a
+/// byte).
+const RVA_CLEAR_UNREACHABLE_FREQ: u32 = 0x0023_9028;
+const RVA_MIN_UNREACHABLE_COUNT: u32 = 0x0023_9532;
+/// `BFAIMgr` fields `initAIParams` fills.
+const BF_AI_PARAM_OFFSETS: [(u32, fn(&BfAiParams) -> i32); 19] = [
+    (0xd4, |p| p.base_x),
+    (0xd8, |p| p.base_y),
+    (0xdc, |p| p.random_x),
+    (0xe0, |p| p.random_y),
+    (0xf0, |p| p.how_often),
+    (0xe4, |p| p.tick),
+    (0x124, |p| p.status_period),
+    (0x128, |p| p.goal_period),
+    (0xf4, |p| p.show_ai_info),
+    (0xf8, |p| p.show_name),
+    (0xfc, |p| p.show_position),
+    (0x100, |p| p.show_status_vars),
+    (0x108, |p| p.show_function_call),
+    (0x10c, |p| p.show_events),
+    (0x110, |p| p.ai_info_nth),
+    (0x104, |p| p.show_selected),
+    (0x114, |p| p.show_frame),
+    (0x118, |p| p.show_goal),
+    (0x11c, |p| p.variable_unit_speeds),
+];
+const OFFSET_ALLOW_DIAGONAL_MOVES: u32 = 0x120;
+
+/// `BFAIMgr::initAIParams()` (`0x005267ec`): loads the `[AI]` parameters (see [`compute_bf_ai_params`]) into the
+/// manager and the two globals. Vanilla writes each field's default before reading it, so a failed read keeps
+/// the default; the result is the same. Returns `1`.
+pub unsafe fn bfaimgr_init_ai_params(this: u32) -> u32 {
+    let section = VanillaString::new(AI_INI_SECTION);
+    let params = compute_bf_ai_params(|key, default| {
+        let key = VanillaString::new(key);
+        unsafe { BFINIFILE_READ.original()(section.as_ptr(), key.as_ptr(), default as u32) as i32 }
+    });
+    for (offset, field) in BF_AI_PARAM_OFFSETS {
+        save_to_memory(this + offset, field(&params));
+    }
+    save_to_memory(this + OFFSET_ALLOW_DIAGONAL_MOVES, u8::from(params.allow_diagonal_moves));
+    let base = get_module_base("zoo.exe") as u32;
+    save_to_memory(base + RVA_CLEAR_UNREACHABLE_FREQ, params.clear_unreachable_freq);
+    save_to_memory(base + RVA_MIN_UNREACHABLE_COUNT, params.min_unreachable_count);
+    1
+}
+
+/// The game's `rand` state: one dword.
+const RVA_RAND_STATE: u32 = 0x0023_8060;
+/// `BFAIMgr` vtable slot `initAIParams`.
+const BFAIMGR_VTABLE_INIT_AI_PARAMS: u32 = 0x38;
+
+/// `BFAIMgr::init()` (`0x005267b5`): zeroes the tick remainder and counter, calls the manager's virtual
+/// `initAIParams` (during construction that is still the `BFAIMgr` one, so it must go through the vtable) and
+/// seeds the game's `rand` state from the game's own `time(NULL)`. Returns the virtual's low byte.
+pub unsafe fn bfaimgr_init(this: u32) -> bool {
+    save_to_memory(this + OFFSET_AI_TICK_REMAINDER, 0u32);
+    save_to_memory(this + OFFSET_AI_TICK_COUNT, 0u32);
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + BFAIMGR_VTABLE_INIT_AI_PARAMS);
+    let result = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(target) }(this);
+    let seconds = unsafe { TIME.original()(std::ptr::null()) } as u32;
+    save_to_memory(get_module_base("zoo.exe") as u32 + RVA_RAND_STATE, seconds);
+    low_byte_bool(result)
 }
 
 /// First save versions that carry the manager's tick fields (`>= 0x23`) and its event manager (`>= 0x61`).
@@ -3859,6 +4474,31 @@ mod ztaimgr_detours {
         unsafe { bfaimgr_load_data(full) }
     }
 
+    #[detour(BFAIMGR_INIT)]
+    unsafe extern "thiscall" fn bfaimgr_init_detour(this: *const u32) -> bool {
+        unsafe { bfaimgr_init(this as u32) }
+    }
+
+    #[detour(BFAIMGR_INIT_AIPARAMS)]
+    unsafe extern "thiscall" fn bfaimgr_init_ai_params_detour(this: *const u32) -> u32 {
+        unsafe { bfaimgr_init_ai_params(this as u32) }
+    }
+
+    #[detour(BFAIMGR_CONSTRUCTOR)]
+    unsafe extern "thiscall" fn bfaimgr_constructor_detour(this: *const u32) -> *const u32 {
+        unsafe { bfaimgr_construct(this as u32) as *const u32 }
+    }
+
+    #[detour(BFAIMGR_DESTRUCTOR_0)]
+    unsafe extern "thiscall" fn bfaimgr_destructor_0_detour(this: *const u32) -> *const u32 {
+        unsafe { bfaimgr_destruct(this as u32) as *const u32 }
+    }
+
+    #[detour(BFAIMGR_DESTRUCTOR_1)]
+    unsafe extern "thiscall" fn bfaimgr_destructor_1_detour(this: *const u32, flags: u8) -> *const u32 {
+        unsafe { bfaimgr_deleting_destruct(this as u32, flags) as *const u32 }
+    }
+
     #[detour(ZTAIMGR_CREATE)]
     unsafe extern "stdcall" fn ztaimgr_create_detour() -> u32 {
         unsafe { ztaimgr_create() }
@@ -3967,6 +4607,22 @@ mod ztaimgr_detours {
             unsafe { super::BFAIMGR_CHECK_PATH_DETOUR.call(this, from, to, unit) }
         }
 
+        pub(crate) fn bfaimgr_init(this: *const u32) -> bool {
+            unsafe { super::BFAIMGR_INIT_DETOUR.call(this) }
+        }
+
+        pub(crate) fn bfaimgr_init_ai_params(this: *const u32) -> u32 {
+            unsafe { super::BFAIMGR_INIT_AIPARAMS_DETOUR.call(this) }
+        }
+
+        pub(crate) fn bfaimgr_construct(this: *const u32) -> *const u32 {
+            unsafe { super::BFAIMGR_CONSTRUCTOR_DETOUR.call(this) }
+        }
+
+        pub(crate) fn bfaimgr_destruct(this: *const u32) -> *const u32 {
+            unsafe { super::BFAIMGR_DESTRUCTOR_0_DETOUR.call(this) }
+        }
+
         pub(crate) fn ztaimgr_create() -> u32 {
             unsafe { super::ZTAIMGR_CREATE_DETOUR.call() }
         }
@@ -4046,6 +4702,84 @@ mod ztaimgr_detours {
         pub(crate) fn f_keeper_routine(unit: *const u32, done: *const bool) -> bool {
             unsafe { super::F_KEEPER_ROUTINE_DETOUR.call(unit, done) }
         }
+
+        pub(crate) fn f_random_walk(this: *const u32, unit: *const i32) -> u32 {
+            unsafe { super::F_RANDOM_WALK_DETOUR.call(this, unit) }
+        }
+
+        pub(crate) fn f_play_set_prob(entries: *const i32, unit: *const c_void) -> u32 {
+            unsafe { super::F_PLAY_SET_PROB_DETOUR.call(entries, unit) }
+        }
+
+        pub(crate) fn f_move_f(this: *const u32, call: *const u32, unit: *const u32, reverse: bool) -> u32 {
+            unsafe { super::F_MOVE_F_DETOUR.call(this, call, unit, reverse) }
+        }
+
+        pub(crate) fn f_move_with_sound_f(this: *const u32, call: *const u32, unit: *const u32) -> u32 {
+            unsafe { super::F_MOVE_WITH_SOUND_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_move_slow_f(this: *const u32, call: i32, unit: *const i32) -> u32 {
+            unsafe { super::F_MOVE_SLOW_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_move_medium_f(this: *const u32, call: i32, unit: *const i32) -> u32 {
+            unsafe { super::F_MOVE_MEDIUM_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_move_fast_f(this: *const u32, call: i32, unit: *const i32) -> u32 {
+            unsafe { super::F_MOVE_FAST_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_target_building(this: *const u32, unit: *const u32, done: *const u8) -> bool {
+            unsafe { super::F_TARGET_BUILDING_DETOUR.call(this, unit, done) }
+        }
+
+        pub(crate) fn f_target_building_f(this: *const u32, call: i32, unit: *const i32) -> bool {
+            unsafe { super::F_TARGET_BUILDING_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_set_base_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_SET_BASE_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_play_set(name: *const i32, unit: *const c_void, child: i8, flag: u32) -> bool {
+            unsafe { super::F_PLAY_SET_DETOUR.call(name, unit, child, flag) }
+        }
+
+        pub(crate) fn f_play_special_f(this: *const u32, call: *const u32, unit: *const u32) -> bool {
+            unsafe { super::F_PLAY_SPECIAL_F_DETOUR.call(this, call, unit) }
+        }
+
+        pub(crate) fn f_play_special(this: *const u32, anim: *const i8, sound: *const i8, seconds: i32, count: i32, special: *const i8, unit: *const i32, done: *const u8) -> bool {
+            unsafe { super::F_PLAY_SPECIAL_DETOUR.call(this, anim, sound, seconds, count, special, unit, done) }
+        }
+
+        pub(crate) fn f_play_f(this: *const u32, call: *const u32, unit: *const u32, reverse: i8, ping_pong: i8) -> bool {
+            unsafe { super::F_PLAY_F_DETOUR.call(this, call, unit, reverse, ping_pong) }
+        }
+
+        pub(crate) fn f_play_with_base_f(this: *const u32, call: *const u32, unit: *const u32, reverse: i8, ping_pong: i8) -> bool {
+            unsafe { super::F_PLAY_WITH_BASE_F_DETOUR.call(this, call, unit, reverse, ping_pong) }
+        }
+
+        pub(crate) fn f_play_time(this: *const u32, name: *const c_void, millis: i32, unit: *const u32, done: *const i8, flag_b: i8) -> bool {
+            unsafe { super::F_PLAY_TIME_DETOUR.call(this, name, millis, unit, done, flag_b) }
+        }
+
+        pub(crate) fn f_play_with_sound(anim_name: *const c_void, sound_name: *const c_void, unit: *const u32, done: *const i8) -> bool {
+            unsafe { super::F_PLAY_WITH_SOUND_DETOUR.call(anim_name, sound_name, unit, done) }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn f_fly(this: *const u32, unit: *const u32, name: *const c_void, value: i32, extra: *const c_void, done: *const i8, reverse: i32, limit: i32) -> bool {
+            unsafe { super::F_FLY_DETOUR.call(this, unit, name, value, extra, done, reverse, limit) }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn f_move(this: *const u32, first_param: i32, seconds: i32, unit: *const i32, done: *const u8, name: i32, speed: u32, extra: *const i8, reverse: u32, limit: u32) -> bool {
+            unsafe { super::F_MOVE_DETOUR.call(this, first_param, seconds, unit, done, name, speed, extra, reverse, limit) }
+        }
     }
 }
 
@@ -4094,12 +4828,23 @@ pub(crate) mod live_support {
     pub(crate) use super::{f_enter_building, f_exit_building, f_hatch, f_return_to_building, f_show_predator};
     pub(crate) use ztaimgr_detours::test_real::{
         bfaimgr_get_events as real_bfaimgr_get_events, bfaimgr_load as real_bfaimgr_load, bfaimgr_send_event as real_bfaimgr_send_event, bfaimgr_call_done as real_bfaimgr_call_done, bfaimgr_check_path as real_bfaimgr_check_path, bfaimgr_get_path_tiles as real_bfaimgr_get_path_tiles,
-        bfaimgr_remove_entities as real_bfaimgr_remove_entities, ztaimgr_init_ai_params as real_ztaimgr_init_ai_params, bfaimgr_load_data as real_bfaimgr_load_data, bfaimgr_save as real_bfaimgr_save, bfaimgr_update as real_bfaimgr_update, ztaimgr_create as real_ztaimgr_create,
+        bfaimgr_remove_entities as real_bfaimgr_remove_entities, ztaimgr_init_ai_params as real_ztaimgr_init_ai_params, bfaimgr_load_data as real_bfaimgr_load_data, bfaimgr_save as real_bfaimgr_save, bfaimgr_update as real_bfaimgr_update, ztaimgr_create as real_ztaimgr_create, bfaimgr_construct as real_bfaimgr_construct, bfaimgr_destruct as real_bfaimgr_destruct,
         ztaimgr_update as real_ztaimgr_update,
     };
     pub(crate) use ztaimgr_detours::test_real::{
         base_execute_call as real_base_execute_call, execute_call as real_execute_call, f_caught_prey as real_f_caught_prey, f_die as real_f_die, f_face_toward_food as real_f_face_toward_food, f_face_toward_target as real_f_face_toward_target, f_exit_building as real_f_exit_building, f_kill_prey as real_f_kill_prey,
     };
+    pub(crate) use ztaimgr_detours::test_real::{bfaimgr_init as real_bfaimgr_init, bfaimgr_init_ai_params as real_bfaimgr_init_ai_params};
+    pub(crate) use ztaimgr_detours::test_real::{f_play_set_prob as real_f_play_set_prob, f_random_walk as real_f_random_walk};
+    pub(crate) use ztaimgr_detours::test_real::{
+        f_move_f as real_f_move_f, f_move_fast_f as real_f_move_fast_f, f_move_medium_f as real_f_move_medium_f, f_move_slow_f as real_f_move_slow_f, f_move_with_sound_f as real_f_move_with_sound_f, f_play_set as real_f_play_set, f_play_special_f as real_f_play_special_f,
+        f_set_base_f as real_f_set_base_f, f_target_building as real_f_target_building, f_target_building_f as real_f_target_building_f,
+    };
+    pub(crate) use ztaimgr_detours::test_real::{
+        f_fly as real_f_fly, f_move as real_f_move, f_play_f as real_f_play_f, f_play_special as real_f_play_special, f_play_time as real_f_play_time, f_play_with_base_f as real_f_play_with_base_f, f_play_with_sound as real_f_play_with_sound,
+    };
+    pub(crate) use super::{f_move, FMoveArgs, F_MOVE_VANILLA_OPS};
+    pub(crate) use super::{acquire_first_vanilla, add_anim_vanilla, play_links_with, play_pair_with, play_single_with, play_timed_with, play_two_with, play_with, release_first_vanilla, set_base_with};
     pub(crate) use ztaimgr_detours::test_real::{
         f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,
         f_keeper_routine as real_f_keeper_routine, f_maint_routine as real_f_maint_routine, f_return_to_building as real_f_return_to_building,
@@ -4153,12 +4898,12 @@ mod tests {
 
     fn string_of(bytes: &'static [u8]) -> RawCallString {
         let range = bytes.as_ptr_range();
-        RawCallString { begin: range.start, end: range.end, capacity: range.end }
+        RawCallString { begin: range.start, end: range.end, capacity: range.end, _live: LiveMemory::default() }
     }
 
     fn call_with(name: &'static [u8], params: &[RawCallString]) -> RawFunctionCall {
         let range = params.as_ptr_range();
-        RawFunctionCall { name: string_of(name), params_begin: range.start, params_end: range.end, params_capacity: range.end }
+        RawFunctionCall { name: string_of(name), params_begin: range.start, params_end: range.end, params_capacity: range.end, _live: LiveMemory::default() }
     }
 
     #[test]
@@ -4266,5 +5011,291 @@ mod tests {
         assert!(!call.is_move_function(b"fMoveFast", &[b"fRun"], b"run"));
         let short = call_with(b"fMove", &params[..2]);
         assert!(!short.is_move_function(b"fMoveMedium", &[b"fTrot"], b"trot"));
+    }
+
+    /// The game's `rand()`: an LCG over one dword (`state * 0x343fd + 0x269ec3`, result bits 16..30).
+    struct GameRand(u32);
+
+    impl GameRand {
+        fn next(&mut self) -> u32 {
+            self.0 = self.0.wrapping_mul(0x343fd).wrapping_add(0x269ec3);
+            (self.0 >> 16) & 0x7fff
+        }
+    }
+
+    #[test]
+    fn game_rand_matches_the_documented_sequence() {
+        let mut rand = GameRand(1);
+        assert_eq!(rand.next(), 41);
+        assert_eq!(rand.next(), 18467);
+        assert_eq!(rand.next(), 6334);
+    }
+
+    use LinkKind::{Main, Tail};
+
+    fn timed(total: i32, duration: i32, ping_pong: bool, stop: bool) -> Vec<LinkKind> {
+        timed_repeat(total, duration, ping_pong, stop).take(1000).collect()
+    }
+
+    #[test]
+    fn timed_repeat_fills_the_duration() {
+        // An exact multiple: 300 ms of 100 ms links is the first link plus two more.
+        assert_eq!(timed(300, 100, false, true), vec![Main, Main]);
+        assert_eq!(timed(301, 100, false, true), vec![Main, Main, Main]);
+        assert_eq!(timed(299, 100, false, true), vec![Main, Main]);
+        // The duration is covered by the first link alone, or not at all.
+        assert_eq!(timed(100, 100, false, true), vec![]);
+        assert_eq!(timed(50, 100, false, true), vec![]);
+        assert_eq!(timed(0, 100, false, true), vec![]);
+        assert_eq!(timed(-5, 100, false, true), vec![]);
+    }
+
+    #[test]
+    fn timed_repeat_with_zero_duration_differs_between_callers() {
+        // `fMove` and `fPlayTime` stop after one extra link; `fPlaySpecial` never ends (bounded here).
+        assert_eq!(timed(500, 0, false, true), vec![Main]);
+        assert_eq!(timed(0, 0, false, true), vec![]);
+        assert_eq!(timed(-1, 0, false, true), vec![]);
+        assert_eq!(timed(500, 0, false, false).len(), 1000);
+        assert_eq!(timed(0, 0, false, false), vec![]);
+        assert_eq!(timed(500, 0, true, false).len(), 1000);
+    }
+
+    #[test]
+    fn timed_repeat_ping_pong_subtracts_twice() {
+        // 500 ms of 100 ms: the first main and tail are paid up front (500 - 200 = 300), then each pair costs 200.
+        assert_eq!(timed(500, 100, true, false), vec![Main, Tail, Main, Tail]);
+        assert_eq!(timed(300, 100, true, false), vec![Main, Tail]);
+        assert_eq!(timed(200, 100, true, false), vec![]);
+        assert_eq!(timed(150, 100, true, false), vec![]);
+        // A pair is always appended whole, even when the remainder covers only its first half.
+        assert_eq!(timed(301, 100, true, false), vec![Main, Tail]);
+    }
+
+    #[test]
+    fn timed_repeat_wraps_like_the_32_bit_arithmetic() {
+        // `total - duration` wraps to a positive remainder for the most negative total, so it keeps appending.
+        assert_eq!(timed(i32::MIN, 100, false, true).len(), 1000);
+        // A negative duration only grows the remainder; the sequence is unbounded (bounded here).
+        assert_eq!(timed(5, -1, false, true).len(), 1000);
+    }
+
+    #[test]
+    fn counted_repeat_appends_count_minus_one() {
+        let counted = |count, ping_pong| counted_repeat(count, ping_pong).collect::<Vec<_>>();
+        // `count - 1` wraps for the most negative count, which asks for 2^31 - 1 links (bounded here).
+        assert_eq!(counted_repeat(i32::MIN, false).take(5).count(), 5);
+        assert_eq!(counted(-3, false), vec![]);
+        assert_eq!(counted(0, false), vec![]);
+        assert_eq!(counted(1, false), vec![]);
+        assert_eq!(counted(2, false), vec![Main]);
+        assert_eq!(counted(4, false), vec![Main, Main, Main]);
+        assert_eq!(counted(1, true), vec![]);
+        assert_eq!(counted(3, true), vec![Main, Tail, Main, Tail]);
+    }
+
+    #[test]
+    fn set_prob_picker_follows_the_scripted_rolls() {
+        let pick = |weights: &[i32], rolls: &[u32]| {
+            let mut rolls = rolls.iter().copied();
+            let picked = pick_set_prob(weights, || rolls.next().expect("rand called more often than scripted"));
+            (picked, rolls.count())
+        };
+        // A roll is `rand % 100 + 1`; 0 -> 1, 29 -> 30.
+        assert_eq!(pick(&[30, 70], &[0, 9]), (Some(0), 1));
+        assert_eq!(pick(&[30, 70], &[29, 9]), (Some(0), 1));
+        // 40 -> roll 41 misses entry 0 (weight 30); the remainder 70 rerolls `5 % 70 + 1 = 6`.
+        assert_eq!(pick(&[30, 70], &[40, 5]), (Some(1), 0));
+        assert_eq!(pick(&[10, 10, 80], &[95, 89, 79]), (Some(2), 0));
+        // An entry with weight 0 is passed over, and a single entry always hits.
+        assert_eq!(pick(&[0, 100], &[0, 0]), (Some(1), 0));
+        assert_eq!(pick(&[100], &[99]), (Some(0), 0));
+        // Weights that do not sum to 100, and no entries, roll nothing.
+        assert_eq!(pick(&[30, 60], &[]), (None, 0));
+        assert_eq!(pick(&[], &[]), (None, 0));
+        assert_eq!(pick(&[60, 60], &[]), (None, 0));
+        // A negative weight can make the sum 100; the first entry then covers every roll.
+        assert_eq!(pick(&[110, -10], &[50]), (Some(0), 0));
+    }
+
+    #[test]
+    fn set_prob_picker_matches_the_weights_over_the_game_rand() {
+        let weights = [20, 30, 50];
+        let mut rand = GameRand(0x1234_5678);
+        let mut counts = [0u32; 3];
+        let draws = 20_000u32;
+        for _ in 0..draws {
+            let picked = pick_set_prob(&weights, || rand.next()).expect("weights sum to 100, so something is always picked");
+            counts[picked] += 1;
+        }
+        for (count, weight) in counts.iter().zip(weights) {
+            let expected = draws * weight as u32 / 100;
+            assert!(count.abs_diff(expected) < draws / 25, "{counts:?} against {weights:?}");
+        }
+    }
+
+    fn facts(f: impl FnOnce(&mut PlaySpecialFFacts)) -> PlaySpecialFFacts {
+        let mut facts = PlaySpecialFFacts::default();
+        f(&mut facts);
+        facts
+    }
+
+    #[test]
+    fn play_special_f_decisions() {
+        use NoSoundPlay as N;
+        use PlaySpecialFAction as A;
+        let decide = decide_play_special_f;
+        assert_eq!(decide(facts(|f| f.seconds = true)), A::PlaySpecial { use_seconds: true, use_repeat: false });
+        assert_eq!(decide(facts(|f| (f.seconds, f.repeat) = (true, true))), A::Fail);
+        assert_eq!(decide(facts(|f| f.repeat = true)), A::PlaySpecial { use_seconds: false, use_repeat: true });
+        // A repeat count wins over every string predicate.
+        assert_eq!(decide(facts(|f| (f.repeat, f.sound_none, f.special_reverse) = (true, true, true))), A::PlaySpecial { use_seconds: false, use_repeat: true });
+        // A duration with the "none" sound and a plain special becomes `fPlayTime`; the second flag follows mode B.
+        assert_eq!(decide(facts(|f| (f.seconds, f.sound_none, f.special_mode_a) = (true, true, true))), A::PlayTime { second_flag: false });
+        assert_eq!(decide(facts(|f| (f.seconds, f.sound_none, f.special_mode_b) = (true, true, true))), A::PlayTime { second_flag: true });
+        assert_eq!(decide(facts(|f| (f.seconds, f.sound_none, f.special_none) = (true, true, true))), A::PlayTime { second_flag: false });
+        // Not plain, or a named sound: `fPlaySpecial` with the duration.
+        assert_eq!(decide(facts(|f| (f.seconds, f.sound_none, f.special_reverse) = (true, true, true))), A::PlaySpecial { use_seconds: true, use_repeat: false });
+        assert_eq!(decide(facts(|f| (f.seconds, f.special_mode_a) = (true, true))), A::PlaySpecial { use_seconds: true, use_repeat: false });
+        // Neither number, the "none" sound.
+        assert_eq!(decide(facts(|f| (f.sound_none, f.special_mode_a) = (true, true))), A::NoSound(N::Plain));
+        assert_eq!(decide(facts(|f| (f.sound_none, f.special_none) = (true, true))), A::NoSound(N::Plain));
+        assert_eq!(decide(facts(|f| (f.sound_none, f.special_reverse) = (true, true))), A::NoSound(N::Reverse));
+        assert_eq!(decide(facts(|f| (f.sound_none, f.special_ping_pong) = (true, true))), A::NoSound(N::PingPong));
+        assert_eq!(decide(facts(|f| f.sound_none = true)), A::NoSound(N::Other));
+        // A plain mode wins over reverse and ping-pong when a string matches several.
+        assert_eq!(decide(facts(|f| (f.sound_none, f.special_mode_a, f.special_reverse) = (true, true, true))), A::NoSound(N::Plain));
+        // A named sound: with a named animation `fPlayWithSound`, with the "none" animation `fPlaySpecial`.
+        assert_eq!(decide(facts(|_| {})), A::PlayWithSound);
+        assert_eq!(decide(facts(|f| f.anim_none = true)), A::PlaySpecialNoAnim { second_flag: false });
+        assert_eq!(decide(facts(|f| (f.anim_none, f.special_mode_b) = (true, true))), A::PlaySpecialNoAnim { second_flag: true });
+    }
+
+    #[test]
+    fn play_special_f_decision_invariants_over_every_combination() {
+        for bits in 0u32..512 {
+            let f = PlaySpecialFFacts {
+                seconds: bits & 1 != 0,
+                repeat: bits & 2 != 0,
+                sound_none: bits & 4 != 0,
+                anim_none: bits & 8 != 0,
+                special_mode_a: bits & 16 != 0,
+                special_mode_b: bits & 32 != 0,
+                special_none: bits & 64 != 0,
+                special_reverse: bits & 128 != 0,
+                special_ping_pong: bits & 256 != 0,
+            };
+            let action = decide_play_special_f(f);
+            assert_eq!(action == PlaySpecialFAction::Fail, f.seconds && f.repeat, "{f:?}");
+            if f.repeat && !f.seconds {
+                assert_eq!(action, PlaySpecialFAction::PlaySpecial { use_seconds: false, use_repeat: true }, "{f:?}");
+            }
+            if !f.seconds && !f.repeat && f.sound_none {
+                assert!(matches!(action, PlaySpecialFAction::NoSound(_)), "{f:?}");
+            }
+            if !f.seconds && !f.repeat && !f.sound_none {
+                assert_eq!(matches!(action, PlaySpecialFAction::PlayWithSound), !f.anim_none, "{f:?}");
+            }
+            if let PlaySpecialFAction::PlayTime { second_flag } = action {
+                assert!(f.seconds && !f.repeat && f.sound_none && (f.special_mode_a || f.special_mode_b || f.special_none), "{f:?}");
+                assert_eq!(second_flag, f.special_mode_b);
+            }
+        }
+    }
+
+    #[test]
+    fn random_walk_border_is_walked_in_column_order() {
+        let border = |hx, hy| border_offsets(hx, hy).collect::<Vec<_>>();
+        assert_eq!(border(1, 1), vec![(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]);
+        assert_eq!(border(0, 0), vec![(0, 0)]);
+        assert_eq!(border(2, 1), vec![(-2, -1), (-2, 0), (-2, 1), (-1, -1), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 1), (2, -1), (2, 0), (2, 1)]);
+        for (hx, hy) in [(1, 1), (2, 3), (5, 2), (4, 4), (1, 6)] {
+            let offsets = border(hx, hy);
+            let interior = ((2 * hx - 1).max(0) * (2 * hy - 1).max(0)) as usize;
+            assert_eq!(offsets.len(), ((2 * hx + 1) * (2 * hy + 1)) as usize - interior, "({hx},{hy})");
+            assert!(offsets.windows(2).all(|pair| pair[0] < pair[1]), "({hx},{hy}) is dx-major, dy ascending");
+            assert!(offsets.iter().all(|&(dx, dy)| dx.abs() == hx || dy.abs() == hy));
+        }
+    }
+
+    #[test]
+    fn random_walk_neighbour_scan_starts_at_the_roll_and_does_not_wrap() {
+        assert_eq!(neighbor_scan(0, 4).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        assert_eq!(neighbor_scan(2, 4).collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(neighbor_scan(3, 4).collect::<Vec<_>>(), vec![3]);
+        assert_eq!(neighbor_scan(0, 1).collect::<Vec<_>>(), vec![0]);
+    }
+
+    #[test]
+    fn route_tables_are_total_and_distinct() {
+        let zt_names: [&[u8]; 24] = [
+            b"fWalk", b"fSwim", b"fTrot", b"fRun", b"fSpray", b"fKeeperRoutine", b"fGuestRoutine", b"fGuideRoutine", b"fMaintRoutine", b"fFaceTowardFood", b"fFaceTowardTarget", b"fShowPredator", b"fHidePredator", b"fEnterBuilding", b"fExitBuilding", b"fDustBall",
+            b"fKillPrey", b"fCaughtPrey", b"fDie", b"fTargetBuilding", b"fHatch", b"fEndTrick", b"fReturnToBuilding", b"fPlaySetTank",
+        ];
+        let mut zt_handlers: Vec<Handler> = zt_names.iter().map(|name| zt_handler(lookup_zt_call(name).unwrap())).collect();
+        zt_handlers.sort_by_key(|h| *h as u32);
+        zt_handlers.dedup();
+        // `fWalk`/`fSwim` share a handler; every other name has its own.
+        assert_eq!(zt_handlers.len(), 23);
+
+        let base_names: [&[u8]; 28] = [
+            b"fPlay", b"fSetBase", b"fPlayWithBase", b"fMoveEntityDelta", b"fMoveEntitySpecial", b"fPlayTime", b"fPlaySound", b"fPlaySpecial", b"fPlaySp", b"fPlaySetProb", b"fPlaySetTerrain", b"fPlayReverse", b"fPlayPingPong", b"fPingPong", b"fPlayWithSound", b"fPlaySFX",
+            b"fPlayStopAtEnd", b"fPlaySet", b"fMoveSlow", b"fMoveMedium", b"fMove", b"fMoveReverse", b"fMoveFast", b"fMoveWithSound", b"fFaceDirection", b"fFly", b"fFlyReverse", b"fKeepControl",
+        ];
+        let mut routes = Vec::new();
+        let mut unrouted = Vec::new();
+        for name in base_names.iter().chain([&b"fHalt"[..]].iter()) {
+            let which = lookup_base_call(name).unwrap();
+            match base_route(which) {
+                Some(route) => routes.push(route.handler),
+                None => unrouted.push(which),
+            }
+        }
+        assert_eq!(unrouted, vec![BaseCall::PlaySetTerrain, BaseCall::KeepControl]);
+        routes.sort_by_key(|h| *h as u32);
+        routes.dedup();
+        // Three aliases share handlers (`fPlaySp`, `fPingPong`, `fPlaySFX`).
+        assert_eq!(routes.len(), 29 - 2 - 3);
+        // The trailing constants the vanilla chain passes (`fPlayF` `0, 0`, `fMoveF` `false`, `fFlyF` `0`) are all zero.
+        assert!(base_names.iter().all(|name| base_route(lookup_base_call(name).unwrap()).map_or(true, |r| r.trailing == [0, 0])));
+    }
+
+    #[test]
+    fn bf_ai_params_use_defaults_keys_and_clamps() {
+        let mut keys = Vec::new();
+        let defaults = compute_bf_ai_params(|key, default| {
+            keys.push((key.to_string(), default));
+            default
+        });
+        let expected: Vec<(&str, i32)> = vec![
+            ("BaseX", 1), ("BaseY", 1), ("RandomX", 5), ("RandomY", 5), ("mAIHowOften", 1), ("mAITick", 1000), ("mStatusPeriod", 1000), ("mGoalPeriod", 0), ("ShowAIInfo", 0), ("ShowName", 1), ("ShowPosition", 1), ("ShowStatusVars", 1), ("ShowFunctionCall", 1),
+            ("ShowEvents", 1), ("AIInfoNth", 100), ("ShowSelected", 0), ("ShowFrame", 0), ("ShowGoal", 0), ("VariableUnitSpeeds", 1), ("AllowDiagonalMoves", 1), ("ClearUnreachableFreq", 5), ("MinUnreachableCount", 5),
+        ];
+        assert_eq!(keys, expected.iter().map(|(key, default)| (key.to_string(), *default)).collect::<Vec<_>>());
+        assert_eq!(
+            defaults,
+            BfAiParams {
+                base_x: 1, base_y: 1, random_x: 5, random_y: 5, how_often: 1, tick: 1000, status_period: 1000, goal_period: 0, show_ai_info: 0, show_name: 1, show_position: 1, show_status_vars: 1, show_function_call: 1, show_events: 1, ai_info_nth: 100,
+                show_selected: 0, show_frame: 0, show_goal: 0, variable_unit_speeds: 1, allow_diagonal_moves: true, clear_unreachable_freq: 5, min_unreachable_count: 5,
+            }
+        );
+        // The base extents clamp up to 0, the random extents up to 1; positive values pass through.
+        let clamped = compute_bf_ai_params(|_, _| -7);
+        assert_eq!((clamped.base_x, clamped.base_y, clamped.random_x, clamped.random_y), (0, 0, 1, 1));
+        let zero = compute_bf_ai_params(|_, _| 0);
+        assert_eq!((zero.base_x, zero.random_x, zero.allow_diagonal_moves), (0, 1, false));
+        let big = compute_bf_ai_params(|_, _| 300);
+        assert_eq!((big.base_x, big.random_y, big.tick, big.clear_unreachable_freq), (300, 300, 300, 300));
+        // Unclamped fields keep negative values, `AllowDiagonalMoves` is true only for exactly 1, and the
+        // unreachable count keeps its low byte.
+        assert_eq!((clamped.tick, clamped.ai_info_nth, clamped.clear_unreachable_freq), (-7, -7, -7));
+        assert_eq!(compute_bf_ai_params(|key, d| if key == "AllowDiagonalMoves" { 2 } else { d }).allow_diagonal_moves, false);
+        assert_eq!(compute_bf_ai_params(|key, d| if key == "MinUnreachableCount" { 0x1ff } else { d }).min_unreachable_count, 0xff);
+        let by_key = compute_bf_ai_params(|key, d| match key {
+            "RandomY" => 8,
+            "mGoalPeriod" => 42,
+            _ => d,
+        });
+        assert_eq!((by_key.random_x, by_key.random_y, by_key.goal_period, by_key.status_period), (5, 8, 42, 1000));
     }
 }

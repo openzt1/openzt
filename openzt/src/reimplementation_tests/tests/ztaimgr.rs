@@ -512,7 +512,7 @@ pub(crate) fn run_ztaimgr_convert_constant_param_test(failure_log: &mut Option<s
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Stage 7: `BFAIMgr::update`/`save`/`loadData`, `ZTAIMgr::update`/`create`.
+// Manager lifecycle: `BFAIMgr::update`/`save`/`loadData`, `ZTAIMgr::update`/`create`.
 //
 // The manager methods read `GLOBAL_ZTWorldMgr`/`GLOBAL_ZTShowMgr` straight from their pointer cells, so the
 // tests point those cells at Rust-owned fake managers for the duration of one call (restored afterwards) and
@@ -1185,6 +1185,81 @@ pub(crate) fn run_ztaimgr_create_test(failure_log: &mut Option<std::fs::File>) -
     finish_test(test_name, failures, failure_log)
 }
 
+/// `ZTAIMGR_BFAIMGR_CONSTRUCT_DESTRUCT` (live zoo: `BFAIMgr::init` reads the loaded configuration): the real and
+/// ported constructor each build a zeroed `0x150`-byte block (every word equal, heap pointers compared only as
+/// non-null, `+0x134` skipped: vanilla leaves a stale stack byte there); the real and ported destructor then tear
+/// one each down (every word equal, same final `BFMgr` vtable, empty path cache). Blocks are freed with `operator
+/// delete`; the real constructor's and destructor's own allocations stay with vanilla's allocator throughout.
+pub(crate) fn run_ztaimgr_bfaimgr_construct_destruct_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::{
+        bfaimgr::{CONSTRUCTOR as BFAIMGR_CONSTRUCTOR, DESTRUCTOR_0 as BFAIMGR_DESTRUCTOR_0, DESTRUCTOR_1 as BFAIMGR_DESTRUCTOR_1},
+        standalone::{OPERATOR_DELETE, OPERATOR_NEW},
+    };
+    let test_name = "ZTAIMGR_BFAIMGR_CONSTRUCT_DESTRUCT";
+    let mut failures: Vec<String> = Vec::new();
+    let base = get_module_base("zoo.exe") as u32;
+    const SIZE: u32 = 0x150;
+    let allocate = || {
+        let block = unsafe { OPERATOR_NEW.original()(SIZE) } as u32;
+        for offset in (0..SIZE).step_by(4) {
+            save_to_memory(block + offset, 0u32);
+        }
+        block
+    };
+    let (real, port) = (allocate(), allocate());
+    if real == 0 || port == 0 {
+        failures.push("operator new failed".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    unsafe {
+        live_support::real_bfaimgr_construct(real as *const u32);
+        BFAIMGR_CONSTRUCTOR.hooked()(port as *const u32);
+    }
+    let compare = |phase: &str, failures: &mut Vec<String>| {
+        for offset in (0..SIZE).step_by(4) {
+            if offset == 0x134 {
+                continue;
+            }
+            let (real_word, port_word) = (get_from_memory::<u32>(real + offset), get_from_memory::<u32>(port + offset));
+            let both_heap_pointers = real_word >= 0x10000 && port_word >= 0x10000 && !(real_word >= base && real_word < base + 0x300000);
+            if real_word != port_word && !both_heap_pointers {
+                failures.push(format!("{phase} +{offset:#x}: real {real_word:#x} != port {port_word:#x}"));
+            }
+        }
+    };
+    compare("construct", &mut failures);
+    if get_from_memory::<u32>(real + 0xd0) == 0 || get_from_memory::<u32>(port + 0xd0) == 0 {
+        failures.push("construct left a null GXLLEAnimSet".to_string());
+    }
+    unsafe {
+        live_support::real_bfaimgr_destruct(real as *const u32);
+        BFAIMGR_DESTRUCTOR_0.hooked()(port as *const u32);
+    }
+    compare("destruct", &mut failures);
+    for manager in [real, port] {
+        if get_from_memory::<u32>(manager) != base + 0x0023_55c0 {
+            failures.push(format!("{manager:#x}: vtable word {:#x}, expected BFMgr's", get_from_memory::<u32>(manager)));
+        }
+        if get_from_memory::<u32>(manager + 0x130) != 0 {
+            failures.push(format!("{manager:#x}: path cache size not zero after destruct"));
+        }
+    }
+    // Deleting destructor: bit 0 clear leaves the block, bit 0 set frees it (nothing to read back afterwards).
+    let deleting = allocate();
+    unsafe {
+        BFAIMGR_CONSTRUCTOR.hooked()(deleting as *const u32);
+        let returned = BFAIMGR_DESTRUCTOR_1.hooked()(deleting as *const u32, 0);
+        if returned as u32 != deleting {
+            failures.push(format!("deleting destructor returned {:#x}, expected {deleting:#x}", returned as u32));
+        }
+        BFAIMGR_CONSTRUCTOR.hooked()(deleting as *const u32);
+        BFAIMGR_DESTRUCTOR_1.hooked()(deleting as *const u32, 1);
+        OPERATOR_DELETE.original()(real);
+        OPERATOR_DELETE.original()(port);
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
 static FIND_PATH_LOG: Mutex<Vec<[u32; 9]>> = Mutex::new(Vec::new());
 static FIND_PATH_MGR: AtomicU32 = AtomicU32::new(0);
 
@@ -1655,7 +1730,7 @@ pub(crate) fn run_ztaimgr_bfaimgr_get_events_test(failure_log: &mut Option<std::
     finish_test(test_name, failures, failure_log)
 }
 
-/// Stage 9 wrappers whose real body is safe to run over fakes: the argument-count guards (which return before
+/// `BFAIMgr` forwarding wrappers whose real body is safe to run over fakes: the argument-count guards (which return before
 /// touching the unit or manager), compared real vs port, plus `fPlayStopAtEndF`'s virtual call on a fake entity.
 /// Paths that reach a real `fPlayF`/`fFlyF`/`fPlayTime`/`fPlaySound`/`fPlayWithSound`/`fPlaySet`/`setMoving`
 /// need live animation state, so those are checked port-only in the forwarding test with recording stand-ins.
@@ -1761,7 +1836,7 @@ pub(crate) fn run_ztaimgr_base_wrapper_guards_test(failure_log: &mut Option<std:
     finish_test(test_name, failures, failure_log)
 }
 
-/// Stage 9 wrappers' forwarding paths, port only (the real targets need live animation state): the exact
+/// `BFAIMgr` forwarding wrappers' forwarding paths, port only (the real targets need live animation state): the exact
 /// arguments passed on, the call-flag writes, the millisecond conversion and the null-unit deferrals.
 pub(crate) fn run_ztaimgr_base_wrapper_forwarding_test(failure_log: &mut Option<std::fs::File>) -> bool {
     use crate::ztaimgr::{f_face_direction_f, f_halt_f, f_play_set_f, f_play_stop_at_end_prepare, f_play_time_f};
@@ -3934,5 +4009,1370 @@ pub(crate) fn run_ztaimgr_f_move_reverse_f_test(failure_log: &mut Option<std::fs
     if std::hint::black_box(marker) != 0x1357_9bdf {
         failures.push("marker corrupted".to_string());
     }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_MOVE_REAL_VS_PORT`: runs the real vanilla `fMove` and the port over identical fake units
+/// (own vtable, cog goal and target ring) on every path that touches only flags and fake virtuals. Compares
+/// the result, the done byte, the unit flags `fMove` writes, whether the target list was emptied and the order
+/// of fake-virtual calls. `BFUnit::stop` runs for real on both sides (its second argument also reaches
+/// `idle`, whose `getIdleAnim` virtual is faked to return no animation), so the target-list nodes come from
+/// `PoolAlloc` in the 24-byte size class `stop` returns them to. The paths that reach the mixer or
+/// `BFCogGoal::reachedTarget` stay in the port-only test.
+pub(crate) fn run_ztaimgr_f_move_real_vs_port_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    let test_name = "ZTAIMGR_F_MOVE_REAL_VS_PORT";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static HAS_TARGET: AtomicU32 = AtomicU32::new(0);
+    static CAN_PLAY: AtomicU32 = AtomicU32::new(0);
+    static VALID: AtomicU32 = AtomicU32::new(0);
+    static ANIM_FIRST: AtomicU32 = AtomicU32::new(0);
+    fn log(entry: &str) {
+        LOG.lock().unwrap().push(entry.to_string());
+    }
+    extern "thiscall" fn v_has_target(_: u32) -> u32 {
+        log("has_target");
+        HAS_TARGET.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_can_play(_: u32) -> u32 {
+        log("can_play");
+        CAN_PLAY.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_prepare(_: u32, arg: u32) -> u32 {
+        LOG.lock().unwrap().push(format!("prepare({arg:#x})"));
+        0
+    }
+    extern "thiscall" fn v_find_anim(_: u32, _name: u32) -> u32 {
+        log("find_anim");
+        ANIM_FIRST.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_find_anim_second(_: u32) -> u32 {
+        log("find_anim_second");
+        ANIM_FIRST.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_set_speed(_: u32, arg: u32) -> u32 {
+        LOG.lock().unwrap().push(format!("set_speed({arg})"));
+        0
+    }
+    extern "thiscall" fn v_set_limit(_: u32, arg: u32) -> u32 {
+        LOG.lock().unwrap().push(format!("set_limit({arg})"));
+        0
+    }
+    extern "thiscall" fn v_idle_anim(_: u32, arg: u32) -> u32 {
+        LOG.lock().unwrap().push(format!("idle_anim({})", arg as u8));
+        0
+    }
+    extern "thiscall" fn c_valid(_: u32) -> u32 {
+        log("cog_valid");
+        VALID.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn c_clear(_: u32) -> u32 {
+        log("cog_clear");
+        0
+    }
+    extern "thiscall" fn c_clear_sub(_: u32) -> u32 {
+        log("cog_clear_sub");
+        0
+    }
+
+    let mut unit_vtable = Box::new([0u32; 0x80]);
+    unit_vtable[0x180 / 4] = v_has_target as *const () as usize as u32;
+    unit_vtable[0x184 / 4] = v_can_play as *const () as usize as u32;
+    unit_vtable[0x1b0 / 4] = v_prepare as *const () as usize as u32;
+    unit_vtable[0x130 / 4] = v_find_anim as *const () as usize as u32;
+    unit_vtable[0x134 / 4] = v_find_anim_second as *const () as usize as u32;
+    unit_vtable[0x1c0 / 4] = v_set_speed as *const () as usize as u32;
+    unit_vtable[0x1c4 / 4] = v_set_limit as *const () as usize as u32;
+    unit_vtable[0x8c / 4] = v_idle_anim as *const () as usize as u32;
+    let mut cog_vtable = Box::new([0u32; 0x10]);
+    cog_vtable[0] = c_valid as *const () as usize as u32;
+    cog_vtable[0xc / 4] = c_clear as *const () as usize as u32;
+    cog_vtable[0x1c / 4] = c_clear_sub as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x200]);
+    let unit = block.as_ptr() as u32;
+    let mut ring = vec![[0u32; 2]; 8];
+    let sentinel = ring.as_ptr() as u32;
+    let empty_extra = Box::new([0x1000u32, 0x1000, 0x1000]);
+    let this_block = Box::new([0u32; 0x40]);
+    let mut done = Box::new(0xaau8);
+    let done_ptr = done.as_mut() as *mut u8 as *const u8;
+    let byte = |block: &[u32; 0x200], offset: usize| unsafe { *((block.as_ptr() as usize + offset) as *const u8) };
+
+    struct Case {
+        label: &'static str,
+        flags: &'static [(usize, u8)],
+        state: u32,
+        state2: u32,
+        list: usize,
+        can_play: bool,
+        valid: bool,
+        has_target: bool,
+        anim_first: u32,
+    }
+    let c = |label, flags, state, state2, list, can_play, valid, has_target, anim_first| Case { label, flags, state, state2, list, can_play, valid, has_target, anim_first };
+    let cases = [
+        c("finished", &[(0x20d, 1)][..], 0, 0, 0, false, false, false, 0xa000),
+        c("finished prepares", &[(0x20d, 1)], 1, 0, 0, false, false, false, 0xa000),
+        c("cog invalid", &[(0xf9, 1)], 0, 0, 0, true, false, false, 0xa000),
+        c("cog valid, no flag", &[(0xf9, 1)], 0, 0, 0, true, true, false, 0xa000),
+        c("cog valid, flag, invalid", &[(0xf9, 1), (0x1a8, 1)], 0, 0, 0, true, true, false, 0xa000),
+        c("cog valid, flag, state 1", &[(0xf9, 1), (0x1a8, 1)], 1, 0, 0, true, true, false, 0xa000),
+        c("stopped, empty list, cannot play", &[(0xf9, 1)], 0, 0, 0, false, false, false, 0xa000),
+        c("stopped, cog already invalid", &[(0xf9, 1), (0x20e, 1)], 0, 0, 0, true, true, false, 0xa000),
+        c("moving one target has target", &[(0xf8, 1)], 0, 0, 1, false, false, true, 0xa000),
+        c("moving two targets has target", &[(0xf8, 1)], 0, 0, 2, false, false, true, 0xa000),
+        c("idle", &[], 0, 0, 2, false, false, false, 0xa000),
+        c("idle has target", &[], 1, 0, 0, false, false, true, 0xa000),
+        c("missing animation", &[(0xf9, 1)], 0, 0, 2, false, false, false, 0),
+        c("stopped, one target: stops", &[(0xf9, 1)], 0, 0, 1, false, false, false, 0xa000),
+        c("stopped, one target, state 3 (missing animation)", &[(0xf9, 1)], 0, 3, 1, false, false, false, 0),
+        c("moving, empty list: stops", &[(0xf8, 1)], 0, 0, 0, false, false, false, 0xa000),
+        c("moving, empty list, flag 20c", &[(0xf8, 1), (0x20c, 1)], 0, 0, 0, false, false, false, 0xa000),
+    ];
+
+    let node_ptrs = std::cell::RefCell::new(Vec::<u32>::new());
+    let setup = |block: &mut Box<[u32; 0x200]>, ring: &mut Vec<[u32; 2]>, case: &Case| {
+        block.fill(0);
+        block[0] = unit_vtable.as_ptr() as u32;
+        block[0x15c / 4] = cog_vtable.as_ptr() as u32;
+        for &(offset, value) in case.flags {
+            unsafe { *((block.as_ptr() as usize + offset) as *mut u8) = value };
+        }
+        block[0x170 / 4] = case.state;
+        block[0x1bc / 4] = case.state2;
+        let mut nodes = node_ptrs.borrow_mut();
+        nodes.clear();
+        for _ in 0..case.list {
+            nodes.push(unsafe { POOL_ALLOCATE.original()(24) } as u32);
+        }
+        ring[0] = [nodes.first().copied().unwrap_or(sentinel), nodes.last().copied().unwrap_or(sentinel)];
+        for (i, &node) in nodes.iter().enumerate() {
+            let next = nodes.get(i + 1).copied().unwrap_or(sentinel);
+            let prev = if i == 0 { sentinel } else { nodes[i - 1] };
+            unsafe { *(node as *mut [u32; 2]) = [next, prev] };
+        }
+        block[0x154 / 4] = sentinel;
+        CAN_PLAY.store(u32::from(case.can_play), Ordering::Relaxed);
+        VALID.store(u32::from(case.valid), Ordering::Relaxed);
+        HAS_TARGET.store(u32::from(case.has_target), Ordering::Relaxed);
+        ANIM_FIRST.store(case.anim_first, Ordering::Relaxed);
+        LOG.lock().unwrap().clear();
+    };
+
+    for case in &cases {
+        for seconds in [0i32, 5] {
+            let mut outcomes: Vec<(bool, Vec<u8>, Vec<String>)> = Vec::new();
+            for port in [false, true] {
+                setup(&mut block, &mut ring, case);
+                *done = 0xaa;
+                let result = if port {
+                    let args = live_support::FMoveArgs { this: this_block.as_ptr() as u32, first_param: 0x5555, seconds, unit, done: done_ptr, name: 0x3000, speed: 9, extra: empty_extra.as_ptr() as u32, reverse: 1, limit: 33 };
+                    unsafe { live_support::f_move(&args, &live_support::F_MOVE_VANILLA_OPS) }
+                } else {
+                    live_support::real_f_move(this_block.as_ptr(), 0x5555, seconds, unit as *const i32, done_ptr, 0x3000, 9, empty_extra.as_ptr() as *const i8, 1, 33)
+                };
+                let emptied = ring[0] == [sentinel, sentinel];
+                let flags: Vec<u8> = [0xf8usize, 0xf9, 0xd4, 0xd6, 0xd7, 0x20c, 0x20d, 0x20e, 0x1a8].iter().map(|&o| byte(&block, o)).chain([*done, u8::from(emptied)]).collect();
+                if !emptied {
+                    for &node in node_ptrs.borrow().iter() {
+                        unsafe { POOL_DEALLOCATE.original()(node as *const u32, 24) };
+                    }
+                }
+                outcomes.push((result, flags, LOG.lock().unwrap().clone()));
+            }
+            if outcomes[0] != outcomes[1] {
+                failures.push(format!("{} (seconds {seconds}): real {:?}, port {:?}", case.label, outcomes[0], outcomes[1]));
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_PLAY_FAMILY_REAL_VS_PORT`: real vanilla against the port (through the hooked address) for
+/// `fPlaySpecial`, `fPlayF`, `fPlayWithBaseF`, `fPlayTime`, `fPlayWithSound` and `fFly`, over one fake unit
+/// whose virtuals log their calls. Covers every path that never reaches the real mixer, `findAnim` or `BFUnit`
+/// methods: the gates, the not-stopped prefix, a missing entity type, a missing default animation and `fFly`'s
+/// failed lookup. Compares the result, the unit flags, the done or call flag, the parameter cursor and the
+/// virtual-call log.
+pub(crate) fn run_ztaimgr_play_family_real_vs_port_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::ffi::c_void;
+    use std::sync::Mutex;
+
+    use openzt_detour::generated::bfaimgr::{F_FLY, F_PLAY_F, F_PLAY_SPECIAL, F_PLAY_TIME, F_PLAY_WITH_BASE_F, F_PLAY_WITH_SOUND};
+
+    let test_name = "ZTAIMGR_PLAY_FAMILY_REAL_VS_PORT";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    fn log(entry: &str) {
+        LOG.lock().unwrap().push(entry.to_string());
+    }
+    extern "thiscall" fn v_default_anim(_: u32, _arg: u32) -> u32 {
+        log("default_anim");
+        0
+    }
+    extern "thiscall" fn v_find_anim(_: u32, _name: u32) -> u32 {
+        log("find_anim");
+        0
+    }
+    extern "thiscall" fn v_set_speed(_: u32, arg: u32) -> u32 {
+        LOG.lock().unwrap().push(format!("set_speed({arg})"));
+        0
+    }
+    let mut vtable = Box::new([0u32; 0x80]);
+    vtable[0x8c / 4] = v_default_anim as *const () as usize as u32;
+    vtable[0x130 / 4] = v_find_anim as *const () as usize as u32;
+    vtable[0x1c0 / 4] = v_set_speed as *const () as usize as u32;
+    let mut block = Box::new([0u32; 0x200]);
+    // An empty target ring: the real `BFUnit::stop` walks it and resets it.
+    let mut target_ring = Box::new([0u32; 2]);
+    let mut this_block = Box::new([0u32; 0x80]);
+    let mut done = Box::new(0xaau8);
+    let unit = block.as_mut_ptr() as u32;
+    let this = this_block.as_mut_ptr() as u32;
+    let done_ptr = done.as_mut() as *mut u8;
+
+    let wb = |offset: u32, value: u8| unsafe { *((unit + offset) as *mut u8) = value };
+    let rb = |offset: u32| unsafe { *((unit + offset) as *const u8) };
+    let ww = |offset: u32, value: u32| unsafe { *((unit + offset) as *mut u32) = value };
+
+    #[derive(Clone, Copy)]
+    struct State {
+        stopped: u8,
+        moving: u8,
+        has_type: bool,
+        pos_equal: bool,
+        mixer_equal: bool,
+    }
+    let st = |stopped, moving, has_type, pos_equal, mixer_equal| State { stopped, moving, has_type, pos_equal, mixer_equal };
+    let states = [
+        ("stopped", st(1, 0, true, false, false)),
+        ("stopped, no type", st(1, 0, false, false, false)),
+        ("idle", st(0, 0, true, false, false)),
+        ("moving, positions differ", st(0, 1, true, false, false)),
+        ("moving, positions match", st(0, 1, true, true, true)),
+    ];
+    let mut apply = |s: State| {
+        for offset in 0..0x200u32 {
+            ww(offset * 4, 0);
+        }
+        ww(0, vtable.as_ptr() as u32);
+        let ring = target_ring.as_mut_ptr() as u32;
+        target_ring[0] = ring;
+        target_ring[1] = ring;
+        ww(0x154, ring);
+        wb(0xf8, s.moving);
+        wb(0xf9, s.stopped);
+        ww(0x128, u32::from(s.has_type));
+        ww(0x8c, 5);
+        ww(0x9c, if s.pos_equal { 5 } else { 6 });
+        // Mixer counters at `+0x74 + 0x28` and `+0x74 + 0x18`.
+        ww(0x74 + 0x28, 3);
+        ww(0x74 + 0x18, if s.mixer_equal { 3 } else { 4 });
+        for offset in 0..0x80u32 {
+            unsafe { *((this + offset * 4) as *mut u32) = 0 };
+        }
+        unsafe { *done_ptr = 0xaa };
+        LOG.lock().unwrap().clear();
+    };
+    let observe = |result: bool, call: Option<&Call>| -> (bool, Vec<u8>, u32, Vec<String>) {
+        let mut bytes: Vec<u8> = [0xf8u32, 0xf9, 0xd4, 0xd6, 0xd7, 0x20c, 0x20d, 0x20e].iter().map(|&o| rb(o)).collect();
+        bytes.push(unsafe { *done_ptr });
+        bytes.push(call.map_or(0, |c| c.flag()));
+        (result, bytes, unsafe { *((this + 0xcc) as *const u32) }, LOG.lock().unwrap().clone())
+    };
+
+    // fPlaySpecial
+    let read_cell = |rva: u32| unsafe { *(tag(rva) as *const u32) };
+    let none = read_cell(0x0023_950c);
+    let reverse = read_cell(0x0024_3620);
+    let ping_pong = read_cell(0x0024_3624);
+    let name = CallString::new("anim");
+    let sound = CallString::new("snd");
+    let (name_ptr, sound_ptr) = (name.raw.as_ptr() as u32, sound.raw.as_ptr() as u32);
+    if none == 0 || reverse == 0 || ping_pong == 0 {
+        failures.push("a special string cell is null".to_string());
+    } else {
+        struct Special {
+            label: &'static str,
+            anim: u32,
+            sound: u32,
+            seconds: i32,
+            count: i32,
+            special: u32,
+        }
+        let sp = |label, anim, sound, seconds, count, special| Special { label, anim, sound, seconds, count, special };
+        let specials = [
+            sp("gate fails", name_ptr, sound_ptr, 0, 0, name_ptr),
+            sp("gate fails on no seconds", name_ptr, sound_ptr, 0, 0, none),
+            sp("gate fails on none sound", name_ptr, none, 5, 0, name_ptr),
+            sp("gate bypassed by seconds", name_ptr, sound_ptr, 5, 0, name_ptr),
+            sp("gate bypassed by count", name_ptr, sound_ptr, 0, 2, name_ptr),
+            sp("none anim", none, sound_ptr, 0, 0, name_ptr),
+            sp("reverse", name_ptr, sound_ptr, 0, 0, reverse),
+            sp("ping-pong", name_ptr, sound_ptr, 0, 0, ping_pong),
+        ];
+        for sp in &specials {
+            for (state_label, state) in &states {
+                let mut outcomes = Vec::new();
+                for port in [false, true] {
+                    apply(*state);
+                    let (t, a, s, sa, u) = (this as *const u32, sp.anim as *const i8, sp.sound as *const i8, sp.special as *const i8, unit as *const i32);
+                    let result = if port {
+                        unsafe { F_PLAY_SPECIAL.hooked()(t, a, s, sp.seconds, sp.count, sa, u, done_ptr) }
+                    } else {
+                        live_support::real_f_play_special(t, a, s, sp.seconds, sp.count, sa, u, done_ptr)
+                    };
+                    outcomes.push(observe(result, None));
+                }
+                if outcomes[0] != outcomes[1] {
+                    failures.push(format!("fPlaySpecial {} / {state_label}: real {:?}, port {:?}", sp.label, outcomes[0], outcomes[1]));
+                }
+            }
+        }
+    }
+
+    // fPlayF and fPlayWithBaseF: parameter-count gates and the states above.
+    let names = ["a", "b", "c"];
+    for count in 0..=3usize {
+        let call = Call::new("fPlay", &names[..count]);
+        for (state_label, state) in &states {
+            for (reverse_flag, ping_flag) in [(0i8, 0i8), (1, 0), (0, 1)] {
+                for with_base in [false, true] {
+                    // `fPlayWithBaseF` resolves its base animation through the real `findAnim` before anything
+                    // else, which would dereference the fake entity type.
+                    if with_base && count >= 2 && state.stopped == 1 && state.has_type {
+                        continue;
+                    }
+                    let mut outcomes = Vec::new();
+                    for port in [false, true] {
+                        apply(*state);
+                        call.raw_mut_flag(0xaa);
+                        let (c, u, t) = (call.ptr(), unit as *const u32, this as *const u32);
+                        let result = match (port, with_base) {
+                            (false, false) => live_support::real_f_play_f(t, c, u, reverse_flag, ping_flag),
+                            (true, false) => unsafe { F_PLAY_F.hooked()(t, c, u, reverse_flag, ping_flag) },
+                            (false, true) => live_support::real_f_play_with_base_f(t, c, u, reverse_flag, ping_flag),
+                            (true, true) => unsafe { F_PLAY_WITH_BASE_F.hooked()(t, c, u, reverse_flag, ping_flag) },
+                        };
+                        outcomes.push(observe(result, Some(&call)));
+                    }
+                    if outcomes[0] != outcomes[1] {
+                        failures.push(format!(
+                            "{} {count} params / {state_label} ({reverse_flag},{ping_flag}): real {:?}, port {:?}",
+                            if with_base { "fPlayWithBaseF" } else { "fPlayF" },
+                            outcomes[0],
+                            outcomes[1]
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // fPlayTime and fPlayWithSound.
+    for (state_label, state) in &states {
+        for millis in [0i32, 500] {
+            let mut outcomes = Vec::new();
+            for port in [false, true] {
+                apply(*state);
+                let (n, d) = (name_ptr as *const c_void, done_ptr as *const i8);
+                let result = if port { unsafe { F_PLAY_TIME.hooked()(this as *const u32, n, millis, unit as *const u32, d, 0) } } else { live_support::real_f_play_time(this as *const u32, n, millis, unit as *const u32, d, 0) };
+                outcomes.push(observe(result, None));
+            }
+            if outcomes[0] != outcomes[1] {
+                failures.push(format!("fPlayTime {millis} / {state_label}: real {:?}, port {:?}", outcomes[0], outcomes[1]));
+            }
+        }
+        let mut outcomes = Vec::new();
+        for port in [false, true] {
+            apply(*state);
+            let (n, s, d) = (name_ptr as *const c_void, sound_ptr as *const c_void, done_ptr as *const i8);
+            let result = if port { unsafe { F_PLAY_WITH_SOUND.hooked()(n, s, unit as *const u32, d) } } else { live_support::real_f_play_with_sound(n, s, unit as *const u32, d) };
+            outcomes.push(observe(result, None));
+        }
+        if outcomes[0] != outcomes[1] {
+            failures.push(format!("fPlayWithSound / {state_label}: real {:?}, port {:?}", outcomes[0], outcomes[1]));
+        }
+    }
+
+    // fFly: a failed lookup and the not-stopped paths. The position words are `+0x114..` and the destination
+    // words `+0x1dc..`; the moving case keeps them apart. The arrived and set-moving branches run the real
+    // `BFUnit::stop` and `setMoving`, which touch only the unit's own bytes and the empty target ring.
+    let extra = CallString::new("");
+    let extra_ptr = extra.raw.as_ptr() as u32;
+    let fly_states = [("stopped, no animation", st(1, 0, true, false, false), 0), ("idle", st(0, 0, true, false, false), 0), ("moving, away from destination", st(0, 1, true, false, false), 1), ("moving, arrived", st(0, 1, true, false, false), 0), ("moving, set moving", st(0, 1, true, false, false), 2), ("moving, flag d7 and 20c, arrived", st(0, 1, true, false, false), 3)];
+    for (label, state, variant) in &fly_states {
+        for reverse_flag in [0i32, 1] {
+            let mut outcomes = Vec::new();
+            for port in [false, true] {
+                apply(*state);
+                match variant {
+                    1 => ww(0x114, 1),
+                    2 => wb(0xd7, 1),
+                    3 => {
+                        wb(0xd7, 1);
+                        wb(0x20c, 1);
+                    }
+                    _ => {}
+                }
+                let (n, e, d) = (name_ptr as *const c_void, extra_ptr as *const c_void, done_ptr as *const i8);
+                let result = if port {
+                    unsafe { F_FLY.hooked()(this as *const u32, unit as *const u32, n, 7, e, d, reverse_flag, 100) }
+                } else {
+                    live_support::real_f_fly(this as *const u32, unit as *const u32, n, 7, e, d, reverse_flag, 100)
+                };
+                outcomes.push(observe(result, None));
+            }
+            if outcomes[0] != outcomes[1] {
+                failures.push(format!("fFly {label} (reverse {reverse_flag}): real {:?}, port {:?}", outcomes[0], outcomes[1]));
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_WRAPPERS_REAL_VS_PORT`: real vanilla against the port (hooked address) for the `fMove*F` wrappers,
+/// `fTargetBuilding`/`fTargetBuildingF`, `fSetBaseF`, `fPlaySet` and `fPlaySpecialF`, over fake units that never
+/// reach the mixer, `findAnim` or `ZTAnimal` methods: a finished unit (so `fMove` returns at once), an idle unit
+/// (so `fPlaySpecial` and its siblings return at once) and units without a type. Calls fake manager and unit
+/// virtuals that log, so the order and arguments of the conversions are compared too. `fPlaySpecialF`'s rewrite
+/// paths are not run: vanilla would free the call's strings through its own allocator. `fDustBall` is not run
+/// at all: every path past its type check reaches the real `BFEntityType::findAnim`.
+pub(crate) fn run_ztaimgr_wrappers_real_vs_port_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::ffi::c_void;
+    use std::sync::Mutex;
+
+    use openzt_detour::generated::bfaimgr::{F_MOVE_FAST_F, F_MOVE_F, F_MOVE_MEDIUM_F, F_MOVE_SLOW_F, F_MOVE_WITH_SOUND_F, F_PLAY_SET, F_PLAY_SPECIAL_F, F_SET_BASE_F};
+    use openzt_detour::generated::ztaimgr::{F_TARGET_BUILDING, F_TARGET_BUILDING_F};
+
+    let test_name = "ZTAIMGR_WRAPPERS_REAL_VS_PORT";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    extern "thiscall" fn fake_convert(_this: u32, param: u32, _unit: u32) -> u32 {
+        let text = unsafe { read_vanilla_string(param) };
+        LOG.lock().unwrap().push(format!("convert({text})"));
+        text.parse().unwrap_or(9999)
+    }
+    extern "thiscall" fn v_name(_: u32) -> u32 {
+        LOG.lock().unwrap().push("name".to_string());
+        FAKE_NAME_PTR.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_name_120(_: u32) -> u32 {
+        LOG.lock().unwrap().push("name120".to_string());
+        FAKE_NAME_PTR.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_limit(_: u32) -> u32 {
+        LOG.lock().unwrap().push("limit".to_string());
+        55
+    }
+    extern "thiscall" fn v_has_target(_: u32) -> u32 {
+        LOG.lock().unwrap().push("has_target".to_string());
+        0
+    }
+    extern "thiscall" fn v_default_anim(_: u32, _: u32) -> u32 {
+        LOG.lock().unwrap().push("default_anim".to_string());
+        0
+    }
+
+    let mut mgr_vtable = Box::new([0u32; 0x20]);
+    mgr_vtable[0x34 / 4] = fake_convert as *const () as usize as u32;
+    let mut mgr_block = Box::new([0u32; 0x80]);
+    mgr_block[0] = mgr_vtable.as_ptr() as u32;
+    let this = mgr_block.as_ptr() as u32;
+
+    let walk = "walk anim";
+    let mut walk_bytes = walk.as_bytes().to_vec();
+    walk_bytes.push(0);
+    let walk_begin = walk_bytes.as_ptr() as u32;
+    let walk_string = Box::new([walk_begin, walk_begin + walk.len() as u32, walk_begin + walk.len() as u32 + 1]);
+    FAKE_NAME_PTR.store(walk_string.as_ptr() as u32, Ordering::Relaxed);
+
+    // A fixture unit: animal/unit-type flags on its fake type, and every log-only virtual installed.
+    let make_unit = |animal: bool, unit_type: bool| -> StringFixtureUnit {
+        let mut unit = StringFixtureUnit::new(animal, unit_type);
+        for step in 0..3usize {
+            unit._vtable[0x120 / 4 + step] = if step == 0 { v_name_120 } else { v_name } as *const () as usize as u32;
+            unit._vtable[0x140 / 4 + step] = v_limit as *const () as usize as u32;
+            unit._ty[0x100 / 4 + step] = 0x100 + step as u32;
+        }
+        unit._vtable[0x128 / 4] = v_name as *const () as usize as u32;
+        unit._vtable[0x180 / 4] = v_has_target as *const () as usize as u32;
+        unit._vtable[0x8c / 4] = v_default_anim as *const () as usize as u32;
+        unit
+    };
+    let reset = |unit: &mut StringFixtureUnit, finished: bool, stopped: bool, moving: bool, acquired: bool, targeting: bool| {
+        for offset in [0xf8usize, 0xf9, 0x20c, 0x20d, 0x20e, 0x3b0, 0x3b1] {
+            unit.set_byte(offset, 0);
+        }
+        unit.set_byte(0x20d, u8::from(finished));
+        unit.set_byte(0xf9, u8::from(stopped));
+        unit.set_byte(0xf8, u8::from(moving));
+        unit.set_byte(0x3b1, u8::from(acquired));
+        unit.set_byte(0x3b0, u8::from(targeting));
+        LOG.lock().unwrap().clear();
+    };
+    type Outcome = (u32, Vec<u8>, Vec<u8>, Vec<String>);
+    let observe = |result: u32, unit: &StringFixtureUnit, call: Option<&Call>, done: Option<&u8>| -> Outcome {
+        let flags: Vec<u8> = [0xf8usize, 0xf9, 0x20c, 0x20d, 0x3b1].iter().map(|&o| unit.byte(o)).collect();
+        let mut tail = Vec::new();
+        if let Some(call) = call {
+            tail.push(call.flag());
+            tail.push(unsafe { *((call.ptr() as u32 + 0x19) as *const u8) });
+        }
+        if let Some(done) = done {
+            tail.push(unsafe { std::ptr::read_volatile(done) });
+        }
+        (result, flags, tail, LOG.lock().unwrap().clone())
+    };
+    // `fMoveF`/`fMoveWithSoundF` call the unit's `+0x120` virtual before every gate and ignore the result; the
+    // port skips that call, so it is removed from the real log for those two.
+    let drop_name_120 = |mut outcome: Outcome| -> Outcome {
+        outcome.3.retain(|entry| entry != "name120");
+        outcome
+    };
+    let compare = |failures: &mut Vec<String>, label: String, real: Outcome, port: Outcome| {
+        if real != port {
+            failures.push(format!("{label}: real {real:?}, port {port:?}"));
+        }
+    };
+
+    let texts: [&str; 7] = ["a", "2", "walk", "5", "purr", "70", "1"];
+    let mut finished_unit = make_unit(false, true);
+    let mut non_unit = make_unit(false, false);
+    let finished_ptr = finished_unit.ptr();
+
+    // fMoveF (counts 3..=6, both directions), fMoveWithSoundF (counts 4..=7).
+    for count in 3..=7usize {
+        for first in ["a", ""] {
+            let mut params: Vec<&str> = texts[..count].to_vec();
+            params[0] = first;
+            let call = Call::new("fMove", &params);
+            for reverse in [false, true] {
+                let mut outcomes = Vec::new();
+                for port in [false, true] {
+                    reset(&mut finished_unit, true, false, false, false, false);
+                    call.raw_mut_flag(0xaa);
+                    let (c, u, t) = (call.ptr(), finished_ptr as *const u32, this as *const u32);
+                    let result = if port { unsafe { F_MOVE_F.hooked()(t, c, u, reverse) } } else { live_support::real_f_move_f(t, c, u, reverse) };
+                    outcomes.push(observe(result & 0xff, &finished_unit, Some(&call), None));
+                }
+                compare(&mut failures, format!("fMoveF {count} params first {first:?} reverse {reverse}"), drop_name_120(outcomes.remove(0)), outcomes.remove(0));
+            }
+            let mut outcomes = Vec::new();
+            for port in [false, true] {
+                reset(&mut finished_unit, true, false, false, false, false);
+                call.raw_mut_flag(0xaa);
+                let (c, u, t) = (call.ptr(), finished_ptr as *const u32, this as *const u32);
+                let result = if port { unsafe { F_MOVE_WITH_SOUND_F.hooked()(t, c, u) } } else { live_support::real_f_move_with_sound_f(t, c, u) };
+                outcomes.push(observe(result & 0xff, &finished_unit, Some(&call), None));
+            }
+            compare(&mut failures, format!("fMoveWithSoundF {count} params first {first:?}"), drop_name_120(outcomes.remove(0)), outcomes.remove(0));
+        }
+    }
+    // fMoveF with a null unit and a unit that is not a `ZTUnitType`.
+    let four = Call::new("fMove", &texts[..4]);
+    for (label, u) in [("null unit", 0u32), ("non-unit type", non_unit.ptr())] {
+        let mut outcomes = Vec::new();
+        for port in [false, true] {
+            reset(&mut non_unit, true, false, false, false, false);
+            four.raw_mut_flag(0xaa);
+            let (c, t) = (four.ptr(), this as *const u32);
+            let result = if port { unsafe { F_MOVE_F.hooked()(t, c, u as *const u32, false) } } else { live_support::real_f_move_f(t, c, u as *const u32, false) };
+            outcomes.push(observe(result & 0xff, &non_unit, Some(&four), None));
+        }
+        compare(&mut failures, format!("fMoveF {label}"), drop_name_120(outcomes.remove(0)), outcomes.remove(0));
+    }
+
+    // fMoveSlowF / fMoveMediumF / fMoveFastF.
+    for count in 0..=3usize {
+        for first in ["a", ""] {
+            let mut params: Vec<&str> = texts[..count].to_vec();
+            if count > 0 {
+                params[0] = first;
+            }
+            let call = Call::new("fWalk", &params);
+            for (which, unit_ptr, is_finished) in [("unit", finished_ptr, true), ("non-unit", non_unit.ptr(), true), ("null", 0, false)] {
+                for variant in 0..3 {
+                    let mut outcomes = Vec::new();
+                    for port in [false, true] {
+                        reset(&mut finished_unit, is_finished, false, false, false, false);
+                        reset(&mut non_unit, is_finished, false, false, false, false);
+                        call.raw_mut_flag(0xaa);
+                        let (c, u, t) = (call.ptr() as i32, unit_ptr as *const i32, this as *const u32);
+                        let result = unsafe {
+                            match (variant, port) {
+                                (0, false) => live_support::real_f_move_slow_f(t, c, u),
+                                (0, true) => F_MOVE_SLOW_F.hooked()(t, c, u),
+                                (1, false) => live_support::real_f_move_medium_f(t, c, u),
+                                (1, true) => F_MOVE_MEDIUM_F.hooked()(t, c, u),
+                                (_, false) => live_support::real_f_move_fast_f(t, c, u),
+                                (_, true) => F_MOVE_FAST_F.hooked()(t, c, u),
+                            }
+                        };
+                        outcomes.push(observe(result & 0xff, &finished_unit, Some(&call), None));
+                    }
+                    compare(&mut failures, format!("fMove speed {variant} F {count} params first {first:?} {which}"), outcomes.remove(0), outcomes.remove(0));
+                }
+            }
+        }
+    }
+
+    // fTargetBuilding and fTargetBuildingF.
+    let mut animal_unit = make_unit(true, true);
+    let mut animal_not_unit = make_unit(true, false);
+    let mut other = make_unit(false, true);
+    let mut done = Box::new(0xaau8);
+    let done_ptr = done.as_mut() as *mut u8;
+    for (which, unit_index) in [("animal unit-type", 0), ("animal, not unit-type", 1), ("non-animal", 2)] {
+        for (acquired, targeting) in [(false, false), (true, false), (true, true), (false, true)] {
+            // `acquired == false` would call the real `ZTAnimal::targetBuilding`; only the acquired state is run.
+            for use_f in [false, true] {
+                if !acquired && !(use_f && !targeting) && !(unit_index == 2) {
+                    continue;
+                }
+                let mut outcomes = Vec::new();
+                let call = Call::new("fTargetBuilding", &[]);
+                for port in [false, true] {
+                    let unit = match unit_index {
+                        0 => &mut animal_unit,
+                        1 => &mut animal_not_unit,
+                        _ => &mut other,
+                    };
+                    reset(unit, true, false, false, acquired, targeting);
+                    unsafe { *done_ptr = 0xaa };
+                    call.raw_mut_flag(0xaa);
+                    let (t, u) = (this as *const u32, unit.ptr());
+                    let result = if use_f {
+                        if port { unsafe { F_TARGET_BUILDING_F.hooked()(t, call.ptr() as i32, u as *const i32) } } else { live_support::real_f_target_building_f(t, call.ptr() as i32, u as *const i32) }
+                    } else if port {
+                        unsafe { F_TARGET_BUILDING.hooked()(t, u as *const u32, done_ptr) }
+                    } else {
+                        live_support::real_f_target_building(t, u as *const u32, done_ptr)
+                    };
+                    outcomes.push(observe(u32::from(result), unit, Some(&call), Some(&*done)));
+                }
+                compare(&mut failures, format!("{} {which} acquired {acquired} targeting {targeting}", if use_f { "fTargetBuildingF" } else { "fTargetBuilding" }), outcomes.remove(0), outcomes.remove(0));
+            }
+        }
+    }
+
+    // fSetBaseF: gates and the not-stopped path.
+    let mut set_base_unit = make_unit(false, false);
+    for count in 0..=2usize {
+        let call = Call::new("fSetBase", &texts[..count]);
+        for (label, stopped) in [("stopped, no type", true), ("idle", false)] {
+            let mut outcomes = Vec::new();
+            for port in [false, true] {
+                reset(&mut set_base_unit, false, stopped, false, false, false);
+                unsafe { *((set_base_unit.ptr() + 0x128) as *mut u32) = 0 };
+                call.raw_mut_flag(0xaa);
+                let (c, u, t) = (call.ptr(), set_base_unit.ptr() as *const u32, this as *const u32);
+                let result = if port { unsafe { F_SET_BASE_F.hooked()(t, c, u) } } else { live_support::real_f_set_base_f(t, c, u) };
+                outcomes.push(observe(u32::from(result), &set_base_unit, Some(&call), None));
+            }
+            compare(&mut failures, format!("fSetBaseF {count} params {label}"), outcomes.remove(0), outcomes.remove(0));
+        }
+    }
+
+    // fPlaySet: a null unit and an empty name.
+    let name = CallString::new("set");
+    let empty = CallString::new("");
+    for (label, name_ptr, unit_ptr) in [("null unit", name.raw.as_ptr() as u32, 0u32), ("empty name", empty.raw.as_ptr() as u32, finished_ptr)] {
+        for child in [0i8, 1] {
+            let mut outcomes = Vec::new();
+            for port in [false, true] {
+                reset(&mut finished_unit, false, true, false, false, false);
+                let result = if port {
+                    unsafe { F_PLAY_SET.hooked()(name_ptr as *const i32, unit_ptr as *const c_void, child, 0) }
+                } else {
+                    live_support::real_f_play_set(name_ptr as *const i32, unit_ptr as *const c_void, child, 0)
+                };
+                outcomes.push(observe(u32::from(result), &finished_unit, None, None));
+            }
+            compare(&mut failures, format!("fPlaySet {label} child {child}"), outcomes.remove(0), outcomes.remove(0));
+        }
+    }
+
+    // fPlaySpecialF: the call's result flag gates, and the paths that reach `fPlaySpecial` without rewriting
+    // the call. The special strings are copied from vanilla's own.
+    let global_text = |rva: u32| -> String {
+        let cell = unsafe { *(tag(rva) as *const u32) };
+        if cell == 0 {
+            String::new()
+        } else {
+            unsafe { read_vanilla_string(cell) }
+        }
+    };
+    let none_text = global_text(0x0023_950c);
+    let mode_a = global_text(0x0024_bdac);
+    let mut special_unit = make_unit(false, false);
+    let rows: Vec<(&str, Vec<String>, u8)> = vec![
+        ("four with flag", ["a", "s", "0", "0"].iter().map(|s| s.to_string()).collect(), 1),
+        ("six with flag", ["a", "s", "0", "0", "m", "x"].iter().map(|s| s.to_string()).collect(), 1),
+        ("seconds and repeat", vec!["a".into(), "s".into(), "2".into(), "3".into(), mode_a.clone()], 0),
+        ("repeat", vec!["a".into(), "s".into(), "0".into(), "2".into(), mode_a.clone()], 0),
+        ("seconds, named sound", vec!["a".into(), "s".into(), "3".into(), "0".into(), mode_a.clone()], 0),
+        ("none anim, named sound", vec![none_text.clone(), "s".into(), "0".into(), "0".into(), mode_a.clone()], 0),
+        ("none anim, named sound, flag set", vec![none_text.clone(), "s".into(), "0".into(), "0".into(), mode_a.clone()], 1),
+    ];
+    for (label, params, flag) in &rows {
+        for (state_label, stopped, has_type) in [("idle", false, false), ("stopped, no type", true, false), ("stopped, typed", true, true)] {
+            let refs: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+            let call = Call::new("fPlaySpecial", &refs);
+            let mut outcomes = Vec::new();
+            for port in [false, true] {
+                reset(&mut special_unit, false, stopped, false, false, false);
+                unsafe { *((special_unit.ptr() + 0x128) as *mut u32) = if has_type { special_unit._ty.as_ptr() as u32 } else { 0 } };
+                call.raw_mut_flag(*flag);
+                unsafe { *((call.ptr() as u32 + 0x19) as *mut u8) = 0 };
+                let (c, u, t) = (call.ptr(), special_unit.ptr() as *const u32, this as *const u32);
+                let result = if port { unsafe { F_PLAY_SPECIAL_F.hooked()(t, c, u) } } else { live_support::real_f_play_special_f(t, c, u) };
+                outcomes.push(observe(u32::from(result), &special_unit, Some(&call), None));
+            }
+            compare(&mut failures, format!("fPlaySpecialF {label} / {state_label}"), outcomes.remove(0), outcomes.remove(0));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// The game's `rand` state: one dword at `0x00638060`.
+const RVA_RAND_STATE: u32 = 0x0023_8060;
+
+fn rand_state() -> u32 {
+    unsafe { *(tag(RVA_RAND_STATE) as *const u32) }
+}
+
+fn set_rand_state(value: u32) {
+    unsafe { *(tag(RVA_RAND_STATE) as *mut u32) = value };
+}
+
+/// `ZTAIMGR_F_PLAY_SET_PROB_REAL_VS_PORT`: real vanilla `fPlaySetProb` against the port, both starting from the
+/// same snapshot of the game's `rand` state. The unit is null, so `fPlaySet` returns false without side
+/// effects whichever entry is chosen; what is compared is the result and the final `rand` state, which encodes
+/// how many rolls the walk consumed. Weights summing to 100 (several shapes), not 100, and empty.
+pub(crate) fn run_ztaimgr_f_play_set_prob_real_vs_port_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::ffi::c_void;
+
+    use openzt_detour::generated::bfaimgr::F_PLAY_SET_PROB;
+
+    let test_name = "ZTAIMGR_F_PLAY_SET_PROB_REAL_VS_PORT";
+    let mut failures: Vec<String> = Vec::new();
+    let saved = rand_state();
+    let mut advanced = 0u32;
+
+    let shapes: [&[u32]; 11] = [&[100], &[30, 70], &[10, 10, 80], &[50, 50], &[0, 100], &[20, 30, 50], &[1, 99], &[25, 25, 25, 25], &[99, 1], &[1, 1, 1, 1, 96], &[30, 60]];
+    let names = ["a", "b", "c", "d", "e"];
+    for (shape_index, weights) in shapes.iter().enumerate() {
+        let strings: Vec<CallString> = weights.iter().enumerate().map(|(i, _)| CallString::new(names[i])).collect();
+        let words: Vec<u32> = strings.iter().zip(weights.iter()).flat_map(|(s, w)| [s.raw[0], s.raw[1], s.raw[2], *w]).collect();
+        let begin = words.as_ptr() as u32;
+        let header = [begin, begin + words.len() as u32 * 4, begin + words.len() as u32 * 4];
+        for seed in 0..64u32 {
+            let state = seed.wrapping_mul(0x9e37_79b1).wrapping_add(0x1234_5678);
+            set_rand_state(state);
+            let real = live_support::real_f_play_set_prob(header.as_ptr() as *const i32, std::ptr::null::<c_void>()) & 0xff;
+            let real_end = rand_state();
+            set_rand_state(state);
+            let port = unsafe { F_PLAY_SET_PROB.hooked()(header.as_ptr() as *const i32, std::ptr::null::<c_void>()) } as u32 & 0xff;
+            let port_end = rand_state();
+            advanced += u32::from(real_end != state);
+            if (real, real_end) != (port, port_end) {
+                failures.push(format!("shape {shape_index} {weights:?} seed {seed}: real ({real}, {real_end:#x}), port ({port}, {port_end:#x})"));
+            }
+        }
+    }
+    // Empty vector.
+    let empty = [0u32; 3];
+    set_rand_state(0x55);
+    let real = (live_support::real_f_play_set_prob(empty.as_ptr() as *const i32, std::ptr::null::<c_void>()) & 0xff, rand_state());
+    set_rand_state(0x55);
+    let port = (unsafe { F_PLAY_SET_PROB.hooked()(empty.as_ptr() as *const i32, std::ptr::null::<c_void>()) } as u32 & 0xff, rand_state());
+    if real != port || port.1 != 0x55 {
+        failures.push(format!("empty: real {real:?}, port {port:?}"));
+    }
+    set_rand_state(saved);
+    if advanced == 0 {
+        failures.push("the rand state never advanced".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_F_RANDOM_WALK_REAL_VS_PORT`: real vanilla `fRandomWalk` against the port over a fake 20x20 map
+/// (the world global is pointed at it), a fake unit and manager whose virtuals log, both starting from the same
+/// `rand` snapshot. Only the first two phases are run (a queued target, a standing destination, the random
+/// perimeter walk): the neighbour scan calls the real `getNeighbors`/`getPathCost`, which are not safe on a
+/// fake map. Every configuration keeps at least one walkable perimeter tile and every path attempt succeeds, so
+/// the neighbour scan is never reached. Compares the result, the guard byte, the call log and the final `rand`
+/// state.
+pub(crate) fn run_ztaimgr_f_random_walk_real_vs_port_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use openzt_detour::generated::bfaimgr::F_RANDOM_WALK;
+
+    let test_name = "ZTAIMGR_F_RANDOM_WALK_REAL_VS_PORT";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static HAS_DEST: AtomicU32 = AtomicU32::new(0);
+    static DEST: Mutex<[i32; 3]> = Mutex::new([0; 3]);
+    static ADD_TARGET: AtomicU32 = AtomicU32::new(0);
+    static RING: AtomicU32 = AtomicU32::new(0);
+    static RANGE_X: AtomicU32 = AtomicU32::new(1);
+    static RANGE_Y: AtomicU32 = AtomicU32::new(1);
+    static TILE_BASE: AtomicU32 = AtomicU32::new(0);
+    static SALT: AtomicU32 = AtomicU32::new(0);
+    fn log(entry: String) {
+        LOG.lock().unwrap().push(entry);
+    }
+    fn index(tile: u32) -> u32 {
+        (tile - TILE_BASE.load(Ordering::Relaxed)) / 0x8c
+    }
+    fn triple(ptr: u32) -> [i32; 3] {
+        [unsafe { *(ptr as *const i32) }, unsafe { *((ptr + 4) as *const i32) }, unsafe { *((ptr + 8) as *const i32) }]
+    }
+    extern "thiscall" fn v_walk(_: u32, tile: u32, flag: u32) -> u32 {
+        let idx = index(tile);
+        log(format!("walk({idx},{flag})"));
+        u32::from((idx + SALT.load(Ordering::Relaxed)) % 4 != 0)
+    }
+    extern "thiscall" fn v_get_dest(_: u32, out: u32) -> u32 {
+        log("get_dest".into());
+        if ADD_TARGET.load(Ordering::Relaxed) != 0 {
+            let ring = RING.load(Ordering::Relaxed);
+            unsafe {
+                *(ring as *mut u32) = ring + 8;
+                *((ring + 8) as *mut u32) = ring;
+            }
+        }
+        if HAS_DEST.load(Ordering::Relaxed) != 0 {
+            let dest = *DEST.lock().unwrap();
+            for (i, v) in dest.iter().enumerate() {
+                unsafe { *((out + i as u32 * 4) as *mut i32) = *v };
+            }
+        }
+        HAS_DEST.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn v_set_dest(_: u32, goal: u32) -> u32 {
+        log(format!("set_dest({:?})", triple(goal)));
+        0
+    }
+    extern "thiscall" fn m_get_path(_: u32, start: u32, goal: u32, _: u32, flag: u32) -> u32 {
+        log(format!("path({:?},{:?},{flag})", triple(start), triple(goal)));
+        1
+    }
+    extern "thiscall" fn m_range_x(_: u32, _: u32) -> u32 {
+        log("range_x".into());
+        RANGE_X.load(Ordering::Relaxed)
+    }
+    extern "thiscall" fn m_range_y(_: u32, _: u32) -> u32 {
+        log("range_y".into());
+        RANGE_Y.load(Ordering::Relaxed)
+    }
+
+    let mut unit_vtable = Box::new([0u32; 0x100]);
+    unit_vtable[0x168 / 4] = v_walk as *const () as usize as u32;
+    unit_vtable[0x1f4 / 4] = v_get_dest as *const () as usize as u32;
+    unit_vtable[0x1f8 / 4] = v_set_dest as *const () as usize as u32;
+    let mut mgr_vtable = Box::new([0u32; 0x20]);
+    mgr_vtable[0x18 / 4] = m_get_path as *const () as usize as u32;
+    mgr_vtable[0x20 / 4] = m_range_x as *const () as usize as u32;
+    mgr_vtable[0x24 / 4] = m_range_y as *const () as usize as u32;
+    let mut mgr = Box::new([0u32; 0x80]);
+    mgr[0] = mgr_vtable.as_ptr() as u32;
+    let this = mgr.as_mut_ptr() as u32;
+
+    let mut tiles = vec![0u8; 20 * 20 * 0x8c];
+    for i in 0..400usize {
+        let base = i * 0x8c + 0x34;
+        for (k, v) in [(i % 20) as i32, (i / 20) as i32, 0].iter().enumerate() {
+            tiles[base + k * 4..base + k * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    TILE_BASE.store(tiles.as_ptr() as u32, Ordering::Relaxed);
+    let mut world_block = Box::new([0u32; 0x40]);
+    world_block[(8 + 0x2c) / 4] = 20;
+    world_block[(8 + 0x30) / 4] = 20;
+    world_block[(8 + 0x38) / 4] = tiles.as_ptr() as u32;
+    let world = world_block.as_ptr() as u32;
+    let ring = vec![[0u32; 2]; 2];
+    RING.store(ring.as_ptr() as u32, Ordering::Relaxed);
+    let ring_ptr = ring.as_ptr() as u32;
+
+    let mut block = Box::new([0u32; 0x200]);
+    block[0] = unit_vtable.as_ptr() as u32;
+    block[0x154 / 4] = ring_ptr;
+    let unit = block.as_mut_ptr() as u32;
+    block[0x114 / 4] = 5 * 64 + 10;
+    block[0x118 / 4] = 5 * 64;
+    block[0x11c / 4] = 3 * 16 + 2;
+    let guard = || unsafe { *((unit + 0x20f) as *const u8) };
+    let reset_ring = || unsafe {
+        *(ring_ptr as *mut u32) = ring_ptr;
+        *((ring_ptr + 8) as *mut u32) = 0;
+    };
+
+    struct Config {
+        label: &'static str,
+        add_target: bool,
+        dest: Option<[i32; 3]>,
+    }
+    let configs = [
+        Config { label: "plain", add_target: false, dest: None },
+        Config { label: "queued", add_target: true, dest: None },
+        Config { label: "standing destination", add_target: false, dest: Some([9, 9, 9]) },
+        Config { label: "destination is own tile", add_target: false, dest: Some([5, 5, 3]) },
+    ];
+    let saved = rand_state();
+    let _ = (&tiles, &world_block, &ring);
+    let mut compared = 0u32;
+    let mut advanced = 0u32;
+    for config in &configs {
+        for (range_x, range_y) in [(1u32, 1u32), (2, 3), (5, 2), (3, 1)] {
+            for (extra_x, extra_y) in [(0u32, 0u32), (1, 2)] {
+                for seed in 0..12u32 {
+                    mgr[0xd4 / 4] = extra_x;
+                    mgr[0xd8 / 4] = extra_y;
+                    RANGE_X.store(range_x, Ordering::Relaxed);
+                    RANGE_Y.store(range_y, Ordering::Relaxed);
+                    SALT.store(seed % 4, Ordering::Relaxed);
+                    HAS_DEST.store(u32::from(config.dest.is_some()), Ordering::Relaxed);
+                    *DEST.lock().unwrap() = config.dest.unwrap_or([0; 3]);
+                    ADD_TARGET.store(u32::from(config.add_target), Ordering::Relaxed);
+                    let state = seed.wrapping_mul(0x9e37_79b1).wrapping_add(0xdead_beef);
+                    let mut outcomes = Vec::new();
+                    for port in [false, true] {
+                        reset_ring();
+                        block[0x20f / 4] = 0;
+                        LOG.lock().unwrap().clear();
+                        set_rand_state(state);
+                        let result = with_globals(world, 0, || {
+                            if port {
+                                unsafe { F_RANDOM_WALK.hooked()(this as *const u32, unit as *const i32) }
+                            } else {
+                                live_support::real_f_random_walk(this as *const u32, unit as *const i32)
+                            }
+                        });
+                        outcomes.push((result & 0xff, guard(), rand_state(), LOG.lock().unwrap().clone()));
+                    }
+                    compared += 1;
+                    advanced += u32::from(outcomes[0].2 != state);
+                    if outcomes[0] != outcomes[1] {
+                        failures.push(format!("{} range ({range_x},{range_y}) extra ({extra_x},{extra_y}) seed {seed}: real {:?}, port {:?}", config.label, outcomes[0], outcomes[1]));
+                        if failures.len() > 8 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    set_rand_state(saved);
+    if compared == 0 || advanced == 0 {
+        failures.push(format!("vacuous: compared {compared}, rand advanced in {advanced}"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_DISPATCH_ROUTING`: runs `ZTAIMgr::executeCall` and `BFAIMgr::executeCall` over a recording handler
+/// table (no vanilla handler runs) for every call name, with a unit that is a `ZTUnitType` and one that is not.
+/// Checks the handler reached, the `this`/call/unit arguments (the play family gets the unit as given, move,
+/// fly, halt and every ZT handler the cast unit, null for a non-`ZTUnitType`), the trailing constants, that the
+/// result is the handler's low byte and that the call's result flag is copied to `done`; unknown names reach
+/// nothing; `fPlaySetTerrain` goes through the manager's vtable `+0x14` and `fKeepControl` answers from the cast.
+pub(crate) fn run_ztaimgr_dispatch_routing_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::cell::RefCell;
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::{execute_base_call_with, execute_call_with, Handler, Handlers};
+
+    let test_name = "ZTAIMGR_DISPATCH_ROUTING";
+    let mut failures: Vec<String> = Vec::new();
+
+    type Seen = (Handler, u32, u32, u32, [u32; 2]);
+    struct Recorder {
+        seen: RefCell<Vec<Seen>>,
+    }
+    impl Handlers for Recorder {
+        unsafe fn invoke(&self, handler: Handler, this: u32, call: u32, unit: u32, trailing: [u32; 2]) -> u32 {
+            self.seen.borrow_mut().push((handler, this, call, unit, trailing));
+            0xabcd_0000 | (handler as u32 + 1)
+        }
+    }
+    let recorder = Recorder { seen: RefCell::new(Vec::new()) };
+
+    static TERRAIN: Mutex<Vec<[u32; 3]>> = Mutex::new(Vec::new());
+    extern "thiscall" fn fake_terrain(this: u32, call: u32, unit: u32) -> u32 {
+        TERRAIN.lock().unwrap().push([this, call, unit]);
+        0x7777_7742
+    }
+    let mut mgr_vtable = Box::new([0u32; 0x20]);
+    mgr_vtable[0x14 / 4] = fake_terrain as *const () as usize as u32;
+    let mgr = Box::new([mgr_vtable.as_ptr() as u32]);
+    let this = mgr.as_ptr() as u32;
+
+    let typed = StringFixtureUnit::new(false, true);
+    let untyped = StringFixtureUnit::new(false, false);
+    let units = [("unit type", typed.ptr(), typed.ptr()), ("other type", untyped.ptr(), 0)];
+
+    use Handler as H;
+    // (name, handler, cast unit, trailing) for the base chain.
+    let z = [0u32, 0];
+    #[rustfmt::skip]
+    let base: Vec<(&str, H, bool, [u32; 2])> = vec![
+        ("fPlay", H::PlayF, false, z), ("fSetBase", H::SetBaseF, false, z), ("fPlayWithBase", H::PlayWithBaseF, false, z),
+        ("fMoveEntityDelta", H::MoveEntityDeltaF, false, z), ("fMoveEntitySpecial", H::MoveEntitySpecialF, false, z),
+        ("fPlayTime", H::PlayTimeF, false, z), ("fPlaySound", H::PlaySoundF, false, z), ("fPlaySpecial", H::PlaySpecialF, false, z),
+        ("fPlaySp", H::PlaySpecialF, false, z), ("fPlaySetProb", H::PlaySetProbF, false, z), ("fPlayReverse", H::PlayReverseF, false, z),
+        ("fPlayPingPong", H::PlayPingPongF, false, z), ("fPingPong", H::PlayPingPongF, false, z), ("fPlayWithSound", H::PlayWithSoundF, false, z),
+        ("fPlaySFX", H::PlayWithSoundF, false, z), ("fPlayStopAtEnd", H::PlayStopAtEndF, false, z), ("fPlaySet", H::PlaySetF, false, z),
+        ("fMoveSlow", H::MoveSlowF, true, z), ("fMoveMedium", H::MoveMediumF, true, z), ("fMove", H::MoveF, true, z),
+        ("fMoveReverse", H::MoveReverseF, true, z), ("fMoveFast", H::MoveFastF, true, z), ("fMoveWithSound", H::MoveWithSoundF, true, z),
+        ("fFaceDirection", H::FaceDirectionF, false, z), ("fFly", H::FlyF, true, z), ("fFlyReverse", H::FlyReverseF, true, z),
+        ("fHalt", H::HaltF, true, z),
+    ];
+    #[rustfmt::skip]
+    let zt: Vec<(&str, H)> = vec![
+        ("fWalk", H::MoveSlowF), ("fSwim", H::MoveSlowF), ("fTrot", H::MoveMediumF), ("fRun", H::MoveFastF), ("fSpray", H::SprayF),
+        ("fKeeperRoutine", H::KeeperRoutineF), ("fGuestRoutine", H::GuestRoutineF), ("fGuideRoutine", H::GuideRoutineF),
+        ("fMaintRoutine", H::MaintRoutineF), ("fFaceTowardFood", H::FaceTowardFoodF), ("fFaceTowardTarget", H::FaceTowardTargetF),
+        ("fShowPredator", H::ShowPredatorF), ("fHidePredator", H::HidePredatorF), ("fEnterBuilding", H::EnterBuildingF),
+        ("fExitBuilding", H::ExitBuildingF), ("fDustBall", H::DustBallF), ("fKillPrey", H::KillPreyF), ("fCaughtPrey", H::CaughtPreyF),
+        ("fDie", H::DieF), ("fTargetBuilding", H::TargetBuildingF), ("fHatch", H::HatchF), ("fEndTrick", H::EndTrickF),
+        ("fReturnToBuilding", H::ReturnToBuildingF), ("fPlaySetTank", H::PlaySetTankF),
+    ];
+
+    let run = |zt_chain: bool, name: &str, unit: u32| -> (Vec<Seen>, u8, u8, u32) {
+        let call = Call::new(name, &[]);
+        call.raw_mut_flag(0x5a);
+        let call_ptr = call.ptr() as u32;
+        let mut done = 0u8;
+        recorder.seen.borrow_mut().clear();
+        let result = unsafe {
+            if zt_chain {
+                execute_call_with(&recorder, this, call_ptr, unit, &mut done);
+                0
+            } else {
+                execute_base_call_with(&recorder, this, call_ptr, unit, &mut done)
+            }
+        };
+        let seen = recorder.seen.borrow().clone();
+        (seen, result, done, call_ptr)
+    };
+
+    // The base chain, called directly.
+    for (name, handler, cast, trailing) in &base {
+        for (unit_label, unit, cast_unit) in &units {
+            let call = Call::new(name, &[]);
+            call.raw_mut_flag(0x5a);
+            let mut done = 0u8;
+            recorder.seen.borrow_mut().clear();
+            let result = unsafe { execute_base_call_with(&recorder, this, call.ptr() as u32, *unit, &mut done) };
+            let expected_unit = if *cast { *cast_unit } else { *unit };
+            let expected: Vec<Seen> = vec![(*handler, this, call.ptr() as u32, expected_unit, *trailing)];
+            let expected_result = (0xabcd_0000u32 | (*handler as u32 + 1)) as u8;
+            if *recorder.seen.borrow() != expected || result != expected_result || done != 0x5a {
+                failures.push(format!("base {name} / {unit_label}: seen {:?}, result {result:#x}, done {done:#x}; expected {expected:?}, {expected_result:#x}", recorder.seen.borrow()));
+            }
+        }
+    }
+    // The ZT chain: ZT names reach their handler with the cast unit, everything else falls through to the base chain.
+    for (name, handler) in &zt {
+        for (unit_label, unit, cast_unit) in &units {
+            let (seen, _, done, call_ptr) = run(true, name, *unit);
+            let expected: Vec<Seen> = vec![(*handler, this, call_ptr, *cast_unit, [0, 0])];
+            if seen != expected || done != 0x5a {
+                failures.push(format!("zt {name} / {unit_label}: seen {seen:?}, done {done:#x}; expected {expected:?}"));
+            }
+        }
+    }
+    for (name, handler, cast, trailing) in &base {
+        for (unit_label, unit, cast_unit) in &units {
+            let (seen, _, done, call_ptr) = run(true, name, *unit);
+            let expected_unit = if *cast { *cast_unit } else { *unit };
+            let expected: Vec<Seen> = vec![(*handler, this, call_ptr, expected_unit, *trailing)];
+            if seen != expected || done != 0x5a {
+                failures.push(format!("zt chain falls through to {name} / {unit_label}: seen {seen:?}, done {done:#x}; expected {expected:?}"));
+            }
+        }
+    }
+
+    // Unknown names, an empty name and near misses reach nothing; the result is 0 and the flag is still copied.
+    for name in ["", "fBogus", "fplay", "fPlayx", "fWalkx", "FPlay", "fMov"] {
+        for zt_chain in [false, true] {
+            let (seen, result, done, _) = run(zt_chain, name, typed.ptr());
+            if !seen.is_empty() || result != 0 || done != 0x5a {
+                failures.push(format!("unknown {name:?} (zt chain {zt_chain}): seen {seen:?}, result {result:#x}, done {done:#x}"));
+            }
+        }
+    }
+
+    // fKeepControl answers from the cast unit and calls nothing.
+    for (unit_label, unit, cast_unit) in &units {
+        let (seen, result, done, _) = run(false, "fKeepControl", *unit);
+        if !seen.is_empty() || result != u8::from(*cast_unit != 0) || done != 0x5a {
+            failures.push(format!("fKeepControl / {unit_label}: seen {seen:?}, result {result}, done {done:#x}"));
+        }
+    }
+
+    // fPlaySetTerrain goes through the manager's vtable +0x14 with the unit as given, and nothing else runs.
+    for (unit_label, unit, _) in &units {
+        TERRAIN.lock().unwrap().clear();
+        let call = Call::new("fPlaySetTerrain", &[]);
+        call.raw_mut_flag(0x5a);
+        let mut done = 0u8;
+        recorder.seen.borrow_mut().clear();
+        let result = unsafe { execute_base_call_with(&recorder, this, call.ptr() as u32, *unit, &mut done) };
+        let terrain = TERRAIN.lock().unwrap().clone();
+        if !recorder.seen.borrow().is_empty() || terrain != vec![[this, call.ptr() as u32, *unit]] || result != 0x42 || done != 0x5a {
+            failures.push(format!("fPlaySetTerrain / {unit_label}: seen {:?}, vtable calls {terrain:x?}, result {result:#x}, done {done:#x}", recorder.seen.borrow()));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_ANIM_REFCOUNT_BALANCE`: runs every animation-link helper (`play_single`, `play_pair`, `play_links`,
+/// `play_two`, `play_timed`, `set_base` and the `acquire_first`/`add_anim`/`play`/`release_first` handle
+/// sequence) over fake animations whose reference counts start at 5, with the vanilla `fPlay`, mixer and duration
+/// calls replaced by recorders. After every helper each animation's count must be back at 5 (a drift leaks an
+/// animation or frees it early) and the animation cache stamp must have been written; the recorders also check
+/// how many links each vector held when `fPlay` ran.
+pub(crate) fn run_ztaimgr_anim_refcount_balance_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+
+    use crate::ztaimgr::MixerOps;
+
+    let test_name = "ZTAIMGR_ANIM_REFCOUNT_BALANCE";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static DURATION: AtomicU32 = AtomicU32::new(100);
+    fn link_count(vector: u32) -> u32 {
+        unsafe { (*((vector + 4) as *const u32) - *(vector as *const u32)) / 12 }
+    }
+    unsafe fn ai_play(_this: u32, second: u32, first: u32, _unit: u32, with_base: bool) -> bool {
+        LOG.lock().unwrap().push(format!("play(second {}, first {}, base {with_base})", link_count(second), link_count(first)));
+        true
+    }
+    unsafe fn duration(_link: u32) -> i32 {
+        DURATION.load(Ordering::Relaxed) as i32
+    }
+    unsafe fn clear_all(_mixer: u32) {
+        LOG.lock().unwrap().push("clear_all".into());
+    }
+    unsafe fn set_set(_mixer: u32, _set: u32, _out: u8) {
+        LOG.lock().unwrap().push("set_set".into());
+    }
+    unsafe fn set_base(_mixer: u32, vector: u32) {
+        LOG.lock().unwrap().push(format!("set_base({})", link_count(vector)));
+    }
+    let mixer = MixerOps { ai_play, duration, clear_all, set_set, set_base };
+    extern "thiscall" fn fake_dir_to_set(_this: u32, _direction: u32, out: *mut u32, _anim: u32, _flag: u32) -> u32 {
+        unsafe { *out = 0 };
+        0
+    }
+
+    // Three fake animations (reference count at +0x20, cache stamp at +0x1c) and a fake animation cache.
+    let mut anims = vec![[0u32; 16]; 3];
+    for anim in anims.iter_mut() {
+        anim[0x20 / 4] = 5;
+    }
+    let anim_ptr = |i: usize| anims.as_ptr() as u32 + i as u32 * 64;
+    let counts = |anims: &Vec<[u32; 16]>| -> Vec<u32> { anims.iter().map(|a| unsafe { std::ptr::read_volatile(&a[0x20 / 4]) }).collect() };
+    let mut cache = Box::new([0u32; 16]);
+    cache[0x20 / 4] = 0x1234;
+    let cache_cell = tag(0x0023_8044) as *mut u32;
+    let saved_cache = unsafe { *cache_cell };
+    unsafe { *cache_cell = cache.as_ptr() as u32 };
+
+    let mut vtable = Box::new([0u32; 0x80]);
+    vtable[0x80 / 4] = fake_dir_to_set as *const () as usize as u32;
+    let mut unit_block = Box::new([0u32; 0x200]);
+    unit_block[0] = vtable.as_ptr() as u32;
+    let unit = unit_block.as_ptr() as u32;
+    let this = 0x7000u32;
+    let (a, b, c) = (anim_ptr(0), anim_ptr(1), anim_ptr(2));
+
+    let check = |failures: &mut Vec<String>, label: &str, expected_log: &[&str], anims: &Vec<[u32; 16]>| {
+        let got = LOG.lock().unwrap().clone();
+        let expected: Vec<String> = expected_log.iter().map(|s| s.to_string()).collect();
+        let balance = counts(anims);
+        if got != expected || balance != vec![5, 5, 5] {
+            failures.push(format!("{label}: log {got:?}, expected {expected:?}; reference counts {balance:?}"));
+        }
+        LOG.lock().unwrap().clear();
+        for anim in unsafe { std::slice::from_raw_parts_mut(anims.as_ptr() as *mut [u32; 16], anims.len()) } {
+            anim[0x1c / 4] = 0;
+        }
+    };
+
+    unsafe {
+        use crate::ztaimgr::live_support::{acquire_first_vanilla, add_anim_vanilla, play_links_with, play_pair_with, play_single_with, play_timed_with, play_two_with, play_with, release_first_vanilla, set_base_with};
+
+        LOG.lock().unwrap().clear();
+        DURATION.store(100, Ordering::Relaxed);
+
+        play_single_with(&mixer, unit, a, 1, 9);
+        let stamped = (0x1234, anims[0][0x1c / 4]);
+        if stamped.0 != stamped.1 {
+            failures.push(format!("play_single did not stamp the animation: {stamped:?}"));
+        }
+        check(&mut failures, "play_single", &["set_base(1)"], &anims);
+
+        for (seconds, extra) in [(300, 2), (301, 3), (100, 0), (0, 0)] {
+            let played = play_pair_with(&mixer, this, unit, a, b, 1, 9, seconds);
+            let second = 1 + extra;
+            check(&mut failures, &format!("play_pair {seconds} ms (returned {played})"), &[&format!("play(second {second}, first 1, base false)")], &anims);
+        }
+        DURATION.store(0, Ordering::Relaxed);
+        play_pair_with(&mixer, this, unit, a, b, 0, 0, 300);
+        check(&mut failures, "play_pair with a zero duration", &["play(second 2, first 1, base false)"], &anims);
+        DURATION.store(100, Ordering::Relaxed);
+
+        // (seconds, count, ping_pong, expected links in the second vector)
+        for (seconds, count, ping_pong, links) in [(300u32, 0, false, 3), (500, 0, true, 6), (0, 3, false, 3), (0, 3, true, 6), (0, 1, false, 1), (0, 1, true, 2), (0, 0, false, 1)] {
+            let first = acquire_first_vanilla(a);
+            let played = play_links_with(&mixer, this, unit, first, b, false, 7, ping_pong, seconds, count);
+            release_first_vanilla(first);
+            check(&mut failures, &format!("play_links {seconds} ms x{count} pp {ping_pong} (returned {played:?})"), &[&format!("play(second {links}, first 1, base false)")], &anims);
+        }
+
+        play_two_with(&mixer, unit, a, b, 7);
+        check(&mut failures, "play_two", &["play(second 1, first 1, base false)"], &anims);
+
+        play_timed_with(&mixer, unit, a, b, 350);
+        check(&mut failures, "play_timed", &["play(second 4, first 1, base false)"], &anims);
+        DURATION.store(0, Ordering::Relaxed);
+        play_timed_with(&mixer, unit, a, b, 350);
+        check(&mut failures, "play_timed with a zero duration", &["play(second 2, first 1, base false)"], &anims);
+        DURATION.store(100, Ordering::Relaxed);
+
+        set_base_with(&mixer, unit, c);
+        check(&mut failures, "set_base", &["clear_all", "set_set", "set_base(1)"], &anims);
+
+        // The handle sequence `fPlayF` uses: first link, parameter animations (one with ping-pong), play, release.
+        let handle = acquire_first_vanilla(a);
+        add_anim_vanilla(handle, b, false, false);
+        add_anim_vanilla(handle, c, true, true);
+        let played = play_with(&mixer, this, unit, handle, true);
+        release_first_vanilla(handle);
+        check(&mut failures, &format!("handle sequence (returned {played:?})"), &["play(second 3, first 1, base true)"], &anims);
+
+        // A handle released without being played.
+        let handle = acquire_first_vanilla(b);
+        add_anim_vanilla(handle, a, false, true);
+        release_first_vanilla(handle);
+        check(&mut failures, "handle released unplayed", &[], &anims);
+    }
+
+    unsafe { *cache_cell = saved_cache };
+    let _ = (&mut unit_block, &cache, &vtable);
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_BFAIMGR_INIT_AI_PARAMS` (live zoo, so the configuration is loaded): the real and ported
+/// `BFAIMgr::initAIParams` over the same fake manager blocks must leave every dword identical, write the two
+/// globals the same way and return the same low byte.
+pub(crate) fn run_ztaimgr_bfaimgr_init_ai_params_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::bfaimgr::INIT_AIPARAMS;
+    let test_name = "ZTAIMGR_BFAIMGR_INIT_AI_PARAMS";
+    let mut failures: Vec<String> = Vec::new();
+    let freq_cell = tag(0x0023_9028) as *mut u32;
+    let count_cell = tag(0x0023_9532) as *mut u8;
+    let (saved_freq, saved_count) = unsafe { (*freq_cell, *count_cell) };
+
+    let mut blocks = [Box::new([0u32; 0x60]), Box::new([0u32; 0x60])];
+    for block in blocks.iter_mut() {
+        for (index, word) in block.iter_mut().enumerate() {
+            *word = 0x7000_0000 + index as u32;
+        }
+    }
+    let seed_globals = || unsafe {
+        *freq_cell = 0x5555_aaaa;
+        *count_cell = 0x77;
+    };
+    seed_globals();
+    let real_ret = live_support::real_bfaimgr_init_ai_params(blocks[0].as_ptr());
+    let real_globals = unsafe { (*freq_cell, *count_cell) };
+    seed_globals();
+    let port_ret = unsafe { INIT_AIPARAMS.hooked()(blocks[1].as_ptr()) };
+    let port_globals = unsafe { (*freq_cell, *count_cell) };
+    unsafe {
+        *freq_cell = saved_freq;
+        *count_cell = saved_count;
+    }
+    if real_ret & 0xff != 1 || port_ret & 0xff != 1 {
+        failures.push(format!("return low byte real {:#x} port {:#x}, expected 1", real_ret & 0xff, port_ret & 0xff));
+    }
+    if real_globals != port_globals {
+        failures.push(format!("globals real {real_globals:x?} port {port_globals:x?}"));
+    }
+    if real_globals == (0x5555_aaaa, 0x77) {
+        failures.push("the real initAIParams did not write the globals".to_string());
+    }
+    for index in 0..0x60 {
+        if blocks[0][index] != blocks[1][index] {
+            failures.push(format!("+{:#x}: real {:#x} != port {:#x}", index * 4, blocks[0][index], blocks[1][index]));
+        }
+    }
+    for offset in [0xd4usize, 0xd8, 0xdc, 0xe0, 0xe4, 0xf0, 0xf4, 0xf8, 0xfc, 0x100, 0x104, 0x108, 0x10c, 0x110, 0x114, 0x118, 0x11c, 0x120, 0x124, 0x128] {
+        if blocks[0][offset / 4] == 0x7000_0000 + (offset / 4) as u32 {
+            failures.push(format!("+{offset:#x}: not written by the real initAIParams"));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTAIMGR_BFAIMGR_INIT`: the real and ported `BFAIMgr::init` over fake manager blocks whose vtable `+0x38` is a
+/// recorder. Compares the tick remainder and counter (zeroed), which target ran (it must be reached through the
+/// manager's vtable), the result's low byte and the `rand` state, which both seed from the clock: each must land
+/// inside the window of host clock readings around the call.
+pub(crate) fn run_ztaimgr_bfaimgr_init_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use openzt_detour::generated::bfaimgr::INIT;
+    let test_name = "ZTAIMGR_BFAIMGR_INIT";
+    let mut failures: Vec<String> = Vec::new();
+
+    static LOG: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static RESULT: AtomicU32 = AtomicU32::new(0);
+    extern "thiscall" fn fake_init_ai_params(this: u32) -> u32 {
+        LOG.lock().unwrap().push(this);
+        RESULT.load(Ordering::Relaxed)
+    }
+    let now = || SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
+    let mut vtable = Box::new([0u32; 0x40]);
+    vtable[0x38 / 4] = fake_init_ai_params as *const () as usize as u32;
+    let saved = rand_state();
+
+    for result in [0x1234_5601u32, 0xabcd_ef00, 0x1, 0x0] {
+        let mut outcomes = Vec::new();
+        for port in [false, true] {
+            let mut block = Box::new([0x5a5a_5a5au32; 0x60]);
+            block[0] = vtable.as_ptr() as u32;
+            let ptr = block.as_ptr();
+            RESULT.store(result, Ordering::Relaxed);
+            LOG.lock().unwrap().clear();
+            set_rand_state(0xdead_beef);
+            let before = now();
+            let ret = if port { unsafe { INIT.hooked()(ptr) } } else { live_support::real_bfaimgr_init(ptr) };
+            let after = now();
+            let seed = rand_state();
+            if seed < before || seed > after {
+                failures.push(format!("{} seed {seed} outside [{before}, {after}] (result {result:#x})", if port { "port" } else { "real" }));
+            }
+            outcomes.push((ret, block[0xe8 / 4], block[0xec / 4], LOG.lock().unwrap().clone() == vec![ptr as u32], block[0x20 / 4]));
+        }
+        let expected = (result & 0xff != 0, 0, 0, true, 0x5a5a_5a5a);
+        if outcomes[0] != expected || outcomes[1] != expected {
+            failures.push(format!("result {result:#x}: real {:?}, port {:?}, expected {expected:?}", outcomes[0], outcomes[1]));
+        }
+    }
+    set_rand_state(saved);
     finish_test(test_name, failures, failure_log)
 }

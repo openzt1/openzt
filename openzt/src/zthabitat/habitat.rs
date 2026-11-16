@@ -2916,7 +2916,7 @@ impl ZTHabitat {
     /// `GET_NUM_SICKLY_ANIMALS`): same `characteristics_dirty`-gated lazy-recalculate shape as
     /// [`Self::get_all_animals`], then counts direct-occupant animals for which all of the following hold:
     /// real vanilla `ZTAnimal::canService(animal, keeper_ptr)` (masked via [`low_byte_bool`]);
-    /// [`Self::keeper_assigned_to_animal`] (`keeper_ptr`'s own assigned-species id list contains the
+    /// [`Self::keeper_lists_animal`] must be **false** (`keeper_ptr`'s own animal-id list at `+0x270`/`+0x274` must not contain the
     /// animal's id); the animal's own tile doesn't have an unconfirmed flag set (`tile+0x85 & 4`, real
     /// vanilla's own `(*(byte*)(tile+0x85) & 4) == 0` check - no corroborating name found elsewhere in the
     /// corpus this pass, plausibly "escaped"/"not visible" given its use alongside a sickness check); real
@@ -2940,7 +2940,7 @@ impl ZTHabitat {
             if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
                 continue;
             }
-            if !Self::keeper_assigned_to_animal(keeper_ptr, animal_ptr) {
+            if Self::keeper_lists_animal(keeper_ptr, animal_ptr) {
                 continue;
             }
             let tile_ptr = unsafe { BFENTITY_GET_TILE.original()(animal_ptr as *const u32) } as u32;
@@ -3063,7 +3063,7 @@ impl ZTHabitat {
     /// own stack-local out-param, zero-initialized here identically), then scans it for the closest animal
     /// for which all of the following hold: the animal's vtable `+0x22c` predicate (`.asm`: `CALL [EAX + 0x22c]`; the decompile's
     /// `vftptr_0x0[1].virt_meth_0x401115_272` is array-indexing, so its `_272` suffix is not the byte offset) returns false; its own tile doesn't have the unconfirmed `+0x85 & 4` flag set
-    /// (same check [`Self::get_num_sickly_animals`] uses); [`Self::keeper_assigned_to_animal`]; and real
+    /// (same check [`Self::get_num_sickly_animals`] uses); [`Self::keeper_lists_animal`]; and real
     /// vanilla `ZTAnimal::canService(animal, keeper_ptr)` (masked via [`low_byte_bool`]). When
     /// `check_can_see` is set, additionally requires the shared `GLOBAL_ZTAIMgr` vtable `+0x1c`
     /// visibility/path-reachability dispatch ([`call_vtable_slot_ptr_ptr_ptr_u32_ret_bool`], `this=ai_mgr`,
@@ -3106,7 +3106,7 @@ impl ZTHabitat {
             if animal_tile_ptr == 0 || get_from_memory::<u8>(animal_tile_ptr + 0x85) & 4 != 0 {
                 continue;
             }
-            if !Self::keeper_assigned_to_animal(keeper_ptr, animal_ptr) {
+            if Self::keeper_lists_animal(keeper_ptr, animal_ptr) {
                 continue;
             }
             if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
@@ -5823,12 +5823,12 @@ impl ZTHabitat {
         type_matches && get_from_memory::<i32>(get_from_memory::<u32>(animal_ptr + 0x128) + 0x1ec) == species_key
     }
 
-    /// Checks whether `keeper_ptr`'s own assigned-species id list (`keeper_ptr+0x270`/`+0x274`, a real
-    /// vanilla `std::vector<u32>` of catalog ids not otherwise modeled in this codebase) contains
-    /// `animal_ptr`'s own numeric id (`+0x124`, `BFEntity::id` - see `ztworldmgr.rs`) - the shared "is this
-    /// keeper actually assigned to service this specific animal" membership check
-    /// `ZTHabitat_getNearestSickAnimal.c`/`_getNumSicklyAnimals.c` both inline identically.
-    pub(crate) fn keeper_assigned_to_animal(keeper_ptr: u32, animal_ptr: u32) -> bool {
+    /// Checks whether the id list at `keeper_ptr+0x270`/`+0x274` (a real vanilla `std::vector<u32>` not
+    /// otherwise modeled in this codebase) contains `animal_ptr`'s own numeric id (`+0x124`,
+    /// `BFEntity::id` - see `ztworldmgr.rs`). `ZTHabitat_getNearestSickAnimal.c`/`_getNumSicklyAnimals.c`
+    /// both inline this scan and proceed only when the id is **not** found, so a listed animal is skipped
+    /// (an empty list skips nothing).
+    pub(crate) fn keeper_lists_animal(keeper_ptr: u32, animal_ptr: u32) -> bool {
         let animal_id: u32 = get_from_memory(animal_ptr + 0x124);
         let begin: u32 = get_from_memory(keeper_ptr + 0x270);
         let end: u32 = get_from_memory(keeper_ptr + 0x274);
@@ -5837,7 +5837,7 @@ impl ZTHabitat {
 
     /// Checks whether `tile_ptr` is present in `keeper_ptr`'s own `std::vector<BFTile*>` exclusion list at
     /// `keeper_ptr+0x27c`(begin)/`+0x280`(end) - same linear-scan-for-membership idiom as
-    /// [`Self::keeper_assigned_to_animal`], just over tile pointers. Confirmed via
+    /// [`Self::keeper_lists_animal`], just over tile pointers. Confirmed via
     /// `ZTHabitat_getNearestDirtPile.asm`'s own inlined scan (real vanilla's "not found" polarity -
     /// presence in the list marks the tile as excluded).
     pub(crate) fn keeper_has_invalid_tile(keeper_ptr: u32, tile_ptr: u32) -> bool {

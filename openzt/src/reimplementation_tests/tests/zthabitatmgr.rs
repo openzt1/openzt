@@ -14842,3 +14842,90 @@ pub(crate) fn run_tank_set_tank_height_marks_viewing_areas_live_test(failure_log
     }
     finish_test(test_name, failures, failure_log)
 }
+
+/// Offset of the egg flag on a live `ZTAnimal` (`_pad_0x2bc[0xd9]`, set by `setEgg`).
+const ANIMAL_EGG_FLAG_OFFSET: u32 = 0x395;
+
+/// Eggs are only serviced by their own staff type, so the keeper-only comparisons above never exercise them. This
+/// test compares vanilla and the port for every (habitat, staff member) pair in the loaded zoo - not just the first
+/// `ZTKeeper` - for the two functions that gate the scientist's "Visiting Eggs" goal: `getNumSicklyAnimals` (whether
+/// `ZTGoalHabitatDuties::decide` picks the heal subgoal) and `getNearestSickAnimal` (the subgoal's target). It logs
+/// each egg's health and what vanilla `canService`/`isSickly` report for each staff type, so a mismatch or a
+/// zoo with no serviceable egg is visible in the log.
+pub(crate) fn run_habitat_egg_service_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTHABITAT_EGG_SERVICE_MATCHES_REAL_LIVE";
+
+    let staff: Vec<u32> = globals().ztworldmgr().entity_array().filter(|&ptr| ptr != 0 && unsafe { entity_type_matches(ptr, crate::zthabitat::RVA_STAFF_TYPE_CHECK_ARG) }).collect();
+    let habitat_mgr = globals().zthabitatmgr();
+    let mut failures: Vec<String> = Vec::new();
+    let (mut eggs_seen, mut serviceable_pairs, mut sickly_counted) = (0u32, 0u32, 0i32);
+
+    for i in 0..habitat_mgr.exhibit_array().len() {
+        let ptr = habitat_mgr.exhibit_array().get_ptr(i);
+        if ptr == 0 {
+            continue;
+        }
+        let habitat = unsafe { ref_from_memory::<ZTHabitat>(ptr) };
+        let eggs: Vec<u32> = (habitat.all_animals_begin..habitat.all_animals_end)
+            .step_by(4)
+            .map(get_from_memory::<u32>)
+            .filter(|&animal| animal != 0 && unsafe { entity_type_matches(animal, RVA_ANIMAL_TYPE_CHECK) } && get_from_memory::<u8>(animal + ANIMAL_EGG_FLAG_OFFSET) != 0)
+            .collect();
+        eggs_seen += eggs.len() as u32;
+
+        for &staff_ptr in &staff {
+            for &egg in &eggs {
+                let can_service = low_byte_bool(unsafe { openzt_detour::generated::ztanimal::CAN_SERVICE.original()(egg as *const u32, staff_ptr as *const u32) });
+                let sickly = low_byte_bool(unsafe { openzt_detour::generated::ztanimal::IS_SICKLY.original()(egg as *const u32) });
+                if can_service {
+                    serviceable_pairs += 1;
+                }
+                tracing::info!(
+                    "{}: habitat {} ({:#010x}) egg {:#010x} health={} staff {:#010x}: canService={} isSickly={}",
+                    test_name, i, ptr, egg, get_from_memory::<i32>(egg + 0x2b8), staff_ptr, can_service, sickly
+                );
+            }
+            for include_neighbors in [false, true] {
+                let real = with_real_neighbour_state(|| unsafe { zthabitat::GET_NUM_SICKLY_ANIMALS.original()(ptr as *const u32, staff_ptr as *const u32, include_neighbors) });
+                let reimpl = habitat.get_num_sickly_animals(staff_ptr, include_neighbors);
+                if !include_neighbors {
+                    sickly_counted += real;
+                }
+                if real != reimpl {
+                    let all_animals: Vec<u32> = (habitat.all_animals_begin..habitat.all_animals_end).step_by(4).map(get_from_memory::<u32>).collect();
+                    let breakdown: Vec<String> = all_animals
+                        .iter()
+                        .map(|&egg| {
+                            let tile = unsafe { openzt_detour::generated::bfentity::GET_TILE.original()(egg as *const u32) } as u32;
+                            format!(
+                                "animal {:#010x} isEgg={} health={} canService={} listed={} tile={:#010x} tile85={:#04x} tile83={:#04x} isSickly={}",
+                                egg,
+                                get_from_memory::<u8>(egg + ANIMAL_EGG_FLAG_OFFSET),
+                                get_from_memory::<i32>(egg + 0x2b8),
+                                low_byte_bool(unsafe { openzt_detour::generated::ztanimal::CAN_SERVICE.original()(egg as *const u32, staff_ptr as *const u32) }),
+                                ZTHabitat::keeper_lists_animal(staff_ptr, egg),
+                                tile,
+                                if tile != 0 { get_from_memory::<u8>(tile + 0x85) } else { 0 },
+                                if tile != 0 { get_from_memory::<u8>(tile + 0x83) } else { 0 },
+                                low_byte_bool(unsafe { openzt_detour::generated::ztanimal::IS_SICKLY.original()(egg as *const u32) }),
+                            )
+                        })
+                        .collect();
+                    failures.push(format!("getNumSicklyAnimals habitat {} ({:#010x}) staff {:#010x} include_neighbors={}: real={}, reimpl={} [{}]", i, ptr, staff_ptr, include_neighbors, real, reimpl, breakdown.join("; ")));
+                }
+            }
+            let real = with_real_neighbour_state(|| unsafe { zthabitat::GET_NEAREST_SICK_ANIMAL.original()(ptr as *const u32, staff_ptr as i32, 0) }) as u32;
+            let reimpl = habitat.get_nearest_sick_animal(staff_ptr, false);
+            if real != reimpl {
+                failures.push(format!("getNearestSickAnimal habitat {} ({:#010x}) staff {:#010x}: real={:#010x}, reimpl={:#010x}", i, ptr, staff_ptr, real, reimpl));
+            }
+        }
+    }
+
+    tracing::info!("{}: {} staff, {} eggs, {} serviceable (egg, staff) pairs, vanilla sickly total {}", test_name, staff.len(), eggs_seen, serviceable_pairs, sickly_counted);
+    if staff.is_empty() || eggs_seen == 0 {
+        write_success_line(failure_log, &format!("{} (skipped: {} staff, {} eggs in the loaded zoo)", test_name, staff.len(), eggs_seen));
+        return false;
+    }
+    finish_test(test_name, failures, failure_log)
+}

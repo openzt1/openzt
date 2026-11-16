@@ -152,6 +152,13 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTAIMGR_F_MOVE_SPEED_F", run: tests::ztaimgr::run_ztaimgr_f_move_speed_f_test },
             RegisteredTest { name: "ZTAIMGR_F_MOVE_F", run: tests::ztaimgr::run_ztaimgr_f_move_f_test },
             RegisteredTest { name: "ZTAIMGR_F_MOVE", run: tests::ztaimgr::run_ztaimgr_f_move_test },
+            RegisteredTest { name: "ZTAIMGR_F_MOVE_REAL_VS_PORT", run: tests::ztaimgr::run_ztaimgr_f_move_real_vs_port_test },
+            RegisteredTest { name: "ZTAIMGR_PLAY_FAMILY_REAL_VS_PORT", run: tests::ztaimgr::run_ztaimgr_play_family_real_vs_port_test },
+            RegisteredTest { name: "ZTAIMGR_WRAPPERS_REAL_VS_PORT", run: tests::ztaimgr::run_ztaimgr_wrappers_real_vs_port_test },
+            RegisteredTest { name: "ZTAIMGR_F_PLAY_SET_PROB_REAL_VS_PORT", run: tests::ztaimgr::run_ztaimgr_f_play_set_prob_real_vs_port_test },
+            RegisteredTest { name: "ZTAIMGR_F_RANDOM_WALK_REAL_VS_PORT", run: tests::ztaimgr::run_ztaimgr_f_random_walk_real_vs_port_test },
+            RegisteredTest { name: "ZTAIMGR_DISPATCH_ROUTING", run: tests::ztaimgr::run_ztaimgr_dispatch_routing_test },
+            RegisteredTest { name: "ZTAIMGR_ANIM_REFCOUNT_BALANCE", run: tests::ztaimgr::run_ztaimgr_anim_refcount_balance_test },
             RegisteredTest { name: "ZTAIMGR_F_PLAY_SPECIAL", run: tests::ztaimgr::run_ztaimgr_f_play_special_test },
             RegisteredTest { name: "ZTAIMGR_F_PLAY_SPECIAL_F", run: tests::ztaimgr::run_ztaimgr_f_play_special_f_test },
             RegisteredTest { name: "ZTAIMGR_F_PLAY_SOUND", run: tests::ztaimgr::run_ztaimgr_f_play_sound_test },
@@ -249,7 +256,10 @@ pub(super) mod detour_zoo_main {
             // first settles that flag before any other test reads the same live habitats.
             RegisteredTest { name: "ZTAIMGR_UPDATE", run: tests::ztaimgr::run_ztaimgr_update_test },
             RegisteredTest { name: "ZTAIMGR_CREATE", run: tests::ztaimgr::run_ztaimgr_create_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_CONSTRUCT_DESTRUCT", run: tests::ztaimgr::run_ztaimgr_bfaimgr_construct_destruct_test },
             RegisteredTest { name: "ZTAIMGR_INIT_AI_PARAMS", run: tests::ztaimgr::run_ztaimgr_init_ai_params_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_INIT_AI_PARAMS", run: tests::ztaimgr::run_ztaimgr_bfaimgr_init_ai_params_test },
+            RegisteredTest { name: "ZTAIMGR_BFAIMGR_INIT", run: tests::ztaimgr::run_ztaimgr_bfaimgr_init_test },
             RegisteredTest { name: "ZTAIMGR_BFAIMGR_CHECK_PATH", run: tests::ztaimgr::run_ztaimgr_bfaimgr_check_path_test },
             RegisteredTest { name: "ZTHABITATMGR_DETOURS_ENABLED", run: tests::zthabitatmgr::run_zthabitatmgr_detours_enabled_test },
             RegisteredTest { name: "ZTTANKEXHIBIT_DETOURS_ENABLED", run: tests::zthabitatmgr::run_tankexhibit_detours_enabled_test },
@@ -826,6 +836,10 @@ pub(super) mod detour_zoo_main {
             RegisteredTest {
                 name: "ZTHABITAT_GET_NEAREST_SICK_ANIMAL_MATCHES_REAL_LIVE",
                 run: tests::zthabitatmgr::run_habitat_get_nearest_sick_animal_matches_real_live_test,
+            },
+            RegisteredTest {
+                name: "ZTHABITAT_EGG_SERVICE_MATCHES_REAL_LIVE",
+                run: tests::zthabitatmgr::run_habitat_egg_service_matches_real_live_test,
             },
             RegisteredTest {
                 name: "ZTHABITAT_GET_NEAREST_DIRT_PILE_MATCHES_REAL_LIVE",
