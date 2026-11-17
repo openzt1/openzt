@@ -1,7 +1,8 @@
 //! `BFScriptMgr::parseFunction` (`0x437d9b`): turns a behavior-script call string such as
 //! `fPlaySet("a b", 3)` into a `BFFunctionCall`. Its only caller is `BFBehaviorSet::executeCall`, and the
-//! resulting call object is read by raw offset by every `ZTAIMgr`/`BFAIMgr` handler, so the struct mirrors
-//! vanilla's layout and is written in place (style 1).
+//! resulting call object is read by raw offset by every `ZTAIMgr`/`BFAIMgr` handler (and passed by pointer to
+//! vanilla's `findAnim`/`convertConstantParam`), so the struct keeps vanilla's layout and is written in place;
+//! only the buffers behind it are owned by Rust (see "Allocation").
 //!
 //! ## Layout
 //! `BFFunctionCall`, `0x1c` bytes: `+0x00` the call name (a `{begin, end, cap}` string, the same type as
@@ -23,19 +24,28 @@
 //! implementation: the name has been replaced and the arguments cleared by the time it returns `false`.
 //!
 //! ## Allocation
-//! Strings and the argument vector are built and torn down only through vanilla's own helpers
-//! (`0x406c55` assign, `0x410ac3` erase, `0x406de7` insert, `BASIC_STRING_2` construct), so every buffer
-//! stays vanilla-allocated and vanilla's destructors for the call object remain valid.
+//! The call name's buffer, the argument array and each argument's buffer are allocated and freed here, from
+//! Rust's allocator, and every vanilla reader only reads them (strings stay `{begin, end, cap}` with a NUL
+//! after the text, the array stays 12-byte entries). Each buffer Rust allocates is recorded in
+//! `RUST_BUFFERS`; a buffer that is not recorded was built by vanilla (a call object constructed by vanilla's own
+//! constructor, as the live tests' "real" side does) and is released through vanilla's allocator, so an object
+//! is always freed by whoever allocated each piece of it.
 
-use std::ffi::c_void;
+use std::{
+    alloc::{alloc, dealloc, handle_alloc_error, Layout},
+    collections::HashSet,
+    ffi::c_void,
+    sync::{LazyLock, Mutex},
+};
 
 use openzt_detour::{
     generated::{
         bffunctioncall::{LOAD as CALL_LOAD, SAVE as CALL_SAVE},
         bfscriptmgr::PARSE_FUNCTION,
-        msvc_std_basic_string::{ASSIGN_RANGE, ASSIGN_RANGE_0X406C55, BASIC_STRING_0, BASIC_STRING_2},
-        msvc_std_vectorbasic_string::{ERASE_RANGE_0X410AC3, INSERT_0X406DE7},
-        standalone::{DEALLOCATE, WRITE_BYTES_TO_FILE},
+        msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_0, BASIC_STRING_2},
+        msvc_std_vectorbasic_string::INSERT_0X406DE7,
+        poolalloc::DEALLOCATE as POOL_DEALLOCATE,
+        standalone::{DEALLOCATE, OPERATOR_DELETE, WRITE_BYTES_TO_FILE},
         uitext::SET_TEXT_0,
     },
 };
@@ -44,7 +54,6 @@ use tracing::error;
 
 use crate::{
     util::{ref_from_memory, LiveMemory},
-    vanilla_string::VanillaString,
     write_live,
 };
 
@@ -129,8 +138,195 @@ pub(crate) fn parse(input: &[u8]) -> ParsedCall {
     parsed
 }
 
-/// Empties a call object's name and argument vector and zeroes its flag bytes, through vanilla's own erase
-/// helper so the argument strings are freed by their allocator. Shared by `parseFunction` and
+/// Addresses of the buffers this module allocated for call objects (names, argument arrays, argument strings).
+static RUST_BUFFERS: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+const STRING_BYTES: usize = 12;
+/// A freshly constructed call name has room for this many bytes (vanilla builds its strings with capacity 8).
+const NAME_INITIAL_CAPACITY: usize = 8;
+/// The smallest argument array a push allocates, in strings.
+const ARGS_MIN_CAPACITY: usize = 4;
+/// Largest block `PoolAlloc` serves from its size-class freelists; bigger ones go to `operator new`.
+const POOL_LIMIT: usize = 0x80;
+
+fn buffer_layout(size: usize, align: usize) -> Layout {
+    Layout::from_size_align(size.max(1), align).expect("call buffer layout")
+}
+
+fn rust_alloc(size: usize, align: usize) -> *mut u8 {
+    let layout = buffer_layout(size, align);
+    let pointer = unsafe { alloc(layout) };
+    if pointer.is_null() {
+        handle_alloc_error(layout);
+    }
+    RUST_BUFFERS.lock().unwrap().insert(pointer as usize);
+    pointer
+}
+
+/// Frees `pointer` and returns true when this module allocated it; false (and nothing freed) otherwise.
+unsafe fn rust_free(pointer: *mut u8, size: usize, align: usize) -> bool {
+    if !RUST_BUFFERS.lock().unwrap().remove(&(pointer as usize)) {
+        return false;
+    }
+    unsafe { dealloc(pointer, buffer_layout(size, align)) };
+    true
+}
+
+/// Releases a buffer of `size` bytes, through Rust's allocator when this module allocated it and otherwise
+/// the way vanilla's `PoolAlloc::deallocate` does.
+unsafe fn free_buffer(pointer: *mut u8, size: usize, align: usize) {
+    if pointer.is_null() || unsafe { rust_free(pointer, size, align) } {
+        return;
+    }
+    unsafe {
+        if size > POOL_LIMIT {
+            OPERATOR_DELETE.original()(pointer as u32);
+        } else {
+            POOL_DEALLOCATE.original()(pointer as *const u32, size as u32);
+        }
+    }
+}
+
+/// A `{begin, end, cap}` string slot inside a call object.
+type StringSlot = *mut [*mut u8; 3];
+
+/// Points `slot` at a new buffer holding `bytes` and a NUL, sized exactly (at least `min_capacity`), without
+/// touching whatever the slot held.
+unsafe fn string_fill_new(slot: StringSlot, bytes: &[u8], min_capacity: usize) {
+    let capacity = (bytes.len() + 1).max(min_capacity);
+    let buffer = rust_alloc(capacity, 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, bytes.len());
+        buffer.add(bytes.len()).write(0);
+        std::ptr::write_volatile(slot, [buffer, buffer.add(bytes.len()), buffer.add(capacity)]);
+    }
+}
+
+/// Frees the buffer behind `slot` (the slot's words are left as they are).
+unsafe fn string_release(slot: StringSlot) {
+    let [begin, _, capacity] = unsafe { std::ptr::read_volatile(slot) };
+    unsafe { free_buffer(begin, capacity as usize - begin as usize, 1) };
+}
+
+/// Assigns `bytes` to the string in `slot`: in place when its buffer has room for the text and a NUL, else into a
+/// new buffer with the old one released.
+unsafe fn string_assign(slot: StringSlot, bytes: &[u8]) {
+    let [begin, _, capacity] = unsafe { std::ptr::read_volatile(slot) };
+    if !begin.is_null() && capacity as usize - begin as usize > bytes.len() {
+        unsafe {
+            std::ptr::copy(bytes.as_ptr(), begin, bytes.len());
+            begin.add(bytes.len()).write(0);
+            std::ptr::write_volatile(slot, [begin, begin.add(bytes.len()), capacity]);
+        }
+        return;
+    }
+    unsafe {
+        string_release(slot);
+        string_fill_new(slot, bytes, 1);
+    }
+}
+
+unsafe fn args_words(call: *const BfFunctionCall) -> [usize; 3] {
+    unsafe { [(*call).args_begin as usize, (*call).args_end as usize, (*call).args_capacity as usize] }
+}
+
+unsafe fn set_args_words(call: *const BfFunctionCall, words: [usize; 3]) {
+    let call = unsafe { ref_from_memory::<BfFunctionCall>(call as u32) };
+    write_live!(call, args_begin, words[0] as *const u32);
+    write_live!(call, args_end, words[1] as *const u32);
+    write_live!(call, args_capacity, words[2] as *const u32);
+}
+
+/// Releases every argument's buffer and empties the argument array, keeping the array itself.
+unsafe fn args_clear(call: *const BfFunctionCall) {
+    let [begin, end, capacity] = unsafe { args_words(call) };
+    let mut element = begin;
+    while element < end {
+        unsafe { string_release(element as StringSlot) };
+        element += STRING_BYTES;
+    }
+    unsafe { set_args_words(call, [begin, begin, capacity]) };
+}
+
+/// Appends an argument holding `bytes`, growing the array (into Rust's allocator) when it is full.
+unsafe fn args_push(call: *const BfFunctionCall, bytes: &[u8]) {
+    let [begin, end, capacity] = unsafe { args_words(call) };
+    let (count, room) = ((end - begin) / STRING_BYTES, (capacity - begin) / STRING_BYTES);
+    let (begin, capacity) = if count == room {
+        let new_room = (room * 2).max(ARGS_MIN_CAPACITY);
+        let fresh = rust_alloc(new_room * STRING_BYTES, 4) as usize;
+        unsafe {
+            if count != 0 {
+                std::ptr::copy_nonoverlapping(begin as *const u8, fresh as *mut u8, count * STRING_BYTES);
+            }
+            free_buffer(begin as *mut u8, room * STRING_BYTES, 4);
+        }
+        (fresh, fresh + new_room * STRING_BYTES)
+    } else {
+        (begin, capacity)
+    };
+    unsafe {
+        string_fill_new((begin + count * STRING_BYTES) as StringSlot, bytes, 1);
+        set_args_words(call, [begin, begin + (count + 1) * STRING_BYTES, capacity]);
+    }
+}
+
+/// Builds an empty call object at `at` (`BFFunctionCall::BFFunctionCall`): a name with room for
+/// [`NAME_INITIAL_CAPACITY`] bytes, no arguments, the flag bytes zero. The padding byte at `+0x1b` is left as it
+/// was, as in vanilla.
+///
+/// # Safety
+/// `at` must have `BFFUNCTIONCALL_SIZE` writable bytes.
+pub(crate) unsafe fn construct_call(at: u32) {
+    unsafe {
+        string_fill_new(at as StringSlot, b"", NAME_INITIAL_CAPACITY);
+        for offset in [0x0cu32, 0x10, 0x14] {
+            ((at + offset) as *mut u32).write_volatile(0);
+        }
+        for offset in [0x18u32, 0x19, 0x1a] {
+            ((at + offset) as *mut u8).write_volatile(0);
+        }
+    }
+}
+
+/// Frees a call object's name and argument buffers (`BFFunctionCall::~BFFunctionCall`). The object's words are
+/// left as they are, as vanilla's destructor leaves them.
+///
+/// # Safety
+/// `at` must point to a constructed `BFFunctionCall`.
+pub(crate) unsafe fn destroy_call(at: u32) {
+    let call = at as *const BfFunctionCall;
+    unsafe {
+        args_clear(call);
+        let [begin, _, capacity] = args_words(call);
+        free_buffer(begin as *mut u8, capacity - begin, 4);
+        string_release(at as StringSlot);
+    }
+}
+
+/// Replaces the call's name.
+///
+/// # Safety
+/// `at` must point to a constructed `BFFunctionCall`.
+pub(crate) unsafe fn set_call_name(at: u32, name: &[u8]) {
+    unsafe { string_assign(at as StringSlot, name) };
+}
+
+/// Replaces the call's arguments with copies of `arguments`.
+///
+/// # Safety
+/// `at` must point to a constructed `BFFunctionCall`.
+pub(crate) unsafe fn set_call_args(at: u32, arguments: &[&[u8]]) {
+    let call = at as *const BfFunctionCall;
+    unsafe {
+        args_clear(call);
+        for argument in arguments {
+            args_push(call, argument);
+        }
+    }
+}
+
+/// Empties a call object's name and argument vector and zeroes its flag bytes. Shared by `parseFunction` and
 /// `BFBehaviorSet::clear`.
 ///
 /// # Safety
@@ -142,7 +338,7 @@ pub(crate) unsafe fn reset_call(dest: *const u32) {
         unsafe { begin.write_volatile(0) };
     }
     write_live!(call, name_end, begin);
-    unsafe { ERASE_RANGE_0X410AC3.original()((dest as u32 + ARGS_OFFSET) as *const u32, call.args_begin, call.args_end as i32) };
+    unsafe { args_clear(dest as *const BfFunctionCall) };
     write_live!(call, result_flag, 0u8);
     write_live!(call, flag_19, 0u8);
     write_live!(call, flag_1a, 0u8);
@@ -169,15 +365,24 @@ pub(crate) unsafe fn read_file_count(file: *const u8) -> Option<i32> {
 /// assigned when the length cannot be read or is at least `0x1000`. A short read of the bytes still assigns
 /// (zeroes) and reports failure, as vanilla's inlined readers do.
 pub(crate) unsafe fn read_file_string(file: *const u8, target: *const RawString) -> bool {
-    let mut length = 0u32;
-    if !unsafe { read_file_bytes(std::ptr::addr_of_mut!(length) as *mut u8, 4, file) } || length >= FILE_STRING_LIMIT {
+    let Some((text, ok)) = (unsafe { read_file_text(file) }) else {
         return false;
-    }
-    let mut text = vec![0u8; length as usize];
-    let ok = length == 0 || unsafe { read_file_bytes(text.as_mut_ptr(), length, file) };
+    };
     let range = text.as_ptr_range();
     unsafe { ASSIGN_RANGE.original()(target as *const c_void, range.start as *const u32, range.end, std::ptr::null()) };
     ok
+}
+
+/// Reads one length-prefixed string from a save file: `None` when the length cannot be read or is at least
+/// `0x1000`, else the bytes (zeroes after a short read) and whether the read succeeded.
+unsafe fn read_file_text(file: *const u8) -> Option<(Vec<u8>, bool)> {
+    let mut length = 0u32;
+    if !unsafe { read_file_bytes(std::ptr::addr_of_mut!(length) as *mut u8, 4, file) } || length >= FILE_STRING_LIMIT {
+        return None;
+    }
+    let mut text = vec![0u8; length as usize];
+    let ok = length == 0 || unsafe { read_file_bytes(text.as_mut_ptr(), length, file) };
+    Some((text, ok))
 }
 
 /// Builds an empty vanilla string (a small `PoolAlloc` buffer) at `at`.
@@ -277,17 +482,33 @@ pub(crate) unsafe fn load_call(call: *const u32, file: *const u8, version: u32) 
     if version <= FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS {
         return true;
     }
-    let mut ok = unsafe { read_file_string(file, call as *const RawString) };
+    let mut ok = match unsafe { read_file_text(file) } {
+        Some((text, read_ok)) => {
+            unsafe { set_call_name(call as u32, &text) };
+            read_ok
+        }
+        None => false,
+    };
     let count = unsafe { read_file_count(file) };
     ok &= count.is_some();
     if !ok {
         return false;
     }
-    let object = unsafe { ref_from_memory::<BfFunctionCall>(call as u32) };
-    let args = (call as u32 + ARGS_OFFSET) as *const u32;
+    let object = call as *const BfFunctionCall;
     unsafe {
-        ERASE_RANGE_0X410AC3.original()(args, object.args_begin, object.args_end as i32);
-        ok &= read_file_string_list(file, args, count.unwrap_or(0));
+        args_clear(object);
+        for _ in 0..count.unwrap_or(0).max(0) {
+            match read_file_text(file) {
+                Some((text, read_ok)) => {
+                    args_push(object, &text);
+                    ok &= read_ok;
+                }
+                None => {
+                    args_push(object, b"");
+                    ok = false;
+                }
+            }
+        }
         for offset in [0x18u32, 0x19, 0x1a] {
             ok &= read_file_bytes((call as u32 + offset) as *mut u8, 1, file);
         }
@@ -302,15 +523,12 @@ pub(crate) unsafe fn load_call(call: *const u32, file: *const u8, version: u32) 
 /// They must not overlap.
 pub(crate) unsafe fn parse_function(input: *const u32, dest: *const u32) -> bool {
     let parsed = parse(unsafe { &*(input as *const RawString) }.bytes());
-    let call = unsafe { ref_from_memory::<BfFunctionCall>(dest as u32) };
-    unsafe { reset_call(dest) };
-    let name = parsed.name.as_ptr_range();
-    unsafe { ASSIGN_RANGE_0X406C55.original()(dest as *const c_void, name.start as *const u32, name.end as *const u32, 0) };
-
-    for arg in &parsed.args {
-        let value = VanillaString::from_bytes(arg);
-        let end = unsafe { std::ptr::read_volatile(&call.args_end) };
-        unsafe { INSERT_0X406DE7.original()((dest as u32 + ARGS_OFFSET) as *const u32, end, value.as_ptr(), 1) };
+    unsafe {
+        reset_call(dest);
+        set_call_name(dest as u32, &parsed.name);
+        for arg in &parsed.args {
+            args_push(dest as *const BfFunctionCall, arg);
+        }
     }
     parsed.ok
 }
@@ -372,8 +590,22 @@ pub(crate) mod live_support {
         ptr as u32
     }
 
+    /// A call object built by this module's own constructor in a leaked buffer: every buffer behind it is
+    /// Rust-allocated.
+    pub(crate) fn standalone_rust_call() -> u32 {
+        let buf: &'static mut [u32] = Box::leak(vec![0xcdcd_cdcdu32; BFFUNCTIONCALL_SIZE / 4].into_boxed_slice());
+        let at = buf.as_mut_ptr() as u32;
+        unsafe { construct_call(at) };
+        at
+    }
+
+    /// How many buffers the call-object allocator currently tracks.
+    pub(crate) fn rust_buffer_count() -> usize {
+        RUST_BUFFERS.lock().unwrap().len()
+    }
+
     /// Runs vanilla's call-object constructor over `at`, which must have `BFFUNCTIONCALL_SIZE` writable bytes.
-    pub(crate) unsafe fn construct_call(at: u32) {
+    pub(crate) unsafe fn construct_vanilla_call(at: u32) {
         unsafe { CALL_CONSTRUCTOR.original()(at as *const u32) };
     }
 
@@ -451,5 +683,116 @@ mod tests {
     #[test]
     fn no_open_paren_but_closing_paren_still_parses() {
         assert_eq!(parsed("a,b)"), ("".into(), vec!["a".into(), "b".into()], true));
+    }
+
+    /// The call object's words, read back the way a vanilla reader would.
+    fn read_call(at: u32) -> (Vec<u8>, Vec<Vec<u8>>, [u8; 3]) {
+        let call = unsafe { &*(at as *const BfFunctionCall) };
+        let name = unsafe { &*(at as *const RawString) }.bytes().to_vec();
+        let count = (call.args_end as usize - call.args_begin as usize) / STRING_BYTES;
+        let args = (0..count).map(|i| unsafe { &*(call.args_begin as *const RawString).add(i) }.bytes().to_vec()).collect();
+        (name, args, [call.result_flag, call.flag_19, call.flag_1a])
+    }
+
+    /// Every string a call hands to vanilla readers ends in a NUL after its text.
+    fn assert_nul_terminated(at: u32) {
+        let call = unsafe { &*(at as *const BfFunctionCall) };
+        assert_eq!(unsafe { *(*(at as *const *const u8)).add(read_call(at).0.len()) }, 0);
+        for i in 0..(call.args_end as usize - call.args_begin as usize) / STRING_BYTES {
+            let string = unsafe { &*(call.args_begin as *const RawString).add(i) };
+            assert_eq!(unsafe { *string.end }, 0, "argument {i}");
+        }
+    }
+
+    fn fresh_call() -> (Box<[u32; BFFUNCTIONCALL_SIZE / 4]>, u32) {
+        let storage = Box::new([0xcdcd_cdcdu32; BFFUNCTIONCALL_SIZE / 4]);
+        let at = storage.as_ptr() as u32;
+        unsafe { construct_call(at) };
+        (storage, at)
+    }
+
+    #[test]
+    fn constructed_call_is_empty_with_room_for_a_short_name() {
+        let (_storage, at) = fresh_call();
+        assert_eq!(read_call(at), (vec![], vec![], [0, 0, 0]));
+        let name = unsafe { &*(at as *const RawString) };
+        assert_eq!(name.capacity as usize - name.begin as usize, NAME_INITIAL_CAPACITY);
+        assert_nul_terminated(at);
+        unsafe { destroy_call(at) };
+    }
+
+    #[test]
+    fn name_is_assigned_in_place_when_it_fits_and_reallocated_when_it_does_not() {
+        let (_storage, at) = fresh_call();
+        let begin = unsafe { (*(at as *const RawString)).begin };
+        unsafe { set_call_name(at, b"fWalk") };
+        assert_eq!(unsafe { (*(at as *const RawString)).begin }, begin);
+        assert_eq!(read_call(at).0, b"fWalk");
+        unsafe { set_call_name(at, b"fPlaySpecialLongName") };
+        assert_eq!(read_call(at).0, b"fPlaySpecialLongName");
+        assert_nul_terminated(at);
+        unsafe { set_call_name(at, b"") };
+        assert_eq!(read_call(at).0, b"");
+        assert_nul_terminated(at);
+        unsafe { destroy_call(at) };
+    }
+
+    #[test]
+    fn arguments_grow_past_the_first_allocation_and_keep_their_text() {
+        let (_storage, at) = fresh_call();
+        let call = at as *const BfFunctionCall;
+        let texts: Vec<Vec<u8>> = (0..11).map(|i| format!("arg{i}{}", "x".repeat(i)).into_bytes()).collect();
+        for text in &texts {
+            unsafe { args_push(call, text) };
+        }
+        assert_eq!(read_call(at).1, texts);
+        assert_nul_terminated(at);
+        unsafe { destroy_call(at) };
+    }
+
+    #[test]
+    fn set_call_args_replaces_and_tolerates_aliasing_free_inputs() {
+        let (_storage, at) = fresh_call();
+        unsafe { set_call_args(at, &[b"one", b"two", b"three"]) };
+        assert_eq!(read_call(at).1, vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]);
+        unsafe { set_call_args(at, &[b"only"]) };
+        assert_eq!(read_call(at).1, vec![b"only".to_vec()]);
+        unsafe { set_call_args(at, &[]) };
+        assert!(read_call(at).1.is_empty());
+        unsafe { destroy_call(at) };
+    }
+
+    #[test]
+    fn reset_clears_name_arguments_and_flags_but_keeps_the_buffers() {
+        let (_storage, at) = fresh_call();
+        unsafe {
+            set_call_name(at, b"fMoveF");
+            set_call_args(at, &[b"1", b"2"]);
+            let call = &mut *(at as *mut BfFunctionCall);
+            call.result_flag = 1;
+            call.flag_19 = 2;
+            call.flag_1a = 3;
+        }
+        let (name_begin, args_begin) = unsafe { ((*(at as *const RawString)).begin, (*(at as *const BfFunctionCall)).args_begin) };
+        unsafe { reset_call(at as *const u32) };
+        assert_eq!(read_call(at), (vec![], vec![], [0, 0, 0]));
+        assert_eq!(unsafe { (*(at as *const RawString)).begin }, name_begin);
+        assert_eq!(unsafe { (*(at as *const BfFunctionCall)).args_begin }, args_begin);
+        unsafe { destroy_call(at) };
+    }
+
+    #[test]
+    fn destroying_a_call_releases_every_buffer_it_allocated() {
+        let (_storage, at) = fresh_call();
+        unsafe {
+            set_call_name(at, b"a name longer than the initial capacity");
+            set_call_args(at, &[b"1", b"2", b"3", b"4", b"5", b"6"]);
+        }
+        let call = unsafe { &*(at as *const BfFunctionCall) };
+        let mut owned = vec![unsafe { (*(at as *const RawString)).begin } as usize, call.args_begin as usize];
+        owned.extend((0..6).map(|i| unsafe { (*(call.args_begin as *const RawString).add(i)).begin } as usize));
+        assert!(owned.iter().all(|pointer| RUST_BUFFERS.lock().unwrap().contains(pointer)));
+        unsafe { destroy_call(at) };
+        assert!(owned.iter().all(|pointer| !RUST_BUFFERS.lock().unwrap().contains(pointer)));
     }
 }

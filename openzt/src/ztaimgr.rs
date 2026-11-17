@@ -38,8 +38,7 @@ use openzt_detour::generated::{
     ztkeeper::F_ROUTINE as ZTKEEPER_F_ROUTINE,
     standalone::{ATOI, TIME},
     bfbscall::{CONSTRUCTOR as BFBSCALL_CONSTRUCTOR, COPY_0X43E90E as BFBSCALL_COPY},
-    msvc_std_basic_string::{ASSIGN_RANGE_0X406C55, BASIC_STRING_0},
-    msvc_std_vectorbasic_string::{ERASE_RANGE_0X410AC3, PUSH_BACK_0X4FCEF5},
+    msvc_std_basic_string::BASIC_STRING_0,
     ztaimgr::{
         CONVERT_CONSTANT_PARAM, F_END_TRICK, F_END_TRICK_F, F_ENTER_BUILDING, F_ENTER_BUILDING_F, F_GUEST_ROUTINE, F_GUEST_ROUTINE_F, F_GUIDE_ROUTINE, F_GUIDE_ROUTINE_F,
         F_HIDE_PREDATOR, F_HIDE_PREDATOR_F, F_KEEPER_ROUTINE, F_KEEPER_ROUTINE_F, F_MAINT_ROUTINE, F_MAINT_ROUTINE_F, F_RETURN_TO_BUILDING, F_RETURN_TO_BUILDING_F, F_SPRAY_F,
@@ -3618,9 +3617,6 @@ fn decide_play_special_f(facts: PlaySpecialFFacts) -> PlaySpecialFAction {
     PlaySpecialFAction::PlaySpecialNoAnim { second_flag: facts.special_mode_b }
 }
 
-/// The call's parameter vector (`call + 0xc`) is a vanilla `vector<string>`.
-const CALL_PARAM_VECTOR_OFFSET: u32 = 0xc;
-
 unsafe fn convert_param_vanilla(this: u32, param: u32, unit: u32) -> i32 {
     let target = get_from_memory::<u32>(get_from_memory::<u32>(this) + AI_VTABLE_CONVERT_CONSTANT_PARAM);
     let convert = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> i32>(target) };
@@ -3628,16 +3624,14 @@ unsafe fn convert_param_vanilla(this: u32, param: u32, unit: u32) -> i32 {
 }
 
 unsafe fn replace_params_vanilla(call: u32, strings: &[u32]) {
-    let vector = call + CALL_PARAM_VECTOR_OFFSET;
-    unsafe { ERASE_RANGE_0X410AC3.original()(vector as *const u32, call_params_begin(call) as *const u32, call_params_end(call) as i32) };
-    for &string in strings {
-        unsafe { PUSH_BACK_0X4FCEF5.original()(vector as *const u32, string as *const i32) };
-    }
+    // Copy the bytes first: a string may be one of the call's own parameters, which the rewrite frees.
+    let copies: Vec<Vec<u8>> = strings.iter().map(|&string| unsafe { &*(string as *const RawCallString) }.bytes().to_vec()).collect();
+    let views: Vec<&[u8]> = copies.iter().map(Vec::as_slice).collect();
+    unsafe { crate::bfscriptmgr::set_call_args(call, &views) };
 }
 
 unsafe fn set_call_name_vanilla(call: u32, text: &[u8]) {
-    let begin = text.as_ptr() as u32;
-    unsafe { ASSIGN_RANGE_0X406C55.original()(call as *const c_void, begin as *const u32, (begin + text.len() as u32) as *const u32, call) };
+    unsafe { crate::bfscriptmgr::set_call_name(call, text) };
 }
 
 unsafe fn forward_special_vanilla(handler: SpecialHandler, this: u32, call: u32, unit: u32) -> bool {

@@ -2,8 +2,10 @@
 //! `executeCall`. The set is embedded in `BFEntity` at `+0x14`, child sets are separate vanilla-allocated
 //! objects, and every string and vector inside is read and written by un-ported vanilla code (`execute`,
 //! `executeChild`, `initChild`, `load`, `BFEntity::setBS`), so the struct mirrors vanilla's layout and is
-//! operated on in place (style 1). All buffers stay vanilla-allocated: strings are assigned, destroyed and
-//! inserted only through vanilla's own helpers.
+//! operated on in place (style 1). The name stack, the call list, the current-call string and the name stay
+//! vanilla-allocated (assigned, destroyed and inserted only through vanilla's own helpers, because un-ported
+//! `BFUnit` and goal code still reads them raw); the parsed call object's buffers are Rust-allocated (see
+//! `bfscriptmgr.rs`).
 //!
 //! ## Layout (`0x60` bytes)
 //! `+0x00` `vector<string>` stack of active child-set names; `+0x0c` the parsed `BFFunctionCall`
@@ -34,7 +36,6 @@ use openzt_detour::{
             CLEAR, CONSTRUCTOR, DESTRUCTOR, EXECUTE, EXECUTE_CALL, EXECUTE_CHILD, EXECUTE_HEAD, INIT_CHILD, KILL_CHILD,
             LOAD_0, LOAD_1, REMOVE_HEAD, SAVE, SET_NAME,
         },
-        bffunctioncall::{CONSTRUCTOR as CALL_CONSTRUCTOR, DESTRUCTOR as CALL_DESTRUCTOR},
         msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_0, BASIC_STRING_RANGE},
         msvc_std_vectorbasic_string::{DESTRUCTOR_0X402466, ERASE_RANGE_0X410AC3},
         poolalloc::DEALLOCATE as POOL_DEALLOCATE,
@@ -47,7 +48,7 @@ use tracing::error;
 use crate::{
     bfscriptmgr::{
         construct_empty_string, load_call, parse_function, push_back_string, read_file_bytes, read_file_count, read_file_string, read_file_string_list,
-        reset_call, save_call, write_file_bytes, write_file_string, write_file_string_list, BfFunctionCall, RawString,
+        reset_call, save_call, write_file_bytes, write_file_string, write_file_string_list, BfFunctionCall, RawString, construct_call, destroy_call,
         FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS,
     },
     util::{get_from_memory, ref_from_memory, LiveMemory},
@@ -484,7 +485,7 @@ pub(crate) unsafe fn construct_set_members(base: u32) {
         for offset in [0x0u32, 0x4, 0x8, 0x28, 0x2c, 0x30, 0x4c, 0x50] {
             ((base + offset) as *mut u32).write_volatile(0);
         }
-        CALL_CONSTRUCTOR.original()((base + 0xc) as *const u32);
+        construct_call(base + 0xc);
         construct_empty_string((base + 0x34) as *mut RawString);
         construct_empty_string((base + 0x40) as *mut RawString);
         (&*(base as *const BfBehaviorSet)).clear();
@@ -493,14 +494,14 @@ pub(crate) unsafe fn construct_set_members(base: u32) {
 
 /// Tears down the set at `base` the way `BFEntity`'s destructor inlines `~BFBehaviorSet`: the child (with its
 /// name-stack entry and the removed flag), then the two strings, the call list, the call object and the name
-/// stack. Every buffer is freed through vanilla's own destructors.
+/// stack. The call object frees its own buffers; the rest go through vanilla's destructors.
 pub(crate) unsafe fn destroy_set_members(base: u32) {
     unsafe {
         (&*(base as *const BfBehaviorSet)).kill_child();
         BASIC_STRING_0.original()((base + 0x40) as *const c_void);
         BASIC_STRING_0.original()((base + 0x34) as *const c_void);
         DESTRUCTOR_0X402466.original()((base + 0x28) as *const u32);
-        CALL_DESTRUCTOR.original()((base + 0xc) as *const u32);
+        destroy_call(base + 0xc);
         DESTRUCTOR_0X402466.original()(base as *const u32);
     }
 }
@@ -720,7 +721,7 @@ pub(crate) mod live_support {
 
     fn init_set(set: u32, name: &[u8], current_call: &[u8], list: &[&[u8]], entity: u32) {
         unsafe {
-            call_support::construct_call(set + 0xc);
+            call_support::construct_vanilla_call(set + 0xc);
             construct_string((set + 0x34) as *mut RawString, current_call);
             construct_string((set + 0x40) as *mut RawString, name);
             ((set + 0x50) as *mut u32).write(entity);

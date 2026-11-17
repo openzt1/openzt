@@ -2,7 +2,8 @@
 //! class: `BFUnit`, `BFOverlay` and `ZTScenery` call them first/last, and `BFEntityType::createEntity` builds a
 //! bare `BFEntity` with the constructor. The object is `0x154`
 //! bytes and is still read and written by un-ported vanilla code, so it keeps vanilla's layout and is built in
-//! place (style 1). Every string, vector and container inside is built through vanilla's own helpers.
+//! place (style 1). Every string, vector and container inside is built through vanilla's own helpers, except the
+//! embedded behavior set's parsed call object, whose buffers are Rust-allocated (`bfscriptmgr.rs`).
 //!
 //! ## Layout written by the constructor
 //! `+0x00` vtable (`BFEventListenerInterface`'s while building, `BFEntity`'s at the end, since derived
