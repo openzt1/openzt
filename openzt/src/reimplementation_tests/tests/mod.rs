@@ -8,6 +8,9 @@
 pub(crate) mod ambients;
 pub(crate) mod bfevent;
 pub(crate) mod bfbehaviorset;
+pub(crate) mod bfentity;
+pub(crate) mod bfentity_io;
+pub(crate) mod bfunit;
 pub(crate) mod bfscriptmgr;
 pub(crate) mod footprints;
 pub(crate) mod ztadvterrainmgr;

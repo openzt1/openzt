@@ -110,6 +110,8 @@ pub fn init() {
         crate::bfevent::init();
         crate::bfscriptmgr::init();
         crate::bfbehaviorset::init();
+        crate::bfentity::init();
+        crate::bfunit::init();
         crate::ztshowscriptmgr::init();
         crate::ztshow::init();
         crate::ztshowstate::init();

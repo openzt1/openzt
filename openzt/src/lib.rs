@@ -151,6 +151,12 @@ mod bfscriptmgr;
 /// `killChild`, `executeHead`, `executeCall`) that drive the AI behavior-script runner.
 mod bfbehaviorset;
 
+/// bfentity module reimplements `BFEntity`'s constructor, the base of every entity class.
+mod bfentity;
+
+/// bfunit module reimplements `BFUnit::getMoveAnimSpeed`.
+mod bfunit;
+
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
 mod ztguest;
@@ -289,6 +295,8 @@ mod zoo_init {
             bfevent::init();
             bfscriptmgr::init();
             bfbehaviorset::init();
+            bfentity::init();
+            bfunit::init();
             ztshow::init();
             ztguest::init();
             ambients::init();

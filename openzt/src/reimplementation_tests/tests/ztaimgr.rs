@@ -1237,6 +1237,12 @@ pub(crate) fn run_ztaimgr_create_test(failure_log: &mut Option<std::fs::File>) -
         }
     }
     for offset in (0..0x150u32).step_by(4) {
+        // `BFPathFinder`'s constructor, given a null map, derives the row count (`+0xc` of the pathfinder, `+0x1c`
+        // here) and the tile count (`+0x20`) from `[pathfinder + 0x38]`, which it never initialises, so both
+        // hold whatever `operator new` returned.
+        if offset == 0x1c || offset == 0x20 {
+            continue;
+        }
         let (real_word, port_word) = (get_from_memory::<u32>(real + offset), get_from_memory::<u32>(port + offset));
         let both_heap_pointers = real_word >= 0x10000 && port_word >= 0x10000;
         if real_word != port_word && !both_heap_pointers {

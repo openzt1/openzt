@@ -31,7 +31,12 @@ use std::ffi::c_void;
 
 use openzt_detour::{
     generated::{
-        bfscriptmgr::PARSE_FUNCTION, msvc_std_basic_string::ASSIGN_RANGE_0X406C55, msvc_std_vectorbasic_string::{ERASE_RANGE_0X410AC3, INSERT_0X406DE7},
+        bffunctioncall::{LOAD as CALL_LOAD, SAVE as CALL_SAVE},
+        bfscriptmgr::PARSE_FUNCTION,
+        msvc_std_basic_string::{ASSIGN_RANGE, ASSIGN_RANGE_0X406C55, BASIC_STRING_0, BASIC_STRING_2},
+        msvc_std_vectorbasic_string::{ERASE_RANGE_0X410AC3, INSERT_0X406DE7},
+        standalone::{DEALLOCATE, WRITE_BYTES_TO_FILE},
+        uitext::SET_TEXT_0,
     },
 };
 use openzt_detour_macro::detour_mod;
@@ -143,6 +148,153 @@ pub(crate) unsafe fn reset_call(dest: *const u32) {
     write_live!(call, flag_1a, 0u8);
 }
 
+/// Save files older than this version carry no behavior-set data; `load` reports success without reading.
+pub(crate) const FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS: u32 = 0x3e;
+/// A saved string longer than this is rejected as corrupt.
+const FILE_STRING_LIMIT: u32 = 0x1000;
+
+/// Reads `size` bytes from a save file into `dest` through vanilla's file-read primitive (the hooked
+/// address, so the test harness can replay bytes into it). True when the read succeeded.
+pub(crate) unsafe fn read_file_bytes(dest: *mut u8, size: u32, file: *const u8) -> bool {
+    unsafe { DEALLOCATE.hooked()(dest as *const u32, size, 1, file) == 1 }
+}
+
+/// Reads a 4-byte count from a save file.
+pub(crate) unsafe fn read_file_count(file: *const u8) -> Option<i32> {
+    let mut count = 0i32;
+    unsafe { read_file_bytes(std::ptr::addr_of_mut!(count) as *mut u8, 4, file) }.then_some(count)
+}
+
+/// Reads one length-prefixed string from a save file and assigns it to the string at `target`. Nothing is
+/// assigned when the length cannot be read or is at least `0x1000`. A short read of the bytes still assigns
+/// (zeroes) and reports failure, as vanilla's inlined readers do.
+pub(crate) unsafe fn read_file_string(file: *const u8, target: *const RawString) -> bool {
+    let mut length = 0u32;
+    if !unsafe { read_file_bytes(std::ptr::addr_of_mut!(length) as *mut u8, 4, file) } || length >= FILE_STRING_LIMIT {
+        return false;
+    }
+    let mut text = vec![0u8; length as usize];
+    let ok = length == 0 || unsafe { read_file_bytes(text.as_mut_ptr(), length, file) };
+    let range = text.as_ptr_range();
+    unsafe { ASSIGN_RANGE.original()(target as *const c_void, range.start as *const u32, range.end, std::ptr::null()) };
+    ok
+}
+
+/// Builds an empty vanilla string (a small `PoolAlloc` buffer) at `at`.
+pub(crate) unsafe fn construct_empty_string(at: *mut RawString) {
+    let empty = [0u8; 1];
+    let start = empty.as_ptr();
+    unsafe { BASIC_STRING_2.original()(at as *const c_void, start as *const u32, start as i32, 0) };
+}
+
+/// Appends a copy of the string at `value` to the `vector<string>` at `vector`: in place when there is room,
+/// through vanilla's `insert` when full, as its inlined `push_back` does.
+pub(crate) unsafe fn push_back_string(vector: *const u32, value: *const u32) {
+    unsafe {
+        let end = std::ptr::read_volatile((vector as u32 + 4) as *const u32);
+        let capacity = std::ptr::read_volatile((vector as u32 + 8) as *const u32);
+        if end == capacity {
+            INSERT_0X406DE7.original()(vector, end as *const u32, value, 1);
+        } else {
+            if end != 0 {
+                SET_TEXT_0.original()(end as *const u32, value as i32);
+            }
+            std::ptr::write_volatile((vector as u32 + 4) as *mut u32, end + 12);
+        }
+    }
+}
+
+/// Reads `count` strings from a save file into the `vector<string>` at `vector`, which must already be empty.
+/// Each string that fails to read is still appended (empty). True when every read succeeded.
+pub(crate) unsafe fn read_file_string_list(file: *const u8, vector: *const u32, count: i32) -> bool {
+    let mut ok = true;
+    for _ in 0..count.max(0) {
+        let mut value = [0u32; 3];
+        unsafe {
+            construct_empty_string(value.as_mut_ptr() as *mut RawString);
+            ok &= read_file_string(file, value.as_ptr() as *const RawString);
+            push_back_string(vector, value.as_ptr());
+            BASIC_STRING_0.original()(value.as_ptr() as *const c_void);
+        }
+    }
+    ok
+}
+
+/// Writes `size` bytes to a save file through vanilla's write primitive (the hooked address, so the test
+/// harness can capture them). True when the write succeeded.
+pub(crate) unsafe fn write_file_bytes(source: *const u8, size: u32, file: *const i8) -> bool {
+    unsafe { WRITE_BYTES_TO_FILE.hooked()(source as *const u32, size, 1, file) == 1 }
+}
+
+/// Writes one length-prefixed string. A string of `0x1000` bytes or more writes nothing and fails. Both
+/// writes are attempted even if the length write failed, as vanilla does.
+pub(crate) unsafe fn write_file_string(file: *const i8, string: *const RawString) -> bool {
+    let (begin, end) = unsafe { ((*string).begin, (*string).end) };
+    let length = (end as u32).wrapping_sub(begin as u32);
+    if length >= FILE_STRING_LIMIT {
+        return false;
+    }
+    let mut ok = unsafe { write_file_bytes(std::ptr::addr_of!(length) as *const u8, 4, file) };
+    if length != 0 {
+        let body = unsafe { write_file_bytes(begin, length, file) };
+        ok = ok && body;
+    }
+    ok
+}
+
+/// Writes a `vector<string>` as its `i32` element count followed by each string. True when every write
+/// succeeded.
+pub(crate) unsafe fn write_file_string_list(file: *const i8, vector: *const u32) -> bool {
+    let (begin, end) = unsafe { (std::ptr::read_volatile(vector), std::ptr::read_volatile(vector.add(1))) };
+    let count = (end.wrapping_sub(begin) as i32) / 12;
+    let mut ok = unsafe { write_file_bytes(std::ptr::addr_of!(count) as *const u8, 4, file) };
+    for index in 0..count.max(0) as u32 {
+        ok &= unsafe { write_file_string(file, (begin + index * 12) as *const RawString) };
+    }
+    ok
+}
+
+/// `BFFunctionCall::save(file)` (`0x477ec3`): the call name, its arguments and the three flag bytes, in the
+/// order `load_call` reads them.
+///
+/// # Safety
+/// `call` must point to a constructed `BFFunctionCall`.
+pub(crate) unsafe fn save_call(call: *const u32, file: *const i8) -> bool {
+    let mut ok = unsafe { write_file_string(file, call as *const RawString) };
+    ok &= unsafe { write_file_string_list(file, (call as u32 + ARGS_OFFSET) as *const u32) };
+    for offset in [0x18u32, 0x19, 0x1a] {
+        ok &= unsafe { write_file_bytes((call as u32 + offset) as *const u8, 1, file) };
+    }
+    ok
+}
+
+/// `BFFunctionCall::load(file, version)` (`0x44fdd1`): the call name, its arguments and the three flag bytes.
+/// Succeeds without reading for saves before behavior sets were written.
+///
+/// # Safety
+/// `call` must point to a constructed `BFFunctionCall`.
+pub(crate) unsafe fn load_call(call: *const u32, file: *const u8, version: u32) -> bool {
+    if version <= FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS {
+        return true;
+    }
+    let mut ok = unsafe { read_file_string(file, call as *const RawString) };
+    let count = unsafe { read_file_count(file) };
+    ok &= count.is_some();
+    if !ok {
+        return false;
+    }
+    let object = unsafe { ref_from_memory::<BfFunctionCall>(call as u32) };
+    let args = (call as u32 + ARGS_OFFSET) as *const u32;
+    unsafe {
+        ERASE_RANGE_0X410AC3.original()(args, object.args_begin, object.args_end as i32);
+        ok &= read_file_string_list(file, args, count.unwrap_or(0));
+        for offset in [0x18u32, 0x19, 0x1a] {
+            ok &= read_file_bytes((call as u32 + offset) as *mut u8, 1, file);
+        }
+    }
+    ok
+}
+
 /// `BFScriptMgr::parseFunction(callString, call)`, writing `dest` in place.
 ///
 /// # Safety
@@ -172,11 +324,27 @@ mod detours {
         unsafe { parse_function(input as *const u32, dest) }
     }
 
-    /// Real vanilla body for the live battery's "real" pole, valid in every profile.
+    #[detour(CALL_LOAD)]
+    unsafe extern "thiscall" fn call_load_detour(this: *const u32, file: *const i8, version: u32) -> bool {
+        unsafe { load_call(this, file as *const u8, version) }
+    }
+
+    #[detour(CALL_SAVE)]
+    unsafe extern "thiscall" fn call_save_detour(this: *const u32, file: *const i8) -> bool {
+        unsafe { save_call(this, file) }
+    }
+
+    /// Real vanilla bodies for the live battery's "real" pole, valid in every profile.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) mod test_real {
         pub(crate) fn parse_function(input: *const i32, dest: *const u32) -> bool {
             unsafe { super::PARSE_FUNCTION_DETOUR.call(input, dest) }
+        }
+        pub(crate) fn load_call(this: u32, file: *const i8, version: u32) -> bool {
+            unsafe { super::CALL_LOAD_DETOUR.call(this as *const u32, file, version) }
+        }
+        pub(crate) fn save_call(this: u32, file: *const i8) -> bool {
+            unsafe { super::CALL_SAVE_DETOUR.call(this as *const u32, file) }
         }
     }
 }
@@ -191,7 +359,7 @@ pub fn init() {
 
 #[cfg(feature = "reimplementation-tests")]
 pub(crate) mod live_support {
-    use openzt_detour::generated::bfconfigfile::UNRESOLVED_CTOR_0X410A7A;
+    use openzt_detour::generated::bffunctioncall::CONSTRUCTOR as CALL_CONSTRUCTOR;
 
     use super::*;
 
@@ -200,18 +368,20 @@ pub(crate) mod live_support {
     pub(crate) fn standalone_call() -> u32 {
         let buf: &'static mut [u32] = Box::leak(vec![0u32; BFFUNCTIONCALL_SIZE / 4].into_boxed_slice());
         let ptr = buf.as_mut_ptr();
-        unsafe { UNRESOLVED_CTOR_0X410A7A.original()(ptr) };
+        unsafe { CALL_CONSTRUCTOR.original()(ptr) };
         ptr as u32
     }
 
     /// Runs vanilla's call-object constructor over `at`, which must have `BFFUNCTIONCALL_SIZE` writable bytes.
     pub(crate) unsafe fn construct_call(at: u32) {
-        unsafe { UNRESOLVED_CTOR_0X410A7A.original()(at as *const u32) };
+        unsafe { CALL_CONSTRUCTOR.original()(at as *const u32) };
     }
 
     pub(crate) fn real_parse_function(input: *const u32, dest: u32) -> bool {
         detours::test_real::parse_function(input as *const i32, dest as *const u32)
     }
+
+    pub(crate) use super::detours::test_real as real;
 
     /// Everything `parseFunction` writes: name, arguments and the three flag bytes.
     #[derive(Debug, PartialEq, Eq)]

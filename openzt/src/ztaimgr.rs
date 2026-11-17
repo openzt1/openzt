@@ -37,9 +37,7 @@ use openzt_detour::generated::{
     ztguide::F_ROUTINE as ZTGUIDE_F_ROUTINE,
     ztkeeper::F_ROUTINE as ZTKEEPER_F_ROUTINE,
     standalone::{ATOI, TIME},
-    bfbehaviorset::INIT_CHILD as BFBEHAVIORSET_INIT_CHILD,
     bfbscall::{CONSTRUCTOR as BFBSCALL_CONSTRUCTOR, COPY_0X43E90E as BFBSCALL_COPY},
-    bfentity::SET_BS as BFENTITY_SET_BS,
     msvc_std_basic_string::{ASSIGN_RANGE_0X406C55, BASIC_STRING_0},
     msvc_std_vectorbasic_string::{ERASE_RANGE_0X410AC3, PUSH_BACK_0X4FCEF5},
     ztaimgr::{
@@ -2938,12 +2936,13 @@ unsafe fn copy_bs_call(source: u32) -> [u32; 4] {
 }
 
 unsafe fn init_child_vanilla(unit: u32, name: u32) -> bool {
-    unsafe { BFBEHAVIORSET_INIT_CHILD.original()((unit + ENTITY_BEHAVIOR_SET) as *const u32, unit as i32, name as *const i32) }
+    unsafe { crate::bfbehaviorset::init_child((unit + ENTITY_BEHAVIOR_SET) as *const u32, unit, name) }
 }
 
 unsafe fn set_bs_vanilla(unit: u32, call: u32, force: u32, mode: u32) {
     let [w0, w1, w2, w3] = unsafe { copy_bs_call(call) };
-    unsafe { BFENTITY_SET_BS.original()(unit as *const u32, w0 as *const u32, w1 as *const u32, w2 as *const u32, w3 as i8, force as i8, mode as i32) };
+    let name = crate::bfscriptmgr::RawString { begin: w0 as *const u8, end: w1 as *const u8, capacity: w2 as *const u8 };
+    unsafe { crate::bfentity::set_bs(unit, name, w3 as u8, force as u8, mode as i32) };
 }
 
 unsafe fn set_pending_vanilla(unit: u32, call: u32, force: u32) {
