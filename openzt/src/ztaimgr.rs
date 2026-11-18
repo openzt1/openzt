@@ -4901,6 +4901,59 @@ mod tests {
         RawFunctionCall { name: string_of(name), params_begin: range.start, params_end: range.end, params_capacity: range.end, _live: LiveMemory::default() }
     }
 
+    fn screaming_snake(camel: &str) -> String {
+        let mut out = String::new();
+        for (index, ch) in camel.chars().enumerate() {
+            if ch.is_ascii_uppercase() && index > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_uppercase());
+        }
+        out
+    }
+
+    fn leading_ident(text: &str) -> &str {
+        let end = text.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(text.len());
+        &text[..end]
+    }
+
+    /// The source between two markers, so the dispatch tables can be checked as written.
+    fn source_between(start: &str, end: &str) -> &'static str {
+        let source: &'static str = include_str!("ztaimgr.rs");
+        let from = source.find(start).unwrap_or_else(|| panic!("marker {start:?} not found"));
+        let to = from + source[from..].find(end).unwrap_or_else(|| panic!("marker {end:?} not found"));
+        &source[from..to]
+    }
+
+    #[test]
+    fn vanilla_handlers_invoke_the_entry_named_after_each_variant() {
+        let region = source_between("impl Handlers for VanillaHandlers", "/// The handler for a `ZTAIMgr` call name.");
+        let arms: Vec<&str> = region.split("Handler::").skip(1).collect();
+        assert_eq!(arms.len(), 44, "one arm per Handler variant");
+        for arm in arms {
+            let variant = leading_ident(arm);
+            let expected = format!("F_{}", screaming_snake(variant));
+            let first_entry = arm
+                .match_indices("F_")
+                .map(|(at, _)| leading_ident(&arm[at..]))
+                .find(|token| token.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit()))
+                .unwrap_or_else(|| panic!("Handler::{variant} calls no F_ entry"));
+            assert_eq!(first_entry, expected, "Handler::{variant} must invoke {expected}");
+        }
+    }
+
+    #[test]
+    fn zt_handler_maps_each_call_to_its_own_handler() {
+        let region = source_between("pub fn zt_handler(", "/// `ZTAIMgr::executeCall`: dispatches");
+        let arms: Vec<&str> = region.split("ZtCall::").skip(1).collect();
+        assert_eq!(arms.len(), 23);
+        for arm in arms {
+            let call = leading_ident(arm);
+            let target = arm.split("Handler::").nth(1).map(leading_ident).unwrap_or_else(|| panic!("ZtCall::{call} has no handler"));
+            assert_eq!(target, format!("{call}F"), "ZtCall::{call} must reach Handler::{call}F");
+        }
+    }
+
     #[test]
     fn zt_call_lookup_covers_every_name_and_nothing_near() {
         let names: [(&[u8], ZtCall); 23] = [
