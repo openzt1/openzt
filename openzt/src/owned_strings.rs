@@ -21,11 +21,17 @@ use std::{
     collections::HashSet,
     sync::{LazyLock, Mutex},
 };
+#[cfg(feature = "reimplementation-tests")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use openzt_detour::generated::{poolalloc::DEALLOCATE as POOL_DEALLOCATE, standalone::OPERATOR_DELETE};
 
 /// Addresses of the buffers this module allocated.
 static RUST_BUFFERS: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Releases that took the vanilla branch of [`free_buffer`] (a buffer this module did not allocate).
+#[cfg(feature = "reimplementation-tests")]
+static VANILLA_FREES: AtomicUsize = AtomicUsize::new(0);
 
 /// Size of one string entry (`{begin, end, cap}`).
 pub(crate) const STRING_BYTES: usize = 12;
@@ -66,6 +72,8 @@ pub(crate) unsafe fn free_buffer(pointer: *mut u8, size: usize, align: usize) {
     if pointer.is_null() || unsafe { rust_free(pointer, size, align) } {
         return;
     }
+    #[cfg(feature = "reimplementation-tests")]
+    VANILLA_FREES.fetch_add(1, Ordering::Relaxed);
     unsafe {
         if size > POOL_LIMIT {
             OPERATOR_DELETE.original()(pointer as u32);
@@ -79,6 +87,14 @@ pub(crate) unsafe fn free_buffer(pointer: *mut u8, size: usize, align: usize) {
 #[cfg(any(test, feature = "reimplementation-tests"))]
 pub(crate) fn tracked_count() -> usize {
     RUST_BUFFERS.lock().unwrap().len()
+}
+
+/// How many releases have taken the vanilla branch of [`free_buffer`] so far. Compare deltas: objects built by
+/// vanilla's own constructors (the live tests' "real" side, anything that predates the detours) legitimately
+/// release through it.
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) fn vanilla_free_count() -> usize {
+    VANILLA_FREES.load(Ordering::Relaxed)
 }
 
 /// Whether `pointer` is a buffer this module allocated and has not yet freed.

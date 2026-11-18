@@ -1166,6 +1166,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSHOWINFO_SAVE_IGNORES_STALE_COUNTS_LIVE", run: tests::zthabitatmgr::run_ztshowinfo_save_ignores_stale_counts_live_test },
             RegisteredTest { name: "ZTWORLDMGR_SAVE_FILE_ROUNDTRIP_LIVE", run: tests::zthabitatmgr::run_ztworldmgr_save_file_roundtrip_live_test },
             RegisteredTest { name: "ZTWORLDMGR_SIMULATED_PLAY_THEN_SAVE_LIVE", run: tests::zthabitatmgr::run_ztworldmgr_simulated_play_then_save_live_test },
+            RegisteredTest { name: "OWNED_STRINGS_OWNERSHIP_LIVE", run: tests::owned_strings::run_owned_strings_ownership_live_test },
             RegisteredTest { name: "ZTHABITATMGR_REMOVE_ALL_HABITATS_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_remove_all_habitats_live_test },
             RegisteredTest { name: "ZTHABITATMGR_CLEAR_LIVE", run: tests::zthabitatmgr::run_zthabitatmgr_clear_live_test },
             RegisteredTest { name: "ZTTANKEXHIBIT_DESTRUCTOR_REACHED", run: tests::zttankexhibit::run_tankexhibit_destructor_reached_test },

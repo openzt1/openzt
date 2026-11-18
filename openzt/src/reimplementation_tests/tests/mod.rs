@@ -11,6 +11,7 @@ pub(crate) mod bfbehaviorset;
 pub(crate) mod bfentity;
 pub(crate) mod bfentity_io;
 pub(crate) mod bfunit;
+pub(crate) mod owned_strings;
 pub(crate) mod bfscriptmgr;
 pub(crate) mod footprints;
 pub(crate) mod ztadvterrainmgr;
