@@ -212,6 +212,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "BFBEHAVIORSET_CLEAR", run: tests::bfbehaviorset::run_bfbehaviorset_clear_test },
             RegisteredTest { name: "BFBEHAVIORSET_KILL_CHILD", run: tests::bfbehaviorset::run_bfbehaviorset_kill_child_test },
             RegisteredTest { name: "BFBEHAVIORSET_DESTRUCTOR", run: tests::bfbehaviorset::run_bfbehaviorset_destructor_test },
+            RegisteredTest { name: "BFBEHAVIORSET_RUST_OWNED", run: tests::bfbehaviorset::run_bfbehaviorset_rust_owned_test },
             RegisteredTest { name: "BFBEHAVIORSET_LOAD_FILE", run: tests::bfbehaviorset::run_bfbehaviorset_load_file_test },
             RegisteredTest { name: "BFBEHAVIORSET_CONSTRUCTOR", run: tests::bfbehaviorset::run_bfbehaviorset_constructor_test },
             RegisteredTest { name: "BFBEHAVIORSET_SAVE", run: tests::bfbehaviorset::run_bfbehaviorset_save_test },

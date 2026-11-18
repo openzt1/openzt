@@ -908,3 +908,90 @@ pub(crate) fn run_bffunctioncall_save_load_test(failure_log: &mut Option<std::fs
     }
     finish_test(test_name, failures, failure_log)
 }
+
+/// `BFBEHAVIORSET_RUST_OWNED` - a whole set lifecycle on the port's own storage: construct, name, call-list entries,
+/// a parsed call, nested children from `initChild`, `removeHead`, `clear` and destruction. Every string and vector
+/// in it is Rust-allocated, so no size class of vanilla's `PoolAlloc` may gain or lose a block and the allocator's
+/// own bookkeeping must end where it started.
+pub(crate) fn run_bfbehaviorset_rust_owned_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::bfbehaviorset::{construct_set_members, destroy_set_members, BfBehaviorSet, BFBEHAVIORSET_SIZE};
+    use crate::bfscriptmgr::{parse_function, RawString};
+    use crate::owned_strings::{strvec_push, tracked_count};
+    use crate::reimplementation_tests::tests::bfentity::{pool_lengths, warm_pool};
+
+    let test_name = "BFBEHAVIORSET_RUST_OWNED";
+    let mut failures: Vec<String> = Vec::new();
+
+    let text = |value: &str| -> (Vec<u8>, RawString) {
+        let mut bytes = value.as_bytes().to_vec();
+        bytes.push(0);
+        let range = bytes.as_ptr_range();
+        let raw = RawString { begin: range.start, end: unsafe { range.end.sub(1) }, capacity: range.end };
+        (bytes, raw)
+    };
+
+    let mut storage = Box::new([0xcdcd_cdcdu32; BFBEHAVIORSET_SIZE / 4]);
+    let base = storage.as_mut_ptr() as u32;
+    let set = unsafe { &*(base as *const BfBehaviorSet) };
+
+    warm_pool();
+    let (pool_before, tracked_before) = (pool_lengths(), tracked_count());
+    unsafe { construct_set_members(base) };
+    let fresh = bfbehaviorset_live_support::snapshot(base);
+    if !fresh.name.is_empty() || !fresh.current_call.is_empty() || !fresh.list.is_empty() || fresh.has_child || fresh.flags != [1, 0, 0, 0, 0] {
+        failures.push(format!("constructed set is not empty: {fresh:?}"));
+    }
+
+    let (_keep_root, root) = text("root");
+    if !unsafe { set.set_name(&root) } {
+        failures.push("setName refused a non-empty name".to_string());
+    }
+    for line in ["fA(1)", "fB(2)", "fC(3)"] {
+        unsafe { strvec_push(base + 0x28, line.as_bytes()) };
+    }
+    let (_keep_call, call_text) = text("fA(1, 2)");
+    unsafe { parse_function(&call_text as *const RawString as *const u32, (base + 0xc) as *const u32) };
+    unsafe { set.remove_head() };
+    let after_remove = bfbehaviorset_live_support::snapshot(base);
+    if after_remove.name != b"root" || after_remove.list != vec![b"fB(2)".to_vec(), b"fC(3)".to_vec()] || !after_remove.call.name.is_empty() {
+        failures.push(format!("after removeHead: {after_remove:?}"));
+    }
+    if after_remove.call.args != vec![b"1".to_vec(), b"2".to_vec()] {
+        failures.push(format!("removeHead should leave the call arguments: {:?}", after_remove.call.args));
+    }
+
+    for child_name in ["child1", "child2"] {
+        let (_keep, name) = text(child_name);
+        if !unsafe { set.init_child(0, &name) } {
+            failures.push(format!("initChild({child_name}) failed"));
+        }
+    }
+    let chain = bfbehaviorset_live_support::snapshot_chain(base);
+    if chain.len() != 3 || chain[0].stack != vec![b"child1".to_vec(), b"child2".to_vec()] || chain[1].name != b"child1" || chain[2].name != b"child2" {
+        failures.push(format!("child chain: {chain:?}"));
+    }
+
+    unsafe { set.clear() };
+    let cleared = bfbehaviorset_live_support::snapshot_chain(base);
+    // `killChild` pops one name-stack entry per call whatever the chain's depth (`BFBEHAVIORSET_KILL_CHILD` compares
+    // that with vanilla), so `child1` is left on the stack.
+    if cleared.len() != 1 || !cleared[0].name.is_empty() || !cleared[0].list.is_empty() || cleared[0].stack != vec![b"child1".to_vec()] || !cleared[0].call.args.is_empty() {
+        failures.push(format!("after clear: {cleared:?}"));
+    }
+
+    let (_keep_again, again) = text("again");
+    unsafe { set.set_name(&again) };
+    for line in ["x", "yy"] {
+        unsafe { strvec_push(base + 0x28, line.as_bytes()) };
+    }
+    unsafe { destroy_set_members(base) };
+
+    let (pool_after, tracked_after) = (pool_lengths(), tracked_count());
+    if pool_before != pool_after {
+        failures.push(format!("vanilla pool changed: before {pool_before:?}, after {pool_after:?}"));
+    }
+    if tracked_before != tracked_after {
+        failures.push(format!("string allocator tracked {tracked_before} buffers before and {tracked_after} after"));
+    }
+    finish_test(test_name, failures, failure_log)
+}

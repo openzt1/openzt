@@ -19,7 +19,7 @@ use openzt_detour::generated::{
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
         ztanimal::{
-            CAN_SERVICE, IS_HUNGRY as ZTANIMAL_IS_HUNGRY, IS_HUNGRY_AND_FOODLESS, IS_SICKLY,
+            ADD_FACE as ZTANIMAL_ADD_FACE, CAN_SERVICE, IS_HUNGRY as ZTANIMAL_IS_HUNGRY, IS_HUNGRY_AND_FOODLESS, IS_SICKLY,
             IS_UNHAPPY_FOR_REPRODUCTION as ZTANIMAL_IS_UNHAPPY_FOR_REPRODUCTION, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING,
         },
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
@@ -84,11 +84,6 @@ const RVA_EMPTY_NAME_STRING: u32 = 0x0063_8084 - 0x0040_0000;
 /// RVA of the global flag byte (`DAT_0063cb35`) `reviseSpeciesList` sets once a habitat holds animals of all
 /// three tracked species kinds; meaning not otherwise identified.
 const RVA_ALL_SPECIES_KINDS_SEEN: u32 = 0x0063_cb35 - 0x0040_0000;
-
-/// `ZTAnimal::FUN_004d9a2f(smile)` (not in `generated.rs`): queues a smile/frown face on the animal.
-/// Reached through `.hooked()` by [`ZTHabitat::generate_faces`] so the live battery's recorder can
-/// observe the per-animal requests without spawning faces.
-pub(crate) const ANIMAL_SHOW_FACE: openzt_detour::FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = openzt_detour::FunctionDef::new(0x004d9a2f);
 
 /// `f32` weights `findBestRating` applies to the five `get*Suitability` terms of a land habitat
 /// (`DAT_00635408`/`0063540c`/`00635480`/`00635484`/`00635488`). RVA = address - `0x400000`.
@@ -6801,7 +6796,7 @@ impl ZTHabitat {
 
     /// Ports `ZTHabitat::generateFaces` (`GENERATE_FACES`, `0x004d9953`, `thiscall(species_type, smile,
     /// other_habitat) -> bool`): asks every animal of `species_type` in this habitat's own list
-    /// (`+0x6c`..`+0x70`) to show a smile/frown face (`ZTAnimal::FUN_004d9a2f`, [`ANIMAL_SHOW_FACE`]), and
+    /// (`+0x6c`..`+0x70`) to show a smile/frown face (`ZTAnimal::addFace`, `ZTANIMAL_ADD_FACE`, reached through `.hooked()` so the live battery's recorder can observe the requests without spawning faces), and
     /// for a land habitat visited directly (`other_habitat == 0`) with a species whose type passes the
     /// vtable `+0xcc` predicate, recurses into every amphibious neighbour (`+0x8`) with `other_habitat =
     /// self` and the same `smile` (the decompile shows `false`; the `.asm` pushes the caller's `[ESP+0x1c]`, the smile argument). Returns whether any animal
@@ -6829,7 +6824,7 @@ impl ZTHabitat {
             let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
             if animal_type == species_type_ptr {
                 any_matched = true;
-                unsafe { ANIMAL_SHOW_FACE.hooked()(animal_ptr as *const u32, smile) };
+                unsafe { ZTANIMAL_ADD_FACE.hooked()(animal_ptr as *const u32, smile) };
             }
         }
         if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) }

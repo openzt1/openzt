@@ -2410,6 +2410,7 @@ pub mod ztanimal {
     pub const F_IS_THERE_KEEPER_FOOD: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a8624, function_type: PhantomData};
     pub const IS_SICKLY: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004a88cf, function_type: PhantomData};
     pub const PUT_DOWN_DIRT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x004a8f89, function_type: PhantomData};
+    pub const ADD_FACE: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = FunctionDef{address: 0x004d9a2f, function_type: PhantomData};
     pub const SET_NAME: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x004e1d6b, function_type: PhantomData};
     pub const DROP: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004e1e4e, function_type: PhantomData};
     pub const SET_TARGET_GRID_POS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const IVec3)> = FunctionDef{address: 0x004e7289, function_type: PhantomData};
@@ -5835,7 +5836,9 @@ pub mod ztworldmgr {
     pub const RESET_GUESTS_WITHOUT_REMOVING: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x004c9eae, function_type: PhantomData};
     pub const RESET_SCENERY: FunctionDef<unsafe extern "fastcall" fn(i32)> = FunctionDef{address: 0x004c9f8a, function_type: PhantomData};
     pub const RESET_ANIMAL_COUNTS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x004c9fd4, function_type: PhantomData};
-    pub const PLAY_SMILE_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004dbf90, function_type: PhantomData};
+    pub const PLAY_SMILE_SOUND_0: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d954a, function_type: PhantomData};
+    pub const PLAY_FROWN_SOUND_0: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004d9573, function_type: PhantomData};
+    pub const PLAY_SMILE_SOUND_1: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x004dbf90, function_type: PhantomData};
     pub const ADD_TO_OBJECT_LIST: FunctionDef<unsafe extern "stdcall" fn(*const u8, u32)> = FunctionDef{address: 0x004fdf04, function_type: PhantomData};
     pub const REMOVE_FROM_ALL_BUILDING_LISTS: FunctionDef<unsafe extern "stdcall" fn(*const i32) -> u32> = FunctionDef{address: 0x005002ac, function_type: PhantomData};
     pub const REMOVE_FROM_BUILDING_LIST: FunctionDef<unsafe extern "stdcall" fn(*const u8, *const i32) -> u32> = FunctionDef{address: 0x00500339, function_type: PhantomData};
@@ -5844,7 +5847,7 @@ pub mod ztworldmgr {
     pub const ADD_AMBIENT_EFFECT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32)> = FunctionDef{address: 0x0059148e, function_type: PhantomData};
     pub const GET_GRANDSTANDS_UPKEEP: FunctionDef<unsafe extern "thiscall" fn(*const u32, i16) -> f32> = FunctionDef{address: 0x0059e8f0, function_type: PhantomData};
     pub const PLAY_SHOW_SOUND: FunctionDef<unsafe extern "stdcall" fn(u32, u16, *const i32)> = FunctionDef{address: 0x005a28fb, function_type: PhantomData};
-    pub const PLAY_FROWN_SOUND: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005acf8a, function_type: PhantomData};
+    pub const PLAY_FROWN_SOUND_1: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef{address: 0x005acf8a, function_type: PhantomData};
     pub const UPDATE_SHOW_ASSOCIATIONS: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x005b3068, function_type: PhantomData};
     pub const TRANS_TO_VER2: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32, *const u32)> = FunctionDef{address: 0x0060d478, function_type: PhantomData};
     pub const TRANS_TO_VER20: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32, *const u32)> = FunctionDef{address: 0x0060d58f, function_type: PhantomData};

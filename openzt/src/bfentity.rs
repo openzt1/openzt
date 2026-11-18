@@ -3,7 +3,8 @@
 //! bare `BFEntity` with the constructor. The object is `0x154`
 //! bytes and is still read and written by un-ported vanilla code, so it keeps vanilla's layout and is built in
 //! place (style 1). Every string, vector and container inside is built through vanilla's own helpers, except the
-//! embedded behavior set's parsed call object, whose buffers are Rust-allocated (`bfscriptmgr.rs`).
+//! embedded behavior set's strings, vectors and parsed call object, whose buffers are Rust-allocated
+//! (`owned_strings.rs`, `bfscriptmgr.rs`).
 //!
 //! ## Layout written by the constructor
 //! `+0x00` vtable (`BFEventListenerInterface`'s while building, `BFEntity`'s at the end, since derived
@@ -35,7 +36,6 @@ use openzt_detour::generated::{
     msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_1, CONSTRUCT_CSTR_0X40505A},
     msvc_std_dequegxmixerchain::{DESTROY_RANGE_0X411CAD, DESTRUCTOR_0X41DECC},
     msvc_std_vector_t_28::VECTOR_T_28,
-    msvc_std_vectorbasic_string::ERASE_RANGE_0X410AC3,
     msvc_std_vectorbyte::VECTORBYTE,
     msvc_std_vectorgxmixerlink::{DESTRUCTOR_0X411C0F, FREE_BUFFER_0X402970},
 };
@@ -44,7 +44,7 @@ use tracing::error;
 
 use crate::{
     bfbehaviorset::{clear_string, construct_set_members, destroy_set_members, BfBehaviorSet},
-    bfscriptmgr::{read_file_bytes, reset_call, write_file_bytes, write_file_string, RawString},
+    bfscriptmgr::{clear_call_args, read_file_bytes, reset_call, write_file_bytes, write_file_string, RawString},
     util::{get_from_memory, ref_from_memory},
     vanilla_string::VanillaString,
     write_live,
@@ -432,7 +432,7 @@ pub(crate) unsafe fn clear_bs(this: u32) -> u32 {
     unsafe { clear_string(std::ptr::addr_of!(set.current_call)) };
     unsafe { clear_string(std::ptr::addr_of!(set.call) as *const RawString) };
     let call = &set.call;
-    unsafe { ERASE_RANGE_0X410AC3.original()(std::ptr::addr_of!(call.args_begin) as *const u32, call.args_begin, call.args_end as i32) };
+    unsafe { clear_call_args(std::ptr::addr_of!(set.call) as u32) };
     write_live!(call, result_flag, 0u8);
     write_live!(call, flag_19, 0u8);
     write_live!(call, flag_1a, 0u8);

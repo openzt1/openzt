@@ -13127,7 +13127,7 @@ pub(crate) fn run_get_random_hungry_animal_matches_real_live_test(failure_log: &
 
 /// `ZTHABITAT_GENERATE_FACES_MATCHES_REAL_LIVE`: real vanilla vs port for `generateFaces` over every live
 /// habitat x every live animal type x `other_habitat` in `{null, each live habitat}` x both `smile`
-/// values. The per-animal `FUN_004d9a2f` requests are recorded rather than executed
+/// values. The per-animal `ZTAnimal::addFace` requests are recorded rather than executed
 /// (`generate_faces_recorder::begin_animal_face_capture`); the return value and the ordered request log
 /// must match. A second pass seeds the amphibious set of each land habitat that has none with every other
 /// live habitat (then clears it) so the neighbour recursion runs. Real runs in

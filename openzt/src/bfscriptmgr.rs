@@ -26,17 +26,11 @@
 //! ## Allocation
 //! The call name's buffer, the argument array and each argument's buffer are allocated and freed here, from
 //! Rust's allocator, and every vanilla reader only reads them (strings stay `{begin, end, cap}` with a NUL
-//! after the text, the array stays 12-byte entries). Each buffer Rust allocates is recorded in
-//! `RUST_BUFFERS`; a buffer that is not recorded was built by vanilla (a call object constructed by vanilla's own
-//! constructor, as the live tests' "real" side does) and is released through vanilla's allocator, so an object
-//! is always freed by whoever allocated each piece of it.
+//! after the text, the array stays 12-byte entries) through `owned_strings.rs`, which also frees a buffer that
+//! vanilla built (a call object constructed by vanilla's own constructor, as the live tests' "real" side does)
+//! through vanilla's allocator, so an object is always freed by whoever allocated each piece of it.
 
-use std::{
-    alloc::{alloc, dealloc, handle_alloc_error, Layout},
-    collections::HashSet,
-    ffi::c_void,
-    sync::{LazyLock, Mutex},
-};
+use std::ffi::c_void;
 
 use openzt_detour::{
     generated::{
@@ -44,8 +38,7 @@ use openzt_detour::{
         bfscriptmgr::PARSE_FUNCTION,
         msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_0, BASIC_STRING_2},
         msvc_std_vectorbasic_string::INSERT_0X406DE7,
-        poolalloc::DEALLOCATE as POOL_DEALLOCATE,
-        standalone::{DEALLOCATE, OPERATOR_DELETE, WRITE_BYTES_TO_FILE},
+        standalone::{DEALLOCATE, WRITE_BYTES_TO_FILE},
         uitext::SET_TEXT_0,
     },
 };
@@ -53,6 +46,7 @@ use openzt_detour_macro::detour_mod;
 use tracing::error;
 
 use crate::{
+    owned_strings::{string_assign, string_construct, string_release, strvec_clear, strvec_free, strvec_push, StringSlot},
     util::{ref_from_memory, LiveMemory},
     write_live,
 };
@@ -138,138 +132,8 @@ pub(crate) fn parse(input: &[u8]) -> ParsedCall {
     parsed
 }
 
-/// Addresses of the buffers this module allocated for call objects (names, argument arrays, argument strings).
-static RUST_BUFFERS: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-
-const STRING_BYTES: usize = 12;
 /// A freshly constructed call name has room for this many bytes (vanilla builds its strings with capacity 8).
 const NAME_INITIAL_CAPACITY: usize = 8;
-/// The smallest argument array a push allocates, in strings.
-const ARGS_MIN_CAPACITY: usize = 4;
-/// Largest block `PoolAlloc` serves from its size-class freelists; bigger ones go to `operator new`.
-const POOL_LIMIT: usize = 0x80;
-
-fn buffer_layout(size: usize, align: usize) -> Layout {
-    Layout::from_size_align(size.max(1), align).expect("call buffer layout")
-}
-
-fn rust_alloc(size: usize, align: usize) -> *mut u8 {
-    let layout = buffer_layout(size, align);
-    let pointer = unsafe { alloc(layout) };
-    if pointer.is_null() {
-        handle_alloc_error(layout);
-    }
-    RUST_BUFFERS.lock().unwrap().insert(pointer as usize);
-    pointer
-}
-
-/// Frees `pointer` and returns true when this module allocated it; false (and nothing freed) otherwise.
-unsafe fn rust_free(pointer: *mut u8, size: usize, align: usize) -> bool {
-    if !RUST_BUFFERS.lock().unwrap().remove(&(pointer as usize)) {
-        return false;
-    }
-    unsafe { dealloc(pointer, buffer_layout(size, align)) };
-    true
-}
-
-/// Releases a buffer of `size` bytes, through Rust's allocator when this module allocated it and otherwise
-/// the way vanilla's `PoolAlloc::deallocate` does.
-unsafe fn free_buffer(pointer: *mut u8, size: usize, align: usize) {
-    if pointer.is_null() || unsafe { rust_free(pointer, size, align) } {
-        return;
-    }
-    unsafe {
-        if size > POOL_LIMIT {
-            OPERATOR_DELETE.original()(pointer as u32);
-        } else {
-            POOL_DEALLOCATE.original()(pointer as *const u32, size as u32);
-        }
-    }
-}
-
-/// A `{begin, end, cap}` string slot inside a call object.
-type StringSlot = *mut [*mut u8; 3];
-
-/// Points `slot` at a new buffer holding `bytes` and a NUL, sized exactly (at least `min_capacity`), without
-/// touching whatever the slot held.
-unsafe fn string_fill_new(slot: StringSlot, bytes: &[u8], min_capacity: usize) {
-    let capacity = (bytes.len() + 1).max(min_capacity);
-    let buffer = rust_alloc(capacity, 1);
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, bytes.len());
-        buffer.add(bytes.len()).write(0);
-        std::ptr::write_volatile(slot, [buffer, buffer.add(bytes.len()), buffer.add(capacity)]);
-    }
-}
-
-/// Frees the buffer behind `slot` (the slot's words are left as they are).
-unsafe fn string_release(slot: StringSlot) {
-    let [begin, _, capacity] = unsafe { std::ptr::read_volatile(slot) };
-    unsafe { free_buffer(begin, capacity as usize - begin as usize, 1) };
-}
-
-/// Assigns `bytes` to the string in `slot`: in place when its buffer has room for the text and a NUL, else into a
-/// new buffer with the old one released.
-unsafe fn string_assign(slot: StringSlot, bytes: &[u8]) {
-    let [begin, _, capacity] = unsafe { std::ptr::read_volatile(slot) };
-    if !begin.is_null() && capacity as usize - begin as usize > bytes.len() {
-        unsafe {
-            std::ptr::copy(bytes.as_ptr(), begin, bytes.len());
-            begin.add(bytes.len()).write(0);
-            std::ptr::write_volatile(slot, [begin, begin.add(bytes.len()), capacity]);
-        }
-        return;
-    }
-    unsafe {
-        string_release(slot);
-        string_fill_new(slot, bytes, 1);
-    }
-}
-
-unsafe fn args_words(call: *const BfFunctionCall) -> [usize; 3] {
-    unsafe { [(*call).args_begin as usize, (*call).args_end as usize, (*call).args_capacity as usize] }
-}
-
-unsafe fn set_args_words(call: *const BfFunctionCall, words: [usize; 3]) {
-    let call = unsafe { ref_from_memory::<BfFunctionCall>(call as u32) };
-    write_live!(call, args_begin, words[0] as *const u32);
-    write_live!(call, args_end, words[1] as *const u32);
-    write_live!(call, args_capacity, words[2] as *const u32);
-}
-
-/// Releases every argument's buffer and empties the argument array, keeping the array itself.
-unsafe fn args_clear(call: *const BfFunctionCall) {
-    let [begin, end, capacity] = unsafe { args_words(call) };
-    let mut element = begin;
-    while element < end {
-        unsafe { string_release(element as StringSlot) };
-        element += STRING_BYTES;
-    }
-    unsafe { set_args_words(call, [begin, begin, capacity]) };
-}
-
-/// Appends an argument holding `bytes`, growing the array (into Rust's allocator) when it is full.
-unsafe fn args_push(call: *const BfFunctionCall, bytes: &[u8]) {
-    let [begin, end, capacity] = unsafe { args_words(call) };
-    let (count, room) = ((end - begin) / STRING_BYTES, (capacity - begin) / STRING_BYTES);
-    let (begin, capacity) = if count == room {
-        let new_room = (room * 2).max(ARGS_MIN_CAPACITY);
-        let fresh = rust_alloc(new_room * STRING_BYTES, 4) as usize;
-        unsafe {
-            if count != 0 {
-                std::ptr::copy_nonoverlapping(begin as *const u8, fresh as *mut u8, count * STRING_BYTES);
-            }
-            free_buffer(begin as *mut u8, room * STRING_BYTES, 4);
-        }
-        (fresh, fresh + new_room * STRING_BYTES)
-    } else {
-        (begin, capacity)
-    };
-    unsafe {
-        string_fill_new((begin + count * STRING_BYTES) as StringSlot, bytes, 1);
-        set_args_words(call, [begin, begin + (count + 1) * STRING_BYTES, capacity]);
-    }
-}
 
 /// Builds an empty call object at `at` (`BFFunctionCall::BFFunctionCall`): a name with room for
 /// [`NAME_INITIAL_CAPACITY`] bytes, no arguments, the flag bytes zero. The padding byte at `+0x1b` is left as it
@@ -279,7 +143,7 @@ unsafe fn args_push(call: *const BfFunctionCall, bytes: &[u8]) {
 /// `at` must have `BFFUNCTIONCALL_SIZE` writable bytes.
 pub(crate) unsafe fn construct_call(at: u32) {
     unsafe {
-        string_fill_new(at as StringSlot, b"", NAME_INITIAL_CAPACITY);
+        string_construct(at as StringSlot, NAME_INITIAL_CAPACITY);
         for offset in [0x0cu32, 0x10, 0x14] {
             ((at + offset) as *mut u32).write_volatile(0);
         }
@@ -295,11 +159,8 @@ pub(crate) unsafe fn construct_call(at: u32) {
 /// # Safety
 /// `at` must point to a constructed `BFFunctionCall`.
 pub(crate) unsafe fn destroy_call(at: u32) {
-    let call = at as *const BfFunctionCall;
     unsafe {
-        args_clear(call);
-        let [begin, _, capacity] = args_words(call);
-        free_buffer(begin as *mut u8, capacity - begin, 4);
+        strvec_free(at + ARGS_OFFSET);
         string_release(at as StringSlot);
     }
 }
@@ -312,16 +173,23 @@ pub(crate) unsafe fn set_call_name(at: u32, name: &[u8]) {
     unsafe { string_assign(at as StringSlot, name) };
 }
 
+/// Empties the call's argument list, keeping its array.
+///
+/// # Safety
+/// `at` must point to a constructed `BFFunctionCall`.
+pub(crate) unsafe fn clear_call_args(at: u32) {
+    unsafe { strvec_clear(at + ARGS_OFFSET) };
+}
+
 /// Replaces the call's arguments with copies of `arguments`.
 ///
 /// # Safety
 /// `at` must point to a constructed `BFFunctionCall`.
 pub(crate) unsafe fn set_call_args(at: u32, arguments: &[&[u8]]) {
-    let call = at as *const BfFunctionCall;
     unsafe {
-        args_clear(call);
+        strvec_clear(at + ARGS_OFFSET);
         for argument in arguments {
-            args_push(call, argument);
+            strvec_push(at + ARGS_OFFSET, argument);
         }
     }
 }
@@ -338,7 +206,7 @@ pub(crate) unsafe fn reset_call(dest: *const u32) {
         unsafe { begin.write_volatile(0) };
     }
     write_live!(call, name_end, begin);
-    unsafe { args_clear(dest as *const BfFunctionCall) };
+    unsafe { strvec_clear(dest as u32 + ARGS_OFFSET) };
     write_live!(call, result_flag, 0u8);
     write_live!(call, flag_19, 0u8);
     write_live!(call, flag_1a, 0u8);
@@ -407,6 +275,35 @@ pub(crate) unsafe fn push_back_string(vector: *const u32, value: *const u32) {
             std::ptr::write_volatile((vector as u32 + 4) as *mut u32, end + 12);
         }
     }
+}
+
+/// Reads one length-prefixed string from a save file into the Rust-owned string at `target`
+/// ([`read_file_string`] for a vanilla-owned one).
+pub(crate) unsafe fn read_file_owned_string(file: *const u8, target: *const RawString) -> bool {
+    let Some((text, ok)) = (unsafe { read_file_text(file) }) else {
+        return false;
+    };
+    unsafe { string_assign(target as StringSlot, &text) };
+    ok
+}
+
+/// Reads `count` strings from a save file into the Rust-owned `vector<string>` at `vector`, which must already be
+/// empty. Each string that fails to read is still appended (empty). True when every read succeeded.
+pub(crate) unsafe fn read_file_strvec(file: *const u8, vector: u32, count: i32) -> bool {
+    let mut ok = true;
+    for _ in 0..count.max(0) {
+        match unsafe { read_file_text(file) } {
+            Some((text, read_ok)) => {
+                unsafe { strvec_push(vector, &text) };
+                ok &= read_ok;
+            }
+            None => {
+                unsafe { strvec_push(vector, b"") };
+                ok = false;
+            }
+        }
+    }
+    ok
 }
 
 /// Reads `count` strings from a save file into the `vector<string>` at `vector`, which must already be empty.
@@ -494,21 +391,10 @@ pub(crate) unsafe fn load_call(call: *const u32, file: *const u8, version: u32) 
     if !ok {
         return false;
     }
-    let object = call as *const BfFunctionCall;
+    let args = call as u32 + ARGS_OFFSET;
     unsafe {
-        args_clear(object);
-        for _ in 0..count.unwrap_or(0).max(0) {
-            match read_file_text(file) {
-                Some((text, read_ok)) => {
-                    args_push(object, &text);
-                    ok &= read_ok;
-                }
-                None => {
-                    args_push(object, b"");
-                    ok = false;
-                }
-            }
-        }
+        strvec_clear(args);
+        ok &= read_file_strvec(file, args, count.unwrap_or(0));
         for offset in [0x18u32, 0x19, 0x1a] {
             ok &= read_file_bytes((call as u32 + offset) as *mut u8, 1, file);
         }
@@ -527,7 +413,7 @@ pub(crate) unsafe fn parse_function(input: *const u32, dest: *const u32) -> bool
         reset_call(dest);
         set_call_name(dest as u32, &parsed.name);
         for arg in &parsed.args {
-            args_push(dest as *const BfFunctionCall, arg);
+            strvec_push(dest as u32 + ARGS_OFFSET, arg);
         }
     }
     parsed.ok
@@ -601,7 +487,7 @@ pub(crate) mod live_support {
 
     /// How many buffers the call-object allocator currently tracks.
     pub(crate) fn rust_buffer_count() -> usize {
-        RUST_BUFFERS.lock().unwrap().len()
+        crate::owned_strings::tracked_count()
     }
 
     /// Runs vanilla's call-object constructor over `at`, which must have `BFFUNCTIONCALL_SIZE` writable bytes.
@@ -640,6 +526,7 @@ pub(crate) mod live_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::owned_strings::{is_tracked, strvec_push, STRING_BYTES};
 
     fn parsed(input: &str) -> (String, Vec<String>, bool) {
         let p = parse(input.as_bytes());
@@ -740,10 +627,9 @@ mod tests {
     #[test]
     fn arguments_grow_past_the_first_allocation_and_keep_their_text() {
         let (_storage, at) = fresh_call();
-        let call = at as *const BfFunctionCall;
         let texts: Vec<Vec<u8>> = (0..11).map(|i| format!("arg{i}{}", "x".repeat(i)).into_bytes()).collect();
         for text in &texts {
-            unsafe { args_push(call, text) };
+            unsafe { strvec_push(at + ARGS_OFFSET, text) };
         }
         assert_eq!(read_call(at).1, texts);
         assert_nul_terminated(at);
@@ -791,8 +677,8 @@ mod tests {
         let call = unsafe { &*(at as *const BfFunctionCall) };
         let mut owned = vec![unsafe { (*(at as *const RawString)).begin } as usize, call.args_begin as usize];
         owned.extend((0..6).map(|i| unsafe { (*(call.args_begin as *const RawString).add(i)).begin } as usize));
-        assert!(owned.iter().all(|pointer| RUST_BUFFERS.lock().unwrap().contains(pointer)));
+        assert!(owned.iter().all(|pointer| is_tracked(*pointer)));
         unsafe { destroy_call(at) };
-        assert!(owned.iter().all(|pointer| !RUST_BUFFERS.lock().unwrap().contains(pointer)));
+        assert!(owned.iter().all(|pointer| !is_tracked(*pointer)));
     }
 }

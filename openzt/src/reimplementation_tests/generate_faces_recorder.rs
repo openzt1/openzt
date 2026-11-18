@@ -1,5 +1,5 @@
 //! Redirects `ZTHabitat::generateFaces` (`0x004d9953`, via [`intercept`] from the port's own detour in
-//! `hooks_zthabitatmgr`, since two detours cannot share an address), `ZTAnimal::FUN_004d9a2f` and the two
+//! `hooks_zthabitatmgr`, since two detours cannot share an address), `ZTAnimal::addFace` and the two
 //! `ZTWorldMgr::playSmileSound`/`playFrownSound` stubs into one ordered in-memory record, so
 //! `ZTHABITAT_AFTER_ENTITY_CHANGE_MATCHES_REAL_LIVE` can compare which faces and sounds real vanilla
 //! `afterEntityChange` and the port each request - without spawning faces or playing audio whose state
@@ -9,21 +9,17 @@
 
 use std::cell::{Cell, RefCell};
 
-use openzt_detour::{
-    generated::{
-        ztworldmgr::{PLAY_FROWN_SOUND, PLAY_SMILE_SOUND},
-    },
-    FunctionDef,
+use openzt_detour::generated::{
+    ztanimal::ADD_FACE as ZTANIMAL_ADD_FACE,
+    ztworldmgr::{PLAY_FROWN_SOUND_0, PLAY_FROWN_SOUND_1, PLAY_SMILE_SOUND_0, PLAY_SMILE_SOUND_1},
 };
 use openzt_detour_macro::detour_mod;
 
 /// Vanilla `afterEntityChange` reaches the world manager's sounds through its own inline thunks
 /// (`MOV EAX,[ECX+0x1e0]; ADD ECX,0x1e0; JMP [EAX+0x2c]` and the `+0x1e8` twin) rather than through
 /// `ZTWorldMgr::playSmileSound`/`playFrownSound` (`0x004dbf90`/`0x005acf8a`), which have the same bodies at
-/// other addresses. Hooking these two lets the recorder see the real function's sounds.
-const ANIMAL_SHOW_FACE_FN: FunctionDef<unsafe extern "thiscall" fn(*const u32, bool)> = crate::zthabitat::habitat::ANIMAL_SHOW_FACE;
-const AFTER_ENTITY_CHANGE_SMILE_THUNK: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef::new(0x004d954a);
-const AFTER_ENTITY_CHANGE_FROWN_THUNK: FunctionDef<unsafe extern "thiscall" fn(*const u32)> = FunctionDef::new(0x004d9573);
+/// other addresses (`PLAY_SMILE_SOUND_0`/`PLAY_FROWN_SOUND_0`). Hooking these two lets the recorder see the real
+/// function's sounds.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recorded {
@@ -87,49 +83,49 @@ fn record(event: Recorded) {
 mod detours {
     use super::*;
 
-    #[detour(ANIMAL_SHOW_FACE_FN)]
+    #[detour(ZTANIMAL_ADD_FACE)]
     unsafe extern "thiscall" fn animal_show_face(this: *const u32, smile: bool) {
         if ANIMAL_FACE_CAPTURE_ACTIVE.with(|a| a.get()) {
             record(Recorded::AnimalFace { animal: this as u32, smile });
             return;
         }
-        unsafe { ANIMAL_SHOW_FACE_FN_DETOUR.call(this, smile) }
+        unsafe { ZTANIMAL_ADD_FACE_DETOUR.call(this, smile) }
     }
 
-    #[detour(PLAY_SMILE_SOUND)]
+    #[detour(PLAY_SMILE_SOUND_1)]
     unsafe extern "thiscall" fn play_smile_sound(this: *const u32) {
         if REDIRECT_ACTIVE.with(|a| a.get()) {
             record(Recorded::SmileSound { world: this as u32 });
             return;
         }
-        unsafe { PLAY_SMILE_SOUND_DETOUR.call(this) }
+        unsafe { PLAY_SMILE_SOUND_1_DETOUR.call(this) }
     }
 
-    #[detour(PLAY_FROWN_SOUND)]
+    #[detour(PLAY_FROWN_SOUND_1)]
     unsafe extern "thiscall" fn play_frown_sound(this: *const u32) {
         if REDIRECT_ACTIVE.with(|a| a.get()) {
             record(Recorded::FrownSound { world: this as u32 });
             return;
         }
-        unsafe { PLAY_FROWN_SOUND_DETOUR.call(this) }
+        unsafe { PLAY_FROWN_SOUND_1_DETOUR.call(this) }
     }
 
-    #[detour(AFTER_ENTITY_CHANGE_SMILE_THUNK)]
+    #[detour(PLAY_SMILE_SOUND_0)]
     unsafe extern "thiscall" fn after_entity_change_smile_thunk(this: *const u32) {
         if REDIRECT_ACTIVE.with(|a| a.get()) {
             record(Recorded::SmileSound { world: this as u32 });
             return;
         }
-        unsafe { AFTER_ENTITY_CHANGE_SMILE_THUNK_DETOUR.call(this) }
+        unsafe { PLAY_SMILE_SOUND_0_DETOUR.call(this) }
     }
 
-    #[detour(AFTER_ENTITY_CHANGE_FROWN_THUNK)]
+    #[detour(PLAY_FROWN_SOUND_0)]
     unsafe extern "thiscall" fn after_entity_change_frown_thunk(this: *const u32) {
         if REDIRECT_ACTIVE.with(|a| a.get()) {
             record(Recorded::FrownSound { world: this as u32 });
             return;
         }
-        unsafe { AFTER_ENTITY_CHANGE_FROWN_THUNK_DETOUR.call(this) }
+        unsafe { PLAY_FROWN_SOUND_0_DETOUR.call(this) }
     }
 }
 

@@ -1,11 +1,11 @@
 //! `BFBehaviorSet` stage 2: the small methods `setName`, `removeHead`, `clear`, `killChild`, `executeHead` and
 //! `executeCall`. The set is embedded in `BFEntity` at `+0x14`, child sets are separate vanilla-allocated
-//! objects, and every string and vector inside is read and written by un-ported vanilla code (`execute`,
-//! `executeChild`, `initChild`, `load`, `BFEntity::setBS`), so the struct mirrors vanilla's layout and is
-//! operated on in place (style 1). The name stack, the call list, the current-call string and the name stay
-//! vanilla-allocated (assigned, destroyed and inserted only through vanilla's own helpers, because un-ported
-//! `BFUnit` and goal code still reads them raw); the parsed call object's buffers are Rust-allocated (see
-//! `bfscriptmgr.rs`).
+//! objects, and the struct mirrors vanilla's layout and is operated on in place (style 1), because un-ported vanilla
+//! code still reads the members raw. The name stack, call list, current-call string, name and the parsed call object
+//! keep vanilla's layout (`{begin, end, cap}` strings with a NUL, 12-byte vector entries) because un-ported
+//! `BFUnit` and goal code reads them, but only reads them, so their buffers are Rust-allocated through
+//! `owned_strings.rs` (and `bfscriptmgr.rs` for the call object). Vanilla-built buffers are still freed correctly,
+//! through vanilla's allocator.
 //!
 //! ## Layout (`0x60` bytes)
 //! `+0x00` `vector<string>` stack of active child-set names; `+0x0c` the parsed `BFFunctionCall`
@@ -28,7 +28,6 @@
 //!   same teardown inline. The resulting state is identical. `~BFEntity` runs the same helper on its embedded
 //!   set. `0x43ee6d` (destructor plus `operator delete`) stays vanilla and reaches the port through `0x43e9be`.
 
-use std::ffi::c_void;
 
 use openzt_detour::{
     generated::{
@@ -36,8 +35,6 @@ use openzt_detour::{
             CLEAR, CONSTRUCTOR, DESTRUCTOR, EXECUTE, EXECUTE_CALL, EXECUTE_CHILD, EXECUTE_HEAD, INIT_CHILD, KILL_CHILD,
             LOAD_0, LOAD_1, REMOVE_HEAD, SAVE, SET_NAME,
         },
-        msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_0, BASIC_STRING_RANGE},
-        msvc_std_vectorbasic_string::{DESTRUCTOR_0X402466, ERASE_RANGE_0X410AC3},
         poolalloc::DEALLOCATE as POOL_DEALLOCATE,
         standalone::{OPERATOR_DELETE, OPERATOR_NEW},
     },
@@ -47,12 +44,11 @@ use tracing::error;
 
 use crate::{
     bfscriptmgr::{
-        construct_empty_string, load_call, parse_function, push_back_string, read_file_bytes, read_file_count, read_file_string, read_file_string_list,
-        reset_call, save_call, write_file_bytes, write_file_string, write_file_string_list, BfFunctionCall, RawString, construct_call, destroy_call,
-        FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS,
+        construct_call, destroy_call, load_call, parse_function, read_file_bytes, read_file_count, read_file_owned_string, read_file_strvec, reset_call, save_call,
+        write_file_bytes, write_file_string, write_file_string_list, BfFunctionCall, RawString, FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS,
     },
+    owned_strings::{string_assign, string_construct, string_release, strvec_clear, strvec_free, strvec_pop, strvec_push, strvec_remove_first, StringSlot},
     util::{get_from_memory, ref_from_memory, LiveMemory},
-    vanilla_string::VanillaString,
     write_live,
 };
 
@@ -71,6 +67,8 @@ const MANAGER_VTABLE_GET_SCRIPT: u32 = 0x38;
 
 pub(crate) const BFBEHAVIORSET_SIZE: usize = 0x60;
 const STRING_SIZE: u32 = 12;
+/// A freshly constructed string has room for this many bytes (vanilla builds its strings with capacity 8).
+const NEW_STRING_CAPACITY: usize = 8;
 
 #[repr(C)]
 pub(crate) struct BfBehaviorSet {
@@ -114,12 +112,7 @@ impl BfBehaviorSet {
 
     /// Destroys the newest entry of the child-name stack, if any.
     unsafe fn pop_stack(&self) {
-        let count = (self.stack_end as u32).wrapping_sub(self.stack_begin as u32) / STRING_SIZE;
-        if count != 0 {
-            let new_end = unsafe { self.stack_end.sub(STRING_SIZE as usize) };
-            write_live!(self, stack_end, new_end);
-            unsafe { BASIC_STRING_0.original()(new_end as *const c_void) };
-        }
+        unsafe { strvec_pop(self as *const BfBehaviorSet as u32) };
     }
 
     /// `BFBehaviorSet::setName`: false for an empty name, else assigns `+0x40` and marks the set dirty.
@@ -130,7 +123,7 @@ impl BfBehaviorSet {
         }
         let own = std::ptr::addr_of!(self.name);
         if name != own {
-            unsafe { ASSIGN_RANGE.original()(own as *const c_void, source.begin as *const u32, source.end, std::ptr::null()) };
+            unsafe { string_assign(own as StringSlot, source.bytes()) };
         }
         write_live!(self, dirty, 1u8);
         true
@@ -141,15 +134,7 @@ impl BfBehaviorSet {
         if self.list_len() == 0 {
             return;
         }
-        let count = self.list_len();
-        for i in 1..count {
-            let source = unsafe { &*(self.list_begin as *const RawString).add(i as usize) };
-            let target = unsafe { (self.list_begin as *const RawString).add(i as usize - 1) };
-            unsafe { ASSIGN_RANGE.original()(target as *const c_void, source.begin as *const u32, source.end, std::ptr::null()) };
-        }
-        let new_end = unsafe { self.list_end.sub(STRING_SIZE as usize) };
-        write_live!(self, list_end, new_end);
-        unsafe { BASIC_STRING_0.original()(new_end as *const c_void) };
+        unsafe { strvec_remove_first(std::ptr::addr_of!(self.list_begin) as u32) };
         unsafe { clear_string(std::ptr::addr_of!(self.call) as *const RawString) };
     }
 
@@ -176,7 +161,7 @@ impl BfBehaviorSet {
         unsafe {
             clear_string(std::ptr::addr_of!(self.current_call));
             reset_call(std::ptr::addr_of!(self.call) as *const u32);
-            ERASE_RANGE_0X410AC3.original()(std::ptr::addr_of!(self.list_begin) as *const u32, self.list_begin as *const u32, self.list_end as i32);
+            strvec_clear(std::ptr::addr_of!(self.list_begin) as u32);
             self.kill_child();
         }
         write_live!(self, loaded, 0u8);
@@ -192,7 +177,11 @@ impl BfBehaviorSet {
             return;
         }
         let head = unsafe { &*(self.list_begin as *const RawString) };
-        let copy = VanillaString::from_bytes(head.bytes());
+        // `executeCall` can change the list, so it runs on a private copy: the text, a NUL, and the three words.
+        let mut text = head.bytes().to_vec();
+        text.push(0);
+        let range = text.as_ptr_range();
+        let copy = [range.start as u32, range.end as u32 - 1, range.end as u32];
         unsafe { self.execute_call(copy.as_ptr(), out) };
     }
 
@@ -206,7 +195,7 @@ impl BfBehaviorSet {
             let own = std::ptr::addr_of!(self.current_call);
             if call_text != own {
                 let source = unsafe { &*call_text };
-                unsafe { ASSIGN_RANGE.original()(own as *const c_void, source.begin as *const u32, source.end, std::ptr::null()) };
+                unsafe { string_assign(own as StringSlot, source.bytes()) };
             }
             unsafe { parse_function(call_text as *const u32, call as *const u32) };
             write_live!(self, removed, 0u8);
@@ -234,7 +223,7 @@ impl BfBehaviorSet {
 
 impl BfBehaviorSet {
     pub(crate) unsafe fn erase_list(&self) {
-        unsafe { ERASE_RANGE_0X410AC3.original()(std::ptr::addr_of!(self.list_begin) as *const u32, self.list_begin as *const u32, self.list_end as i32) };
+        unsafe { strvec_clear(std::ptr::addr_of!(self.list_begin) as u32) };
     }
 
     /// The shared tail `execute` runs when a call finished or the list ran dry: reset the set.
@@ -343,12 +332,8 @@ impl BfBehaviorSet {
             while get_from_memory::<u8>(text + length) != 0 {
                 length += 1;
             }
-            let mut line: [u32; 3] = [0; 3];
-            unsafe {
-                BASIC_STRING_RANGE.original()(line.as_mut_ptr() as *const c_void, text as *const u32, (text + length) as i32);
-                push_back_string(std::ptr::addr_of!(self.list_begin) as *const u32, line.as_ptr());
-                BASIC_STRING_0.original()(line.as_ptr() as *const c_void);
-            }
+            let line = unsafe { std::slice::from_raw_parts(text as *const u8, length as usize) };
+            unsafe { strvec_push(std::ptr::addr_of!(self.list_begin) as u32, line) };
             cursor += 4;
         }
 
@@ -382,7 +367,7 @@ impl BfBehaviorSet {
         unsafe { child.set_name(name) };
         write_live!(child, removed, 0u8);
         unsafe { child.load() };
-        unsafe { push_back_string(self as *const BfBehaviorSet as *const u32, name as *const u32) };
+        unsafe { strvec_push(self as *const BfBehaviorSet as u32, (*name).bytes()) };
         true
     }
 
@@ -422,18 +407,18 @@ impl BfBehaviorSet {
         if version <= FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS {
             return true;
         }
-        let mut ok = unsafe { read_file_string(file, std::ptr::addr_of!(self.name)) };
+        let mut ok = unsafe { read_file_owned_string(file, std::ptr::addr_of!(self.name)) };
         ok &= unsafe { read_file_bytes(std::ptr::addr_of!(self.flag_58) as *mut u8, 1, file) };
         let stack_count = unsafe { read_file_count(file) };
         ok &= stack_count.is_some();
         if !ok {
             return false;
         }
-        let stack = std::ptr::addr_of!(self.stack_begin) as *const u32;
+        let stack = std::ptr::addr_of!(self.stack_begin) as u32;
         unsafe {
-            ERASE_RANGE_0X410AC3.original()(stack, self.stack_begin as *const u32, self.stack_end as i32);
-            ok &= read_file_string_list(file, stack, stack_count.unwrap_or(0));
-            ok &= read_file_string(file, std::ptr::addr_of!(self.current_call));
+            strvec_clear(stack);
+            ok &= read_file_strvec(file, stack, stack_count.unwrap_or(0));
+            ok &= read_file_owned_string(file, std::ptr::addr_of!(self.current_call));
             load_call(std::ptr::addr_of!(self.call) as *const u32, file, version);
         }
 
@@ -458,7 +443,7 @@ impl BfBehaviorSet {
         }
         unsafe {
             self.erase_list();
-            ok &= read_file_string_list(file, std::ptr::addr_of!(self.list_begin) as *const u32, list_count.unwrap_or(0));
+            ok &= read_file_strvec(file, std::ptr::addr_of!(self.list_begin) as u32, list_count.unwrap_or(0));
             for flag in [std::ptr::addr_of!(self.loaded), std::ptr::addr_of!(self.removed), std::ptr::addr_of!(self.dirty), std::ptr::addr_of!(self.pending)] {
                 ok &= read_file_bytes(flag as *mut u8, 1, file);
             }
@@ -486,23 +471,23 @@ pub(crate) unsafe fn construct_set_members(base: u32) {
             ((base + offset) as *mut u32).write_volatile(0);
         }
         construct_call(base + 0xc);
-        construct_empty_string((base + 0x34) as *mut RawString);
-        construct_empty_string((base + 0x40) as *mut RawString);
+        string_construct((base + 0x34) as StringSlot, NEW_STRING_CAPACITY);
+        string_construct((base + 0x40) as StringSlot, NEW_STRING_CAPACITY);
         (&*(base as *const BfBehaviorSet)).clear();
     }
 }
 
 /// Tears down the set at `base` the way `BFEntity`'s destructor inlines `~BFBehaviorSet`: the child (with its
 /// name-stack entry and the removed flag), then the two strings, the call list, the call object and the name
-/// stack. The call object frees its own buffers; the rest go through vanilla's destructors.
+/// stack. Every buffer is freed through `owned_strings`, which hands a vanilla-built buffer back to vanilla's allocator.
 pub(crate) unsafe fn destroy_set_members(base: u32) {
     unsafe {
         (&*(base as *const BfBehaviorSet)).kill_child();
-        BASIC_STRING_0.original()((base + 0x40) as *const c_void);
-        BASIC_STRING_0.original()((base + 0x34) as *const c_void);
-        DESTRUCTOR_0X402466.original()((base + 0x28) as *const u32);
+        string_release((base + 0x40) as StringSlot);
+        string_release((base + 0x34) as StringSlot);
+        strvec_free(base + 0x28);
         destroy_call(base + 0xc);
-        DESTRUCTOR_0X402466.original()(base as *const u32);
+        strvec_free(base);
     }
 }
 
@@ -650,7 +635,9 @@ pub(crate) mod live_support {
     use openzt_detour::generated::{msvc_std_basic_string::BASIC_STRING_2, msvc_std_vectorbasic_string::INSERT_0X406DE7};
 
     use super::*;
-    use crate::bfscriptmgr::live_support as call_support;
+    use std::ffi::c_void;
+
+    use crate::{bfscriptmgr::live_support as call_support, vanilla_string::VanillaString};
 
     /// Everything the stage-2 methods read or write.
     #[derive(Debug, PartialEq, Eq)]

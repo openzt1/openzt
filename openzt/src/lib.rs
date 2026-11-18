@@ -143,6 +143,10 @@ pub(crate) use ztshow::ui as ztshowui;
 /// `BFEventMgr`'s event vectors hold by value.
 mod bfevent;
 
+/// owned_strings module holds the Rust-owned buffers behind vanilla-layout strings and `vector<string>`s that the
+/// behavior-set code keeps (`BFFunctionCall`, `BFBehaviorSet`), freeing vanilla-built ones through vanilla's allocator.
+mod owned_strings;
+
 /// bfscriptmgr module reimplements `BFScriptMgr::parseFunction`, the call-string parser behind
 /// `BFBehaviorSet::executeCall`.
 mod bfscriptmgr;

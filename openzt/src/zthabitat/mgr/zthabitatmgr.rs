@@ -30,7 +30,7 @@ use openzt_detour::generated::{
         ztui_habitatinfo::{ADD_HABITAT as ZTUI_HABITATINFO_ADD_HABITAT, REMOVE_ALL_HABITATS as ZTUI_HABITATINFO_REMOVE_ALL_HABITATS, REMOVE_HABITAT as ZTUI_HABITATINFO_REMOVE_HABITAT},
         ztvisibilitytesting::TEST_LOS,
         ztworldmgr::{
-            PLAY_FROWN_SOUND as ZTWORLDMGR_PLAY_FROWN_SOUND, PLAY_SMILE_SOUND as ZTWORLDMGR_PLAY_SMILE_SOUND,
+            PLAY_FROWN_SOUND_1, PLAY_SMILE_SOUND_1,
             GET_BUILDING_LIST as ZTWORLDMGR_GET_BUILDING_LIST, UPDATE_SHOW_ASSOCIATIONS as ZTWORLDMGR_UPDATE_SHOW_ASSOCIATIONS,
         },
     };
@@ -2812,10 +2812,10 @@ impl ZTHabitatMgr {
 
         let world_ptr = globals().ztworldmgr_ptr() as u32;
         if smile {
-            unsafe { ZTWORLDMGR_PLAY_SMILE_SOUND.hooked()(world_ptr as *const u32) };
+            unsafe { PLAY_SMILE_SOUND_1.hooked()(world_ptr as *const u32) };
         }
         if frown {
-            unsafe { ZTWORLDMGR_PLAY_FROWN_SOUND.hooked()(world_ptr as *const u32) };
+            unsafe { PLAY_FROWN_SOUND_1.hooked()(world_ptr as *const u32) };
         }
     }
 
@@ -2966,10 +2966,10 @@ impl ZTHabitatMgr {
 
         let world_ptr = globals().ztworldmgr_ptr() as u32;
         if smile {
-            unsafe { ZTWORLDMGR_PLAY_SMILE_SOUND.original()(world_ptr as *const u32) };
+            unsafe { PLAY_SMILE_SOUND_1.original()(world_ptr as *const u32) };
         }
         if frown {
-            unsafe { ZTWORLDMGR_PLAY_FROWN_SOUND.original()(world_ptr as *const u32) };
+            unsafe { PLAY_FROWN_SOUND_1.original()(world_ptr as *const u32) };
         }
     }
 
