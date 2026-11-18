@@ -206,6 +206,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "BFSCRIPTMGR_DETOURS_ENABLED", run: tests::bfscriptmgr::run_bfscriptmgr_detours_enabled_test },
             RegisteredTest { name: "BFSCRIPTMGR_PARSE_FUNCTION", run: tests::bfscriptmgr::run_bfscriptmgr_parse_function_test },
             RegisteredTest { name: "BFSCRIPTMGR_PARSE_FUNCTION_REAL_DATA", run: tests::bfscriptmgr::run_bfscriptmgr_parse_function_real_data_test },
+            RegisteredTest { name: "BFSCRIPTMGR_PARSE_FUNCTION_LONG_ARG", run: tests::bfscriptmgr::run_bfscriptmgr_parse_function_long_arg_test },
             RegisteredTest { name: "BFSCRIPTMGR_RUST_OWNED_CALL", run: tests::bfscriptmgr::run_bfscriptmgr_rust_owned_call_test },
             RegisteredTest { name: "BFBEHAVIORSET_DETOURS_ENABLED", run: tests::bfbehaviorset::run_bfbehaviorset_detours_enabled_test },
             RegisteredTest { name: "BFBEHAVIORSET_SET_NAME", run: tests::bfbehaviorset::run_bfbehaviorset_set_name_test },

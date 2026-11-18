@@ -96,6 +96,11 @@ pub(crate) struct ParsedCall {
 }
 
 /// The pure part of `parseFunction`. `args` is only filled when `ok` is true.
+///
+/// Vanilla copies into fixed stack buffers and the port has no limits, which differs in three ways. A name over
+/// 127 bytes overwrites vanilla's return address. An argument section over 127 bytes spills into a dead buffer
+/// and is parsed correctly up to about 250 bytes (shipped Marine Mania scripts rely on this). An argument over 31
+/// bytes makes vanilla drop every argument after it; the port keeps them.
 pub(crate) fn parse(input: &[u8]) -> ParsedCall {
     let open = input.iter().position(|&b| b == b'(');
     let name = match open {

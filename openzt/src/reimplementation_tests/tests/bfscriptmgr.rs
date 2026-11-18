@@ -159,9 +159,20 @@ pub(crate) fn run_bfscriptmgr_rust_owned_call_test(failure_log: &mut Option<std:
     finish_test(test_name, failures, failure_log)
 }
 
-/// Largest name or argument section vanilla's `parseFunction` copies into its 128-byte stack buffers.
+/// `parseFunction`'s stack frame (offsets from `ESP` after its four register pushes): a 32-byte argument buffer
+/// at `+0x2c`, a 128-byte section buffer at `+0x4c`, a 128-byte name buffer at `+0xcc`, then the return address
+/// at `+0x14c`. The name is assigned to the call before the section is copied, so the name buffer is dead by
+/// then and a section longer than 127 bytes only spills into it.
+///
+/// Largest name that stays in its buffer (one more byte reaches the return address).
 const REAL_NAME_LIMIT: usize = 127;
-/// Largest single argument it copies into a 32-byte stack buffer.
+/// Largest section (the characters after `(`, `)` included) vanilla copies without reaching the return address:
+/// the section buffer plus the dead name buffer, with margin.
+const REAL_SECTION_LIMIT: usize = 250;
+/// The section buffer's own size; a section past this relies on the dead name buffer.
+const REAL_SECTION_BUFFER: usize = 127;
+/// Largest argument that stays in its 32-byte buffer. A longer one is written over the section buffer, whose
+/// terminating NUL it moves, so vanilla's later comma search fails and every following argument is dropped.
 const REAL_ARG_LIMIT: usize = 31;
 
 /// Every distinct call string (the value of a key) in a `\BehaviorSet\` section of an `.ai` file in the
@@ -232,10 +243,11 @@ fn collect_behavior_call_strings() -> (usize, usize, std::collections::BTreeSet<
 
 /// `BFSCRIPTMGR_PARSE_FUNCTION_REAL_DATA` - every behavior-script call string in the install's `.ai` data, parsed
 /// by real and port into a fresh and a previously-parsed call object, must agree (return, arguments, flags, and
-/// the name when the string is well formed). A string over vanilla's stack-buffer limits (name or argument
-/// section over 127 bytes, an argument over 31) overflows the real parser, so it is not run through it and is
-/// reported instead, as is any string that is not `name(...)`; those are the inputs on which the port's
-/// missing limits could differ from vanilla.
+/// the name when the string is well formed). A string the real parser cannot take safely (a name over 127 bytes
+/// reaches its return address, a section over about 250 bytes does too, and an argument over 31 makes it drop
+/// the arguments after it) is not run through it; the port's parse of it is checked to round-trip and it is
+/// reported, as is any string that is not `name(...)`. A section over 127 bytes only spills into the dead name
+/// buffer, so those are compared and counted.
 pub(crate) fn run_bfscriptmgr_parse_function_real_data_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "BFSCRIPTMGR_PARSE_FUNCTION_REAL_DATA";
     let mut failures: Vec<String> = Vec::new();
@@ -245,16 +257,17 @@ pub(crate) fn run_bfscriptmgr_parse_function_real_data_test(failure_log: &mut Op
         return false;
     }
 
-    let (mut over_limit, mut not_a_call): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let (mut over_limit, mut not_a_call, mut spills): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
     let mut compared = 0usize;
     for call in &calls {
         let text = String::from_utf8_lossy(call).into_owned();
         let parsed = crate::bfscriptmgr::parse(call);
         let open = call.iter().position(|&b| b == b'(');
-        let section_len = open.map_or(0, |p| call.len() - p - 1);
-        if open.is_some_and(|p| p > REAL_NAME_LIMIT) || section_len > REAL_NAME_LIMIT || parsed.args.iter().any(|a| a.len() > REAL_ARG_LIMIT) {
-            // The real parser would overflow its stack buffers here; the port has no limits and must still split
-            // the text into the same name and arguments a longer buffer would give.
+        let (name_len, section_len) = (open.unwrap_or(0), open.map_or(0, |p| call.len() - p - 1));
+        let long_arg = parsed.args.iter().any(|a| a.len() > REAL_ARG_LIMIT);
+        if name_len > REAL_NAME_LIMIT || section_len > REAL_SECTION_LIMIT || long_arg {
+            // The real parser would reach its return address (or drop arguments after the long one); the port has
+            // no limits and must still split the text into the same name and arguments a longer buffer would give.
             let expected: Vec<u8> = call.iter().copied().filter(|&b| b != b' ' && b != b'"').collect();
             let mut rebuilt = parsed.name.clone();
             rebuilt.push(b'(');
@@ -265,6 +278,9 @@ pub(crate) fn run_bfscriptmgr_parse_function_real_data_test(failure_log: &mut Op
             }
             over_limit.push(text);
             continue;
+        }
+        if section_len > REAL_SECTION_BUFFER {
+            spills.push(text.clone());
         }
         let well_formed = open.is_some_and(|p| p + 1 < call.len()) && parsed.ok;
         if !well_formed {
@@ -300,15 +316,50 @@ pub(crate) fn run_bfscriptmgr_parse_function_real_data_test(failure_log: &mut Op
 
     let shown = |list: &[String]| list.iter().take(10).map(|s| format!("{s:?}")).collect::<Vec<_>>().join(", ");
     let summary = format!(
-        "{} distinct call strings from {} .ai files in {} archives: {} compared, {} over vanilla's stack-buffer limits [{}], {} not of the form name(...) [{}]",
+        "{} distinct call strings from {} .ai files in {} archives: {} compared ({} of them spill past the 128-byte section buffer into the dead name buffer), {} unsafe for the real parser [{}], {} not of the form name(...) [{}]",
         calls.len(),
         files,
         archives,
         compared,
+        spills.len(),
         over_limit.len(),
         shown(&over_limit),
         not_a_call.len(),
         shown(&not_a_call)
     );
     finish_test(&format!("{test_name} ({summary})"), failures, failure_log)
+}
+
+/// `BFSCRIPTMGR_PARSE_FUNCTION_LONG_ARG` - documents the one place the port deliberately differs from vanilla on
+/// input that stays clear of the return address. An argument over 31 bytes is written past `parseFunction`'s
+/// 32-byte argument buffer into its section buffer, which moves that buffer's terminating NUL, so vanilla's next
+/// comma search fails and every later argument is dropped. The port keeps them all. The first argument is intact
+/// in both, and a 31-byte argument (the largest that fits) behaves identically.
+pub(crate) fn run_bfscriptmgr_parse_function_long_arg_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "BFSCRIPTMGR_PARSE_FUNCTION_LONG_ARG";
+    let mut failures: Vec<String> = Vec::new();
+    for (length, vanilla_drops_rest) in [(31usize, false), (32, true), (40, true), (90, true)] {
+        let long = "x".repeat(length);
+        let input = format!("fCall({long},b,c)");
+        let (real, port) = (bfscriptmgr_live_support::standalone_call(), bfscriptmgr_live_support::standalone_rust_call());
+        let (real_ret, port_ret) = parse_both(&input, real, port);
+        let (real_snap, port_snap) = (bfscriptmgr_live_support::snapshot(real), bfscriptmgr_live_support::snapshot(port));
+        let full = vec![long.clone().into_bytes(), b"b".to_vec(), b"c".to_vec()];
+        let first_only = vec![long.clone().into_bytes()];
+        if !(real_ret && port_ret) {
+            failures.push(format!("{length}-byte argument: return real={real_ret} port={port_ret}"));
+        }
+        if port_snap.args != full {
+            failures.push(format!("{length}-byte argument: port args {:?} are not all three", port_snap.args.iter().map(|a| a.len()).collect::<Vec<_>>()));
+        }
+        let expected_real = if vanilla_drops_rest { &first_only } else { &full };
+        if &real_snap.args != expected_real {
+            failures.push(format!(
+                "{length}-byte argument: real args lengths {:?}, expected {:?}",
+                real_snap.args.iter().map(|a| a.len()).collect::<Vec<_>>(),
+                expected_real.iter().map(|a| a.len()).collect::<Vec<_>>()
+            ));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
 }
