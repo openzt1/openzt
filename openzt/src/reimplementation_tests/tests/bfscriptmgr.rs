@@ -158,3 +158,157 @@ pub(crate) fn run_bfscriptmgr_rust_owned_call_test(failure_log: &mut Option<std:
     }
     finish_test(test_name, failures, failure_log)
 }
+
+/// Largest name or argument section vanilla's `parseFunction` copies into its 128-byte stack buffers.
+const REAL_NAME_LIMIT: usize = 127;
+/// Largest single argument it copies into a 32-byte stack buffer.
+const REAL_ARG_LIMIT: usize = 31;
+
+/// Every distinct call string (the value of a key) in a `\BehaviorSet\` section of an `.ai` file in the
+/// install directory's `.ztd` archives, read at test time and never stored. Returns `(archives, ai files,
+/// strings)`.
+fn collect_behavior_call_strings() -> (usize, usize, std::collections::BTreeSet<Vec<u8>>) {
+    use std::io::Read;
+
+    fn archives(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if depth < 3 {
+                    archives(&path, depth + 1, out);
+                }
+            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ztd")) {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut calls = std::collections::BTreeSet::new();
+    let (mut archive_count, mut file_count) = (0, 0);
+    let Some(root) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|p| p.to_path_buf())) else {
+        return (0, 0, calls);
+    };
+    let mut paths = Vec::new();
+    archives(&root, 0, &mut paths);
+    for path in paths {
+        let Ok(file) = std::fs::File::open(&path) else { continue };
+        let Ok(mut archive) = zip::ZipArchive::new(file) else { continue };
+        archive_count += 1;
+        for index in 0..archive.len() {
+            let Ok(mut entry) = archive.by_index(index) else { continue };
+            if !entry.name().is_ok_and(|name| name.to_ascii_lowercase().ends_with(".ai")) {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            if entry.read_to_end(&mut bytes).is_err() {
+                continue;
+            }
+            file_count += 1;
+            let mut in_behavior_set = false;
+            for line in bytes.split(|&b| b == b'\n') {
+                let line = line.trim_ascii();
+                if line.first() == Some(&b'[') {
+                    in_behavior_set = String::from_utf8_lossy(line).to_ascii_lowercase().contains(r"\behaviorset\");
+                    continue;
+                }
+                if !in_behavior_set || line.is_empty() || line[0] == b';' {
+                    continue;
+                }
+                let Some(equals) = line.iter().position(|&b| b == b'=') else { continue };
+                let mut value = &line[equals + 1..];
+                if let Some(comment) = value.iter().position(|&b| b == b';') {
+                    value = &value[..comment];
+                }
+                let value = value.trim_ascii();
+                if !value.is_empty() {
+                    calls.insert(value.to_vec());
+                }
+            }
+        }
+    }
+    (archive_count, file_count, calls)
+}
+
+/// `BFSCRIPTMGR_PARSE_FUNCTION_REAL_DATA` - every behavior-script call string in the install's `.ai` data, parsed
+/// by real and port into a fresh and a previously-parsed call object, must agree (return, arguments, flags, and
+/// the name when the string is well formed). A string over vanilla's stack-buffer limits (name or argument
+/// section over 127 bytes, an argument over 31) overflows the real parser, so it is not run through it and is
+/// reported instead, as is any string that is not `name(...)`; those are the inputs on which the port's
+/// missing limits could differ from vanilla.
+pub(crate) fn run_bfscriptmgr_parse_function_real_data_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "BFSCRIPTMGR_PARSE_FUNCTION_REAL_DATA";
+    let mut failures: Vec<String> = Vec::new();
+    let (archives, files, calls) = collect_behavior_call_strings();
+    if calls.is_empty() {
+        write_success_line(failure_log, &format!("{test_name} (skipped: no behavior scripts found, {archives} archives, {files} .ai files)"));
+        return false;
+    }
+
+    let (mut over_limit, mut not_a_call): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut compared = 0usize;
+    for call in &calls {
+        let text = String::from_utf8_lossy(call).into_owned();
+        let parsed = crate::bfscriptmgr::parse(call);
+        let open = call.iter().position(|&b| b == b'(');
+        let section_len = open.map_or(0, |p| call.len() - p - 1);
+        if open.is_some_and(|p| p > REAL_NAME_LIMIT) || section_len > REAL_NAME_LIMIT || parsed.args.iter().any(|a| a.len() > REAL_ARG_LIMIT) {
+            // The real parser would overflow its stack buffers here; the port has no limits and must still split
+            // the text into the same name and arguments a longer buffer would give.
+            let expected: Vec<u8> = call.iter().copied().filter(|&b| b != b' ' && b != b'"').collect();
+            let mut rebuilt = parsed.name.clone();
+            rebuilt.push(b'(');
+            rebuilt.extend(parsed.args.join(&b','));
+            rebuilt.push(b')');
+            if !parsed.ok || rebuilt != expected {
+                failures.push(format!("{text:?}: the port's parse of an over-limit string does not round-trip"));
+            }
+            over_limit.push(text);
+            continue;
+        }
+        let well_formed = open.is_some_and(|p| p + 1 < call.len()) && parsed.ok;
+        if !well_formed {
+            not_a_call.push(text.clone());
+        }
+        for dirty in [false, true] {
+            let real = bfscriptmgr_live_support::standalone_call();
+            let port = bfscriptmgr_live_support::standalone_rust_call();
+            if dirty {
+                let previous = parse_both("fOld(x, y, z)", real, port);
+                if previous != (true, true) {
+                    failures.push(format!("{text:?}: priming parse returned {previous:?}"));
+                }
+            }
+            let (real_ret, port_ret) = parse_both(&text, real, port);
+            let label = format!("{text:?} (dirty={dirty})");
+            if real_ret != port_ret {
+                failures.push(format!("{label}: return real={real_ret} port={port_ret}"));
+            }
+            let (real_snap, port_snap) = (bfscriptmgr_live_support::snapshot(real), bfscriptmgr_live_support::snapshot(port));
+            if real_snap.args != port_snap.args {
+                failures.push(format!("{label}: args real={:?} port={:?}", real_snap.args, port_snap.args));
+            }
+            if real_snap.flags != port_snap.flags {
+                failures.push(format!("{label}: flags real={:?} port={:?}", real_snap.flags, port_snap.flags));
+            }
+            if well_formed && real_snap.name != port_snap.name {
+                failures.push(format!("{label}: name real={:?} port={:?}", String::from_utf8_lossy(&real_snap.name), String::from_utf8_lossy(&port_snap.name)));
+            }
+        }
+        compared += 1;
+    }
+
+    let shown = |list: &[String]| list.iter().take(10).map(|s| format!("{s:?}")).collect::<Vec<_>>().join(", ");
+    let summary = format!(
+        "{} distinct call strings from {} .ai files in {} archives: {} compared, {} over vanilla's stack-buffer limits [{}], {} not of the form name(...) [{}]",
+        calls.len(),
+        files,
+        archives,
+        compared,
+        over_limit.len(),
+        shown(&over_limit),
+        not_a_call.len(),
+        shown(&not_a_call)
+    );
+    finish_test(&format!("{test_name} ({summary})"), failures, failure_log)
+}
