@@ -4716,6 +4716,14 @@ mod ztaimgr_detours {
             unsafe { super::F_SET_BASE_F_DETOUR.call(this, call, unit) }
         }
 
+        pub(crate) fn f_dust_ball(this: *const u32, unit: *const i32, done: *const i8) -> bool {
+            unsafe { super::F_DUST_BALL_DETOUR.call(this, unit, done) }
+        }
+
+        pub(crate) fn f_dust_ball_f(this: *const u32, call: i32, unit: *const i32) -> bool {
+            unsafe { super::F_DUST_BALL_F_DETOUR.call(this, call, unit) }
+        }
+
         pub(crate) fn f_play_set(name: *const i32, unit: *const c_void, child: i8, flag: u32) -> bool {
             unsafe { super::F_PLAY_SET_DETOUR.call(name, unit, child, flag) }
         }
@@ -4812,6 +4820,7 @@ pub(crate) mod live_support {
     pub(crate) use ztaimgr_detours::test_real::{
         f_move_f as real_f_move_f, f_move_fast_f as real_f_move_fast_f, f_move_medium_f as real_f_move_medium_f, f_move_slow_f as real_f_move_slow_f, f_move_with_sound_f as real_f_move_with_sound_f, f_play_set as real_f_play_set, f_play_special_f as real_f_play_special_f,
         f_set_base_f as real_f_set_base_f, f_target_building as real_f_target_building, f_target_building_f as real_f_target_building_f,
+        f_dust_ball as real_f_dust_ball, f_dust_ball_f as real_f_dust_ball_f,
     };
     pub(crate) use ztaimgr_detours::test_real::{
         f_fly as real_f_fly, f_move as real_f_move, f_play_f as real_f_play_f, f_play_special as real_f_play_special, f_play_time as real_f_play_time, f_play_with_base_f as real_f_play_with_base_f, f_play_with_sound as real_f_play_with_sound,

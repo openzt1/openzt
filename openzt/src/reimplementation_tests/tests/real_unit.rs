@@ -1,6 +1,6 @@
-//! T1 fixtures: real `BFUnit`s over a real animal type from the live zoo, so `findAnim`, the mixer and the
+//! T1 fixtures: real `ZTAnimal`s over a real animal type from the live zoo, so `findAnim`, the mixer and the
 //! animation cache run for real instead of against recording stand-ins. Each case builds two units with the vanilla
-//! `BFUnit` constructor from identical starting state, runs real vanilla on one and the port on the other, and
+//! `ZTAnimal` constructor over zeroed memory (identical starting state), runs real vanilla on one and the port on the other, and
 //! compares the return value, the call's done flag, the unit's flags, the unit's and mixer's memory (heap pointers
 //! may differ, shared pointers may not), and the animation reference counts. The units are then torn down through
 //! the real destructor and the counts must return to where they started. The "real" pole's call object is built by
@@ -9,10 +9,11 @@
 //! Needs the live zoo (a real animal type) and `GLOBAL_ZTAIMgr`.
 
 use openzt_detour::generated::{
-    bfaimgr::{F_PLAY_WITH_BASE_F, F_SET_BASE_F},
+    bfaimgr::{F_PLAY_SPECIAL_F, F_PLAY_WITH_BASE_F, F_SET_BASE_F},
+    ztaimgr::{F_DUST_BALL, F_DUST_BALL_F},
     bfentity::FIND_ANIM as BFENTITY_FIND_ANIM,
     gxmixer::GET_ANIM as GXMIXER_GET_ANIM,
-    bfunit::{CONSTRUCTOR as BFUNIT_CONSTRUCTOR, DESTRUCTOR_1 as BFUNIT_DESTRUCTOR_1},
+    ztanimal::{CONSTRUCTOR as ZTANIMAL_CONSTRUCTOR, DESTRUCTOR_1 as ZTANIMAL_DESTRUCTOR_1},
     standalone::OPERATOR_NEW,
 };
 use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS};
@@ -24,7 +25,8 @@ use crate::util::{get_from_memory, save_to_memory};
 use crate::zoostatus::globals::raw_globals::ANIMAL_TYPE_CHECK_RVA;
 use crate::ztaimgr::live_support as ztaimgr_live_support;
 
-const BFUNIT_SIZE: u32 = 0x214;
+/// `ZTAnimalType::createEntity` allocates this many bytes.
+const UNIT_SIZE: u32 = 0x3b8;
 const UNIT_TYPE: u32 = 0x128;
 const UNIT_MOVING: u32 = 0xf8;
 const UNIT_STOPPED: u32 = 0xf9;
@@ -73,14 +75,14 @@ fn live_animal_type() -> Option<u32> {
 }
 
 fn build_unit(ty: u32) -> u32 {
-    let unit = unsafe { OPERATOR_NEW.original()(BFUNIT_SIZE) } as u32;
-    unsafe { std::ptr::write_bytes(unit as *mut u8, 0, BFUNIT_SIZE as usize) };
-    unsafe { BFUNIT_CONSTRUCTOR.original()(unit as *const u32, ty) };
+    let unit = unsafe { OPERATOR_NEW.original()(UNIT_SIZE) } as u32;
+    unsafe { std::ptr::write_bytes(unit as *mut u8, 0, UNIT_SIZE as usize) };
+    unsafe { ZTANIMAL_CONSTRUCTOR.original()(unit as *const u32, ty) };
     unit
 }
 
 fn destroy_unit(unit: u32) {
-    unsafe { BFUNIT_DESTRUCTOR_1.original()(unit as *const u32, 1) };
+    unsafe { ZTANIMAL_DESTRUCTOR_1.original()(unit as *const u32, 1) };
 }
 
 /// A call object for `name(args)` parsed by real vanilla (`port == false`) or by the port.
@@ -142,6 +144,7 @@ fn words(address: u32, length: u32) -> Vec<u32> {
 struct Observation {
     result: u32,
     call_flag: u8,
+    call: bfscriptmgr_live_support::CallSnapshot,
     unit: Vec<u32>,
     chains: Vec<[u32; 3]>,
     links: Vec<[u32; 3]>,
@@ -161,7 +164,8 @@ fn observe(result: u32, unit: u32, call: u32) -> Observation {
     Observation {
         result,
         call_flag: get_from_memory::<u8>(call + CALL_RESULT_FLAG),
-        unit: words(unit, BFUNIT_SIZE),
+        call: bfscriptmgr_live_support::snapshot(call),
+        unit: words(unit, UNIT_SIZE),
         chains: read_triples(get_from_memory(mixer), get_from_memory(mixer + 4)),
         links: read_triples(get_from_memory(mixer + 0xc), get_from_memory(mixer + 0x10)),
         mixer_anim: unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) as u32 },
@@ -174,6 +178,19 @@ fn compare(failures: &mut Vec<String>, label: &str, real: &Observation, port: &O
     }
     if real.call_flag != port.call_flag {
         failures.push(format!("{label}: call flag real={:#x} port={:#x}", real.call_flag, port.call_flag));
+    }
+    if real.call.name != port.call.name {
+        failures.push(format!("{label}: call name real={:?} port={:?}", String::from_utf8_lossy(&real.call.name), String::from_utf8_lossy(&port.call.name)));
+    }
+    if real.call.args != port.call.args {
+        failures.push(format!(
+            "{label}: call args real={:?} port={:?}",
+            real.call.args.iter().map(|a| String::from_utf8_lossy(a).into_owned()).collect::<Vec<_>>(),
+            port.call.args.iter().map(|a| String::from_utf8_lossy(a).into_owned()).collect::<Vec<_>>()
+        ));
+    }
+    if real.call.flags != port.call.flags {
+        failures.push(format!("{label}: call flags real={:?} port={:?}", real.call.flags, port.call.flags));
     }
     let mismatched: Vec<String> = real
         .unit
@@ -345,4 +362,173 @@ pub(crate) fn run_f_play_with_base_f_real_unit_test(failure_log: &mut Option<std
         }
     }
     finish_test(&format!("{test_name} (type {ty:#x}, {} cases; first: {})", seen.len(), seen.first().cloned().unwrap_or_default()), failures, failure_log)
+}
+
+/// The distinct types of the animals in the live world (up to `limit`).
+fn live_animal_types(limit: usize) -> Vec<u32> {
+    let world = globals().ztworldmgr();
+    let animal_arg = get_module_base("zoo.exe") as u32 + ANIMAL_TYPE_CHECK_RVA;
+    let mut types: Vec<u32> = Vec::new();
+    let mut slot = world.entity_array_start();
+    while slot != world.entity_array_end() && types.len() < limit {
+        let entity: u32 = get_from_memory(slot);
+        slot += 4;
+        if entity == 0 {
+            continue;
+        }
+        let ty: u32 = get_from_memory(entity + UNIT_TYPE);
+        if ty == 0 || types.contains(&ty) {
+            continue;
+        }
+        let vtable: u32 = get_from_memory(ty);
+        let check = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(get_from_memory::<u32>(vtable + 0x1c)) };
+        if check(ty, animal_arg) {
+            types.push(ty);
+        }
+    }
+    types
+}
+
+/// The unit's ball selector (`fDustBall` reads it at `+0x258`).
+const UNIT_BALL_SELECTOR: u32 = 0x258;
+
+/// `ZTAIMGR_F_DUST_BALL_REAL_UNIT_LIVE`: `fDustBall` and `fDustBallF` on real animals, for each ball selector (`0`
+/// picks dust or water by the unit's tile, `3` surface, `4` submerged), the done flag clear and set, and animal
+/// types that do and do not have the ball animations. Both poles reach the port's `fPlaySpecial` for the actual
+/// playing, so this checks `fDustBall`'s own choices: which names it asks the type for, what it hands
+/// `fPlaySpecial`, and the follow-up catch.
+pub(crate) fn run_f_dust_ball_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTAIMGR_F_DUST_BALL_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let ai = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
+    let types = live_animal_types(12);
+    if types.is_empty() || ai == 0 {
+        failures.push("no animal in the live zoo, or GLOBAL_ZTAIMgr is null".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    const BALL_NAMES: [&str; 4] = ["dustball", "waterball", "surfaceball", "submergedball"];
+    let mut with_balls: Vec<(u32, Vec<u32>)> = Vec::new();
+    let mut without_balls: Option<u32> = None;
+    for ty in &types {
+        let probe = build_unit(*ty);
+        let anims: Vec<u32> = BALL_NAMES.iter().map(|name| resolve_anim(probe, name)).filter(|a| *a != 0).collect();
+        destroy_unit(probe);
+        if anims.is_empty() {
+            without_balls.get_or_insert(*ty);
+        } else {
+            with_balls.push((*ty, anims));
+        }
+    }
+    let mut subjects: Vec<(u32, Vec<u32>)> = with_balls.iter().take(2).cloned().collect();
+    if let Some(ty) = without_balls {
+        subjects.push((ty, Vec::new()));
+    }
+
+    let mut seen = Vec::new();
+    for (ty, anims) in &subjects {
+        for selector in [0u32, 3, 4] {
+            for done_start in [0u8, 1] {
+                for use_f in [false, true] {
+                    let label = format!("fDustBall{} type {ty:#x} ({} ball anim(s)) selector {selector} done {done_start}", if use_f { "F" } else { "" }, anims.len());
+                    let real = move |call: u32, unit: u32| {
+                        save_to_memory(unit + UNIT_BALL_SELECTOR, selector);
+                        let done = Box::new(done_start);
+                        let result = if use_f {
+                            save_to_memory(call + CALL_RESULT_FLAG, done_start);
+                            ztaimgr_live_support::real_f_dust_ball_f(ai as *const u32, call as i32, unit as *const i32)
+                        } else {
+                            ztaimgr_live_support::real_f_dust_ball(ai as *const u32, unit as *const i32, &*done as *const u8 as *const i8)
+                        };
+                        u32::from(result) | (u32::from(*done) << 8)
+                    };
+                    let port = move |call: u32, unit: u32| {
+                        save_to_memory(unit + UNIT_BALL_SELECTOR, selector);
+                        let done = Box::new(done_start);
+                        let result = if use_f {
+                            save_to_memory(call + CALL_RESULT_FLAG, done_start);
+                            unsafe { F_DUST_BALL_F.hooked()(ai as *const u32, call as i32, unit as *const i32) }
+                        } else {
+                            unsafe { F_DUST_BALL.hooked()(ai as *const u32, unit as *const i32, &*done as *const u8 as *const i8) }
+                        };
+                        u32::from(result) | (u32::from(*done) << 8)
+                    };
+                    let summary = run_pair(&mut failures, &label, *ty, anims, Start { stopped: 1, moving: 0 }, "fDustBallF()", &real, &port);
+                    if seen.len() < 6 {
+                        seen.push(summary);
+                    }
+                }
+            }
+        }
+    }
+    finish_test(&format!("{test_name} ({} subject type(s); first: {})", subjects.len(), seen.join("; ")), failures, failure_log)
+}
+
+/// The text of a vanilla global string cell (`{begin, end, cap}` behind a pointer), or `None` when unset.
+fn global_string(rva: u32) -> Option<String> {
+    let cell = get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + rva);
+    if cell == 0 {
+        return None;
+    }
+    let (begin, end) = (get_from_memory::<u32>(cell), get_from_memory::<u32>(cell + 4));
+    if begin == 0 || end < begin || end - begin > 64 {
+        return None;
+    }
+    Some(String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(begin as *const u8, (end - begin) as usize) }).into_owned())
+}
+
+/// `ZTAIMGR_F_PLAY_SPECIAL_F_REAL_UNIT_LIVE`: `fPlaySpecialF(anim, sound, seconds, count, special)` on real animals,
+/// across the rewrite paths: the call becoming `fPlayTime`, `fPlay`/`fPlayReverse`/`fPlayPingPong`,
+/// `fPlayWithSound` or a plain `fPlaySpecial`, and the failures. Compared as well as the unit: the call object's
+/// name, arguments and flags after the rewrite, each pole rewriting its own allocator's strings.
+pub(crate) fn run_f_play_special_f_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTAIMGR_F_PLAY_SPECIAL_F_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((ty, found)) = live_type_and_anims(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let ai = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
+    let real = |call: u32, unit: u32| u32::from(ztaimgr_live_support::real_f_play_special_f(ai as *const u32, call as *const u32, unit as *const u32));
+    let port = |call: u32, unit: u32| u32::from(unsafe { F_PLAY_SPECIAL_F.hooked()(ai as *const u32, call as *const u32, unit as *const u32) });
+
+    let none = global_string(0x0023_950c);
+    let specials: Vec<(&str, Option<String>)> = vec![
+        ("none", none.clone()),
+        ("modeA", global_string(0x0024_bdac)),
+        ("modeB", global_string(0x0024_bda8)),
+        ("reverse", global_string(0x0024_3620)),
+        ("pingPong", global_string(0x0024_3624)),
+    ];
+    let usable = |text: &str| !text.is_empty() && !text.contains([' ', '"', ',', '(', ')']);
+    let (Some(none), true) = (none, specials.iter().all(|(_, t)| t.as_deref().is_some_and(usable))) else {
+        failures.push(format!("the special strings are not plain tokens: {specials:?}"));
+        return finish_test(test_name, failures, failure_log);
+    };
+    let special_text = |name: &str| specials.iter().find(|(n, _)| *n == name).and_then(|(_, t)| t.clone()).unwrap_or_default();
+
+    let (anim, other) = (found[0], found[1]);
+    let stopped = Start { stopped: 1, moving: 0 };
+    let sound = "nosuchsound";
+    // (label, anim text, sound text, seconds, count, special name)
+    let mut rows: Vec<(String, String, String, &str, &str, &str)> = Vec::new();
+    for special in ["none", "modeA", "modeB", "reverse", "pingPong"] {
+        rows.push((format!("anim, no sound, no time, {special}"), anim.0.to_string(), none.clone(), "0", "0", special));
+        rows.push((format!("anim, no sound, 2s, {special}"), anim.0.to_string(), none.clone(), "2", "0", special));
+        rows.push((format!("anim, sound, no time, {special}"), anim.0.to_string(), sound.to_string(), "0", "0", special));
+        rows.push((format!("no anim, sound, no time, {special}"), none.clone(), sound.to_string(), "0", "0", special));
+        rows.push((format!("anim, sound, 2s, {special}"), anim.0.to_string(), sound.to_string(), "2", "0", special));
+        rows.push((format!("anim, no sound, repeat 3, {special}"), anim.0.to_string(), none.clone(), "0", "3", special));
+        rows.push((format!("anim, sound, 2s and repeat 3, {special}"), anim.0.to_string(), sound.to_string(), "2", "3", special));
+    }
+    rows.push(("unresolvable anim, no sound".to_string(), "nosuchanim".to_string(), none.clone(), "0", "0", "none"));
+    rows.push(("both anims named".to_string(), other.0.to_string(), none.clone(), "0", "0", "none"));
+
+    let mut seen = Vec::new();
+    for (label, anim_text, sound_text, seconds, count, special) in &rows {
+        let text = format!("fPlaySpecialF({anim_text},{sound_text},{seconds},{count},{})", special_text(special));
+        let summary = run_pair(&mut failures, &format!("fPlaySpecialF {label}"), ty, &[anim.1, other.1], stopped, &text, &real, &port);
+        if seen.len() < 4 {
+            seen.push(summary);
+        }
+    }
+    finish_test(&format!("{test_name} (type {ty:#x}, {} cases; first: {})", rows.len(), seen.join("; ")), failures, failure_log)
 }
