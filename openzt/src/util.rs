@@ -123,6 +123,49 @@ pub fn low_byte_bool(value: u32) -> bool {
     (value & 0xff) != 0
 }
 
+/// MSVC `_ftol2`'s float-to-`int` conversion, which vanilla emits as `(int)(longlong)f`: truncate toward
+/// zero to a 64-bit integer (`FISTP qword` with the truncation rounding mode), then keep the low 32
+/// bits. A NaN, an infinity or a magnitude of 2^63 or more yields x87's "integer indefinite"
+/// (`0x8000_0000_0000_0000`), whose low dword is `0`. Rust's `f as i32` instead saturates (and maps
+/// NaN to `0`), so the two disagree for any value outside the `i32` range.
+pub fn ftol_low32(value: f32) -> i32 {
+    let truncated = value.trunc();
+    if !(-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&truncated) {
+        return 0;
+    }
+    (truncated as i64) as i32
+}
+
+#[cfg(test)]
+mod ftol_tests {
+    use super::ftol_low32;
+
+    #[test]
+    fn in_range_values_truncate_toward_zero() {
+        assert_eq!(ftol_low32(0.0), 0);
+        assert_eq!(ftol_low32(1.9), 1);
+        assert_eq!(ftol_low32(-1.9), -1);
+        assert_eq!(ftol_low32(2_147_483_520.0), 2_147_483_520);
+        assert_eq!(ftol_low32(-2_147_483_648.0), i32::MIN);
+    }
+
+    #[test]
+    fn values_beyond_i32_wrap_through_the_64_bit_result() {
+        assert_eq!(ftol_low32(4_294_967_296.0), 0);
+        assert_eq!(ftol_low32(4_294_967_296.0 + 8_589_934_592.0), 0);
+        assert_eq!(ftol_low32(3_221_225_472.0), -1_073_741_824);
+    }
+
+    #[test]
+    fn out_of_64_bit_range_and_non_finite_values_give_zero() {
+        assert_eq!(ftol_low32(f32::from_bits(0xe0e0_e0e0)), 0);
+        assert_eq!(ftol_low32(f32::NEG_INFINITY), 0);
+        assert_eq!(ftol_low32(f32::INFINITY), 0);
+        assert_eq!(ftol_low32(f32::NAN), 0);
+        assert_eq!(ftol_low32(-9.223_372_036_854_775_808e18), 0);
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn save_to_protected_memory<T>(address: u32, value: T) -> anyhow::Result<()> {
     unsafe {
