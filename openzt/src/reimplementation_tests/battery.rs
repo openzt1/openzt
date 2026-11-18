@@ -1116,6 +1116,8 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "BFENTITY_LOAD", run: tests::bfentity_io::run_bfentity_load_test },
             RegisteredTest { name: "BFUNIT_GET_MOVE_ANIM_SPEED", run: tests::bfunit::run_bfunit_get_move_anim_speed_test },
             RegisteredTest { name: "BFUNIT_GET_MOVE_ANIM_SYMBOL", run: tests::bfunit::run_bfunit_get_move_anim_symbol_test },
+            RegisteredTest { name: "ZTAIMGR_F_SET_BASE_F_REAL_UNIT_LIVE", run: tests::real_unit::run_f_set_base_f_real_unit_test },
+            RegisteredTest { name: "ZTAIMGR_F_PLAY_WITH_BASE_F_REAL_UNIT_LIVE", run: tests::real_unit::run_f_play_with_base_f_real_unit_test },
             RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_CALL", run: tests::bfbehaviorset::run_bfbehaviorset_execute_call_test },
             RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_HEAD", run: tests::bfbehaviorset::run_bfbehaviorset_execute_head_test },
             RegisteredTest { name: "BFBEHAVIORSET_LOAD", run: tests::bfbehaviorset::run_bfbehaviorset_load_test },
