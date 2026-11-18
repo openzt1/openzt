@@ -96,6 +96,7 @@ use tracing::error;
 use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, save_to_memory, LiveMemory},
+    owned_strings::OwnedString,
     vanilla_string::VanillaString,
 };
 
@@ -1438,9 +1439,9 @@ pub unsafe fn f_dust_ball(this: u32, unit: u32, done: *const bool, ops: &DustBal
             NO_NAME
         }
     };
-    let anim = VanillaString::from_bytes(pick(ops.find_anim));
-    let sound = VanillaString::from_bytes(pick(ops.find_sound));
-    let extra = VanillaString::from_bytes(NO_NAME);
+    let anim = OwnedString::from_bytes(pick(ops.find_anim));
+    let sound = OwnedString::from_bytes(pick(ops.find_sound));
+    let extra = OwnedString::from_bytes(NO_NAME);
     let result = unsafe { (ops.play_special)(this, anim.as_ptr() as u32, sound.as_ptr() as u32, extra.as_ptr() as u32, unit, done as u32) };
     drop(extra);
     if unsafe { done.cast::<u8>().read_volatile() } != 0 {
@@ -1510,7 +1511,7 @@ pub unsafe fn f_target_building(this: u32, unit: u32, done: *const bool, ops: &T
     }
     let name = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_TARGET_BUILDING_NAME) };
     let speed = get_from_memory::<u32>(entity_type + UNIT_TYPE_MOVE_SPEED_OFFSET);
-    let none = VanillaString::from_bytes(NO_NAME);
+    let none = OwnedString::from_bytes(NO_NAME);
     let empty = EmptyName::new();
     unsafe { (ops.f_move)(this, none.as_ptr() as u32, unit, done as u32, name, speed, empty.as_ptr()) }
 }
@@ -1617,8 +1618,8 @@ unsafe fn convert_param(this: u32, param: u32, unit: u32) -> u32 {
     convert(this, param, unit)
 }
 
-unsafe fn param_string(param: u32) -> VanillaString {
-    VanillaString::from_bytes(unsafe { &*(param as *const RawCallString) }.bytes())
+unsafe fn param_string(param: u32) -> OwnedString {
+    OwnedString::from_bytes(unsafe { &*(param as *const RawCallString) }.bytes())
 }
 
 /// An empty `{begin, end, cap}` string over a static NUL byte. Consumers only read `begin`/`end` (and `begin`
@@ -2762,11 +2763,11 @@ pub unsafe fn f_fly_f(this: u32, call: u32, unit: u32, reverse: u32, ops: &FlyOp
     unsafe { (ops.f_fly)(this, unit, begin, value, empty.as_ptr(), call + CALL_DONE_FLAG_OFFSET, reverse, limit) }
 }
 
-/// A `(name, probability)` entry of the vector `BFAIMgr::fPlaySetProb` reads: a vanilla string and a weight,
-/// 16 bytes.
+/// A `(name, probability)` entry of the vector `BFAIMgr::fPlaySetProb` reads: a vanilla-layout string (Rust-owned
+/// buffer) and a weight, 16 bytes.
 #[repr(C)]
 struct SetProbEntry {
-    name: VanillaString,
+    name: OwnedString,
     probability: u32,
 }
 
@@ -2954,7 +2955,7 @@ const PLAY_SET_VANILLA: PlaySetOps = PlaySetOps { init_child: init_child_vanilla
 /// `BFAIMgr::fPlaySetProbF(call, unit)`: an even number (at least two) of parameters, read as
 /// `(name, weight)` pairs. Each name is the parameter's C string (up to its NUL, not its recorded end) and
 /// each weight its converted text; `fPlaySetProb` then picks among them. The entry vector lives in Rust memory
-/// (vanilla only reads it) and each name string is built and freed through vanilla's allocator.
+/// (vanilla only reads it) and each name string is Rust-owned and freed when the entries drop.
 pub unsafe fn f_play_set_prob_f(call: u32, unit: u32, ops: &SetProbOps) -> bool {
     let count = unsafe { call_param_count(call) };
     if count < 2 || count % 2 != 0 {
@@ -2965,7 +2966,7 @@ pub unsafe fn f_play_set_prob_f(call: u32, unit: u32, ops: &SetProbOps) -> bool 
     for pair in 0..count as u32 / 2 {
         let name_text = get_from_memory::<u32>(begin + pair * 2 * CALL_PARAM_SIZE) as *const std::ffi::c_char;
         let weight_text = get_from_memory::<u32>(begin + (pair * 2 + 1) * CALL_PARAM_SIZE) as *const u8;
-        let name = VanillaString::from_bytes(unsafe { std::ffi::CStr::from_ptr(name_text) }.to_bytes());
+        let name = OwnedString::from_bytes(unsafe { std::ffi::CStr::from_ptr(name_text) }.to_bytes());
         let probability = unsafe { (ops.parse_int)(weight_text) };
         entries.push(SetProbEntry { name, probability });
     }
@@ -3420,7 +3421,7 @@ const PLAY_SOUND_ANIM_NAME: &str = "0";
 /// plain-mode string)`. `mode_a` is the value of the `[0x0064bdac]` global (the string pointer vanilla passes);
 /// `play_special` is `fPlaySpecial`. Returns its result.
 pub unsafe fn f_play_sound(this: u32, sound: u32, unit: u32, done: *const u8, mode_a: u32, play_special: unsafe fn(&FPlaySpecialArgs) -> bool) -> bool {
-    let anim = VanillaString::new(PLAY_SOUND_ANIM_NAME);
+    let anim = OwnedString::new(PLAY_SOUND_ANIM_NAME);
     let args = FPlaySpecialArgs { this, anim_name: anim.as_ptr() as u32, sound_name: sound, seconds: 0, count: 0, special: mode_a, unit, done };
     unsafe { play_special(&args) }
 }
@@ -3480,7 +3481,7 @@ pub unsafe fn f_play_special_f(this: u32, call: u32, unit: u32, ops: &PlaySpecia
     let repeat = unsafe { (ops.convert)(this, param(3), unit) };
     let (anim, sound, special) = unsafe { (param_string(param(0)), param_string(param(1)), param_string(param(4))) };
 
-    let is = |which, string: &VanillaString| unsafe { (ops.is_string)(which, string.as_ptr() as u32) };
+    let is = |which, string: &OwnedString| unsafe { (ops.is_string)(which, string.as_ptr() as u32) };
     let play_special = |seconds: i32, repeat: i32| {
         let args = FPlaySpecialArgs {
             this,

@@ -154,6 +154,38 @@ pub(crate) unsafe fn string_assign(slot: StringSlot, bytes: &[u8]) {
     }
 }
 
+/// A vanilla-layout string (`{begin, end, cap}`, NUL-terminated) whose buffer comes from Rust's allocator, for
+/// temporaries handed to code that only reads them. The slot's address is what callers pass, so it must not move
+/// after [`OwnedString::as_ptr`] is taken. Never hand it to code that assigns to, grows or frees the string
+/// through vanilla's allocator.
+#[repr(C)]
+pub(crate) struct OwnedString {
+    slot: [*mut u8; 3],
+}
+
+impl OwnedString {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
+        let mut slot: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+        unsafe { string_fill_new(&mut slot, bytes, 1) };
+        OwnedString { slot }
+    }
+
+    pub(crate) fn new(text: &str) -> Self {
+        Self::from_bytes(text.as_bytes())
+    }
+
+    /// The address of the `{begin, end, cap}` words.
+    pub(crate) fn as_ptr(&self) -> *const u32 {
+        self.slot.as_ptr() as *const u32
+    }
+}
+
+impl Drop for OwnedString {
+    fn drop(&mut self) {
+        unsafe { string_release(&mut self.slot) };
+    }
+}
+
 fn read_words(vector: u32) -> [usize; 3] {
     unsafe { [std::ptr::read_volatile(vector as *const usize), std::ptr::read_volatile((vector + 4) as *const usize), std::ptr::read_volatile((vector + 8) as *const usize)] }
 }
@@ -308,6 +340,21 @@ mod tests {
         assert!(owned[1..].iter().all(|pointer| !is_tracked(*pointer)));
         unsafe { strvec_free(address(&v)) };
         assert!(!is_tracked(array));
+    }
+
+    #[test]
+    fn owned_string_is_nul_terminated_tracked_and_released_on_drop() {
+        let string = OwnedString::from_bytes(b"dustball");
+        let [begin, end, capacity] = unsafe { *(string.as_ptr() as *const [usize; 3]) };
+        assert!(is_tracked(begin));
+        assert_eq!(end - begin, 8);
+        assert!(capacity > end);
+        assert_eq!(unsafe { *(end as *const u8) }, 0);
+        assert_eq!(unsafe { string_bytes(string.as_ptr() as *const [*mut u8; 3]) }, b"dustball");
+        drop(string);
+        assert!(!is_tracked(begin));
+        let empty = OwnedString::new("");
+        assert_eq!(unsafe { string_bytes(empty.as_ptr() as *const [*mut u8; 3]) }, b"");
     }
 
     #[test]
