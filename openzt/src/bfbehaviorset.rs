@@ -36,7 +36,6 @@ use openzt_detour::{
             LOAD_0, LOAD_1, REMOVE_HEAD, SAVE, SET_NAME,
         },
         poolalloc::DEALLOCATE as POOL_DEALLOCATE,
-        standalone::{OPERATOR_DELETE, OPERATOR_NEW},
     },
 };
 use openzt_detour_macro::detour_mod;
@@ -47,7 +46,7 @@ use crate::{
         construct_call, destroy_call, load_call, parse_function, read_file_bytes, read_file_count, read_file_owned_string, read_file_strvec, reset_call, save_call,
         write_file_bytes, write_file_string, write_file_string_list, BfFunctionCall, RawString, FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS,
     },
-    owned_strings::{string_assign, string_construct, string_release, strvec_clear, strvec_free, strvec_pop, strvec_push, strvec_remove_first, StringSlot},
+    owned_strings::{alloc_block, free_block, string_assign, string_construct, string_release, strvec_clear, strvec_free, strvec_pop, strvec_push, strvec_remove_first, StringSlot},
     util::{get_from_memory, ref_from_memory, LiveMemory},
     write_live,
 };
@@ -66,6 +65,8 @@ const ENTITY_PENDING_FLAG: u32 = 0xd6;
 const MANAGER_VTABLE_GET_SCRIPT: u32 = 0x38;
 
 pub(crate) const BFBEHAVIORSET_SIZE: usize = 0x60;
+/// Child sets are allocated from Rust (see `owned_strings::alloc_block`) with this alignment.
+const SET_ALIGN: usize = 4;
 const STRING_SIZE: u32 = 12;
 /// A freshly constructed string has room for this many bytes (vanilla builds its strings with capacity 8).
 const NEW_STRING_CAPACITY: usize = 8;
@@ -147,7 +148,7 @@ impl BfBehaviorSet {
         }
         unsafe {
             destroy_set_members(child as u32);
-            OPERATOR_DELETE.original()(child as u32);
+            free_block(child as *mut u8, BFBEHAVIORSET_SIZE, SET_ALIGN);
         }
         write_live!(self, child, std::ptr::null());
         unsafe { self.pop_stack() };
@@ -424,10 +425,7 @@ impl BfBehaviorSet {
         while unsafe { !(*parent).child.is_null() } {
             parent = unsafe { (*parent).child };
         }
-        let raw = unsafe { OPERATOR_NEW.original()(BFBEHAVIORSET_SIZE as u32) } as *mut u32;
-        if raw.is_null() {
-            return false;
-        }
+        let raw = alloc_block(BFBEHAVIORSET_SIZE, SET_ALIGN) as *mut u32;
         unsafe { construct_set(raw, entity) };
         let child = unsafe { &*(raw as *const BfBehaviorSet) };
         write_live!(unsafe { &*parent }, child, raw as *const BfBehaviorSet);
@@ -495,10 +493,8 @@ impl BfBehaviorSet {
             return false;
         }
         if has_child != 0 {
-            let raw = unsafe { OPERATOR_NEW.original()(BFBEHAVIORSET_SIZE as u32) } as *mut u32;
-            if !raw.is_null() {
-                unsafe { construct_set(raw, entity as u32) };
-            }
+            let raw = alloc_block(BFBEHAVIORSET_SIZE, SET_ALIGN) as *mut u32;
+            unsafe { construct_set(raw, entity as u32) };
             write_live!(self, child, raw as *const BfBehaviorSet);
             ok &= unsafe { (*self.child).load_file(file, version, entity) };
         }
@@ -699,7 +695,7 @@ pub fn init() {
 
 #[cfg(feature = "reimplementation-tests")]
 pub(crate) mod live_support {
-    use openzt_detour::generated::{msvc_std_basic_string::BASIC_STRING_2, msvc_std_vectorbasic_string::INSERT_0X406DE7};
+    use openzt_detour::generated::{msvc_std_basic_string::BASIC_STRING_2, msvc_std_vectorbasic_string::INSERT_0X406DE7, standalone::OPERATOR_NEW};
 
     use super::*;
     use std::ffi::c_void;

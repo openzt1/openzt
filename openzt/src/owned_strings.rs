@@ -6,6 +6,9 @@
 //! and only reads them, so the layout stays exactly vanilla's while the buffers behind it come from Rust's
 //! allocator.
 //!
+//! Child behavior sets (`alloc_block`/`free_block`) are tracked the same way, with `operator delete` as their vanilla
+//! release.
+//!
 //! Every buffer allocated here is recorded in `RUST_BUFFERS`. Releasing a buffer that is not recorded means vanilla
 //! built it (an object made by vanilla's own constructor, as the live tests' "real" side does, or one that existed
 //! before the detours were installed), so it is freed the way `PoolAlloc::deallocate` does it: into the size-class
@@ -87,6 +90,23 @@ pub(crate) unsafe fn free_buffer(pointer: *mut u8, size: usize, align: usize) {
             POOL_DEALLOCATE.original()(pointer as *const u32, size as u32);
         }
     }
+}
+
+/// Allocates a block of `size` bytes from Rust's allocator and records it, for an object vanilla would have got from
+/// `operator new` (a child behavior set). Release it with [`free_block`].
+pub(crate) fn alloc_block(size: usize, align: usize) -> *mut u8 {
+    rust_alloc(size, align)
+}
+
+/// Releases a block from [`alloc_block`] through Rust's allocator; a block this module did not allocate was made by
+/// vanilla's `operator new` and goes to `operator delete`.
+pub(crate) unsafe fn free_block(pointer: *mut u8, size: usize, align: usize) {
+    if pointer.is_null() || unsafe { rust_free(pointer, size, align) } {
+        return;
+    }
+    #[cfg(feature = "reimplementation-tests")]
+    VANILLA_FREES.fetch_add(1, Ordering::Relaxed);
+    unsafe { OPERATOR_DELETE.original()(pointer as u32) };
 }
 
 /// How many buffers are currently tracked.
@@ -281,6 +301,14 @@ pub(crate) unsafe fn strvec_free(vector: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocks_are_tracked_until_freed() {
+        let block = alloc_block(0x60, 4);
+        assert!(is_tracked(block as usize));
+        unsafe { free_block(block, 0x60, 4) };
+        assert!(!is_tracked(block as usize));
+    }
 
     fn vector() -> Box<[u32; 3]> {
         Box::new([0; 3])
