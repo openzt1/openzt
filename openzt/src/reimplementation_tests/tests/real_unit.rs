@@ -1576,7 +1576,7 @@ pub(crate) fn run_target_list_real_unit_test(failure_log: &mut Option<std::fs::F
             get_from_memory::<u32>(sentinel + 4)
         };
 
-        unsafe { openzt_detour::generated::bfunit::STOP.hooked()(unit as *const u32, 0, 0) };
+        crate::bfunit::live_support::real::stop(unit, 0, 0);
         if !list.is_empty() {
             failures.push(format!("vanilla BFUnit::stop left {} nodes", list.len()));
         }
@@ -1596,6 +1596,153 @@ pub(crate) fn run_target_list_real_unit_test(failure_log: &mut Option<std::fs::F
             failures.push(format!("the helper's clear left the list or the pool different: len {} pool {:?}", list.len(), &pool_lengths()[..4]));
         }
         destroy_unit(unit);
+    } else {
+        failures.push("no animal in the live zoo".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+const MOVEMENT_FLAGS: [u32; 6] = [0xd4, 0xd6, 0x20c, 0x20d, 0x20e, 0x210];
+
+fn movement_flags(unit: u32) -> [u8; 6] {
+    MOVEMENT_FLAGS.map(|offset| get_from_memory::<u8>(unit + offset))
+}
+
+/// Two units over the same animal type with identical movement flags and `nodes` target-list nodes.
+fn movement_pair(ty: u32, flags: [u8; 6], nodes: u32) -> (u32, u32) {
+    use ztaimgr_live_support::{TargetList, VanillaPool};
+    let (real, port) = (build_unit(ty), build_unit(ty));
+    for unit in [real, port] {
+        for (offset, value) in MOVEMENT_FLAGS.iter().zip(flags) {
+            save_to_memory(unit + offset, value);
+        }
+        let list = TargetList::of_unit(unit);
+        for index in 0..nodes as i32 {
+            unsafe { list.push_back(&mut VanillaPool, [index, index + 1, index + 2]) };
+        }
+    }
+    (real, port)
+}
+
+/// Runs `run_real` on one unit and `run_port` on the other and compares the flag bytes, the target list and the pool.
+fn compare_movement(failures: &mut Vec<String>, label: &str, real: u32, port: u32, run_real: impl FnOnce(u32), run_port: impl FnOnce(u32)) {
+    use crate::reimplementation_tests::tests::bfentity::{pool_lengths, warm_pool};
+    use ztaimgr_live_support::TargetList;
+
+    warm_pool();
+    let before = pool_lengths();
+    run_real(real);
+    let middle = pool_lengths();
+    run_port(port);
+    let after = pool_lengths();
+
+    if movement_flags(real) != movement_flags(port) {
+        failures.push(format!("{label}: flags real={:?} port={:?}", movement_flags(real), movement_flags(port)));
+    }
+    let (real_len, port_len) = (TargetList::of_unit(real).len(), TargetList::of_unit(port).len());
+    if real_len != port_len {
+        failures.push(format!("{label}: list length real={real_len} port={port_len}"));
+    }
+    let real_delta: Vec<u32> = middle.iter().zip(&before).map(|(a, b)| a.wrapping_sub(*b)).collect();
+    let port_delta: Vec<u32> = after.iter().zip(&middle).map(|(a, b)| a.wrapping_sub(*b)).collect();
+    if real_delta != port_delta {
+        failures.push(format!("{label}: freelist growth real={real_delta:?} port={port_delta:?}"));
+    }
+}
+
+/// `BFUNIT_STOP_REAL_UNIT_LIVE`: `BFUnit::stop` against vanilla on real units, with and without queued target
+/// nodes, every combination of the clear and idle arguments and several starting flags.
+pub(crate) fn run_bfunit_stop_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "BFUNIT_STOP_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    if let Some(ty) = live_animal_type() {
+        for nodes in [0u32, 1, 4] {
+            for clear in [0u8, 1] {
+                for idle in [0u8, 1] {
+                    for flags in [[1u8, 0, 1, 0, 0, 0], [1, 0, 0, 1, 1, 1], [0, 1, 1, 1, 0, 0]] {
+                        let label = format!("nodes={nodes} clear={clear} idle={idle} flags={flags:?}");
+                        let (real, port) = movement_pair(ty, flags, nodes);
+                        compare_movement(
+                            &mut failures,
+                            &label,
+                            real,
+                            port,
+                            |unit| crate::bfunit::live_support::real::stop(unit, clear, idle),
+                            |unit| unsafe { crate::bfunit::stop(unit, clear, idle) },
+                        );
+                        destroy_unit(real);
+                        destroy_unit(port);
+                    }
+                }
+            }
+        }
+    } else {
+        failures.push("no animal in the live zoo".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `BFUNIT_SET_MOVING_REAL_UNIT_LIVE`: `BFUnit::setMoving` against vanilla for every combination of the request,
+/// force and the finished flag, including a request byte other than 0 or 1.
+pub(crate) fn run_bfunit_set_moving_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "BFUNIT_SET_MOVING_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    if let Some(ty) = live_animal_type() {
+        for moving in [0u8, 1, 7] {
+            for force in [0u8, 1] {
+                for finished in [0u8, 1] {
+                    let label = format!("moving={moving} force={force} finished={finished}");
+                    let (real, port) = movement_pair(ty, [1, 0, 9, finished, 0, 0], 0);
+                    compare_movement(
+                        &mut failures,
+                        &label,
+                        real,
+                        port,
+                        |unit| crate::bfunit::live_support::real::set_moving(unit, moving, force),
+                        |unit| unsafe { crate::bfunit::set_moving(unit, moving, force) },
+                    );
+                    destroy_unit(real);
+                    destroy_unit(port);
+                }
+            }
+        }
+    } else {
+        failures.push("no animal in the live zoo".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `BFUNIT_CLEAR_GOAL_REAL_UNIT_LIVE`: the goal clear at `0x43e6c0` against vanilla, with a queued list and set
+/// invalid-goal flags. The embedded cog goal's bytes must also match.
+pub(crate) fn run_bfunit_clear_goal_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "BFUNIT_CLEAR_GOAL_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    if let Some(ty) = live_animal_type() {
+        for nodes in [0u32, 3] {
+            for flags in [[0u8, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1]] {
+                let label = format!("nodes={nodes} flags={flags:?}");
+                let (real, port) = movement_pair(ty, flags, nodes);
+                compare_movement(&mut failures, &label, real, port, crate::bfunit::live_support::real::clear_goal, |unit| unsafe { crate::bfunit::clear_goal(unit) });
+                // The cog goal holds a vector at `+0x4` (`begin, end, cap`) whose heap pointers differ between units:
+                // compare its sizes, and every other word exactly.
+                let cog = |unit: u32| {
+                    let words: Vec<u32> = (0..16u32).map(|i| get_from_memory::<u32>(unit + 0x15c + i * 4)).collect();
+                    let mut normalised = words.clone();
+                    normalised[1] = 0;
+                    normalised[2] = words[2].wrapping_sub(words[1]);
+                    normalised[3] = words[3].wrapping_sub(words[1]);
+                    normalised
+                };
+                if cog(real) != cog(port) {
+                    failures.push(format!("{label}: cog goal words real={:x?} port={:x?}", cog(real), cog(port)));
+                }
+                if movement_flags(real)[4] != 0 || movement_flags(real)[5] != 0 {
+                    failures.push(format!("{label}: vanilla left the invalid-goal flags set"));
+                }
+                destroy_unit(real);
+                destroy_unit(port);
+            }
+        }
     } else {
         failures.push("no animal in the live zoo".to_string());
     }

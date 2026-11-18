@@ -5,8 +5,6 @@
 //! freelist pushes and pops. This type reads and edits the list in place and takes nodes from, and returns them
 //! to, the same pool, so a list edited here stays valid for vanilla and the other way round.
 
-#![allow(dead_code)] // `clear`, `push_back` and `positions` are for the stop/setMoving ports (E2); the live test exercises them now.
-
 use openzt_detour::generated::poolalloc::{ALLOCATE as POOL_ALLOCATE, DEALLOCATE as POOL_DEALLOCATE};
 
 use crate::util::{get_from_memory, save_to_memory};

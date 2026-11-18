@@ -209,11 +209,11 @@ pub unsafe fn f_move(args: &FMoveArgs, ops: &FMoveOps) -> bool {
 }
 
 pub(super) unsafe fn stop_vanilla(unit: u32, a: i8, b: i8) {
-    unsafe { BFUNIT_STOP.hooked()(unit as *const u32, a, b) }
+    unsafe { crate::bfunit::stop(unit, a as u8, b as u8) }
 }
 
 pub(super) unsafe fn set_moving_vanilla(unit: u32, a: i8, b: i8) {
-    unsafe { SET_MOVING.hooked()(unit as *const u32, a, b) }
+    unsafe { crate::bfunit::set_moving(unit, a as u8, b as u8) }
 }
 
 pub(super) unsafe fn reached_target_vanilla(cog: u32) -> bool {

@@ -28,7 +28,7 @@ pub unsafe fn f_halt_f(call: u32, unit: u32) -> Option<u8> {
     if unit == 0 {
         return None;
     }
-    unsafe { SET_MOVING.hooked()(unit as *const u32, 0, 0) };
+    unsafe { crate::bfunit::set_moving(unit, 0, 0) };
     unsafe { set_done(call_done_flag(call)) };
     Some(1)
 }
