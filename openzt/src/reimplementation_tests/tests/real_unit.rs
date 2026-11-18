@@ -18,6 +18,7 @@ use openzt_detour::generated::{
 };
 use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS};
 
+use crate::bfbehaviorset::live_support as bfbehaviorset_live_support;
 use crate::bfscriptmgr::live_support as bfscriptmgr_live_support;
 use crate::globals::{get_module_base, globals};
 use crate::reimplementation_tests::harness::finish_test;
@@ -150,6 +151,10 @@ struct Observation {
     links: Vec<[u32; 3]>,
     mixer_anim: u32,
     targets: u32,
+    /// Words 2..5 of each target node (what the path stored there).
+    node_words: Vec<[u32; 3]>,
+    /// The unit's behavior set (`+0x14`) and its nested children.
+    sets: Vec<bfbehaviorset_live_support::SetSnapshot>,
 }
 
 fn read_triples(begin: u32, end: u32) -> Vec<[u32; 3]> {
@@ -171,6 +176,8 @@ fn observe(result: u32, unit: u32, call: u32) -> Observation {
         links: read_triples(get_from_memory(mixer + 0xc), get_from_memory(mixer + 0x10)),
         mixer_anim: unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) as u32 },
         targets: target_count(unit),
+        node_words: target_node_words(unit),
+        sets: bfbehaviorset_live_support::snapshot_chain(unit + 0x14),
     }
 }
 
@@ -207,6 +214,42 @@ fn compare(failures: &mut Vec<String>, label: &str, real: &Observation, port: &O
     }
     if real.targets != port.targets {
         failures.push(format!("{label}: target list holds real={} port={}", real.targets, port.targets));
+    }
+    if real.node_words != port.node_words {
+        failures.push(format!("{label}: target node words real={:x?} port={:x?}", real.node_words, port.node_words));
+    }
+    if real.sets.len() != port.sets.len() {
+        failures.push(format!("{label}: behavior-set chain length real={} port={}", real.sets.len(), port.sets.len()));
+    }
+    for (depth, (r, p)) in real.sets.iter().zip(&port.sets).enumerate() {
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+        let lists = |list: &[Vec<u8>]| list.iter().map(|b| text(b)).collect::<Vec<_>>();
+        if r.name != p.name
+            || r.current_call != p.current_call
+            || r.call.name != p.call.name
+            || r.call.args != p.call.args
+            || r.call.flags != p.call.flags
+            || r.list != p.list
+            || r.stack != p.stack
+            || r.has_child != p.has_child
+            || r.flags != p.flags
+        {
+            failures.push(format!(
+                "{label}: behavior set depth {depth} real(name={:?} call={:?} list={:?} stack={:?} child={} flags={:?}) port(name={:?} call={:?} list={:?} stack={:?} child={} flags={:?})",
+                text(&r.name),
+                text(&r.current_call),
+                lists(&r.list),
+                lists(&r.stack),
+                r.has_child,
+                r.flags,
+                text(&p.name),
+                text(&p.current_call),
+                lists(&p.list),
+                lists(&p.stack),
+                p.has_child,
+                p.flags
+            ));
+        }
     }
     if real.mixer_anim != port.mixer_anim {
         failures.push(format!("{label}: GXMixer::getAnim real={:#x} port={:#x}", real.mixer_anim, port.mixer_anim));
@@ -266,12 +309,13 @@ fn run_pair(
         }
     }
     let summary = format!(
-        "{label}: result {}, flag {:#x}, {} link(s), {} chain(s), {} target(s), +{:?} ref(s)",
+        "{label}: result {}, flag {:#x}, {} link(s), {} chain(s), {} target(s), {} set(s), +{:?} ref(s)",
         real_obs.result,
         real_obs.call_flag,
         real_obs.links.len(),
         real_obs.chains.len(),
         real_obs.targets,
+        real_obs.sets.len(),
         refs_real.iter().zip(&refs_start).map(|(a, b)| a.wrapping_sub(*b)).collect::<Vec<_>>()
     );
 
@@ -577,6 +621,17 @@ fn set_target_count(unit: u32, n: u32) {
     save_to_memory(sentinel + 4, previous);
 }
 
+fn target_node_words(unit: u32) -> Vec<[u32; 3]> {
+    let sentinel = get_from_memory::<u32>(unit + UNIT_TARGET_LIST);
+    let mut node = get_from_memory::<u32>(sentinel);
+    let mut words = Vec::new();
+    while node != sentinel && words.len() < 64 {
+        words.push([get_from_memory(node + 8), get_from_memory(node + 0xc), get_from_memory(node + 0x10)]);
+        node = get_from_memory::<u32>(node);
+    }
+    words
+}
+
 fn target_count(unit: u32) -> u32 {
     let sentinel = get_from_memory::<u32>(unit + UNIT_TARGET_LIST);
     let mut node = get_from_memory::<u32>(sentinel);
@@ -849,6 +904,178 @@ pub(crate) fn run_f_move_real_unit_test(failure_log: &mut Option<std::fs::File>)
                 .unwrap_or_default();
             *outcomes.entry(key).or_insert(0) += 1;
             total += 1;
+        }
+    }
+    let coverage = outcomes.iter().map(|(k, v)| format!("{k} x{v}")).collect::<Vec<_>>().join(" | ");
+    finish_test(&format!("{test_name} ({} subject type(s), {total} cases; outcomes: {coverage})", subjects.len()), failures, failure_log)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// fPlaySetProb and fRandomWalk
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The CRT `rand()` seed the game's `rand` (`0x0040f103`) advances: `seed = seed * 0x343fd + 0x269ec3`.
+const RAND_SEED_ADDRESS: u32 = 0x0063_8060;
+
+/// Runs `body` with the game's `rand` seed set to `seed`, restoring the previous seed afterwards.
+fn with_rand_seed<R>(seed: u32, body: impl FnOnce() -> R) -> R {
+    let previous = get_from_memory::<u32>(RAND_SEED_ADDRESS);
+    save_to_memory(RAND_SEED_ADDRESS, seed);
+    let result = body();
+    save_to_memory(RAND_SEED_ADDRESS, previous);
+    result
+}
+
+/// A `vector<(string, weight)>` of 16-byte entries for `fPlaySetProb`, in Rust memory (vanilla only reads it).
+struct ProbEntries {
+    _names: Vec<crate::owned_strings::OwnedString>,
+    entries: Vec<[u32; 4]>,
+    header: [u32; 3],
+}
+
+impl ProbEntries {
+    fn new(entries: &[(&str, u32)]) -> Box<Self> {
+        let names: Vec<crate::owned_strings::OwnedString> = entries.iter().map(|(name, _)| crate::owned_strings::OwnedString::new(name)).collect();
+        let raw: Vec<[u32; 4]> = names
+            .iter()
+            .zip(entries)
+            .map(|(name, (_, weight))| {
+                let words = unsafe { *(name.as_ptr() as *const [u32; 3]) };
+                [words[0], words[1], words[2], *weight]
+            })
+            .collect();
+        let mut boxed = Box::new(ProbEntries { _names: names, entries: raw, header: [0; 3] });
+        let begin = boxed.entries.as_ptr() as u32;
+        let len = boxed.entries.len() as u32;
+        boxed.header = [begin, begin + len * 16, begin + len * 16];
+        boxed
+    }
+
+    fn ptr(&self) -> u32 {
+        self.header.as_ptr() as u32
+    }
+}
+
+/// `ZTAIMGR_F_PLAY_SET_PROB_REAL_UNIT_LIVE`: `fPlaySetProb(entries, unit)` on real animals, with real behavior-set
+/// names, weight lists that do and do not sum to 100, an empty list and a null unit, over several `rand` seeds
+/// (both poles start from the same seed). Both poles reach the port's `fPlaySet`, so what is compared is the pick
+/// and the behavior-set chain it builds on the unit (names, calls, lists, child links).
+pub(crate) fn run_f_play_set_prob_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::bfaimgr::F_PLAY_SET_PROB;
+
+    let test_name = "ZTAIMGR_F_PLAY_SET_PROB_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((ty, _)) = live_type_and_anims(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let names = ["bIdle1", "bHappy1", "bCalm1", "bIdle2", "bAngry1"];
+    let weight_lists: Vec<(&str, Vec<u32>)> = vec![
+        ("single 100", vec![100]),
+        ("two 50/50", vec![50, 50]),
+        ("three 20/30/50", vec![20, 30, 50]),
+        ("skewed 10/10/80", vec![10, 10, 80]),
+        ("five even", vec![20, 20, 20, 20, 20]),
+        ("short sum 50/30", vec![50, 30]),
+        ("long sum 60/60", vec![60, 60]),
+        ("empty", vec![]),
+    ];
+    let seeds = [1u32, 7, 12345, 99991, 0xdead_beef, 31337];
+    let mut seen = Vec::new();
+    for (label, weights) in &weight_lists {
+        for seed in seeds {
+            for null_unit in [false, true] {
+                let entries: Vec<(&str, u32)> = weights.iter().enumerate().map(|(i, w)| (names[i % names.len()], *w)).collect();
+                let table = ProbEntries::new(&entries);
+                let table_ptr = table.ptr();
+                let real = move |_call: u32, unit: u32| {
+                    let unit = if null_unit { 0 } else { unit };
+                    with_rand_seed(seed, || ztaimgr_live_support::real_f_play_set_prob(table_ptr as *const i32, unit as *const std::ffi::c_void)) & 0xff
+                };
+                let port = move |_call: u32, unit: u32| {
+                    let unit = if null_unit { 0 } else { unit };
+                    with_rand_seed(seed, || unsafe { F_PLAY_SET_PROB.hooked()(table_ptr as *const i32, unit as *const std::ffi::c_void) }) & 0xff
+                };
+                let summary = run_pair(&mut failures, &format!("fPlaySetProb {label} seed {seed:#x} nullUnit={null_unit}"), ty, &[], Start { stopped: 1, moving: 0 }, "fPlaySetProb()", &real, &port);
+                if seen.len() < 5 && !null_unit {
+                    seen.push(summary);
+                }
+                drop(table);
+            }
+        }
+    }
+    finish_test(&format!("{test_name} (type {ty:#x}, {} cases; first: {})", weight_lists.len() * seeds.len() * 2, seen.join("; ")), failures, failure_log)
+}
+
+/// Up to `count` land tiles spread over the live map, then a wet tile and the map corners.
+fn sample_tiles(count: usize) -> Vec<(u32, u32)> {
+    let world = globals().ztworldmgr();
+    let (width, height) = (world.map_x_size, world.map_y_size);
+    let mut tiles: Vec<(u32, u32)> = Vec::new();
+    let step = (width.max(height) / (count as u32 + 1)).max(1);
+    let mut wet = None;
+    let mut y = step / 2;
+    while y < height && tiles.len() < count {
+        let mut x = step / 2;
+        while x < width && tiles.len() < count {
+            let flags = get_from_memory::<u8>(world.get_tile_ptr(x, y) + 0x83) & 3;
+            if flags == 0 {
+                tiles.push((x, y));
+            } else if wet.is_none() {
+                wet = Some((x, y));
+            }
+            x += step;
+        }
+        y += step;
+    }
+    tiles.extend(wet);
+    tiles.push((0, 0));
+    tiles.push((width.saturating_sub(1), height.saturating_sub(1)));
+    tiles
+}
+
+/// `ZTAIMGR_F_RANDOM_WALK_REAL_UNIT_LIVE`: `fRandomWalk(unit)` on real animals at real map positions (land tiles
+/// spread over the map, a wet tile and the corners), several `rand` seeds each, plus a unit with queued targets.
+/// Real vanilla runs its own tile walk, the manager's `getPath` and the neighbour scan against the live map;
+/// the port does the same through the same vtables. Compared: the result, the unit's words (destination, walking
+/// guard), its target list (count and node words) and the call outcome.
+pub(crate) fn run_f_random_walk_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::bfaimgr::F_RANDOM_WALK;
+
+    let test_name = "ZTAIMGR_F_RANDOM_WALK_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((first_ty, _)) = live_type_and_anims(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let ai = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
+    let mut subjects: Vec<u32> = vec![first_ty];
+    subjects.extend(live_animal_types(40).into_iter().filter(|ty| *ty != first_ty).take(1));
+    let tiles = sample_tiles(5);
+    let seeds = [3u32, 1000, 77777, 0x1234_5678];
+    let mut outcomes: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    let mut total = 0usize;
+    for ty in subjects.iter().copied() {
+        for tile in tiles.iter().copied() {
+            for seed in seeds {
+                for queued in [0u32, 2] {
+                    if queued != 0 && seed != seeds[0] {
+                        continue;
+                    }
+                    let state = MoveState { tile, targets: queued, ..MoveState::BASE };
+                    let real = move |_call: u32, unit: u32| {
+                        state.apply(unit);
+                        with_rand_seed(seed, || ztaimgr_live_support::real_f_random_walk(ai as *const u32, unit as *const i32)) & 0xff
+                    };
+                    let port = move |_call: u32, unit: u32| {
+                        state.apply(unit);
+                        with_rand_seed(seed, || unsafe { F_RANDOM_WALK.hooked()(ai as *const u32, unit as *const i32) }) & 0xff
+                    };
+                    let label = format!("fRandomWalk [type {ty:#x}] tile {tile:?} seed {seed:#x} queued={queued}");
+                    let summary = run_pair(&mut failures, &label, ty, &[], Start { stopped: 1, moving: 0 }, "fRandomWalk()", &real, &port);
+                    let key = summary.split_once(": ").map(|(_, rest)| rest.split(',').take(1).chain(rest.split(',').skip(4).take(1)).collect::<Vec<_>>().join(",")).unwrap_or_default();
+                    *outcomes.entry(key).or_insert(0) += 1;
+                    total += 1;
+                }
+            }
         }
     }
     let coverage = outcomes.iter().map(|(k, v)| format!("{k} x{v}")).collect::<Vec<_>>().join(" | ");
