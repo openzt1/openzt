@@ -246,8 +246,12 @@ where
     F: Fn(&mut Ini) -> anyhow::Result<()>,
 {
     modify_ztfile(file_name, |file: &BFResourcePtr| {
-        let c_string = unsafe { CString::from_raw(file.data_ptr as *mut i8) };
-        let bytes = c_string.as_bytes();
+        // The buffer may be vanilla-allocated and is not guaranteed to be NUL-terminated at
+        // `content_size`, so read exactly `content_size` bytes (stopping at an embedded NUL, as
+        // `strlen` would) instead of taking ownership with `CString::from_raw`. The old buffer is
+        // left alone: freeing it through Rust's allocator would be a cross-allocator free.
+        let raw = unsafe { std::slice::from_raw_parts(file.data_ptr as *const u8, file.content_size as usize) };
+        let bytes = raw.split(|&b| b == 0).next().unwrap_or(raw);
         let decoded_string = crate::encoding_utils::decode_game_text(bytes);
         let mut cfg = Ini::new_cs();
         cfg.set_comment_symbols(&[';', '#', ':']);

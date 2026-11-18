@@ -63,8 +63,10 @@ pub struct BFTile {
     unknown_byte_3: u8,     // 0x082
     unknown_byte_4: u8,     // 0x083
     unknown_byte_5: u8,     // 0x084
-    padding_4: [u8; 0x8],   // Full size 0x8c
+    padding_4: [u8; 0x7],   // Full size 0x8c
 }
+
+const _: () = assert!(std::mem::size_of::<BFTile>() == 0x8c);
 
 impl PartialEq for BFTile {
     fn eq(&self, other: &Self) -> bool {
@@ -96,7 +98,7 @@ impl BFTile {
             unknown_byte_3: 0,
             unknown_byte_4: 0,
             unknown_byte_5: 0,
-            padding_4: [0; 0x8],
+            padding_4: [0; 0x7],
         }
     }
 
