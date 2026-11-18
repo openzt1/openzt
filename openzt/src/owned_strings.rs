@@ -19,7 +19,7 @@
 use std::{
     alloc::{alloc, dealloc, handle_alloc_error, Layout},
     collections::HashSet,
-    sync::{LazyLock, Mutex},
+    sync::{LazyLock, Mutex, MutexGuard, PoisonError},
 };
 #[cfg(feature = "reimplementation-tests")]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,6 +43,12 @@ const POOL_LIMIT: usize = 0x80;
 /// A `{begin, end, cap}` string slot.
 pub(crate) type StringSlot = *mut [*mut u8; 3];
 
+/// Locks the tracker. A panic while the lock is held must not poison it into a second panic across an
+/// `extern "thiscall"` boundary, and the set stays consistent after any single insert/remove, so poison is ignored.
+fn tracked_buffers() -> MutexGuard<'static, HashSet<usize>> {
+    RUST_BUFFERS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 fn buffer_layout(size: usize, align: usize) -> Layout {
     Layout::from_size_align(size.max(1), align).expect("string buffer layout")
 }
@@ -53,13 +59,13 @@ fn rust_alloc(size: usize, align: usize) -> *mut u8 {
     if pointer.is_null() {
         handle_alloc_error(layout);
     }
-    RUST_BUFFERS.lock().unwrap().insert(pointer as usize);
+    tracked_buffers().insert(pointer as usize);
     pointer
 }
 
 /// Frees `pointer` and returns true when this module allocated it; false (and nothing freed) otherwise.
 unsafe fn rust_free(pointer: *mut u8, size: usize, align: usize) -> bool {
-    if !RUST_BUFFERS.lock().unwrap().remove(&(pointer as usize)) {
+    if !tracked_buffers().remove(&(pointer as usize)) {
         return false;
     }
     unsafe { dealloc(pointer, buffer_layout(size, align)) };
@@ -86,7 +92,7 @@ pub(crate) unsafe fn free_buffer(pointer: *mut u8, size: usize, align: usize) {
 /// How many buffers are currently tracked.
 #[cfg(any(test, feature = "reimplementation-tests"))]
 pub(crate) fn tracked_count() -> usize {
-    RUST_BUFFERS.lock().unwrap().len()
+    tracked_buffers().len()
 }
 
 /// How many releases have taken the vanilla branch of [`free_buffer`] so far. Compare deltas: objects built by
@@ -100,7 +106,7 @@ pub(crate) fn vanilla_free_count() -> usize {
 /// Whether `pointer` is a buffer this module allocated and has not yet freed.
 #[cfg(test)]
 pub(crate) fn is_tracked(pointer: usize) -> bool {
-    RUST_BUFFERS.lock().unwrap().contains(&pointer)
+    tracked_buffers().contains(&pointer)
 }
 
 /// The string's text.
