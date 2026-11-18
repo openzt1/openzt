@@ -76,14 +76,12 @@ fn live_animal_type() -> Option<u32> {
 }
 
 fn build_unit(ty: u32) -> u32 {
-    let unit = unsafe { OPERATOR_NEW.original()(UNIT_SIZE) } as u32;
-    unsafe { std::ptr::write_bytes(unit as *mut u8, 0, UNIT_SIZE as usize) };
-    unsafe { ZTANIMAL_CONSTRUCTOR.original()(unit as *const u32, ty) };
-    unit
+    build_kind(Kind::Animal, ty)
 }
 
+/// Tears down an animal built by [`build_unit`].
 fn destroy_unit(unit: u32) {
-    unsafe { ZTANIMAL_DESTRUCTOR_1.original()(unit as *const u32, 1) };
+    destroy_kind(Kind::Animal, unit);
 }
 
 /// A call object for `name(args)` parsed by real vanilla (`port == false`) or by the port.
@@ -165,18 +163,18 @@ fn read_triples(begin: u32, end: u32) -> Vec<[u32; 3]> {
     (0..count).map(|i| [get_from_memory(begin + i * 12), get_from_memory(begin + i * 12 + 4), get_from_memory(begin + i * 12 + 8)]).collect()
 }
 
-fn observe(result: u32, unit: u32, call: u32) -> Observation {
+fn observe(result: u32, unit: u32, call: u32, kind: Kind) -> Observation {
     let mixer = unit + UNIT_MIXER;
     Observation {
         result,
         call_flag: get_from_memory::<u8>(call + CALL_RESULT_FLAG),
         call: bfscriptmgr_live_support::snapshot(call),
-        unit: words(unit, UNIT_SIZE),
+        unit: words(unit, kind.size()),
         chains: read_triples(get_from_memory(mixer), get_from_memory(mixer + 4)),
         links: read_triples(get_from_memory(mixer + 0xc), get_from_memory(mixer + 0x10)),
         mixer_anim: unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) as u32 },
-        targets: target_count(unit),
-        node_words: target_node_words(unit),
+        targets: if kind.is_unit() { target_count(unit) } else { 0 },
+        node_words: if kind.is_unit() { target_node_words(unit) } else { Vec::new() },
         sets: bfbehaviorset_live_support::snapshot_chain(unit + 0x14),
     }
 }
@@ -275,7 +273,13 @@ struct Start {
 /// one unit each, then the comparison and the teardown check for every animation in `anims`. Returns a one-line
 /// summary of what the case did.
 #[allow(clippy::too_many_arguments)]
-fn run_pair(
+fn run_pair(failures: &mut Vec<String>, label: &str, ty: u32, anims: &[u32], start: Start, text: &str, real: &dyn Fn(u32, u32) -> u32, port: &dyn Fn(u32, u32) -> u32) -> String {
+    run_pair_kind(Kind::Animal, failures, label, ty, anims, start, text, real, port)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_pair_kind(
+    kind: Kind,
     failures: &mut Vec<String>,
     label: &str,
     ty: u32,
@@ -287,7 +291,7 @@ fn run_pair(
 ) -> String {
     let mut shared = vec![ty];
     shared.extend_from_slice(anims);
-    let (real_unit, port_unit) = (build_unit(ty), build_unit(ty));
+    let (real_unit, port_unit) = (build_kind(kind, ty), build_kind(kind, ty));
     for unit in [real_unit, port_unit] {
         save_to_memory(unit + UNIT_STOPPED, start.stopped);
         save_to_memory(unit + UNIT_MOVING, start.moving);
@@ -300,7 +304,7 @@ fn run_pair(
     let port_result = port(port_call, port_unit);
     let refs_port: Vec<u32> = anims.iter().map(|a| refcount(*a)).collect();
 
-    let (real_obs, port_obs) = (observe(real_result, real_unit, real_call), observe(port_result, port_unit, port_call));
+    let (real_obs, port_obs) = (observe(real_result, real_unit, real_call, kind), observe(port_result, port_unit, port_call, kind));
     compare(failures, label, &real_obs, &port_obs, &shared);
     for (i, anim) in anims.iter().enumerate() {
         let (real_delta, port_delta) = (refs_real[i].wrapping_sub(refs_start[i]), refs_port[i].wrapping_sub(refs_real[i]));
@@ -319,8 +323,8 @@ fn run_pair(
         refs_real.iter().zip(&refs_start).map(|(a, b)| a.wrapping_sub(*b)).collect::<Vec<_>>()
     );
 
-    destroy_unit(real_unit);
-    destroy_unit(port_unit);
+    destroy_kind(kind, real_unit);
+    destroy_kind(kind, port_unit);
     for (i, anim) in anims.iter().enumerate() {
         if refcount(*anim) != refs_start[i] {
             failures.push(format!("{label}: refcount of {anim:#x} is {} after teardown, started at {}", refcount(*anim), refs_start[i]));
@@ -1080,4 +1084,455 @@ pub(crate) fn run_f_random_walk_real_unit_test(failure_log: &mut Option<std::fs:
     }
     let coverage = outcomes.iter().map(|(k, v)| format!("{k} x{v}")).collect::<Vec<_>>().join(" | ");
     finish_test(&format!("{test_name} ({} subject type(s), {total} cases; outcomes: {coverage})", subjects.len()), failures, failure_log)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Entity-class handlers: fShowPredator, fHidePredator, fCaughtPrey, fKillPrey, fDie, fHatch, fFaceToward*
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A class of entity a handler can be run on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Animal,
+    Guest,
+    Keeper,
+    Maint,
+    Guide,
+    Scenery,
+}
+
+impl Kind {
+    const ALL: [Kind; 6] = [Kind::Animal, Kind::Guest, Kind::Keeper, Kind::Maint, Kind::Guide, Kind::Scenery];
+
+    /// What `<Class>Type::createEntity` allocates.
+    fn size(self) -> u32 {
+        match self {
+            Kind::Animal => 0x3b8,
+            Kind::Guest => 0x348,
+            Kind::Keeper => 0x2ac,
+            Kind::Maint => 0x2c4,
+            Kind::Guide => 0x2a4,
+            Kind::Scenery => 0x158,
+        }
+    }
+
+    /// `BFUnit`-derived (has the target list at `+0x154`).
+    fn is_unit(self) -> bool {
+        self != Kind::Scenery
+    }
+
+    /// The class tag the entity type's `isCastClass` test takes.
+    fn type_tag_rva(self) -> u32 {
+        match self {
+            Kind::Animal => 0x0023_8690,
+            Kind::Guest => 0x0023_8700,
+            Kind::Keeper => 0x0023_8760,
+            Kind::Maint => 0x0023_8780,
+            Kind::Guide => 0x0023_8770,
+            Kind::Scenery => 0x0023_8670,
+        }
+    }
+
+    fn construct(self, at: u32, ty: u32) {
+        use openzt_detour::generated::{ztguide, ztguest, ztkeeper, ztmaint, ztscenery};
+        unsafe {
+            match self {
+                Kind::Animal => {
+                    ZTANIMAL_CONSTRUCTOR.original()(at as *const u32, ty);
+                }
+                Kind::Guest => {
+                    ztguest::CONSTRUCTOR.original()(at as *const u32, ty);
+                }
+                Kind::Keeper => {
+                    ztkeeper::CONSTRUCTOR.original()(at as *const u32, ty as *const u32);
+                }
+                Kind::Maint => {
+                    ztmaint::CONSTRUCTOR.original()(at as *const i32, ty as *const i32);
+                }
+                Kind::Guide => {
+                    ztguide::CONSTRUCTOR.original()(at as *const u32, ty as *const u32);
+                }
+                Kind::Scenery => {
+                    ztscenery::CONSTRUCTOR.original()(at as *const u32, ty as i32);
+                }
+            }
+        }
+    }
+}
+
+/// A live-world entity type of `kind` (the first the world holds), if any.
+fn live_type_of_kind(kind: Kind) -> Option<u32> {
+    let world = globals().ztworldmgr();
+    let tag = get_module_base("zoo.exe") as u32 + kind.type_tag_rva();
+    let mut slot = world.entity_array_start();
+    while slot != world.entity_array_end() {
+        let entity: u32 = get_from_memory(slot);
+        slot += 4;
+        if entity == 0 {
+            continue;
+        }
+        let ty: u32 = get_from_memory(entity + UNIT_TYPE);
+        if ty == 0 {
+            continue;
+        }
+        let vtable: u32 = get_from_memory(ty);
+        let check = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(get_from_memory::<u32>(vtable + 0x1c)) };
+        if check(ty, tag) {
+            return Some(ty);
+        }
+    }
+    None
+}
+
+/// A zeroed entity of `kind` built by the vanilla constructor over `ty`.
+fn build_kind(kind: Kind, ty: u32) -> u32 {
+    let entity = unsafe { OPERATOR_NEW.original()(kind.size()) } as u32;
+    unsafe { std::ptr::write_bytes(entity as *mut u8, 0, kind.size() as usize) };
+    kind.construct(entity, ty);
+    entity
+}
+
+/// Tears an entity down through its class's non-virtual deleting destructor (the entity vtables have no destructor
+/// slot). `ZTMaint` and `ZTGuide` have no decompiled destructor, so those fixtures are leaked.
+fn destroy_kind(kind: Kind, entity: u32) {
+    use openzt_detour::generated::{ztguest, ztkeeper, ztscenery};
+    unsafe {
+        match kind {
+            Kind::Animal => {
+                ZTANIMAL_DESTRUCTOR_1.original()(entity as *const u32, 1);
+            }
+            Kind::Guest => {
+                ztguest::DESTRUCTOR_1.original()(entity as *const u32, 1);
+            }
+            Kind::Keeper => {
+                ztkeeper::DESTRUCTOR_0.original()(entity as *const u32, 1);
+            }
+            Kind::Scenery => {
+                ztscenery::DESTRUCTOR_1.original()(entity as *const u32, 1);
+            }
+            Kind::Maint | Kind::Guide => {}
+        }
+    }
+}
+
+/// Positions an entity at the centre of a tile.
+fn place_at(entity: u32, tile: (u32, u32)) {
+    save_to_memory(entity + UNIT_POS_X, tile.0 * 64 + 32);
+    save_to_memory(entity + UNIT_POS_Y, tile.1 * 64 + 32);
+    save_to_memory(entity + UNIT_POS_Z, 0u32);
+}
+
+/// A live-map tile that belongs to a habitat, if there is one.
+fn habitat_tile() -> Option<(u32, u32)> {
+    let world = globals().ztworldmgr();
+    let habitats = globals().zthabitatmgr();
+    for y in 0..world.map_y_size.min(200) {
+        for x in 0..world.map_x_size.min(200) {
+            if habitats.get_habitat_ptr(x as i32, y as i32) != 0 {
+                return Some((x, y));
+            }
+        }
+    }
+    None
+}
+
+type HandlerFn = fn(unit: u32, done: u32) -> u32;
+
+/// One handler under test: its real and port entry points, the classes it is run on, the classes on which the port
+/// must defer to vanilla (checked without running vanilla, which would dereference null for them), and how.
+struct Handler {
+    name: &'static str,
+    real: HandlerFn,
+    port: HandlerFn,
+    run_on: &'static [Kind],
+    /// `Some(check)`: `check(kind)` runs the port's pure function on a standalone entity of that kind and says whether it
+    /// deferred.
+    defers_on: &'static [Kind],
+    defers: Option<fn(unit: u32, done: u32) -> bool>,
+}
+
+fn handlers() -> Vec<Handler> {
+    use openzt_detour::generated::ztaimgr::{F_CAUGHT_PREY, F_DIE, F_FACE_TOWARD_FOOD, F_FACE_TOWARD_TARGET, F_HATCH, F_HIDE_PREDATOR, F_KILL_PREY, F_SHOW_PREDATOR};
+    const ALL: &[Kind] = &[Kind::Animal, Kind::Guest, Kind::Keeper, Kind::Maint, Kind::Guide, Kind::Scenery];
+    const NOT_GUEST: &[Kind] = &[Kind::Animal, Kind::Keeper, Kind::Maint, Kind::Guide, Kind::Scenery];
+    const NOT_ANIMAL: &[Kind] = &[Kind::Guest, Kind::Keeper, Kind::Maint, Kind::Guide, Kind::Scenery];
+    vec![
+        Handler {
+            name: "fShowPredator",
+            real: |u, d| ztaimgr_live_support::real_f_show_predator(u as *const i32, d as *const u8),
+            port: |u, d| unsafe { F_SHOW_PREDATOR.hooked()(u as *const i32, d as *const u8) },
+            run_on: &[Kind::Guest],
+            defers_on: NOT_GUEST,
+            defers: Some(|u, d| unsafe { crate::ztaimgr::f_show_predator(u, d as *const bool) }.is_none()),
+        },
+        Handler {
+            name: "fHidePredator",
+            real: |u, d| u32::from(ztaimgr_live_support::real_f_hide_predator(u as *const u32, d as *const bool)),
+            port: |u, d| u32::from(unsafe { F_HIDE_PREDATOR.hooked()(u as *const u32, d as *const bool) }),
+            run_on: &[Kind::Guest],
+            defers_on: NOT_GUEST,
+            defers: Some(|u, d| !unsafe { crate::ztaimgr::f_hide_predator(u, d as *const bool) }),
+        },
+        Handler {
+            name: "fCaughtPrey",
+            real: |u, d| ztaimgr_live_support::real_f_caught_prey(u as *const i32, d as *const u8),
+            port: |u, d| unsafe { F_CAUGHT_PREY.hooked()(u as *const i32, d as *const u8) },
+            run_on: ALL,
+            defers_on: &[],
+            defers: None,
+        },
+        Handler {
+            name: "fKillPrey",
+            real: |u, d| ztaimgr_live_support::real_f_kill_prey(u as *const u8, d as *const u8),
+            port: |u, d| unsafe { F_KILL_PREY.hooked()(u as *const u8, d as *const u8) },
+            run_on: ALL,
+            defers_on: &[],
+            defers: None,
+        },
+        Handler {
+            name: "fDie",
+            real: |u, d| ztaimgr_live_support::real_f_die(u as *const i32, d as *const u8),
+            port: |u, d| unsafe { F_DIE.hooked()(u as *const i32, d as *const u8) },
+            run_on: ALL,
+            defers_on: &[],
+            defers: None,
+        },
+        Handler {
+            name: "fHatch",
+            real: |u, d| ztaimgr_live_support::real_f_hatch(u as *const i32, d as *const u8),
+            port: |u, d| unsafe { F_HATCH.hooked()(u as *const i32, d as *const u8) },
+            run_on: &[Kind::Animal],
+            defers_on: NOT_ANIMAL,
+            defers: Some(|u, d| !unsafe { crate::ztaimgr::f_hatch(u, d as *const bool) }),
+        },
+        Handler {
+            name: "fFaceTowardFood",
+            real: |u, d| ztaimgr_live_support::real_f_face_toward_food(u as *const u8, d as *const u8),
+            port: |u, d| unsafe { F_FACE_TOWARD_FOOD.hooked()(u as *const u8, d as *const u8) },
+            run_on: ALL,
+            defers_on: &[],
+            defers: None,
+        },
+        Handler {
+            name: "fFaceTowardTarget",
+            real: |u, d| ztaimgr_live_support::real_f_face_toward_target(u as *const std::ffi::c_void, d as *const u8),
+            port: |u, d| unsafe { F_FACE_TOWARD_TARGET.hooked()(u as *const std::ffi::c_void, d as *const u8) },
+            run_on: ALL,
+            defers_on: &[],
+            defers: None,
+        },
+    ]
+}
+
+/// Offsets of the tile pointers `fFaceTowardFood` (animal `+0x38c`) and `fFaceTowardTarget` (unit `+0x234`) read.
+const ANIMAL_FOOD_TILE: u32 = 0x38c;
+const UNIT_TARGET_TILE: u32 = 0x234;
+
+/// How a handler case starts besides the entity's class.
+#[derive(Clone, Copy, Debug)]
+enum Variant {
+    /// Entity on a land tile, no targets.
+    Plain,
+    /// Entity on a land tile with food/target tile pointers set to another tile.
+    WithTargetTile,
+    /// Entity on a habitat tile (so `fDie` reaches the habitat notification).
+    InHabitat,
+}
+
+/// `ZTAIMGR_ENTITY_HANDLERS_REAL_UNIT_LIVE`: `fShowPredator`, `fHidePredator`, `fCaughtPrey`, `fKillPrey`, `fDie`,
+/// `fHatch`, `fFaceTowardFood` and `fFaceTowardTarget` on real standalone entities of each class (animal, guest,
+/// keeper, maintenance worker, guide, scenery), each built by its vanilla constructor over a real type from the live
+/// zoo. Compared: the return value, the done byte and the entity's whole memory. Where the port defers to vanilla
+/// (which would dereference null), the port's own decision is checked instead. The live zoo is reloaded afterwards
+/// because `fDie` notifies a live habitat.
+pub(crate) fn run_entity_handlers_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::battery::detour_zoo_main::run_load_live_zoo;
+
+    let test_name = "ZTAIMGR_ENTITY_HANDLERS_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types: Vec<(Kind, u32)> = Kind::ALL.iter().filter_map(|kind| live_type_of_kind(*kind).map(|ty| (*kind, ty))).collect();
+    let (land, _) = land_and_wet_tiles();
+    let Some(land) = land else {
+        failures.push("the live map has no land tile".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let other_tile = sample_tiles(3).get(1).copied().unwrap_or((land.0 + 1, land.1));
+    let world = globals().ztworldmgr();
+    let (tile_a, tile_b) = (world.get_tile_ptr(other_tile.0, other_tile.1), world.get_tile_ptr(land.0, land.1));
+    let _ = tile_b;
+    let habitat = habitat_tile();
+    let missing: Vec<Kind> = Kind::ALL.iter().copied().filter(|k| !types.iter().any(|(kind, _)| kind == k)).collect();
+
+    let mut seen: Vec<String> = Vec::new();
+    for handler in handlers() {
+        for (kind, ty) in &types {
+            if !handler.run_on.contains(kind) {
+                continue;
+            }
+            let mut variants = vec![Variant::Plain];
+            if matches!(handler.name, "fFaceTowardFood" | "fFaceTowardTarget" | "fCaughtPrey" | "fKillPrey") {
+                variants.push(Variant::WithTargetTile);
+            }
+            if handler.name == "fDie" && habitat.is_some() {
+                variants.push(Variant::InHabitat);
+            }
+            for variant in variants {
+                let label = format!("{} on {kind:?} ({variant:?})", handler.name);
+                let tile = match variant {
+                    Variant::InHabitat => habitat.unwrap_or(land),
+                    _ => land,
+                };
+                let (real, port) = (handler.real, handler.port);
+                let prepare = move |entity: u32| {
+                    place_at(entity, tile);
+                    if matches!(variant, Variant::WithTargetTile) {
+                        if *kind == Kind::Animal {
+                            save_to_memory(entity + ANIMAL_FOOD_TILE, tile_a);
+                        }
+                        if kind.is_unit() {
+                            save_to_memory(entity + UNIT_TARGET_TILE, tile_a);
+                        }
+                    }
+                };
+                let invoke = move |is_port: bool, unit: u32| -> u32 {
+                    prepare(unit);
+                    let done = Box::new(0u8);
+                    let done_ptr = &*done as *const u8 as u32;
+                    let result = if is_port { port(unit, done_ptr) } else { real(unit, done_ptr) };
+                    (result & 0xff) | (u32::from(unsafe { (done_ptr as *const u8).read_volatile() }) << 8)
+                };
+                let summary = run_pair_kind(*kind, &mut failures, &label, *ty, &[], Start { stopped: 1, moving: 0 }, "fProbe()", &|_c, u| invoke(false, u), &|_c, u| invoke(true, u));
+                seen.push(format!("{label} => {}", summary.split_once(": ").map(|(_, rest)| rest.split(',').next().unwrap_or("")).unwrap_or("")));
+            }
+        }
+        // A null unit, for the handlers vanilla also takes it for.
+        if matches!(handler.name, "fCaughtPrey" | "fKillPrey" | "fDie" | "fFaceTowardFood" | "fFaceTowardTarget") {
+            let (real, port) = (handler.real, handler.port);
+            let (done_real, done_port) = (Box::new(0u8), Box::new(0u8));
+            let (real_result, port_result) = (real(0, &*done_real as *const u8 as u32) & 0xff, port(0, &*done_port as *const u8 as u32) & 0xff);
+            if real_result != port_result || *done_real != *done_port {
+                failures.push(format!("{} on a null unit: result real={real_result} port={port_result}, done real={} port={}", handler.name, *done_real, *done_port));
+            }
+        }
+        // Classes the port defers on: its own decision, with no vanilla call.
+        if let Some(defers) = handler.defers {
+            for kind in handler.defers_on {
+                let Some((_, ty)) = types.iter().find(|(k, _)| k == kind) else { continue };
+                let unit = build_kind(*kind, *ty);
+                let done = Box::new(0u8);
+                if !defers(unit, &*done as *const u8 as u32) {
+                    failures.push(format!("{} on {kind:?}: the port did not defer to vanilla", handler.name));
+                }
+                if *done != 0 {
+                    failures.push(format!("{} on {kind:?}: the port touched the done flag while deferring", handler.name));
+                }
+                destroy_kind(*kind, unit);
+            }
+        }
+    }
+    if !run_load_live_zoo(&mut None) {
+        failures.push("could not reload the live zoo afterwards".to_string());
+    }
+    finish_test(
+        &format!("{test_name} ({} classes with a live type, missing {missing:?}; habitat tile {habitat:?}; first: {})", types.len(), seen.join("; ")),
+        failures,
+        failure_log,
+    )
+}
+
+/// The first `count` live animals (entities whose type passes the animal test and that are not flagged removed).
+fn live_animal_entities(count: usize) -> Vec<u32> {
+    let world = globals().ztworldmgr();
+    let animal_arg = get_module_base("zoo.exe") as u32 + ANIMAL_TYPE_CHECK_RVA;
+    let mut found = Vec::new();
+    let mut slot = world.entity_array_start();
+    while slot != world.entity_array_end() && found.len() < count {
+        let entity: u32 = get_from_memory(slot);
+        slot += 4;
+        if entity == 0 || get_from_memory::<u8>(entity + 0x142) != 0 || get_from_memory::<u8>(entity + 0x143) != 0 || get_from_memory::<u32>(entity + 0x124) == 0 {
+            continue;
+        }
+        let ty: u32 = get_from_memory(entity + UNIT_TYPE);
+        if ty == 0 {
+            continue;
+        }
+        let vtable: u32 = get_from_memory(ty);
+        let check = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(get_from_memory::<u32>(vtable + 0x1c)) };
+        if check(ty, animal_arg) {
+            found.push(entity);
+        }
+    }
+    found
+}
+
+/// Words of a live entity that a handler changed: `(offset, before, after)`.
+fn changed_words(before: &[u32], after: &[u32]) -> Vec<(u32, u32, u32)> {
+    before.iter().zip(after).enumerate().filter(|(_, (b, a))| b != a).map(|(i, (b, a))| (i as u32 * 4, *b, *a)).collect()
+}
+
+/// Whether two poles changed two (different, same-class) entities the same way: the same offsets, and at each the
+/// same new value or the same change (heap pointers count as equal).
+fn same_change(real: &[(u32, u32, u32)], port: &[(u32, u32, u32)]) -> bool {
+    real.len() == port.len()
+        && real.iter().zip(port).all(|(r, p)| {
+            r.0 == p.0 && (equivalent(r.2, p.2, &[]) || r.2.wrapping_sub(r.1) == p.2.wrapping_sub(p.1))
+        })
+}
+
+/// `ZTAIMGR_HUNTER_PREY_REAL_UNIT_LIVE`: `fCaughtPrey` and `fKillPrey` with a real target. A standalone hunter animal
+/// has the entity id of a live animal in its target field (`+0x178`), so `getTargetUnit` finds it through the world;
+/// the real pole acts on one live animal and the port on another (they cannot share one, since the first changes
+/// it). Compared: the hunter, the result and done flag, and how each prey changed (same words, same new values or
+/// changes). The live zoo is reloaded afterwards.
+pub(crate) fn run_hunter_prey_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::battery::detour_zoo_main::run_load_live_zoo;
+    use std::cell::RefCell;
+
+    let test_name = "ZTAIMGR_HUNTER_PREY_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((hunter_ty, _)) = live_type_and_anims(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let (land, _) = land_and_wet_tiles();
+    let land = land.unwrap_or((0, 0));
+    let mut seen = Vec::new();
+
+    for handler in handlers().into_iter().filter(|h| matches!(h.name, "fCaughtPrey" | "fKillPrey")) {
+        let preys = live_animal_entities(4);
+        if preys.len() < 4 {
+            failures.push(format!("{}: need four live animals, found {}", handler.name, preys.len()));
+            continue;
+        }
+        // Two poles, two prey each time so the order of the poles does not matter: (real, port) = (0, 1) then (2, 3).
+        for (round, (real_prey, port_prey)) in [(preys[0], preys[1]), (preys[2], preys[3])].into_iter().enumerate() {
+            let changes: RefCell<Vec<Vec<(u32, u32, u32)>>> = RefCell::new(Vec::new());
+            let (real, port) = (handler.real, handler.port);
+            let invoke = |is_port: bool, unit: u32| -> u32 {
+                let prey = if is_port { port_prey } else { real_prey };
+                place_at(unit, land);
+                save_to_memory(unit + 0x178, get_from_memory::<u32>(prey + 0x124));
+                let before = words(prey, Kind::Animal.size());
+                let done = Box::new(0u8);
+                let done_ptr = &*done as *const u8 as u32;
+                let result = if is_port { port(unit, done_ptr) } else { real(unit, done_ptr) };
+                changes.borrow_mut().push(changed_words(&before, &words(prey, Kind::Animal.size())));
+                (result & 0xff) | (u32::from(unsafe { (done_ptr as *const u8).read_volatile() }) << 8)
+            };
+            let label = format!("{} with a real target (round {round})", handler.name);
+            let summary = run_pair_kind(Kind::Animal, &mut failures, &label, hunter_ty, &[], Start { stopped: 1, moving: 0 }, "fProbe()", &|_c, u| invoke(false, u), &|_c, u| invoke(true, u));
+            let changes = changes.into_inner();
+            if changes.len() == 2 {
+                if !same_change(&changes[0], &changes[1]) {
+                    failures.push(format!("{label}: the prey changed differently: real {:x?} port {:x?}", changes[0], changes[1]));
+                }
+                seen.push(format!("{label}: {}, prey words changed real {} port {}", summary.split_once(": ").map(|(_, r)| r.split(',').next().unwrap_or("")).unwrap_or(""), changes[0].len(), changes[1].len()));
+            } else {
+                failures.push(format!("{label}: expected two prey observations, got {}", changes.len()));
+            }
+        }
+    }
+    if !run_load_live_zoo(&mut None) {
+        failures.push("could not reload the live zoo afterwards".to_string());
+    }
+    finish_test(&format!("{test_name} ({})", seen.join("; ")), failures, failure_log)
 }

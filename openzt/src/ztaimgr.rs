@@ -4616,6 +4616,18 @@ mod ztaimgr_detours {
             unsafe { super::F_DIE_DETOUR.call(unit, done) }
         }
 
+        pub(crate) fn f_show_predator(unit: *const i32, done: *const u8) -> u32 {
+            unsafe { super::F_SHOW_PREDATOR_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_hide_predator(unit: *const u32, done: *const bool) -> bool {
+            unsafe { super::F_HIDE_PREDATOR_DETOUR.call(unit, done) }
+        }
+
+        pub(crate) fn f_hatch(unit: *const i32, done: *const u8) -> u32 {
+            unsafe { super::F_HATCH_DETOUR.call(unit, done) }
+        }
+
         pub(crate) fn f_face_toward_food(unit: *const u8, done: *const u8) -> u32 {
             unsafe { super::F_FACE_TOWARD_FOOD_DETOUR.call(unit, done) }
         }
@@ -4821,6 +4833,7 @@ pub(crate) mod live_support {
         f_move_f as real_f_move_f, f_move_fast_f as real_f_move_fast_f, f_move_medium_f as real_f_move_medium_f, f_move_slow_f as real_f_move_slow_f, f_move_with_sound_f as real_f_move_with_sound_f, f_play_set as real_f_play_set, f_play_special_f as real_f_play_special_f,
         f_set_base_f as real_f_set_base_f, f_target_building as real_f_target_building, f_target_building_f as real_f_target_building_f,
         f_dust_ball as real_f_dust_ball, f_dust_ball_f as real_f_dust_ball_f,
+        f_hatch as real_f_hatch, f_hide_predator as real_f_hide_predator, f_show_predator as real_f_show_predator,
     };
     pub(crate) use ztaimgr_detours::test_real::{
         f_fly as real_f_fly, f_move as real_f_move, f_play_f as real_f_play_f, f_play_special as real_f_play_special, f_play_time as real_f_play_time, f_play_with_base_f as real_f_play_with_base_f, f_play_with_sound as real_f_play_with_sound,
