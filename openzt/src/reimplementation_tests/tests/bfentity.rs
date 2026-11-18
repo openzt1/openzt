@@ -571,3 +571,52 @@ pub(crate) fn run_bfentity_set_pending_bs_test(failure_log: &mut Option<std::fs:
     }
     finish_test(test_name, failures, failure_log)
 }
+
+fn entity_name(entity: u32) -> Vec<u8> {
+    let (begin, end) = (get_from_memory::<u32>(entity + 0x108), get_from_memory::<u32>(entity + 0x10c));
+    (0..end.wrapping_sub(begin)).map(|i| get_from_memory::<u8>(begin + i)).collect()
+}
+
+/// `BFENTITY_SET_NAME` - `BFEntity::setName` (`0x449215`) against vanilla: empty, blank, graphic and mixed names,
+/// names that fit the name's capacity of 8, outgrow it, or shorten an existing longer name, and a name that is
+/// the entity's own. Compares the resulting name text and that it is NUL-terminated.
+pub(crate) fn run_bfentity_set_name_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::tests::bfbehaviorset::build_fake_type;
+    use crate::vanilla_string::VanillaString;
+    use openzt_detour::generated::bfentity::SET_NAME;
+
+    let test_name = "BFENTITY_SET_NAME";
+    let mut failures: Vec<String> = Vec::new();
+    let type_object = build_fake_type();
+    let names = ["", " ", "   ", "a", "  a ", "Leo", "Buddy the Great", "x\t", "\u{e9}t\u{e9}"];
+    for existing in ["", "Old", "A Rather Long Existing Name"] {
+        for name in names {
+            for own in [false, true] {
+                if own && name != "Leo" {
+                    continue;
+                }
+                let label = format!("existing={existing:?} name={name:?} own={own}");
+                let (real, port) = (build_clear_entity(type_object, false, [0; 5]), build_clear_entity(type_object, false, [0; 5]));
+                let prime = VanillaString::new(existing);
+                for entity in [real, port] {
+                    bfentity_live_support::real::set_name(entity, prime.as_ptr() as u32);
+                }
+                let (real_arg, port_arg) = (VanillaString::new(name), VanillaString::new(name));
+                let (real_ptr, port_ptr) = if own { (real + 0x108, port + 0x108) } else { (real_arg.as_ptr() as u32, port_arg.as_ptr() as u32) };
+                bfentity_live_support::real::set_name(real, real_ptr);
+                unsafe { SET_NAME.hooked()(port as *const u32, port_ptr as *const u32) };
+
+                let (real_name, port_name) = (entity_name(real), entity_name(port));
+                if real_name != port_name {
+                    failures.push(format!("{label}: name real={real_name:?} port={port_name:?}"));
+                }
+                for (pole, entity) in [("real", real), ("port", port)] {
+                    if get_from_memory::<u8>(get_from_memory::<u32>(entity + 0x10c)) != 0 {
+                        failures.push(format!("{label}: {pole} name not NUL-terminated"));
+                    }
+                }
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}

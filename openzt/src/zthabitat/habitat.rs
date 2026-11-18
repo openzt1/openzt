@@ -379,10 +379,11 @@ const RVA_CHAR_CLASS_TEST: u32 = 0x0004_91ea;
 const RVA_BUFFER_STRING_APPEND_RANGE: u32 = 0x0000_5eff;
 
 /// `ZTHabitat::setName`'s acceptance scan: a new name is applied only when at least one byte is a DBCS lead
-/// byte, passes the CRT character-class test, or (code page 950 only) lies in `0xa1..=0xdf`. Short-circuits in
-/// that order; an all-whitespace name is rejected.
-fn name_has_meaningful_byte(bytes: &[u8], is_lead_byte: impl Fn(u8) -> bool, char_class: impl Fn(u8) -> bool, code_page: impl Fn() -> u32) -> bool {
-    bytes.iter().any(|&b| is_lead_byte(b) || char_class(b) || (code_page() == 950 && (0xa1..=0xdf).contains(&b)))
+/// byte, passes the CRT character-class test, or (code page 932 only, Japanese) lies in `0xa1..=0xdf`.
+/// Short-circuits in that order; an all-whitespace name is rejected. Shared with `BFEntity::setName`, which
+/// runs the same scan.
+pub(crate) fn name_has_meaningful_byte(bytes: &[u8], is_lead_byte: impl Fn(u8) -> bool, char_class: impl Fn(u8) -> bool, code_page: impl Fn() -> u32) -> bool {
+    bytes.iter().any(|&b| is_lead_byte(b) || char_class(b) || (code_page() == 932 && (0xa1..=0xdf).contains(&b)))
 }
 
 /// Everything [`ZTHabitat::recalc_phase_6_species`] needs besides the record and species: the shared,
@@ -8148,9 +8149,9 @@ mod tests {
         assert!(name_has_meaningful_byte(b"  a", lead, class, || 1252));
         assert!(name_has_meaningful_byte(&[b' ', 0x81], lead, class, || 1252));
         assert!(!name_has_meaningful_byte(&[b' ', 0xb0], lead, class, || 1252));
-        assert!(name_has_meaningful_byte(&[b' ', 0xb0], lead, class, || 950));
-        assert!(!name_has_meaningful_byte(&[b' ', 0xe0], lead, class, || 950));
-        assert!(!name_has_meaningful_byte(b"", lead, class, || 950));
+        assert!(name_has_meaningful_byte(&[b' ', 0xb0], lead, class, || 932));
+        assert!(!name_has_meaningful_byte(&[b' ', 0xe0], lead, class, || 932));
+        assert!(!name_has_meaningful_byte(b"", lead, class, || 932));
     }
 
     #[test]

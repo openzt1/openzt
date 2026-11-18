@@ -26,15 +26,13 @@
 //! `+0x80` is destroyed; the vector at `+0x74` has the reference count (`+0x20`) of each non-null entry
 //! decremented before its buffer is freed. Everything is freed through vanilla's own helpers.
 
-use std::ffi::c_void;
-
 use openzt_detour::generated::{
-    bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_WORLD_POS},
+    bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_NAME, SET_WORLD_POS},
     gxmixer::{CLEAR_ALL as GXMIXER_CLEAR_ALL, CONSTRUCTOR as GXMIXER_CONSTRUCTOR, TOTAL_CLEAR as GXMIXER_TOTAL_CLEAR},
-    msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_1},
+    msvc_std_basic_string::BASIC_STRING_1,
+    standalone::CRT_ISMBCGRAPH,
     msvc_std_dequegxmixerchain::{DESTROY_RANGE_0X411CAD, DESTRUCTOR_0X41DECC},
     msvc_std_vector_t_28::VECTOR_T_28,
-    msvc_std_vectorbyte::VECTORBYTE,
     msvc_std_vectorgxmixerlink::{DESTRUCTOR_0X411C0F, FREE_BUFFER_0X402970},
     ztanimal::SET_PENDING_BS_0X4300F6,
 };
@@ -46,6 +44,7 @@ use crate::{
     bfscriptmgr::{clear_call_args, read_file_bytes, reset_call, write_file_bytes, write_file_string, RawString},
     owned_strings::{free_buffer, string_construct, string_fill_new, string_release, string_assign, StringSlot},
     util::{get_from_memory, ref_from_memory},
+    zthabitat::habitat::name_has_meaningful_byte,
     vanilla_string::VanillaString,
     write_live,
 };
@@ -90,12 +89,9 @@ pub(crate) unsafe fn construct_entity(this: u32, entity_type: u32) {
             write(this + offset, 0u32);
         }
 
-        for offset in [0u32, 4, 8] {
-            write(this + NAME_VECTOR + offset, 0u32);
-        }
-        VECTORBYTE.original()((this + NAME_VECTOR) as *const u8, 8 as *const u32);
-        let first = std::ptr::read_volatile((this + NAME_VECTOR + 4) as *const u32);
-        write(first, 0u8);
+        // The name is an empty byte string of capacity 8 with a Rust-owned buffer; `set_name` and `load` are its only
+        // writers.
+        string_construct((this + NAME_VECTOR) as StringSlot, 8);
 
         for offset in [0x114u32, 0x118, 0x11c, 0x120] {
             write(this + offset, 0u32);
@@ -122,7 +118,8 @@ pub(crate) unsafe fn destroy_entity(this: u32) {
     unsafe {
         write(this, VTABLE_BFENTITY);
 
-        for (begin_offset, capacity_offset) in [(NAME_VECTOR, NAME_VECTOR + 8), (0xfcu32, 0x104)] {
+        string_release((this + NAME_VECTOR) as StringSlot);
+        for (begin_offset, capacity_offset) in [(0xfcu32, 0x104)] {
             let begin = read(this + begin_offset);
             BASIC_STRING_1.original()(begin as *const u32, read(this + capacity_offset).wrapping_sub(begin));
         }
@@ -405,8 +402,7 @@ pub(crate) unsafe fn load_entity(this: u32, file: *const u8, version: u32) -> bo
             write(APP_GUARD, APP_GUARD_INIT);
         }
         if get_from_memory::<u8>(APP + APP_KEEP_NAME_FLAG) != 0 {
-            let range = name.as_ptr_range();
-            ASSIGN_RANGE.original()((this + NAME_VECTOR) as *const c_void, range.start as *const u32, range.end, version as *const u8);
+            string_assign((this + NAME_VECTOR) as StringSlot, &name);
         }
     }
 
@@ -467,6 +463,27 @@ pub(crate) unsafe fn load_entity(this: u32, file: *const u8, version: u32) -> bo
         }
     }
     true
+}
+
+/// `BFEntity::setName(name)` (`0x449215`, `name` a pointer to a `{begin, end, cap}` string): replaces the entity's
+/// name (`+0x108`) with `name` when at least one of its bytes is meaningful (see
+/// `habitat::name_has_meaningful_byte`: a DBCS lead byte, a CRT graphic character, or on code page 932 a byte in
+/// `0xa1..=0xdf`). An empty, all-blank or self-assigned name changes nothing. Vanilla overwrites the existing
+/// bytes and appends or truncates; only the buffer's capacity can differ from the port's.
+pub(crate) unsafe fn set_name(this: u32, name: u32) {
+    let text = unsafe { string_bytes(read(name), read(name + 4)) };
+    if text.is_empty() {
+        return;
+    }
+    let accepted = name_has_meaningful_byte(
+        &text,
+        |byte| unsafe { windows::Win32::Globalization::IsDBCSLeadByte(byte) }.is_ok(),
+        |byte| unsafe { CRT_ISMBCGRAPH.original()(byte as i8 as i32 as u32) } != 0,
+        || unsafe { windows::Win32::Globalization::GetACP() },
+    );
+    if accepted && name != this + NAME_VECTOR {
+        unsafe { string_assign((this + NAME_VECTOR) as StringSlot, &text) };
+    }
 }
 
 /// `BFEntity::clearBS`: empties the embedded set's name, current call text, call name, call arguments and
@@ -547,6 +564,11 @@ mod detours {
         unsafe { set_pending_bs(this as u32, name, call_flag as u8, force as u8) }
     }
 
+    #[detour(SET_NAME)]
+    unsafe extern "thiscall" fn set_name_detour(this: *const u32, name: *const u32) {
+        unsafe { set_name(this as u32, name as u32) }
+    }
+
     #[detour(CONSTRUCTOR)]
     unsafe extern "thiscall" fn constructor_detour(this: *const u32, entity_type: u32) -> *const u32 {
         unsafe { construct_entity(this as u32, entity_type) };
@@ -574,6 +596,9 @@ mod detours {
         }
         pub(crate) fn set_pending_bs(this: u32, name: [u32; 3], call_flag: u8, force: u8) -> bool {
             unsafe { super::SET_PENDING_BS_0X4300F6_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as *const u32, name[2] as *const u32, call_flag as i8, force as i8) }
+        }
+        pub(crate) fn set_name(this: u32, name: u32) {
+            unsafe { super::SET_NAME_DETOUR.call(this as *const u32, name as *const u32) }
         }
         pub(crate) fn clear_bs(this: u32) -> u32 {
             unsafe { super::CLEAR_BS_DETOUR.call(this as *const u32) }
