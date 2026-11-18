@@ -226,6 +226,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "BFENTITY_SET_BS_NEW", run: tests::bfentity::run_bfentity_set_bs_new_test },
             RegisteredTest { name: "BFENTITY_CLEAR_BS",run: tests::bfentity::run_bfentity_clear_bs_test },
             RegisteredTest { name: "BFENTITY_CLEAR_QUEUE", run: tests::bfentity::run_bfentity_clear_queue_test },
+            RegisteredTest { name: "BFENTITY_SET_PENDING_BS", run: tests::bfentity::run_bfentity_set_pending_bs_test },
             RegisteredTest { name: "BFENTITY_SAVE", run: tests::bfentity_io::run_bfentity_save_test },
             RegisteredTest { name: "BFUNIT_DETOURS_ENABLED", run: tests::bfunit::run_bfunit_detours_enabled_test },
             RegisteredTest { name: "ZTSHOWINFO_DETOURS_ENABLED", run: tests::ztshowinfo::run_ztshowinfo_detours_enabled_test },

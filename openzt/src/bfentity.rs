@@ -10,7 +10,7 @@
 //! `+0x00` vtable (`BFEventListenerInterface`'s while building, `BFEntity`'s at the end, since derived
 //! constructors overwrite it afterwards); `+0x04..+0x10` a `vector<BFEvent>`; `+0x14` the embedded
 //! `BFBehaviorSet` (`0x60` bytes, see `bfbehaviorset.rs`); `+0x74` a `GXMixer` (`0x68` bytes); `+0xdc` a
-//! `BFBSCall`; `+0xf8`/`+0xf9` flag bytes (0 and 1); `+0xfc` a string left as three zero words and never
+//! `BFBSCall` (a string with a Rust-owned buffer plus the flag byte at `+0xe8`; see `set_pending_bs`); `+0xf8`/`+0xf9` flag bytes (0 and 1); `+0xfc` a string left as three zero words and never
 //! constructed; `+0x108` a byte vector of capacity 8 whose first byte is 0; `+0x114..+0x124` position and
 //! height; `+0x128` the entity type; `+0x13c..+0x146` flag bytes.
 //!
@@ -29,15 +29,14 @@
 use std::ffi::c_void;
 
 use openzt_detour::generated::{
-    bfbscall::CONSTRUCTOR as BFBSCALL_CONSTRUCTOR,
     bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_WORLD_POS},
-    ztanimal::SET_PENDING_BS_0X4300F6,
     gxmixer::{CLEAR_ALL as GXMIXER_CLEAR_ALL, CONSTRUCTOR as GXMIXER_CONSTRUCTOR, TOTAL_CLEAR as GXMIXER_TOTAL_CLEAR},
-    msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_1, CONSTRUCT_CSTR_0X40505A},
+    msvc_std_basic_string::{ASSIGN_RANGE, BASIC_STRING_1},
     msvc_std_dequegxmixerchain::{DESTROY_RANGE_0X411CAD, DESTRUCTOR_0X41DECC},
     msvc_std_vector_t_28::VECTOR_T_28,
     msvc_std_vectorbyte::VECTORBYTE,
     msvc_std_vectorgxmixerlink::{DESTRUCTOR_0X411C0F, FREE_BUFFER_0X402970},
+    ztanimal::SET_PENDING_BS_0X4300F6,
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -45,6 +44,7 @@ use tracing::error;
 use crate::{
     bfbehaviorset::{clear_string, construct_set_members, destroy_set_members, BfBehaviorSet},
     bfscriptmgr::{clear_call_args, read_file_bytes, reset_call, write_file_bytes, write_file_string, RawString},
+    owned_strings::{free_buffer, string_construct, string_fill_new, string_release, string_assign, StringSlot},
     util::{get_from_memory, ref_from_memory},
     vanilla_string::VanillaString,
     write_live,
@@ -53,8 +53,6 @@ use crate::{
 pub(crate) const BFENTITY_SIZE: usize = 0x154;
 const VTABLE_BASE: u32 = 0x0063_21a4;
 const VTABLE_BFENTITY: u32 = 0x0062_d4b4;
-/// The empty C string vanilla passes to build the `BFBSCall` temporary.
-const EMPTY_CSTRING: u32 = 0x0063_8084;
 
 const EMBEDDED_SET: u32 = 0x14;
 const MIXER: u32 = 0x74;
@@ -79,12 +77,10 @@ pub(crate) unsafe fn construct_entity(this: u32, entity_type: u32) {
 
         GXMIXER_CONSTRUCTOR.original()((this + MIXER) as *const u32);
 
-        // `BFBSCall`'s constructor copies the string it is given by value and then frees that string's buffer
-        // to the pool, so the temporary must be a real vanilla string.
-        // `0x40505a` is `RET 8`: the string and an unused allocator slot.
-        let mut temp = [0u32; 3];
-        CONSTRUCT_CSTR_0X40505A.original()(temp.as_mut_ptr() as *const c_void, EMPTY_CSTRING as *const i8, 0);
-        BFBSCALL_CONSTRUCTOR.original()((this + BS_CALL) as *const u32, temp[0] as *const u32, temp[1] as *const u32, temp[2] as *const u32, 1);
+        // The pending `BFBSCall` is an empty string of capacity 8 and a flag byte (`+0xe8`) of 1. Its buffer is
+        // Rust-owned: only this module and `set_pending_bs` write the string, and vanilla only truncates it.
+        string_construct((this + BS_CALL) as StringSlot, 8);
+        write(this + BS_CALL + 0xc, 1u8);
 
         write(this + 0xec, 0u32);
         write(this + 0xf4, 0u32);
@@ -126,10 +122,12 @@ pub(crate) unsafe fn destroy_entity(this: u32) {
     unsafe {
         write(this, VTABLE_BFENTITY);
 
-        for (begin_offset, capacity_offset) in [(NAME_VECTOR, NAME_VECTOR + 8), (0xfcu32, 0x104), (BS_CALL, BS_CALL + 8)] {
+        for (begin_offset, capacity_offset) in [(NAME_VECTOR, NAME_VECTOR + 8), (0xfcu32, 0x104)] {
             let begin = read(this + begin_offset);
             BASIC_STRING_1.original()(begin as *const u32, read(this + capacity_offset).wrapping_sub(begin));
         }
+
+        string_release((this + BS_CALL) as StringSlot);
 
         let mixer = this + MIXER;
         let deque = mixer + 0x18;
@@ -210,8 +208,32 @@ pub(crate) unsafe fn set_bs(this: u32, name: RawString, call_flag: u8, force: u8
             write_live!(set, pending, 1u8);
         }
     }
-    unsafe { BASIC_STRING_1.original()(name.begin as *const u32, (name.capacity as u32).wrapping_sub(name.begin as u32)) };
+    unsafe { free_buffer(name.begin as *mut u8, (name.capacity as usize).wrapping_sub(name.begin as usize), 1) };
     loaded
+}
+
+/// A Rust-owned string holding `bytes`, as the by-value argument words a callee takes and releases.
+unsafe fn new_owned_name(bytes: &[u8]) -> RawString {
+    let mut slot: [*mut u8; 3] = [std::ptr::null_mut(); 3];
+    unsafe { string_fill_new(&mut slot, bytes, 1) };
+    RawString { begin: slot[0], end: slot[1], capacity: slot[2] }
+}
+
+/// `ZTAnimal::setPendingBS(name, callFlag, force)` (`0x4300f6`): when the pending-call flag (`+0xe8`) is set or
+/// `force` is, stores `name` as the pending call string (`+0xdc`) and sets the flag to `call_flag`. Returns whether
+/// it stored it. `name` is passed by value and its buffer is released on return, stored or not. Vanilla copies
+/// over the existing text and appends the remainder, so only the buffer's capacity can differ from the port's.
+pub(crate) unsafe fn set_pending_bs(this: u32, name: RawString, call_flag: u8, force: u8) -> bool {
+    let stored = unsafe { read(this + BS_CALL + 0xc) } as u8 != 0 || force != 0;
+    if stored {
+        let text = unsafe { string_bytes(name.begin as u32, name.end as u32) };
+        unsafe {
+            string_assign((this + BS_CALL) as StringSlot, &text);
+            write(this + BS_CALL + 0xc, call_flag);
+        }
+    }
+    unsafe { free_buffer(name.begin as *mut u8, (name.capacity as usize).wrapping_sub(name.begin as usize), 1) };
+    stored
 }
 
 unsafe fn string_bytes(begin: u32, end: u32) -> Vec<u8> {
@@ -221,8 +243,7 @@ unsafe fn string_bytes(begin: u32, end: u32) -> Vec<u8> {
 /// `BFEntity::setBSNew(name, callFlag, force, clearMode)`: when `name` equals the set's current name, returns
 /// true and does nothing. Otherwise runs `setBS` on a copy of `name`, and when the call queued at `+0xdc`
 /// (read before `setBS`) equals `name`, queues an empty call (`0x4300f6`, call flag 1, forced). Returns `setBS`'s
-/// result. `name` is passed by value and its buffer is freed to the pool on return, as vanilla does; the copy
-/// handed to `setBS` is a vanilla string because `setBS` frees it.
+/// result. `name` is passed by value and its buffer is released on return, as vanilla does.
 pub(crate) unsafe fn set_bs_new(this: u32, name: RawString, call_flag: u8, force: u8, clear_mode: i32) -> bool {
     let set = unsafe { ref_from_memory::<BfBehaviorSet>(this + EMBEDDED_SET) };
     let wanted = unsafe { string_bytes(name.begin as u32, name.end as u32) };
@@ -232,22 +253,15 @@ pub(crate) unsafe fn set_bs_new(this: u32, name: RawString, call_flag: u8, force
     let result = if wanted == current {
         true
     } else {
-        let copy = VanillaString::from_bytes(&wanted);
-        let base = copy.as_ptr() as u32;
-        let copy_words = RawString { begin: unsafe { read(base) } as *const u8, end: unsafe { read(base + 4) } as *const u8, capacity: unsafe { read(base + 8) } as *const u8 };
-        std::mem::forget(copy);
+        // `setBS` frees the string it is given, so it gets a copy of its own.
+        let copy_words = unsafe { new_owned_name(&wanted) };
         let loaded = unsafe { set_bs(this, copy_words, call_flag, force, clear_mode) };
         if queued == wanted {
-            // `0x4300f6` takes the string by value and frees it.
-            let mut empty = [0u32; 3];
-            unsafe {
-                CONSTRUCT_CSTR_0X40505A.original()(empty.as_mut_ptr() as *const c_void, EMPTY_CSTRING as *const i8, 0);
-                SET_PENDING_BS_0X4300F6.original()(this as *const u32, empty[0] as *const u32, empty[1] as *const u32, empty[2] as *const u32, 1, 1);
-            }
+            unsafe { set_pending_bs(this, new_owned_name(b""), 1, 1) };
         }
         loaded
     };
-    unsafe { BASIC_STRING_1.original()(name.begin as *const u32, (name.capacity as u32).wrapping_sub(name.begin as u32)) };
+    unsafe { free_buffer(name.begin as *mut u8, (name.capacity as usize).wrapping_sub(name.begin as usize), 1) };
     result
 }
 
@@ -527,6 +541,12 @@ mod detours {
         unsafe { set_bs_new(this as u32, name, call_flag as u8, force as u8, clear_mode) }
     }
 
+    #[detour(SET_PENDING_BS_0X4300F6)]
+    unsafe extern "thiscall" fn set_pending_bs_detour(this: *const u32, begin: *const u32, end: *const u32, capacity: *const u32, call_flag: i8, force: i8) -> bool {
+        let name = RawString { begin: begin as *const u8, end: end as *const u8, capacity: capacity as *const u8 };
+        unsafe { set_pending_bs(this as u32, name, call_flag as u8, force as u8) }
+    }
+
     #[detour(CONSTRUCTOR)]
     unsafe extern "thiscall" fn constructor_detour(this: *const u32, entity_type: u32) -> *const u32 {
         unsafe { construct_entity(this as u32, entity_type) };
@@ -551,6 +571,9 @@ mod detours {
         }
         pub(crate) fn set_bs_new(this: u32, name: [u32; 3], call_flag: u8, force: u8, clear_mode: i32) -> bool {
             unsafe { super::SET_BSNEW_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as *const u32, name[2] as *const u32, call_flag as i8, force as i8, clear_mode) }
+        }
+        pub(crate) fn set_pending_bs(this: u32, name: [u32; 3], call_flag: u8, force: u8) -> bool {
+            unsafe { super::SET_PENDING_BS_0X4300F6_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as *const u32, name[2] as *const u32, call_flag as i8, force as i8) }
         }
         pub(crate) fn clear_bs(this: u32) -> u32 {
             unsafe { super::CLEAR_BS_DETOUR.call(this as *const u32) }

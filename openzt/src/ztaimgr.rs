@@ -32,13 +32,10 @@ use openzt_detour::generated::{
     bfaimgr::{F_FLY, F_MOVE_REVERSE_F, F_PLAY as BFAIMGR_F_PLAY, F_PLAY_TIME},
     bfcoggoal::REACHED_TARGET as BFCOGGOAL_REACHED_TARGET,
     gxmixerlink::DURATION as LINK_DURATION,
-    ztanimal::SET_PENDING_BS_0X4300F6 as ZTANIMAL_SET_PENDING_BS,
     ztcheat::ENTITY_REMOVED as ZTCHEAT_ENTITY_REMOVED,
     ztguide::F_ROUTINE as ZTGUIDE_F_ROUTINE,
     ztkeeper::F_ROUTINE as ZTKEEPER_F_ROUTINE,
     standalone::{ATOI, TIME},
-    bfbscall::{CONSTRUCTOR as BFBSCALL_CONSTRUCTOR, COPY_0X43E90E as BFBSCALL_COPY},
-    msvc_std_basic_string::BASIC_STRING_0,
     ztaimgr::{
         CONVERT_CONSTANT_PARAM, F_END_TRICK, F_END_TRICK_F, F_ENTER_BUILDING, F_ENTER_BUILDING_F, F_GUEST_ROUTINE, F_GUEST_ROUTINE_F, F_GUIDE_ROUTINE, F_GUIDE_ROUTINE_F,
         F_HIDE_PREDATOR, F_HIDE_PREDATOR_F, F_KEEPER_ROUTINE, F_KEEPER_ROUTINE_F, F_MAINT_ROUTINE, F_MAINT_ROUTINE_F, F_RETURN_TO_BUILDING, F_RETURN_TO_BUILDING_F, F_SPRAY_F,
@@ -96,7 +93,7 @@ use tracing::error;
 use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, save_to_memory, LiveMemory},
-    owned_strings::OwnedString,
+    owned_strings::{self, string_fill_new, string_release, OwnedString, StringSlot},
     vanilla_string::VanillaString,
 };
 
@@ -2845,9 +2842,9 @@ fn pick_set_prob(weights: &[i32], mut rand: impl FnMut() -> u32) -> Option<usize
 
 const SET_PROB_PICK_VANILLA: SetProbPickOps = SetProbPickOps { rand: random_vanilla, play_set: play_set_vanilla };
 
-/// A `BFBSCall` (a behavior-set name call): a vanilla `{begin, end, cap}` string plus a flag byte at `+0xc`,
-/// 16 bytes, owned through vanilla's allocator. Built by the vanilla constructor (`0x004109fe`, `RET 0x10`:
-/// the string by value, which the constructor copies and frees, then the flag) and freed like a string.
+/// A `BFBSCall` (a behavior-set name call): a `{begin, end, cap}` string plus a flag byte at `+0xc`, 16 bytes,
+/// with a Rust-owned string buffer. It is only handed to ported code, which takes the string by value and
+/// releases it through `owned_strings`.
 #[repr(C)]
 pub struct BsCall {
     words: [u32; 4],
@@ -2855,12 +2852,9 @@ pub struct BsCall {
 
 impl BsCall {
     unsafe fn new(name: &[u8], flag: u32) -> Self {
-        let moved = VanillaString::from_bytes(name);
-        let string = moved.as_ptr();
-        let (w0, w1, w2) = (get_from_memory::<u32>(string as u32), get_from_memory::<u32>(string as u32 + 4), get_from_memory::<u32>(string as u32 + 8));
-        mem::forget(moved);
         let mut call = BsCall { words: [0; 4] };
-        unsafe { BFBSCALL_CONSTRUCTOR.original()(call.words.as_mut_ptr(), w0 as *const u32, w1 as *const u32, w2 as *const u32, flag as i8) };
+        unsafe { string_fill_new(call.words.as_mut_ptr() as StringSlot, name, 1) };
+        call.words[3] = flag & 0xff;
         call
     }
 
@@ -2871,7 +2865,7 @@ impl BsCall {
 
 impl Drop for BsCall {
     fn drop(&mut self) {
-        unsafe { BASIC_STRING_0.original()(self.words.as_mut_ptr() as *const c_void) };
+        unsafe { string_release(self.words.as_mut_ptr() as StringSlot) };
     }
 }
 
@@ -2928,10 +2922,12 @@ pub unsafe fn f_play_set(name: u32, unit: u32, child: bool, flag: u32, ops: &Pla
     true
 }
 
-/// Copies a `BFBSCall` through vanilla's copy constructor, for a callee that takes it by value and frees it.
+/// Copies a `BFBSCall` into a Rust-owned one, for a callee that takes it by value and releases it.
 unsafe fn copy_bs_call(source: u32) -> [u32; 4] {
+    let text = unsafe { owned_strings::string_bytes(source as *const [*mut u8; 3]) };
     let mut copy = [0u32; 4];
-    unsafe { BFBSCALL_COPY.original()(copy.as_mut_ptr(), source as *const u32) };
+    unsafe { string_fill_new(copy.as_mut_ptr() as StringSlot, text, 1) };
+    copy[3] = get_from_memory::<u8>(source + 0xc) as u32;
     copy
 }
 
@@ -2947,7 +2943,8 @@ unsafe fn set_bs_vanilla(unit: u32, call: u32, force: u32, mode: u32) {
 
 unsafe fn set_pending_vanilla(unit: u32, call: u32, force: u32) {
     let [w0, w1, w2, w3] = unsafe { copy_bs_call(call) };
-    unsafe { ZTANIMAL_SET_PENDING_BS.original()(unit as *const u32, w0 as *const u32, w1 as *const u32, w2 as *const u32, w3 as i8, force as i8) };
+    let name = crate::bfscriptmgr::RawString { begin: w0 as *const u8, end: w1 as *const u8, capacity: w2 as *const u8 };
+    unsafe { crate::bfentity::set_pending_bs(unit, name, w3 as u8, force as u8) };
 }
 
 const PLAY_SET_VANILLA: PlaySetOps = PlaySetOps { init_child: init_child_vanilla, set_bs: set_bs_vanilla, set_pending: set_pending_vanilla };

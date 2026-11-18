@@ -515,3 +515,59 @@ pub(crate) fn run_bfentity_clear_queue_test(failure_log: &mut Option<std::fs::Fi
     }
     finish_test(test_name, failures, failure_log)
 }
+
+/// `BFENTITY_SET_PENDING_BS` - `ZTAnimal::setPendingBS` (`0x4300f6`) against vanilla: the queued call's flag byte
+/// clear and set, forced and not, with names that fit the string's capacity, are empty, or force it to grow.
+/// Compares the return value and the queued text and flag, and the freelist growth where neither pole reallocates.
+pub(crate) fn run_bfentity_set_pending_bs_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::tests::bfbehaviorset::build_fake_type;
+    use openzt_detour::generated::ztanimal::SET_PENDING_BS_0X4300F6;
+
+    let test_name = "BFENTITY_SET_PENDING_BS";
+    let mut failures: Vec<String> = Vec::new();
+    let type_object = build_fake_type();
+    // The fixture's queued string is "abc" in a buffer of capacity 8.
+    for (name, grows) in [("", false), ("x", false), ("walkAbc", false), ("aMuchLongerBehaviorName", true)] {
+        for queued_flag in [0u8, 1] {
+            for force in [0u8, 1] {
+                for call_flag in [0u8, 1, 7] {
+                    let label = format!("name={name:?} queued_flag={queued_flag} force={force} call_flag={call_flag}");
+                    let (real, port) = (build_clear_entity(type_object, false, [0; 5]), build_clear_entity(type_object, false, [0; 5]));
+                    unsafe {
+                        ((real + 0xe8) as *mut u8).write(queued_flag);
+                        ((port + 0xe8) as *mut u8).write(queued_flag);
+                    }
+
+                    warm_pool();
+                    let before = pool_lengths();
+                    let real_ret = bfentity_live_support::real::set_pending_bs(real, string_words(name), call_flag, force);
+                    let middle = pool_lengths();
+                    let [w0, w1, w2] = string_words(name);
+                    let port_ret = unsafe { SET_PENDING_BS_0X4300F6.hooked()(port as *const u32, w0 as *const u32, w1 as *const u32, w2 as *const u32, call_flag as i8, force as i8) };
+                    let after = pool_lengths();
+
+                    if real_ret != port_ret {
+                        failures.push(format!("{label}: returned real={real_ret} port={port_ret}"));
+                    }
+                    let (real_queue, port_queue) = (queue_string(real), queue_string(port));
+                    if real_queue != port_queue {
+                        failures.push(format!("{label}: queue real={real_queue:?} port={port_queue:?}"));
+                    }
+                    let nul_ok = |entity: u32| get_from_memory::<u8>(get_from_memory::<u32>(entity + 0xe0)) == 0;
+                    if !nul_ok(real) || !nul_ok(port) {
+                        failures.push(format!("{label}: queued text not NUL-terminated"));
+                    }
+                    let stored = queued_flag != 0 || force != 0;
+                    if !(grows && stored) {
+                        let real_delta: Vec<u32> = middle.iter().zip(&before).map(|(a, b)| a.wrapping_sub(*b)).collect();
+                        let port_delta: Vec<u32> = after.iter().zip(&middle).map(|(a, b)| a.wrapping_sub(*b)).collect();
+                        if real_delta != port_delta {
+                            failures.push(format!("{label}: freelist growth real={real_delta:?} port={port_delta:?}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
