@@ -1536,3 +1536,68 @@ pub(crate) fn run_hunter_prey_real_unit_test(failure_log: &mut Option<std::fs::F
     }
     finish_test(&format!("{test_name} ({})", seen.join("; ")), failures, failure_log)
 }
+
+/// `ZTAIMGR_TARGET_LIST_REAL_UNIT_LIVE`: the target-list helper against vanilla's own list handling on a real unit.
+/// Nodes pushed through the helper come from `PoolAlloc`'s 20-byte freelist; vanilla's `BFUnit::stop` must free
+/// exactly those nodes back to it and empty the list, and the helper's own `clear` must do the same. The next push
+/// after a free reuses the last node freed, as vanilla's inlined freelist pop would.
+pub(crate) fn run_target_list_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::tests::bfentity::{pool_lengths, warm_pool};
+    use ztaimgr_live_support::{TargetList, VanillaPool};
+
+    let test_name = "ZTAIMGR_TARGET_LIST_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    // Size class of 20-byte blocks: `(20 - 1) >> 3`.
+    const BUCKET: usize = 2;
+
+    if let Some(ty) = live_animal_type() {
+        let unit = build_unit(ty);
+        let list = TargetList::of_unit(unit);
+        if !list.is_empty() {
+            failures.push(format!("a new unit's list holds {} nodes", list.len()));
+        }
+
+        warm_pool();
+        let before = pool_lengths();
+        let mut pool = VanillaPool;
+        let wanted = [[11, 12, 13], [22, 23, 24], [33, 34, 35]];
+        for position in wanted {
+            unsafe { list.push_back(&mut pool, position) };
+        }
+        if list.len() != 3 || list.positions() != wanted {
+            failures.push(format!("after three pushes: len {} positions {:?}", list.len(), list.positions()));
+        }
+        let pushed = pool_lengths();
+        if pushed[BUCKET] != before[BUCKET] - 3 {
+            failures.push(format!("three pushes took {} blocks from the 20-byte class, expected 3", before[BUCKET] as i64 - pushed[BUCKET] as i64));
+        }
+        let last_node = {
+            let sentinel = get_from_memory::<u32>(unit + 0x154);
+            get_from_memory::<u32>(sentinel + 4)
+        };
+
+        unsafe { openzt_detour::generated::bfunit::STOP.hooked()(unit as *const u32, 0, 0) };
+        if !list.is_empty() {
+            failures.push(format!("vanilla BFUnit::stop left {} nodes", list.len()));
+        }
+        let stopped = pool_lengths();
+        if stopped != before {
+            failures.push(format!("vanilla stop did not return exactly the pushed nodes: before {:?} after {:?}", &before[..4], &stopped[..4]));
+        }
+
+        unsafe { list.push_back(&mut pool, [44, 0, 0]) };
+        let reused = get_from_memory::<u32>(get_from_memory::<u32>(unit + 0x154) + 4);
+        if reused != last_node {
+            failures.push(format!("the next push got {reused:#x}, expected the last node vanilla freed ({last_node:#x})"));
+        }
+        unsafe { list.push_back(&mut pool, [55, 0, 0]) };
+        unsafe { list.clear(&mut pool) };
+        if !list.is_empty() || pool_lengths() != before {
+            failures.push(format!("the helper's clear left the list or the pool different: len {} pool {:?}", list.len(), &pool_lengths()[..4]));
+        }
+        destroy_unit(unit);
+    } else {
+        failures.push("no animal in the live zoo".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}

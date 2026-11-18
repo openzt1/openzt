@@ -31,7 +31,6 @@ pub(super) const UNIT_FLAG_D7: u32 = 0xd7;
 pub(super) const UNIT_FLAG_20C: u32 = 0x20c;
 pub(super) const UNIT_FINISHED: u32 = 0x20d;
 pub(super) const UNIT_COG_INVALID: u32 = 0x20e;
-pub(super) const UNIT_TARGET_LIST: u32 = 0x154;
 pub(super) const UNIT_COG_GOAL: u32 = 0x15c;
 pub(super) const UNIT_STATE: u32 = 0x170;
 pub(super) const UNIT_STATE_2: u32 = 0x1bc;
@@ -104,18 +103,6 @@ pub(super) unsafe fn vcall1(object: u32, slot: u32, arg: u32) -> u32 {
     unsafe { call_virtual_args(object, slot, [arg]) }
 }
 
-/// Number of nodes between the target list's first node and its sentinel.
-pub(super) unsafe fn target_list_count(unit: u32) -> u32 {
-    let sentinel = get_from_memory::<u32>(unit + UNIT_TARGET_LIST);
-    let mut node = get_from_memory::<u32>(sentinel);
-    let mut count = 0;
-    while node != sentinel {
-        count += 1;
-        node = get_from_memory::<u32>(node);
-    }
-    count
-}
-
 /// Vanilla ends `fMove` through the same four-write sequence in several places.
 pub(super) unsafe fn finish_stopped(unit: u32, done: *const u8) {
     unsafe { vcall1(unit, ENTITY_VT_SET_SPEED, 0) };
@@ -152,7 +139,7 @@ pub unsafe fn f_move(args: &FMoveArgs, ops: &FMoveOps) -> bool {
     };
     if get_from_memory::<u8>(unit + UNIT_STOPPED) != 0
         && get_from_memory::<u8>(unit + UNIT_COG_INVALID) == 0
-        && unsafe { target_list_count(unit) } == 0
+        && TargetList::of_unit(unit).is_empty()
         && unsafe { vcall0(unit, ENTITY_VT_CAN_PLAY) } as u8 != 0
     {
         if unsafe { vcall0(cog, COG_VT_VALID) } as u8 == 0 {
@@ -164,8 +151,8 @@ pub unsafe fn f_move(args: &FMoveArgs, ops: &FMoveOps) -> bool {
         return invalid_cog();
     }
 
-    if get_from_memory::<u8>(unit + UNIT_STOPPED) != 0 && unsafe { target_list_count(unit) } != 0 {
-        if unsafe { target_list_count(unit) } <= 1 && get_from_memory::<u32>(unit + UNIT_STATE_2) != 3 {
+    if get_from_memory::<u8>(unit + UNIT_STOPPED) != 0 && !TargetList::of_unit(unit).is_empty() {
+        if TargetList::of_unit(unit).len() <= 1 && get_from_memory::<u32>(unit + UNIT_STATE_2) != 3 {
             unsafe { finish_stopped(unit, done) };
             unsafe { (ops.stop)(unit, 1, 1) };
             return true;
@@ -200,7 +187,7 @@ pub unsafe fn f_move(args: &FMoveArgs, ops: &FMoveOps) -> bool {
         return true;
     }
     if has_target {
-        if unsafe { target_list_count(unit) } <= 1 {
+        if TargetList::of_unit(unit).len() <= 1 {
             unsafe { vcall0(cog, COG_VT_CLEAR_TARGET) };
             unsafe { vcall0(cog, COG_VT_CLEAR_TARGET_SUB) };
             save_to_memory(unit + UNIT_STOPPED, 1u8);
@@ -208,7 +195,7 @@ pub unsafe fn f_move(args: &FMoveArgs, ops: &FMoveOps) -> bool {
             save_to_memory(unit + UNIT_MOVING, 0u8);
             return true;
         }
-    } else if unsafe { target_list_count(unit) } == 0 || unsafe { (ops.reached_target)(cog) } {
+    } else if TargetList::of_unit(unit).is_empty() || unsafe { (ops.reached_target)(cog) } {
         unsafe { finish_stopped(unit, done) };
         unsafe { (ops.stop)(unit, 1, 0) };
         return true;

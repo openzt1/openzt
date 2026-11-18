@@ -58,7 +58,7 @@ pub(super) fn neighbor_scan(first: usize, len: usize) -> std::ops::Range<usize> 
 /// `None` (defer to vanilla) where vanilla divides by zero (a zero random extent or an empty neighbour list)
 /// or hands a null tile to `getNeighbors` (a unit off the map).
 pub unsafe fn f_random_walk(this: u32, unit: u32, ops: &RandomWalkOps) -> Option<bool> {
-    if unit == 0 || unsafe { target_list_count(unit) } != 0 {
+    if unit == 0 || !TargetList::of_unit(unit).is_empty() {
         return Some(false);
     }
     let map = unsafe { (ops.world)() }.wrapping_add(OFFSET_WORLD_MAP);
@@ -77,7 +77,7 @@ pub unsafe fn f_random_walk(this: u32, unit: u32, ops: &RandomWalkOps) -> Option
 
     let mut goal = unsafe { (ops.no_destination)() };
     let mut has_destination = unsafe { call_virtual_args(unit, ENTITY_VT_GET_DESTINATION, [goal.as_mut_ptr() as u32]) } as u8 != 0;
-    let queued = unsafe { target_list_count(unit) } != 0;
+    let queued = !TargetList::of_unit(unit).is_empty();
     if has_destination && goal == start {
         has_destination = false;
     }

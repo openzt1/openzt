@@ -171,6 +171,7 @@ mod links;
 mod play;
 mod play_variants;
 mod walk;
+mod target_list;
 mod wrappers;
 mod ai_params;
 mod detours;
@@ -185,6 +186,7 @@ pub(crate) use links::*;
 pub use play::*;
 pub use play_variants::*;
 pub use walk::*;
+pub(crate) use target_list::*;
 pub use wrappers::*;
 pub use ai_params::*;
 use detours::ztaimgr_detours;
@@ -253,6 +255,7 @@ pub(crate) mod live_support {
         f_fly as real_f_fly, f_move as real_f_move, f_play_f as real_f_play_f, f_play_special as real_f_play_special, f_play_time as real_f_play_time, f_play_with_base_f as real_f_play_with_base_f, f_play_with_sound as real_f_play_with_sound,
     };
     pub(crate) use super::{f_move, FMoveArgs, F_MOVE_VANILLA_OPS};
+    pub(crate) use super::target_list::{TargetList, VanillaPool};
     pub(crate) use super::{acquire_first_vanilla, add_anim_vanilla, play_links_with, play_pair_with, play_single_with, play_timed_with, play_two_with, play_with, release_first_vanilla, set_base_with};
     pub(crate) use ztaimgr_detours::test_real::{
         f_end_trick as real_f_end_trick, f_enter_building as real_f_enter_building, f_guest_routine as real_f_guest_routine, f_guide_routine as real_f_guide_routine,

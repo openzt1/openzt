@@ -1125,6 +1125,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTAIMGR_F_MOVE_REAL_UNIT_LIVE", run: tests::real_unit::run_f_move_real_unit_test },
             RegisteredTest { name: "ZTAIMGR_F_PLAY_SET_PROB_REAL_UNIT_LIVE", run: tests::real_unit::run_f_play_set_prob_real_unit_test },
             RegisteredTest { name: "ZTAIMGR_F_RANDOM_WALK_REAL_UNIT_LIVE", run: tests::real_unit::run_f_random_walk_real_unit_test },
+            RegisteredTest { name: "ZTAIMGR_TARGET_LIST_REAL_UNIT_LIVE", run: tests::real_unit::run_target_list_real_unit_test },
             RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_CALL", run: tests::bfbehaviorset::run_bfbehaviorset_execute_call_test },
             RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_HEAD", run: tests::bfbehaviorset::run_bfbehaviorset_execute_head_test },
             RegisteredTest { name: "BFBEHAVIORSET_LOAD", run: tests::bfbehaviorset::run_bfbehaviorset_load_test },
