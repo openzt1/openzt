@@ -149,6 +149,7 @@ struct Observation {
     chains: Vec<[u32; 3]>,
     links: Vec<[u32; 3]>,
     mixer_anim: u32,
+    targets: u32,
 }
 
 fn read_triples(begin: u32, end: u32) -> Vec<[u32; 3]> {
@@ -169,6 +170,7 @@ fn observe(result: u32, unit: u32, call: u32) -> Observation {
         chains: read_triples(get_from_memory(mixer), get_from_memory(mixer + 4)),
         links: read_triples(get_from_memory(mixer + 0xc), get_from_memory(mixer + 0x10)),
         mixer_anim: unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) as u32 },
+        targets: target_count(unit),
     }
 }
 
@@ -202,6 +204,9 @@ fn compare(failures: &mut Vec<String>, label: &str, real: &Observation, port: &O
         .collect();
     if !mismatched.is_empty() {
         failures.push(format!("{label}: unit words differ: {}", mismatched.iter().take(12).cloned().collect::<Vec<_>>().join("; ")));
+    }
+    if real.targets != port.targets {
+        failures.push(format!("{label}: target list holds real={} port={}", real.targets, port.targets));
     }
     if real.mixer_anim != port.mixer_anim {
         failures.push(format!("{label}: GXMixer::getAnim real={:#x} port={:#x}", real.mixer_anim, port.mixer_anim));
@@ -261,11 +266,12 @@ fn run_pair(
         }
     }
     let summary = format!(
-        "{label}: result {}, flag {:#x}, {} link(s), {} chain(s), +{:?} ref(s)",
+        "{label}: result {}, flag {:#x}, {} link(s), {} chain(s), {} target(s), +{:?} ref(s)",
         real_obs.result,
         real_obs.call_flag,
         real_obs.links.len(),
         real_obs.chains.len(),
+        real_obs.targets,
         refs_real.iter().zip(&refs_start).map(|(a, b)| a.wrapping_sub(*b)).collect::<Vec<_>>()
     );
 
@@ -531,4 +537,320 @@ pub(crate) fn run_f_play_special_f_real_unit_test(failure_log: &mut Option<std::
         }
     }
     finish_test(&format!("{test_name} (type {ty:#x}, {} cases; first: {})", rows.len(), seen.join("; ")), failures, failure_log)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// fMove
+// ---------------------------------------------------------------------------------------------------------------
+
+const UNIT_TARGET_LIST: u32 = 0x154;
+const UNIT_COG_GOAL: u32 = 0x15c;
+const COG_TARGET_TILE: u32 = 0x24;
+const COG_GOAL_FLAG: u32 = 0x4c;
+const UNIT_STATE: u32 = 0x170;
+const UNIT_STATE_2: u32 = 0x1bc;
+const UNIT_POS_X: u32 = 0x114;
+const UNIT_POS_Y: u32 = 0x118;
+const UNIT_POS_Z: u32 = 0x11c;
+const UNIT_FLAG_D7: u32 = 0xd7;
+const UNIT_FLAG_20C: u32 = 0x20c;
+const UNIT_FINISHED: u32 = 0x20d;
+const UNIT_COG_INVALID: u32 = 0x20e;
+/// `ZTUnit`'s keep-moving predicate also reads this byte.
+const UNIT_KEEP_MOVING_BYTE: u32 = 0x25c;
+const CALL_PARAM_SIZE: u32 = 12;
+const TARGET_NODE_SIZE: u32 = 0x14;
+
+/// The unit's circular target list: `n` zeroed `PoolAlloc` nodes linked around the sentinel the constructor made.
+/// Vanilla's `stop` returns them to the pool's freelist, and `~BFUnit` does the same for any that remain.
+fn set_target_count(unit: u32, n: u32) {
+    let sentinel = get_from_memory::<u32>(unit + UNIT_TARGET_LIST);
+    let mut previous = sentinel;
+    for _ in 0..n {
+        let node = unsafe { openzt_detour::generated::poolalloc::ALLOCATE.original()(TARGET_NODE_SIZE) } as u32;
+        unsafe { std::ptr::write_bytes(node as *mut u8, 0, TARGET_NODE_SIZE as usize) };
+        save_to_memory(previous, node);
+        save_to_memory(node + 4, previous);
+        previous = node;
+    }
+    save_to_memory(previous, sentinel);
+    save_to_memory(sentinel + 4, previous);
+}
+
+fn target_count(unit: u32) -> u32 {
+    let sentinel = get_from_memory::<u32>(unit + UNIT_TARGET_LIST);
+    let mut node = get_from_memory::<u32>(sentinel);
+    let mut count = 0;
+    while node != sentinel && count < 64 {
+        count += 1;
+        node = get_from_memory::<u32>(node);
+    }
+    count
+}
+
+/// The state a case sets on a unit before calling `fMove`.
+#[derive(Clone, Copy, Debug)]
+struct MoveState {
+    stopped: u8,
+    moving: u8,
+    finished: u8,
+    state: u32,
+    state_2: u32,
+    targets: u32,
+    cog_invalid: u8,
+    cog_flag: u8,
+    d7: u8,
+    f20c: u8,
+    reached: bool,
+    keep_moving: u8,
+    /// Tile the unit stands on (its coordinates are set to the tile's centre).
+    tile: (u32, u32),
+}
+
+impl MoveState {
+    const BASE: MoveState = MoveState {
+        stopped: 1,
+        moving: 0,
+        finished: 0,
+        state: 0,
+        state_2: 0,
+        targets: 0,
+        cog_invalid: 0,
+        cog_flag: 0,
+        d7: 0,
+        f20c: 0,
+        reached: false,
+        keep_moving: 0,
+        tile: (0, 0),
+    };
+
+    fn apply(&self, unit: u32) {
+        save_to_memory(unit + UNIT_POS_X, self.tile.0 * 64 + 32);
+        save_to_memory(unit + UNIT_POS_Y, self.tile.1 * 64 + 32);
+        save_to_memory(unit + UNIT_POS_Z, 0u32);
+        save_to_memory(unit + UNIT_STOPPED, self.stopped);
+        save_to_memory(unit + UNIT_MOVING, self.moving);
+        save_to_memory(unit + UNIT_FINISHED, self.finished);
+        save_to_memory(unit + UNIT_STATE, self.state);
+        save_to_memory(unit + UNIT_STATE_2, self.state_2);
+        save_to_memory(unit + UNIT_COG_INVALID, self.cog_invalid);
+        save_to_memory(unit + UNIT_COG_GOAL + COG_GOAL_FLAG, self.cog_flag);
+        save_to_memory(unit + UNIT_FLAG_D7, self.d7);
+        save_to_memory(unit + UNIT_FLAG_20C, self.f20c);
+        save_to_memory(unit + UNIT_KEEP_MOVING_BYTE, self.keep_moving);
+        // `BFCogGoal::reachedTarget` compares the unit's tile with the goal's `+0x24`.
+        let tile = unsafe { openzt_detour::generated::bfentity::GET_TILE.original()(unit as *const u32) } as u32;
+        save_to_memory(unit + UNIT_COG_GOAL + COG_TARGET_TILE, if self.reached { tile } else { tile.wrapping_add(0x8c) });
+        set_target_count(unit, self.targets);
+    }
+}
+
+/// How `fMove` is called besides the unit's state.
+#[derive(Clone, Copy, Debug)]
+struct MoveArgs {
+    seconds: i32,
+    /// 0 none, 1 empty, 2 named
+    extra: u8,
+    reverse: u32,
+    anim_found: bool,
+}
+
+impl MoveArgs {
+    const BASE: MoveArgs = MoveArgs { seconds: 0, extra: 0, reverse: 0, anim_found: true };
+}
+
+/// A live-map tile whose water flags (`tile + 0x83`, low two bits) are clear, and one where they are set.
+fn land_and_wet_tiles() -> (Option<(u32, u32)>, Option<(u32, u32)>) {
+    let world = globals().ztworldmgr();
+    let (mut land, mut wet) = (None, None);
+    for y in 0..world.map_y_size.min(200) {
+        for x in 0..world.map_x_size.min(200) {
+            let flags = get_from_memory::<u8>(world.get_tile_ptr(x, y) + 0x83) & 3;
+            if flags == 0 && land.is_none() {
+                land = Some((x, y));
+            } else if flags != 0 && wet.is_none() {
+                wet = Some((x, y));
+            }
+        }
+        if land.is_some() && wet.is_some() {
+            break;
+        }
+    }
+    (land, wet)
+}
+
+/// Whether `ZTAnimal`'s `hasTarget` virtual (`+0x180`) answers true for a unit of this type with state `0x72`.
+fn type_has_target(ty: u32) -> bool {
+    let probe = build_unit(ty);
+    save_to_memory(probe + UNIT_STATE, 0x72u32);
+    let target = get_from_memory::<u32>(get_from_memory::<u32>(probe) + 0x180);
+    let has_target = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(target) }(probe) as u8 != 0;
+    destroy_unit(probe);
+    has_target
+}
+
+/// `ZTAIMGR_F_MOVE_REAL_UNIT_LIVE`: `fMove` on real animals, over the state combinations that select each of its
+/// paths: a finished unit, a stopped unit with and without targets (cog goal checks, the one-target stop, the
+/// move start with one or two animations, sound and reverse), a moving unit (target reached or not, the
+/// `setMoving` condition) and an idle one. The target list is a ring of real `PoolAlloc` nodes that vanilla's
+/// `stop` frees; the virtuals (`hasTarget`, `canPlay`, `findAnim`, `setSpeed`) and `BFCogGoal::reachedTarget`
+/// are the real ones, driven through the unit's state words.
+pub(crate) fn run_f_move_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::bfaimgr::F_MOVE;
+
+    let test_name = "ZTAIMGR_F_MOVE_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((first_ty, _)) = live_type_and_anims(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let ai = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
+    let none = global_string(0x0023_950c).unwrap_or_default();
+    let (land, wet) = land_and_wet_tiles();
+    let Some(land) = land else {
+        failures.push("the live map has no land tile".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let base = MoveState { tile: land, ..MoveState::BASE };
+    // Subjects: the first animal type, and one whose `hasTarget` answers true (the moving-with-target branches).
+    let mut subjects: Vec<u32> = vec![first_ty];
+    if let Some(ty) = live_animal_types(40).into_iter().find(|ty| *ty != first_ty && type_has_target(*ty)) {
+        subjects.push(ty);
+    }
+
+    let mut cases: Vec<(String, MoveState, MoveArgs)> = Vec::new();
+    // A finished unit completes at once.
+    for (stopped, moving) in [(1u8, 0u8), (0, 1), (0, 0)] {
+        for state in [0u32, 1] {
+            cases.push((format!("finished stopped={stopped} moving={moving} state={state}"), MoveState { stopped, moving, finished: 1, state, ..base }, MoveArgs::BASE));
+        }
+    }
+    // Stopped, no targets: the cog goal checks.
+    for state in [0u32, 1, 0x66, 0x72] {
+        for keep_moving in [0u8, 1] {
+            for cog_invalid in [0u8, 1] {
+                for cog_flag in [0u8, 1] {
+                    cases.push((
+                        format!("stopped no targets state={state:#x} keepMoving={keep_moving} cogInvalid={cog_invalid} cogFlag={cog_flag}"),
+                        MoveState { state, keep_moving, cog_invalid, cog_flag, ..base },
+                        MoveArgs::BASE,
+                    ));
+                }
+            }
+        }
+    }
+    // Stopped with one target: stop when the state is not 3, otherwise start the move.
+    for state_2 in [0u32, 3] {
+        for state in [0u32, 1] {
+            cases.push((format!("stopped one target state={state} state2={state_2}"), MoveState { targets: 1, state, state_2, ..base }, MoveArgs::BASE));
+        }
+    }
+    // Stopped with several targets: the move start across its arguments.
+    for targets in [2u32, 3] {
+        for seconds in [0i32, 2000] {
+            for extra in [0u8, 1, 2] {
+                for reverse in [0u32, 1] {
+                    for anim_found in [true, false] {
+                        cases.push((
+                            format!("start move targets={targets} seconds={seconds} extra={extra} reverse={reverse} animFound={anim_found}"),
+                            MoveState { targets, ..base },
+                            MoveArgs { seconds, extra, reverse, anim_found },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(wet) = wet {
+        for seconds in [0i32, 2000] {
+            for anim_found in [true, false] {
+                cases.push((
+                    format!("start move wet tile seconds={seconds} animFound={anim_found}"),
+                    MoveState { targets: 2, tile: wet, ..base },
+                    MoveArgs { seconds, anim_found, ..MoveArgs::BASE },
+                ));
+            }
+        }
+    }
+    cases.push(("start move state=1 (prepare)".to_string(), MoveState { targets: 2, state: 1, ..base }, MoveArgs::BASE));
+    // Moving.
+    for state in [0u32, 1, 0x72] {
+        for state_2 in [0u32, 1, 3] {
+            for targets in [0u32, 1, 2] {
+                for reached in [false, true] {
+                    cases.push((
+                        format!("moving state={state:#x} state2={state_2} targets={targets} reached={reached}"),
+                        MoveState { stopped: 0, moving: 1, state, state_2, targets, reached, ..base },
+                        MoveArgs::BASE,
+                    ));
+                }
+            }
+        }
+    }
+    // The `setMoving` condition also compares two mixer words (`+0x8c`/`+0x9c`, deque iterators) that only the
+    // real mixer may set, so they are left as the unit's own mixer has them.
+    for d7 in [0u8, 1] {
+        for f20c in [0u8, 1] {
+            for seconds in [0i32, 2000] {
+                cases.push((
+                    format!("moving keeps going d7={d7} 20c={f20c} seconds={seconds}"),
+                    MoveState { stopped: 0, moving: 1, targets: 2, d7, f20c, ..base },
+                    MoveArgs { seconds, ..MoveArgs::BASE },
+                ));
+            }
+        }
+    }
+    cases.push(("idle".to_string(), MoveState { stopped: 0, moving: 0, targets: 1, ..base }, MoveArgs::BASE));
+
+    let empty: &'static [u32; 3] = {
+        static EMPTY_BYTE: u8 = 0;
+        let byte = &EMPTY_BYTE as *const u8 as u32;
+        Box::leak(Box::new([byte, byte, byte]))
+    };
+    let mut outcomes: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    let mut total = 0usize;
+    for (subject_index, ty) in subjects.iter().copied().enumerate() {
+        let probe = build_unit(ty);
+        let found: Vec<(&str, u32)> = CANDIDATE_ANIMS.iter().map(|name| (*name, resolve_anim(probe, name))).filter(|(_, anim)| *anim != 0).collect();
+        destroy_unit(probe);
+        let Some(anim) = found.first().copied() else {
+            failures.push(format!("the animal type {ty:#x} resolves none of {CANDIDATE_ANIMS:?}"));
+            continue;
+        };
+        for (label, state, args) in &cases {
+            let anim_text = if args.anim_found { anim.0 } else { "nosuchanim" };
+            let extra_text = match args.extra {
+                2 => "nosuchsound".to_string(),
+                _ => none.clone(),
+            };
+            let text = format!("fMove(first,{anim_text},{extra_text})");
+            let (state, args) = (*state, *args);
+            let invoke = move |port: bool, call: u32, unit: u32| -> u32 {
+                state.apply(unit);
+                let begin = get_from_memory::<u32>(call + 0xc);
+                let extra: u32 = match args.extra {
+                    1 => empty.as_ptr() as u32,
+                    _ => begin + 2 * CALL_PARAM_SIZE,
+                };
+                let done = Box::new(0xaau8);
+                let done_ptr = &*done as *const u8;
+                let result = if port {
+                    unsafe { F_MOVE.hooked()(ai as *const u32, begin as i32, args.seconds, unit as *const i32, done_ptr, (begin + CALL_PARAM_SIZE) as i32, 0x55, extra as *const i8, args.reverse, 100) }
+                } else {
+                    ztaimgr_live_support::real_f_move(ai as *const u32, begin as i32, args.seconds, unit as *const i32, done_ptr, (begin + CALL_PARAM_SIZE) as i32, 0x55, extra as *const i8, args.reverse, 100)
+                };
+                u32::from(result) | (u32::from(unsafe { done_ptr.read_volatile() }) << 8)
+            };
+            let anims: Vec<u32> = if args.anim_found { vec![anim.1] } else { Vec::new() };
+            let summary = run_pair(&mut failures, &format!("fMove [type {ty:#x}] {label}"), ty, &anims, Start { stopped: 1, moving: 0 }, &text, &|c, u| invoke(false, c, u), &|c, u| invoke(true, c, u));
+            let category = label.split(' ').take(2).collect::<Vec<_>>().join(" ");
+            let key = summary
+                .split_once(": ")
+                .map(|(_, rest)| format!("s{subject_index} {category}: {}", rest.split(',').take(5).collect::<Vec<_>>().join(",")))
+                .unwrap_or_default();
+            *outcomes.entry(key).or_insert(0) += 1;
+            total += 1;
+        }
+    }
+    let coverage = outcomes.iter().map(|(k, v)| format!("{k} x{v}")).collect::<Vec<_>>().join(" | ");
+    finish_test(&format!("{test_name} ({} subject type(s), {total} cases; outcomes: {coverage})", subjects.len()), failures, failure_log)
 }
