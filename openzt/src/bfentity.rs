@@ -308,6 +308,42 @@ unsafe fn read_prefixed_bytes(file: *const u8) -> (bool, Option<Vec<u8>>) {
     (ok, Some(bytes))
 }
 
+/// Which parts of a saved entity a given save `version` carries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct LoadGates {
+    id: bool,
+    /// Saves up to `0xa` renumber a typed entity's id from the global counter.
+    renumber_id: bool,
+    legacy_behavior_name: bool,
+    visible_and_field_138: bool,
+    flag_13c: bool,
+    behavior_set: bool,
+    extra_bytes: bool,
+}
+
+impl LoadGates {
+    const fn for_version(version: u32) -> Self {
+        Self {
+            id: version >= 7,
+            renumber_id: version >= 7 && version <= 0xa,
+            legacy_behavior_name: version < 0x3f,
+            visible_and_field_138: version >= 0x23,
+            flag_13c: version >= 0x3a,
+            behavior_set: version >= 0x3f,
+            extra_bytes: version >= 0x43,
+        }
+    }
+}
+
+/// The behavior name `load` hands to `setBS`: saves up to `0x16` call `bRunFromPredator` `bAvoidPredator`.
+fn migrate_legacy_behavior_name(version: u32, name: Vec<u8>) -> Vec<u8> {
+    if version <= 0x16 && name == b"bAvoidPredator" {
+        b"bRunFromPredator".to_vec()
+    } else {
+        name
+    }
+}
+
 /// `BFEntity::load(file, version)`. Fields appear by version: position and rotation always; the id from `7`
 /// (saves older than `0xb` renumber it from a global counter); a name string, kept only when the app's
 /// keep-name flag is set; from `0x23` the visible byte and `+0x138` (defaulted from `ZTAIMgr` when 0); from
@@ -317,14 +353,15 @@ unsafe fn read_prefixed_bytes(file: *const u8) -> (bool, Option<Vec<u8>>) {
 /// still performs is still performed. The result is whether everything read.
 pub(crate) unsafe fn load_entity(this: u32, file: *const u8, version: u32) -> bool {
     let read_into = |address: u32, size: u32| unsafe { read_file_bytes(address as *mut u8, size, file) };
+    let gates = LoadGates::for_version(version);
 
     let mut position = [0i32; 3];
     let mut ok = unsafe { read_file_bytes(position.as_mut_ptr() as *mut u8, 0xc, file) };
     unsafe { SET_WORLD_POS.original()(this as *const u32, position.as_ptr() as *const glam::IVec3) };
     ok &= read_into(this + ROTATION, 4);
-    if version >= 7 {
+    if gates.id {
         ok &= read_into(this + ID, 4);
-        if version <= 0xa && unsafe { read(this + ENTITY_TYPE) } != 0 {
+        if gates.renumber_id && unsafe { read(this + ENTITY_TYPE) } != 0 {
             let id = unsafe { read(ENTITY_ID_COUNTER) }.wrapping_add(1);
             unsafe {
                 write(ENTITY_ID_COUNTER, id);
@@ -359,16 +396,13 @@ pub(crate) unsafe fn load_entity(this: u32, file: *const u8, version: u32) -> bo
         }
     }
 
-    if version < 0x3f {
+    if gates.legacy_behavior_name {
         let (read_ok, legacy) = unsafe { read_prefixed_bytes(file) };
         ok &= read_ok;
         if !ok {
             return false;
         }
-        let mut legacy = legacy.unwrap_or_default();
-        if version <= 0x16 && legacy == b"bAvoidPredator" {
-            legacy = b"bRunFromPredator".to_vec();
-        }
+        let legacy = migrate_legacy_behavior_name(version, legacy.unwrap_or_default());
         if !legacy.is_empty() {
             let string = VanillaString::from_bytes(&legacy);
             let base = string.as_ptr() as u32;
@@ -382,24 +416,24 @@ pub(crate) unsafe fn load_entity(this: u32, file: *const u8, version: u32) -> bo
         }
     }
 
-    if version >= 0x23 {
+    if gates.visible_and_field_138 {
         ok &= read_into(this + FLAG_13F, 1);
         ok &= read_into(this + FIELD_138, 4);
         if unsafe { read(this + FIELD_138) } == 0 {
             unsafe { write(this + FIELD_138, read(read(GLOBAL_ZTAIMGR) + AIMGR_DEFAULT_FIELD_138)) };
         }
     }
-    if version >= 0x3a {
+    if gates.flag_13c {
         ok &= read_into(this + FLAG_13C, 1);
     }
-    if version >= 0x3f {
+    if gates.behavior_set {
         ok &= unsafe { ref_from_memory::<BfBehaviorSet>(this + EMBEDDED_SET).load_file(file, version, this as i32) };
     }
     if !ok {
         return false;
     }
 
-    if version >= 0x43 {
+    if gates.extra_bytes {
         let existing = unsafe { read(this + EXTRA_BYTES + 4).wrapping_sub(read(this + EXTRA_BYTES)) };
         let mut count = 0u32;
         ok &= unsafe { read_file_bytes(std::ptr::addr_of_mut!(count) as *mut u8, 4, file) };
@@ -553,5 +587,38 @@ pub(crate) mod live_support {
     /// `(name, is_enabled)` per detour.
     pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
         detours::status()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gates_switch_on_at_their_documented_versions() {
+        let at = LoadGates::for_version;
+        assert!(!at(6).id && at(7).id);
+        assert!(at(7).renumber_id && at(0xa).renumber_id && !at(0xb).renumber_id && !at(6).renumber_id);
+        assert!(at(0x3e).legacy_behavior_name && !at(0x3f).legacy_behavior_name);
+        assert!(!at(0x22).visible_and_field_138 && at(0x23).visible_and_field_138);
+        assert!(!at(0x39).flag_13c && at(0x3a).flag_13c);
+        assert!(!at(0x3e).behavior_set && at(0x3f).behavior_set);
+        assert!(!at(0x42).extra_bytes && at(0x43).extra_bytes);
+    }
+
+    #[test]
+    fn legacy_name_is_a_behavior_set_or_a_set_never_both() {
+        for version in 0..0x60 {
+            let gates = LoadGates::for_version(version);
+            assert_ne!(gates.legacy_behavior_name, gates.behavior_set, "version {version:#x}");
+        }
+    }
+
+    #[test]
+    fn avoid_predator_is_renamed_only_in_old_saves() {
+        assert_eq!(migrate_legacy_behavior_name(0x16, b"bAvoidPredator".to_vec()), b"bRunFromPredator");
+        assert_eq!(migrate_legacy_behavior_name(0x17, b"bAvoidPredator".to_vec()), b"bAvoidPredator");
+        assert_eq!(migrate_legacy_behavior_name(0x10, b"bAvoidPredatorX".to_vec()), b"bAvoidPredatorX");
+        assert_eq!(migrate_legacy_behavior_name(0x10, Vec::new()), b"");
     }
 }

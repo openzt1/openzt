@@ -221,6 +221,109 @@ impl BfBehaviorSet {
     }
 }
 
+/// The operations `BFBehaviorSet::execute` performs on a set, so its loop can be run over a script.
+trait ExecuteOps {
+    fn dirty(&self) -> bool;
+    fn removed(&self) -> bool;
+    fn pending(&self) -> bool;
+    fn list_len(&self) -> u32;
+    /// Flags the entity's pending bit and clears the set's own.
+    fn take_pending(&mut self);
+    fn remove_head(&mut self);
+    /// Clears dirty, kills the child, erases the list and clears the set.
+    fn finish(&mut self);
+    fn execute_head(&mut self, result: &mut u8);
+    fn has_child(&self) -> bool;
+    fn child_dirty(&self) -> bool;
+    /// `executeChild`: returns the child's result and may set `removed`.
+    fn execute_child(&mut self) -> bool;
+    fn kill_child(&mut self);
+    fn set_removed(&mut self);
+}
+
+/// `execute`'s loop. Returns the result byte, or `None` when it ran more than `max_iterations` times (vanilla
+/// has a state in which it never terminates).
+fn run_execute(ops: &mut dyn ExecuteOps, max_iterations: usize) -> Option<u8> {
+    let mut result = 0u8;
+    for _ in 0..max_iterations {
+        if ops.dirty() && ops.removed() {
+            if ops.pending() {
+                ops.take_pending();
+            } else {
+                ops.remove_head();
+            }
+        } else if ops.pending() {
+            ops.take_pending();
+        }
+
+        if ops.list_len() == 0 {
+            ops.finish();
+        } else {
+            if !ops.has_child() {
+                ops.execute_head(&mut result);
+            } else {
+                result = ops.execute_child() as u8;
+                if ops.has_child() && !ops.child_dirty() {
+                    ops.kill_child();
+                }
+            }
+            if result != 0 {
+                ops.set_removed();
+                ops.finish();
+            }
+        }
+        if !ops.removed() || ops.list_len() == 0 {
+            return Some(result);
+        }
+    }
+    None
+}
+
+struct LiveSet<'a>(&'a BfBehaviorSet);
+
+impl ExecuteOps for LiveSet<'_> {
+    fn dirty(&self) -> bool {
+        self.0.dirty != 0
+    }
+    fn removed(&self) -> bool {
+        self.0.removed != 0
+    }
+    fn pending(&self) -> bool {
+        self.0.pending != 0
+    }
+    fn list_len(&self) -> u32 {
+        self.0.list_len()
+    }
+    fn take_pending(&mut self) {
+        unsafe { ((self.0.entity as u32 + ENTITY_PENDING_FLAG) as *mut u8).write_volatile(1) };
+        write_live!(self.0, pending, 0u8);
+    }
+    fn remove_head(&mut self) {
+        unsafe { self.0.remove_head() };
+    }
+    fn finish(&mut self) {
+        unsafe { self.0.finish() };
+    }
+    fn execute_head(&mut self, result: &mut u8) {
+        unsafe { self.0.execute_head(result) };
+    }
+    fn has_child(&self) -> bool {
+        !self.0.child.is_null()
+    }
+    fn child_dirty(&self) -> bool {
+        unsafe { (*self.0.child).dirty != 0 }
+    }
+    fn execute_child(&mut self) -> bool {
+        unsafe { self.0.execute_child() }
+    }
+    fn kill_child(&mut self) {
+        unsafe { self.0.kill_child() };
+    }
+    fn set_removed(&mut self) {
+        write_live!(self.0, removed, 1u8);
+    }
+}
+
 impl BfBehaviorSet {
     pub(crate) unsafe fn erase_list(&self) {
         unsafe { strvec_clear(std::ptr::addr_of!(self.list_begin) as u32) };
@@ -256,43 +359,7 @@ impl BfBehaviorSet {
             unsafe { out.write_volatile(1) };
             return;
         }
-        let mut result = 0u8;
-        loop {
-            let take_pending = |set: &BfBehaviorSet| {
-                unsafe { ((set.entity as u32 + ENTITY_PENDING_FLAG) as *mut u8).write_volatile(1) };
-                write_live!(set, pending, 0u8);
-            };
-            if self.dirty != 0 && self.removed != 0 {
-                if self.pending != 0 {
-                    take_pending(self);
-                } else {
-                    unsafe { self.remove_head() };
-                }
-            } else if self.pending != 0 {
-                take_pending(self);
-            }
-
-            if self.list_len() == 0 {
-                unsafe { self.finish() };
-            } else {
-                if self.child.is_null() {
-                    unsafe { self.execute_head(&mut result) };
-                } else {
-                    result = unsafe { self.execute_child() } as u8;
-                    let child = self.child;
-                    if !child.is_null() && unsafe { (*child).dirty } == 0 {
-                        unsafe { self.kill_child() };
-                    }
-                }
-                if result != 0 {
-                    write_live!(self, removed, 1u8);
-                    unsafe { self.finish() };
-                }
-            }
-            if self.removed == 0 || self.list_len() == 0 {
-                break;
-            }
-        }
+        let result = run_execute(&mut LiveSet(self), usize::MAX).expect("unbounded loop returns");
         unsafe { out.write_volatile(result) };
     }
 
@@ -772,6 +839,129 @@ pub(crate) mod live_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scripted set; `execute_head`/`execute_child` pop their next result from the front of a queue.
+    #[derive(Default)]
+    struct Script {
+        dirty: bool,
+        removed: bool,
+        pending: bool,
+        len: u32,
+        child: bool,
+        child_dirty: bool,
+        head_results: Vec<u8>,
+        child_results: Vec<(bool, bool)>,
+        log: Vec<&'static str>,
+    }
+
+    impl ExecuteOps for Script {
+        fn dirty(&self) -> bool {
+            self.dirty
+        }
+        fn removed(&self) -> bool {
+            self.removed
+        }
+        fn pending(&self) -> bool {
+            self.pending
+        }
+        fn list_len(&self) -> u32 {
+            self.len
+        }
+        fn take_pending(&mut self) {
+            self.log.push("take_pending");
+            self.pending = false;
+        }
+        fn remove_head(&mut self) {
+            self.log.push("remove_head");
+            self.len = self.len.saturating_sub(1);
+        }
+        fn finish(&mut self) {
+            self.log.push("finish");
+            self.dirty = false;
+            self.child = false;
+            self.len = 0;
+        }
+        fn execute_head(&mut self, result: &mut u8) {
+            self.log.push("execute_head");
+            *result = self.head_results.remove(0);
+        }
+        fn has_child(&self) -> bool {
+            self.child
+        }
+        fn child_dirty(&self) -> bool {
+            self.child_dirty
+        }
+        fn execute_child(&mut self) -> bool {
+            self.log.push("execute_child");
+            let (result, still_dirty) = self.child_results.remove(0);
+            self.child_dirty = still_dirty;
+            result
+        }
+        fn kill_child(&mut self) {
+            self.log.push("kill_child");
+            self.child = false;
+        }
+        fn set_removed(&mut self) {
+            self.log.push("set_removed");
+            self.removed = true;
+        }
+    }
+
+    #[test]
+    fn unfinished_head_returns_zero_after_one_pass() {
+        let mut script = Script { len: 2, head_results: vec![0], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["execute_head"]);
+    }
+
+    #[test]
+    fn finished_head_resets_the_set_and_reports_done() {
+        let mut script = Script { len: 1, dirty: true, head_results: vec![1], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(1));
+        assert_eq!(script.log, ["execute_head", "set_removed", "finish"]);
+    }
+
+    #[test]
+    fn empty_list_finishes_without_running_anything() {
+        let mut script = Script::default();
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["finish"]);
+    }
+
+    #[test]
+    fn pending_is_taken_first_and_a_removed_set_keeps_looping_until_the_list_is_empty() {
+        let mut script = Script { len: 2, dirty: true, removed: true, pending: true, head_results: vec![0, 0], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["take_pending", "execute_head", "remove_head", "execute_head", "remove_head", "finish"]);
+    }
+
+    #[test]
+    fn removed_head_is_dropped_when_nothing_is_pending() {
+        let mut script = Script { len: 1, dirty: true, removed: true, ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["remove_head", "finish"]);
+    }
+
+    #[test]
+    fn idle_child_is_killed_after_it_runs() {
+        let mut script = Script { len: 1, child: true, child_results: vec![(false, false)], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["execute_child", "kill_child"]);
+    }
+
+    #[test]
+    fn busy_child_is_left_alone() {
+        let mut script = Script { len: 1, child: true, child_dirty: true, child_results: vec![(false, true)], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["execute_child"]);
+    }
+
+    #[test]
+    fn the_never_terminating_state_hits_the_bound() {
+        // removed set but not dirty, so the head is never dropped, and a busy child never finishes.
+        let mut script = Script { len: 1, removed: true, child: true, child_dirty: true, child_results: vec![(false, true); 50], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 50), None);
+    }
 
     #[test]
     fn layout_offsets_match_vanilla() {

@@ -41,6 +41,20 @@ const SYMBOL_SLOTS: [u32; 3] = [0x120, 0x124, 0x128];
 /// Entity vtable slots `(slow, medium, fast)` for `getMoveAnimSpeed`.
 const SPEED_SLOTS: [u32; 3] = [ENTITY_VTABLE_SLOW_SPEED, ENTITY_VTABLE_MEDIUM_SPEED, ENTITY_VTABLE_FAST_SPEED];
 
+/// Picks the slot for a call's move class. The predicates are tried slow, medium, fast and stop at the first
+/// match (the later ones are not evaluated); no match uses the slow slot.
+fn select_move_slot(slots: [u32; 3], is_slow: bool, is_medium: impl FnOnce() -> bool, is_fast: impl FnOnce() -> bool) -> u32 {
+    if is_slow {
+        slots[0]
+    } else if is_medium() {
+        slots[1]
+    } else if is_fast() {
+        slots[2]
+    } else {
+        slots[0]
+    }
+}
+
 /// Calls the entity vtable slot for the move class of the deepest behavior set's call and returns its `EAX`.
 /// `slots` is `(slow, medium, fast)`; no match uses the slow slot.
 unsafe fn dispatch_by_move_class(unit: u32, slots: [u32; 3]) -> u32 {
@@ -55,15 +69,12 @@ unsafe fn dispatch_by_move_class(unit: u32, slots: [u32; 3]) -> u32 {
     let call = set + SET_CALL;
     let manager = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
     let slot = unsafe {
-        if predicate(manager, AIMGR_VTABLE_IS_SLOW_MOVE, call) {
-            slots[0]
-        } else if predicate(manager, AIMGR_VTABLE_IS_MEDIUM_MOVE, call) {
-            slots[1]
-        } else if predicate(manager, AIMGR_VTABLE_IS_FAST_MOVE, call) {
-            slots[2]
-        } else {
-            slots[0]
-        }
+        select_move_slot(
+            slots,
+            predicate(manager, AIMGR_VTABLE_IS_SLOW_MOVE, call),
+            || predicate(manager, AIMGR_VTABLE_IS_MEDIUM_MOVE, call),
+            || predicate(manager, AIMGR_VTABLE_IS_FAST_MOVE, call),
+        )
     };
     let function = get_from_memory::<u32>(get_from_memory::<u32>(unit) + slot);
     unsafe { std::mem::transmute::<u32, unsafe extern "thiscall" fn(u32) -> u32>(function)(unit) }
@@ -120,5 +131,31 @@ pub(crate) mod live_support {
     /// `(name, is_enabled)` per detour.
     pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
         detours::status()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    const SLOTS: [u32; 3] = [10, 20, 30];
+
+    #[test]
+    fn slot_follows_the_first_matching_move_class() {
+        assert_eq!(select_move_slot(SLOTS, true, || true, || true), 10);
+        assert_eq!(select_move_slot(SLOTS, false, || true, || true), 20);
+        assert_eq!(select_move_slot(SLOTS, false, || false, || true), 30);
+        assert_eq!(select_move_slot(SLOTS, false, || false, || false), 10);
+    }
+
+    #[test]
+    fn later_predicates_are_not_evaluated_after_a_match() {
+        let medium_calls = Cell::new(0);
+        let fast_calls = Cell::new(0);
+        select_move_slot(SLOTS, true, || { medium_calls.set(1); false }, || { fast_calls.set(1); false });
+        assert_eq!((medium_calls.get(), fast_calls.get()), (0, 0));
+        select_move_slot(SLOTS, false, || { medium_calls.set(1); true }, || { fast_calls.set(1); false });
+        assert_eq!((medium_calls.get(), fast_calls.get()), (1, 0));
     }
 }
