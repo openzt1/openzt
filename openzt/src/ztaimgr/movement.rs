@@ -7,7 +7,7 @@ pub(super) unsafe fn link_duration_vanilla(link: u32) -> i32 {
 }
 
 pub(super) unsafe fn mixer_clear_all_vanilla(mixer: u32) {
-    unsafe { GXMIXER_CLEAR_ALL.hooked()(mixer as *const u32) };
+    unsafe { crate::gxmixer::clear_all(mixer) };
 }
 
 pub(super) unsafe fn mixer_set_set_vanilla(mixer: u32, set: u32, out: u8) {

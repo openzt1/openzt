@@ -1132,6 +1132,7 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "BFUNIT_SET_MOVING_REAL_UNIT_LIVE", run: tests::real_unit::run_bfunit_set_moving_real_unit_test },
             RegisteredTest { name: "BFUNIT_CLEAR_GOAL_REAL_UNIT_LIVE", run: tests::real_unit::run_bfunit_clear_goal_real_unit_test },
             RegisteredTest { name: "GXMIXER_READERS_REAL_UNIT_LIVE", run: tests::real_unit::run_gxmixer_readers_real_unit_test },
+            RegisteredTest { name: "GXMIXER_PLAYBACK_REAL_UNIT_LIVE", run: tests::real_unit::run_gxmixer_playback_real_unit_test },
             RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_CALL", run: tests::bfbehaviorset::run_bfbehaviorset_execute_call_test },
             RegisteredTest { name: "BFBEHAVIORSET_EXECUTE_HEAD", run: tests::bfbehaviorset::run_bfbehaviorset_execute_head_test },
             RegisteredTest { name: "BFBEHAVIORSET_LOAD", run: tests::bfbehaviorset::run_bfbehaviorset_load_test },

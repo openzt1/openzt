@@ -1806,3 +1806,100 @@ pub(crate) fn run_gxmixer_readers_real_unit_test(failure_log: &mut Option<std::f
     }
     finish_test(test_name, failures, failure_log)
 }
+
+/// `GXMIXER_PLAYBACK_REAL_UNIT_LIVE`: `update`, `totalClear` and `clearAll` against vanilla on real units whose
+/// mixer holds a real animation (installed by the real `fSetBaseF` and, for the play cases, `fPlayF`), comparing
+/// the mixer's words and the animation's reference count after every operation.
+pub(crate) fn run_gxmixer_playback_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::gxmixer::live_support as gxmixer;
+
+    let test_name = "GXMIXER_PLAYBACK_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((ty, found)) = live_type_and_anims(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let ai = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
+    let third = found.get(2).copied().unwrap_or(found[1]);
+    let installs = [
+        format!("fSetBaseF({})", found[0].0),
+        format!("fSetBaseF({})", found[1].0),
+        format!("fPlayWithBaseF({},{})", found[0].0, found[1].0),
+        format!("fPlayWithBaseF({},{},{})", found[0].0, found[1].0, third.0),
+    ];
+    let steps: [(i32, i8); 9] = [(0, 0), (1, 0), (7, 0), (40, 0), (40, 1), (1000, 0), (100_000, 0), (5, 1), (3, 1)];
+
+    for (case, install) in installs.iter().enumerate() {
+        for operation in ["update", "update stepwise", "totalClear", "clearAll"] {
+            let label = format!("{install} {operation}");
+            let (a, b) = (build_unit(ty), build_unit(ty));
+            let anims: Vec<u32> = found.iter().map(|(_, anim)| *anim).collect();
+            let shared = [vec![ty], anims.clone()].concat();
+            for unit in [a, b] {
+                save_to_memory(unit + UNIT_STOPPED, 1u8);
+                save_to_memory(unit + UNIT_MOVING, 0u8);
+                let call = build_call(false, install);
+                if install.starts_with("fPlayWithBaseF") {
+                    ztaimgr_live_support::real_f_play_with_base_f(ai as *const u32, call as *const u32, unit as *const u32, 0, 0);
+                } else {
+                    ztaimgr_live_support::real_f_set_base_f(ai as *const u32, call as *const u32, unit as *const u32);
+                }
+            }
+            let (mixer_a, mixer_b) = (a + UNIT_MIXER, b + UNIT_MIXER);
+            let check = |failures: &mut Vec<String>, what: &str, refs_real: &[u32], refs_port: &[u32]| {
+                let (real_words, port_words) = (words(mixer_a, 0x68), words(mixer_b, 0x68));
+                if !real_words.iter().zip(&port_words).all(|(r, p)| equivalent(*r, *p, &shared)) {
+                    failures.push(format!("{label} {what}: mixer real={real_words:x?} port={port_words:x?}"));
+                }
+                if refs_real != refs_port {
+                    failures.push(format!("{label} {what}: reference-count change real={refs_real:?} port={refs_port:?}"));
+                }
+            };
+            let delta = |before: &[u32]| -> Vec<u32> { anims.iter().zip(before).map(|(anim, b)| refcount(*anim).wrapping_sub(*b)).collect() };
+
+            match operation {
+                "update" | "update stepwise" => {
+                    let sequences: Vec<Vec<(i32, i8)>> = if operation == "update" { steps.iter().map(|s| vec![*s]).collect() } else { vec![steps.to_vec()] };
+                    for sequence in sequences {
+                        for (step, stop) in &sequence {
+                            let before: Vec<u32> = anims.iter().map(|anim| refcount(*anim)).collect();
+                            gxmixer::real::update(mixer_a, *step, *stop);
+                            let real_delta = delta(&before);
+                            let middle: Vec<u32> = anims.iter().map(|anim| refcount(*anim)).collect();
+                            unsafe { crate::gxmixer::update(mixer_b, *step, *stop) };
+                            let port_delta = delta(&middle);
+                            check(&mut failures, &format!("update({step}, {stop})"), &real_delta, &port_delta);
+                        }
+                    }
+                    // The fixture must make the clock move, or the comparison above proves nothing.
+                    if operation == "update stepwise" && [0x50u32, 0x54, 0x58, 0x5c].iter().all(|offset| get_from_memory::<u32>(mixer_a + offset) == 0) && get_from_memory::<u8>(mixer_a + 0x61) == 0 {
+                        failures.push(format!("{label}: update never moved the clock or the set (words {:x?})", words(mixer_a, 0x68)));
+                    }
+                }
+                "totalClear" | "clearAll" => {
+                    let before: Vec<u32> = anims.iter().map(|anim| refcount(*anim)).collect();
+                    if operation == "totalClear" {
+                        gxmixer::real::total_clear(mixer_a);
+                    } else {
+                        gxmixer::real::clear_all(mixer_a);
+                    }
+                    let real_delta = delta(&before);
+                    let middle: Vec<u32> = anims.iter().map(|anim| refcount(*anim)).collect();
+                    unsafe {
+                        if operation == "totalClear" {
+                            crate::gxmixer::total_clear(mixer_b);
+                        } else {
+                            crate::gxmixer::clear_all(mixer_b);
+                        }
+                    }
+                    let port_delta = delta(&middle);
+                    check(&mut failures, operation, &real_delta, &port_delta);
+                }
+                _ => unreachable!(),
+            }
+            let _ = case;
+            destroy_unit(a);
+            destroy_unit(b);
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}

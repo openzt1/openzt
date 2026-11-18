@@ -14,7 +14,6 @@ use openzt_detour::generated::{
     poolalloc::ALLOCATE as POOLALLOC_ALLOCATE,
     ztui_general::GET_MAPVIEW,
     ztworldmgr::{BOX_UP_AND_FIND_APLACE_FOR_ANIMAL, FIND_APLACE_FOR_STAFF_MEMBER},
-    gxmixer::UPDATE as GXMIXER_UPDATE,
     msvc_std_basic_string::BASIC_STRING_RANGE,
     msvc_std_vectorbyte::VECTORBYTE,
     standalone::SET_NEEDS_ORDER_RECALCULATE,
@@ -1057,7 +1056,7 @@ impl ZTTankExhibit {
         save_to_memory(entity + ENTITY_ROTATION_OFFSET, direction);
         unsafe { SET_WORLD_POS.original()(entity as *const u32, (wall + ENTITY_WORLD_POS_OFFSET) as *const IVec3) };
         let animation_start = (next_game_random() % RIPPLE_ANIMATION_START_RANGE) as i32;
-        unsafe { GXMIXER_UPDATE.original()((entity + ENTITY_MIXER_OFFSET) as *const u32, animation_start, 0) };
+        unsafe { crate::gxmixer::update(entity + ENTITY_MIXER_OFFSET, animation_start, 0) };
         if !Self::add_transient(entity, tile) {
             return;
         }

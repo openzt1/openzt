@@ -28,7 +28,7 @@
 
 use openzt_detour::generated::{
     bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_NAME, SET_WORLD_POS},
-    gxmixer::{CLEAR_ALL as GXMIXER_CLEAR_ALL, CONSTRUCTOR as GXMIXER_CONSTRUCTOR, TOTAL_CLEAR as GXMIXER_TOTAL_CLEAR},
+    gxmixer::CONSTRUCTOR as GXMIXER_CONSTRUCTOR,
     msvc_std_basic_string::BASIC_STRING_1,
     standalone::CRT_ISMBCGRAPH,
     msvc_std_dequegxmixerchain::{DESTROY_RANGE_0X411CAD, DESTRUCTOR_0X41DECC},
@@ -196,8 +196,8 @@ pub(crate) unsafe fn set_bs(this: u32, name: RawString, call_flag: u8, force: u8
         if name.begin != name.end {
             loaded = unsafe { set.load() };
             match clear_mode {
-                0 => unsafe { GXMIXER_TOTAL_CLEAR.original()((this + MIXER) as *const u32) },
-                1 => unsafe { GXMIXER_CLEAR_ALL.original()((this + MIXER) as *const u32) },
+                0 => unsafe { crate::gxmixer::total_clear(this + MIXER) },
+                1 => unsafe { crate::gxmixer::clear_all(this + MIXER) },
                 _ => {}
             }
         }
@@ -420,7 +420,7 @@ pub(crate) unsafe fn load_entity(this: u32, file: *const u8, version: u32) -> bo
             // `setBS` takes the string by value and frees it.
             std::mem::forget(string);
             unsafe {
-                GXMIXER_CLEAR_ALL.original()((this + MIXER) as *const u32);
+                crate::gxmixer::clear_all(this + MIXER);
                 set_bs(this, name, 1, 1, 2);
             }
         }

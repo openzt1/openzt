@@ -120,7 +120,7 @@ pub unsafe fn f_move_entity_special_f(this: u32, call: u32, unit: u32, move_delt
 }
 
 pub(super) unsafe fn clear_mixer_vanilla(mixer: u32) {
-    unsafe { GXMIXER_CLEAR_ALL.original()(mixer as *const u32) };
+    unsafe { crate::gxmixer::clear_all(mixer) };
 }
 
 /// `fPlaySetF(call, unit)`: exactly one parameter clears the call's result flag and plays that set (through
