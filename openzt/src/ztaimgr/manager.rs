@@ -316,7 +316,7 @@ pub unsafe fn bfaimgr_call_done(entity: u32) -> bool {
     if get_from_memory::<u32>(mixer + MIXER_CURSOR) == get_from_memory::<u32>(mixer + MIXER_END) {
         return true;
     }
-    unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) }.is_null()
+    (unsafe { crate::gxmixer::get_anim(mixer) }) == 0
 }
 
 /// Entity vtable slots `removeEntities` tests and clears: `isRemoved`, `isRemovedUndo` and `setIsRemoved(a, b)`.

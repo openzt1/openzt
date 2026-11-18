@@ -11,7 +11,7 @@ pub(super) unsafe fn mixer_clear_all_vanilla(mixer: u32) {
 }
 
 pub(super) unsafe fn mixer_set_set_vanilla(mixer: u32, set: u32, out: u8) {
-    unsafe { GXMIXER_SET_SET.hooked()(mixer as *const u32, set, out) };
+    crate::gxmixer::set_set(mixer, set, out);
 }
 
 pub(super) unsafe fn mixer_set_base_vanilla(mixer: u32, vector: u32) {

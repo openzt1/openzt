@@ -356,7 +356,7 @@ pub unsafe fn f_set_base_f(this: u32, call: u32, unit: u32, ops: &PlayOps) -> bo
 }
 
 pub(super) unsafe fn mixer_anim_vanilla(mixer: u32) -> u32 {
-    unsafe { GXMIXER_GET_ANIM.hooked()(mixer as *const u32) as u32 }
+    unsafe { crate::gxmixer::get_anim(mixer) }
 }
 
 pub(crate) unsafe fn add_anim_vanilla(handle: u32, anim: u32, reverse: bool, ping_pong: bool) {

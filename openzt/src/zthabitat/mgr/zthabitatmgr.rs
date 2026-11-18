@@ -9,7 +9,6 @@ use openzt_detour::generated::{
         bfuimgr::DISPLAY_MESSAGE_1 as BFUIMGR_DISPLAY_MESSAGE_1,
         bfunit::GET_PATH_COST as BFUNIT_GET_PATH_COST,
         bfworldmgr::{ADD_ENTITY as BFWORLDMGR_ADD_ENTITY, GET_TYPE as BFWORLDMGR_GET_TYPE, REMOVE_ENTITY as BFWORLDMGR_REMOVE_ENTITY, VERIFY_ENTITY_0 as BFWORLDMGR_VERIFY_ENTITY_0},
-        gxmixer::SET_SET as GXMIXER_SET_SET,
         msvc_std_listuint::{ERASE as MSVC_LIST_UINT_ERASE_NODES, INSERT as MSVC_LIST_UINT_INSERT_NODE, LIST as MSVC_LIST_UINT_DTOR_NODE, LIST_UINT_CTOR as MSVC_LIST_UINT_CTOR},
         msvc_std_vectorbyte::VECTORBYTE,
         ztbuilding::{REMOVE_ALL_USERS as ZTBUILDING_REMOVE_ALL_USERS, USER_DATA_CHANGED as ZTBUILDING_USER_DATA_CHANGED},
@@ -2317,7 +2316,7 @@ impl ZTHabitatMgr {
     /// the entity type's own `create` factory ([`call_entity_type_create`] on `fence_ptr`'s own
     /// `entity_type_ptr` at `+0x128`), gives it the standard visual direction-set treatment (a real
     /// `std::vector<ph_GXLLEAnimSet>`-style bounds-checked index read at `+0x74`/`+0x78`/`+0xcc`, feeding
-    /// [`BFENTITY_DIR_TO_SET`] then [`GXMIXER_SET_SET`]), positions it in world space
+    /// [`BFENTITY_DIR_TO_SET`] then [`crate::gxmixer::set_set`]), positions it in world space
     /// ([`WORLD_TO_VIRTUAL_0`] + [`BFENTITY_SET_WORLD_POS`]), adds it to the world
     /// ([`BFWORLDMGR_ADD_ENTITY`]), and registers an undo action for the map editor
     /// ([`ADD_UNDO_ACTION`]) - this last part makes this function, independent of
@@ -2399,7 +2398,7 @@ impl ZTHabitatMgr {
                 std::ptr::null::<u32>(),
             )
         };
-        unsafe { GXMIXER_SET_SET.original()(gxmixer_ptr as *const u32, set_index, flip as u8) };
+        crate::gxmixer::set_set(gxmixer_ptr, set_index, flip as u8);
 
         let mut virtual_pos = [0i32; 3];
         unsafe {

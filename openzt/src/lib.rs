@@ -160,6 +160,8 @@ mod bfentity;
 
 /// bfunit module reimplements `BFUnit::getMoveAnimSpeed`.
 mod bfunit;
+/// gxmixer module reimplements `GXMixer`'s read-side methods.
+mod gxmixer;
 
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
@@ -301,6 +303,7 @@ mod zoo_init {
             bfbehaviorset::init();
             bfentity::init();
             bfunit::init();
+            gxmixer::init();
             ztshow::init();
             ztguest::init();
             ambients::init();

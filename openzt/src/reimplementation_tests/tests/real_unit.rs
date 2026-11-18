@@ -1748,3 +1748,61 @@ pub(crate) fn run_bfunit_clear_goal_real_unit_test(failure_log: &mut Option<std:
     }
     finish_test(test_name, failures, failure_log)
 }
+
+/// `GXMIXER_READERS_REAL_UNIT_LIVE`: `getAnimSet`, `getAnim`, `setSet` and `setTime` against vanilla on real
+/// units whose mixer holds a real animation (installed by the real `fSetBaseF`). The same case runs real on one
+/// unit and the port on the other and compares the returns and the mixer's words.
+pub(crate) fn run_gxmixer_readers_real_unit_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::gxmixer::live_support as gxmixer;
+
+    let test_name = "GXMIXER_READERS_REAL_UNIT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((ty, found)) = live_type_and_anims(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let ai = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
+    for (name, anim) in found.iter().take(2) {
+        let (a, b) = (build_unit(ty), build_unit(ty));
+        for unit in [a, b] {
+            save_to_memory(unit + UNIT_STOPPED, 1u8);
+            save_to_memory(unit + UNIT_MOVING, 0u8);
+            let call = build_call(false, &format!("fSetBaseF({name})"));
+            ztaimgr_live_support::real_f_set_base_f(ai as *const u32, call as *const u32, unit as *const u32);
+        }
+        let (mixer_a, mixer_b) = (a + UNIT_MIXER, b + UNIT_MIXER);
+        let shared = [ty, *anim];
+        let label = |what: &str| format!("{name} {what}");
+
+        let (real_set, port_set) = (gxmixer::real::get_anim_set(mixer_a), gxmixer::get_anim_set(mixer_b));
+        if real_set != port_set || real_set == 0 {
+            failures.push(label(&format!("getAnimSet real={real_set:#x} port={port_set:#x} (expected equal and non-null)")));
+        }
+        let (real_anim, port_anim) = (gxmixer::real::get_anim(mixer_a), unsafe { crate::gxmixer::get_anim(mixer_b) });
+        if real_anim != port_anim {
+            failures.push(label(&format!("getAnim real={real_anim:#x} port={port_anim:#x}")));
+        }
+        for (index, flag) in [(0u32, 0u8), (1, 1), (2, 0), (99, 1)] {
+            gxmixer::real::set_set(mixer_a, index, flag);
+            gxmixer::set_set(mixer_b, index, flag);
+            let (real_words, port_words) = (words(mixer_a, 0x68), words(mixer_b, 0x68));
+            if !real_words.iter().zip(&port_words).all(|(r, p)| equivalent(*r, *p, &shared)) {
+                failures.push(label(&format!("setSet({index}, {flag}) mixer real={real_words:x?} port={port_words:x?}")));
+            }
+            let (real_anim, port_anim) = (gxmixer::real::get_anim(mixer_a), unsafe { crate::gxmixer::get_anim(mixer_b) });
+            if real_anim != port_anim {
+                failures.push(label(&format!("getAnim after setSet({index}) real={real_anim:#x} port={port_anim:#x}")));
+            }
+        }
+        for (time, flag) in [(0i32, 0i8), (40, 1), (1000, 0)] {
+            gxmixer::real::set_time(mixer_a, time, flag);
+            unsafe { crate::gxmixer::set_time(mixer_b, time, flag) };
+            let (real_words, port_words) = (words(mixer_a, 0x68), words(mixer_b, 0x68));
+            if !real_words.iter().zip(&port_words).all(|(r, p)| equivalent(*r, *p, &shared)) {
+                failures.push(label(&format!("setTime({time}, {flag}) mixer real={real_words:x?} port={port_words:x?}")));
+            }
+        }
+        destroy_unit(a);
+        destroy_unit(b);
+    }
+    finish_test(test_name, failures, failure_log)
+}
