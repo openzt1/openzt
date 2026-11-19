@@ -27,14 +27,13 @@
 //! decremented before its buffer is freed. Everything is freed through vanilla's own helpers.
 
 use openzt_detour::generated::{
-    bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_NAME, SET_WORLD_POS},
+    bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_NAME, SET_QUEUED_CALL, SET_WORLD_POS},
     gxmixer::CONSTRUCTOR as GXMIXER_CONSTRUCTOR,
     msvc_std_basic_string::BASIC_STRING_1,
     standalone::CRT_ISMBCGRAPH,
     msvc_std_dequegxmixerchain::{DESTROY_RANGE_0X411CAD, DESTRUCTOR_0X41DECC},
     msvc_std_vector_t_28::VECTOR_T_28,
     msvc_std_vectorgxmixerlink::{DESTRUCTOR_0X411C0F, FREE_BUFFER_0X402970},
-    ztanimal::SET_PENDING_BS_0X4300F6,
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -558,7 +557,7 @@ mod detours {
         unsafe { set_bs_new(this as u32, name, call_flag as u8, force as u8, clear_mode) }
     }
 
-    #[detour(SET_PENDING_BS_0X4300F6)]
+    #[detour(SET_QUEUED_CALL)]
     unsafe extern "thiscall" fn set_pending_bs_detour(this: *const u32, begin: *const u32, end: *const u32, capacity: *const u32, call_flag: i8, force: i8) -> bool {
         let name = RawString { begin: begin as *const u8, end: end as *const u8, capacity: capacity as *const u8 };
         unsafe { set_pending_bs(this as u32, name, call_flag as u8, force as u8) }
@@ -595,7 +594,7 @@ mod detours {
             unsafe { super::SET_BSNEW_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as *const u32, name[2] as *const u32, call_flag as i8, force as i8, clear_mode) }
         }
         pub(crate) fn set_pending_bs(this: u32, name: [u32; 3], call_flag: u8, force: u8) -> bool {
-            unsafe { super::SET_PENDING_BS_0X4300F6_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as *const u32, name[2] as *const u32, call_flag as i8, force as i8) }
+            unsafe { super::SET_QUEUED_CALL_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as *const u32, name[2] as *const u32, call_flag as i8, force as i8) }
         }
         pub(crate) fn set_name(this: u32, name: u32) {
             unsafe { super::SET_NAME_DETOUR.call(this as *const u32, name as *const u32) }

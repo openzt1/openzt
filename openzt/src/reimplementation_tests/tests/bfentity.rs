@@ -516,12 +516,12 @@ pub(crate) fn run_bfentity_clear_queue_test(failure_log: &mut Option<std::fs::Fi
     finish_test(test_name, failures, failure_log)
 }
 
-/// `BFENTITY_SET_PENDING_BS` - `ZTAnimal::setPendingBS` (`0x4300f6`) against vanilla: the queued call's flag byte
+/// `BFENTITY_SET_PENDING_BS` - `BFEntity::setQueuedCall` (`0x4300f6`) against vanilla: the queued call's flag byte
 /// clear and set, forced and not, with names that fit the string's capacity, are empty, or force it to grow.
 /// Compares the return value and the queued text and flag, and the freelist growth where neither pole reallocates.
 pub(crate) fn run_bfentity_set_pending_bs_test(failure_log: &mut Option<std::fs::File>) -> bool {
     use crate::reimplementation_tests::tests::bfbehaviorset::build_fake_type;
-    use openzt_detour::generated::ztanimal::SET_PENDING_BS_0X4300F6;
+    use openzt_detour::generated::bfentity::SET_QUEUED_CALL;
 
     let test_name = "BFENTITY_SET_PENDING_BS";
     let mut failures: Vec<String> = Vec::new();
@@ -543,7 +543,7 @@ pub(crate) fn run_bfentity_set_pending_bs_test(failure_log: &mut Option<std::fs:
                     let real_ret = bfentity_live_support::real::set_pending_bs(real, string_words(name), call_flag, force);
                     let middle = pool_lengths();
                     let [w0, w1, w2] = string_words(name);
-                    let port_ret = unsafe { SET_PENDING_BS_0X4300F6.hooked()(port as *const u32, w0 as *const u32, w1 as *const u32, w2 as *const u32, call_flag as i8, force as i8) };
+                    let port_ret = unsafe { SET_QUEUED_CALL.hooked()(port as *const u32, w0 as *const u32, w1 as *const u32, w2 as *const u32, call_flag as i8, force as i8) };
                     let after = pool_lengths();
 
                     if real_ret != port_ret {

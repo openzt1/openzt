@@ -14,11 +14,11 @@
 //!
 //! `stop` (`0x43e642`), `setMoving` (`0x43e5a5`) and the goal clear at `0x43e6c0` are the unit's movement-state
 //! writers. The goal clear is `BFUnit::clearGoal` in the macOS binary (same sequence: `BFGoal::clear` on the
-//! embedded cog goal, empty the target list, clear two flag bytes); `generated.rs` and Ghidra still call it
-//! `getOnlyUnderwater`. Each empties the target list through `ztaimgr::TargetList`, which returns the nodes to
-//! vanilla's pool exactly as vanilla's inlined freelist pushes do.
+//! embedded cog goal, empty the target list, clear two flag bytes) and is `bfunit::CLEAR_GOAL`. Each empties
+//! the target list through `ztaimgr::TargetList`, which returns the nodes to vanilla's pool exactly as
+//! vanilla's inlined freelist pushes do.
 
-use openzt_detour::generated::bfunit::{GET_MOVE_ANIM_SPEED, GET_MOVE_ANIM_SYMBOL, GET_ONLY_UNDERWATER, IDLE, SET_MOVING, STOP};
+use openzt_detour::generated::bfunit::{GET_MOVE_ANIM_SPEED, GET_MOVE_ANIM_SYMBOL, CLEAR_GOAL, IDLE, SET_MOVING, STOP};
 use openzt_detour_macro::detour_mod;
 use tracing::error;
 
@@ -175,7 +175,7 @@ mod detours {
         unsafe { stop(this as u32, clear as u8, idle as u8) }
     }
 
-    #[detour(GET_ONLY_UNDERWATER)]
+    #[detour(CLEAR_GOAL)]
     unsafe extern "thiscall" fn clear_goal_detour(this: *const u32) {
         unsafe { clear_goal(this as u32) }
     }
@@ -196,7 +196,7 @@ mod detours {
             unsafe { super::SET_MOVING_DETOUR.call(this as *const u32, moving as i8, force as i8) }
         }
         pub(crate) fn clear_goal(this: u32) {
-            unsafe { super::GET_ONLY_UNDERWATER_DETOUR.call(this as *const u32) }
+            unsafe { super::CLEAR_GOAL_DETOUR.call(this as *const u32) }
         }
     }
 }

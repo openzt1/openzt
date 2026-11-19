@@ -735,8 +735,8 @@ pub(crate) fn run_ztshowinfo_event_system_live_test(failure_log: &mut Option<std
     }
 
     // getEvents, called directly (the same call `listen` above already made indirectly) - confirms the
-    // real, un-detoured `+0xc` vtable target (`bfunit::GET_EVENTS_3`) still runs correctly through
-    // `GET_EVENTS.original()`'s now-corrected (post-regeneration) 2-arg signature.
+    // real, un-detoured `+0xc` vtable target (`getEvents` at `0x0043f40d`) still runs correctly through
+    // `GET_EVENTS.original()`'s 2-arg signature.
     unsafe { GET_EVENTS.original()(real_info as *const u32, real_info + 0x5c) };
 
     // cleanupEvents: a non-empty, Rust-owned scratch range on both poles - see this test's own doc
