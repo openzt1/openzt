@@ -167,6 +167,9 @@ mod gxmixer;
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
 mod ztguest;
 
+/// ztkeeper module reimplements the vanilla ZTKeeper staff entity in place over vanilla memory.
+mod ztkeeper;
+
 /// ztsoundscape module reimplements the vanilla ZTSoundscape crowd/world ambient-audio crossfade
 /// class (structs + constructor + init + update, plus the CONSTRUCTOR/INIT/UPDATE detours; see
 /// openzt/plans/ztsoundscape-implementation-plan.md).
@@ -308,6 +311,7 @@ mod zoo_init {
             ztguest::init();
             ambients::init();
             ztsoundscape::init();
+            ztkeeper::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }
     }

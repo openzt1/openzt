@@ -128,6 +128,7 @@ pub(super) mod detour_zoo_main {
         tests.extend([RegisteredTest { name: "MENUMUSICHANDLER_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_original_routes_to_trampoline_test }]);
         tests.push(RegisteredTest { name: "AMBIENTS_DETOURS_ENABLED", run: tests::ambients::run_ambients_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTKEEPER_DETOURS_ENABLED", run: tests::ztkeeper::run_ztkeeper_detours_enabled_test });
         tests.extend([
             RegisteredTest { name: "ZTAIMGR_DETOURS_ENABLED", run: tests::ztaimgr::run_ztaimgr_detours_enabled_test },
             RegisteredTest { name: "ZTAIMGR_GET_RANDOM_XY", run: tests::ztaimgr::run_ztaimgr_get_random_xy_test },
@@ -1161,6 +1162,22 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSOUNDSCAPE_INIT", run: tests::ztsoundscape::run_ztsoundscape_init_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE", run: tests::ztsoundscape::run_ztsoundscape_update_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE", run: tests::ztsoundscape::run_ztsoundscape_update_attempt_failure_test },
+            RegisteredTest { name: "ZTKEEPER_FIXTURE_LAYOUT_LIVE", run: tests::ztkeeper::run_ztkeeper_fixture_layout_live_test },
+            RegisteredTest { name: "ZTKEEPER_LIFECYCLE_LIVE", run: tests::ztkeeper::run_ztkeeper_lifecycle_live_test },
+            RegisteredTest { name: "ZTKEEPER_SET_SPEED_LIVE", run: tests::ztkeeper::run_ztkeeper_set_speed_live_test },
+            RegisteredTest { name: "ZTKEEPER_GET_EVENTS_LIVE", run: tests::ztkeeper::run_ztkeeper_get_events_live_test },
+            RegisteredTest { name: "ZTKEEPER_BEHAVIOUR_LIVE", run: tests::ztkeeper::run_ztkeeper_behaviour_live_test },
+            RegisteredTest { name: "ZTKEEPER_CLEANS_UP_LIVE", run: tests::ztkeeper::run_ztkeeper_cleans_up_live_test },
+            RegisteredTest { name: "ZTKEEPER_IN_TARGET_HABITAT_LIVE", run: tests::ztkeeper::run_ztkeeper_in_target_habitat_live_test },
+            RegisteredTest { name: "ZTKEEPER_HABITAT_QUERIES_LIVE", run: tests::ztkeeper::run_ztkeeper_habitat_queries_live_test },
+            RegisteredTest { name: "ZTKEEPER_DROP_LIVE", run: tests::ztkeeper::run_ztkeeper_drop_live_test },
+            RegisteredTest { name: "ZTKEEPER_F_ROUTINE_LIVE", run: tests::ztkeeper::run_ztkeeper_f_routine_live_test },
+            RegisteredTest { name: "ZTKEEPER_INIT_STATUS_VARS_LIVE", run: tests::ztkeeper::run_ztkeeper_init_status_vars_live_test },
+            RegisteredTest { name: "ZTKEEPER_TERRAIN_COST_LIVE", run: tests::ztkeeper::run_ztkeeper_terrain_cost_live_test },
+            RegisteredTest { name: "ZTKEEPER_NOTIFY_REMOVE_LIVE", run: tests::ztkeeper::run_ztkeeper_notify_remove_live_test },
+            RegisteredTest { name: "ZTKEEPER_SAVE_LOAD_LIVE", run: tests::ztkeeper::run_ztkeeper_save_load_live_test },
+            RegisteredTest { name: "ZTKEEPER_LISTEN_LIVE", run: tests::ztkeeper::run_ztkeeper_listen_live_test },
+            RegisteredTest { name: "ZTKEEPER_UPDATE_GOALS_LIVE", run: tests::ztkeeper::run_ztkeeper_update_goals_live_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_DESTRUCT", run: tests::ztsoundscape::run_ztsoundscape_destruct_test },
             // Run last (see this test's own doc comment): a one-shot wiring smoke test for start()/stop(),
             // which read the live GLOBAL_ZTScenarioMgr/GLOBAL_ZTApp singletons, run the Rust

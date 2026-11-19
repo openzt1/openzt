@@ -164,6 +164,10 @@ pub fn init() {
         // go through soundscape_live_support's real_* trampolines for the same per-profile reason.
         crate::ztsoundscape::init();
 
+        // ZTKeeper: no detours yet; the call stays here so each method group's detours are installed under the
+        // battery as soon as they exist.
+        crate::ztkeeper::init();
+
         // ZooStatus: installs the class's 31 detours (zoostatus-implementation-plan.md Stage 8) so
         // ZOOSTATUS_DETOURS_ENABLED can assert the wiring itself (same rationale as the MenuMusicHandler/
         // ZTSoundscape blocks above). The existing ZOOSTATUS_* comparison tests are unaffected: they call

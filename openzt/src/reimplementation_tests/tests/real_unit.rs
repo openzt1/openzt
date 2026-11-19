@@ -1134,7 +1134,7 @@ impl Kind {
     }
 
     fn construct(self, at: u32, ty: u32) {
-        use openzt_detour::generated::{ztguide, ztguest, ztkeeper, ztmaint, ztscenery};
+        use openzt_detour::generated::{ztguide, ztguest, ztmaint, ztscenery};
         unsafe {
             match self {
                 Kind::Animal => {
@@ -1144,7 +1144,7 @@ impl Kind {
                     ztguest::CONSTRUCTOR.original()(at as *const u32, ty);
                 }
                 Kind::Keeper => {
-                    ztkeeper::CONSTRUCTOR.original()(at as *const u32, ty as *const u32);
+                    crate::ztkeeper::live_support::real::constructor(at, ty);
                 }
                 Kind::Maint => {
                     ztmaint::CONSTRUCTOR.original()(at as *const i32, ty as *const i32);
@@ -1195,7 +1195,7 @@ fn build_kind(kind: Kind, ty: u32) -> u32 {
 /// Tears an entity down through its class's non-virtual deleting destructor (the entity vtables have no destructor
 /// slot). `ZTMaint` and `ZTGuide` have no decompiled destructor, so those fixtures are leaked.
 fn destroy_kind(kind: Kind, entity: u32) {
-    use openzt_detour::generated::{ztguest, ztkeeper, ztscenery};
+    use openzt_detour::generated::{ztguest, ztscenery};
     unsafe {
         match kind {
             Kind::Animal => {
@@ -1205,7 +1205,7 @@ fn destroy_kind(kind: Kind, entity: u32) {
                 ztguest::DESTRUCTOR_1.original()(entity as *const u32, 1);
             }
             Kind::Keeper => {
-                ztkeeper::DESTRUCTOR_0.original()(entity as *const u32, 1);
+                crate::ztkeeper::live_support::real::destructor_deleting(entity, 1);
             }
             Kind::Scenery => {
                 ztscenery::DESTRUCTOR_1.original()(entity as *const u32, 1);

@@ -27,6 +27,7 @@ pub(crate) mod zthabitatmgr;
 pub(crate) mod ztmarketing;
 pub(crate) mod ztmegatilemgr;
 pub(crate) mod zoostatus;
+pub(crate) mod ztkeeper;
 pub(crate) mod ztresearch;
 pub(crate) mod ztscenariosimplegoal;
 pub(crate) mod ztshow;

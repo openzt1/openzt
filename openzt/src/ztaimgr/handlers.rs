@@ -100,7 +100,7 @@ pub unsafe fn f_keeper_routine(unit: u32, done: *const bool) -> bool {
     if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTKEEPER) } {
         return false;
     }
-    unsafe { ZTKEEPER_F_ROUTINE.original()(unit as *const u32, done) }
+    crate::ztkeeper::ZTKeeper(unit).f_routine(done)
 }
 
 /// `ZTUnit` field `fShowPredator` clears and `fCaughtPrey` stores the hunter's id into on the prey.

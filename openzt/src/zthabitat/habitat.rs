@@ -26,7 +26,6 @@ use openzt_detour::generated::{
         zthabitat::{
             SPECIES_SUITABILITY_CACHE_ALLOC, SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
-        ztkeeper::CLEANS_UP,
         ztapp::GET_WORLD_MGR as ZTAPP_GET_WORLD_MGR,
         ztspecies::IS_SPECIAL_DUMMY_SPECIES,
         ztstaff::IS_HABITAT_ASSIGNED as ZTSTAFF_IS_HABITAT_ASSIGNED,
@@ -5909,7 +5908,7 @@ impl ZTHabitat {
                 continue;
             }
             let occupant_ptr: u32 = get_from_memory(tile_ptr + 0x10); // BFTile::entity_ptr
-            if occupant_ptr != 0 && low_byte_bool(unsafe { CLEANS_UP.original()(keeper_ptr as *const u32, occupant_ptr as *const u32) }) {
+            if occupant_ptr != 0 && crate::ztkeeper::ZTKeeper(keeper_ptr).cleans_up(occupant_ptr) {
                 return 0;
             }
         }
