@@ -20,7 +20,7 @@ use openzt_detour::generated::{
     ztkeeper::{
         CHECK_ASSIGNED_HABITATS, CLEANS_UP, CONSTRUCTOR, DESTRUCTOR_0, DESTRUCTOR_1, DO_CONDITIONALS, DROP, F_ESCAPED_ANIMAL_ROUTINE,
         F_HABITAT_ROUTINE, F_ROUTINE, GET_EVENTS, GET_EVENTS_0X43F40D, GET_RANDOM_ASSIGNED_HABITAT, GET_TERRAIN_COST, IN_TARGET_HABITAT,
-        INIT_STATUS_VARS, LISTEN, LOAD, NOTIFY_HABITAT_NOT_COMING, REMOVE_FROM_MAP, RESET_AI, SAVE, SET_SPEED, SET_TARGET_TILE,
+        INIT_AFTER_LOAD, INIT_STATUS_VARS, LISTEN, LOAD, NOTIFY_HABITAT_NOT_COMING, REMOVE_FROM_MAP, RESET_AI, SAVE, SET_SPEED, SET_TARGET_TILE,
         UPDATE_GOALS,
     },
     ztfence::CLOSE_GATE as ZTFENCE_CLOSE_GATE,
@@ -384,16 +384,13 @@ impl ZTKeeper {
     /// `ZTKeeper::initAfterLoad` (`0x00595386`): a show keeper re-registers with its habitat's show, then the
     /// `ZTStaff` behaviour runs. `param` reaches `ZTStaff` as the full dword vanilla pushes. Vanilla tail-returns
     /// `ZTStaff::initAfterLoad`'s result in `AL` and the load path checks it, so this returns it too.
-    ///
-    /// Not detoured: `generated.rs` declares the entry without a return value, and a detour that returns nothing
-    /// leaves `AL` undefined, which fails zoo loads.
-    pub fn init_after_load(self, param: u32) -> u32 {
+    pub fn init_after_load(self, param: u32) -> bool {
         let habitat = call_slot_0(self.0, slots::GET_HABITAT);
         if habitat != 0 && get_from_memory::<u32>(self.0 + unit_offsets::COG_GOAL_STATE) == GOAL_STATE_SHOW {
             unsafe { ref_from_memory::<ZTHabitat>(habitat) }.add_show_unit(self.0);
         }
         let staff_init_after_load = unsafe { transmute::<u32, unsafe extern "thiscall" fn(*const u32, u32) -> u32>(ZTSTAFF_INIT_AFTER_LOAD.address) };
-        unsafe { staff_init_after_load(self.0 as *const u32, param) }
+        low_byte_bool(unsafe { staff_init_after_load(self.0 as *const u32, param) })
     }
 
     /// `ZTKeeper::getEvents` (vtable `+0x8`, `0x00423cee`): this keeper's events, through the three-argument
@@ -901,8 +898,8 @@ mod keeper_detours {
     }
 
     #[detour(IN_TARGET_HABITAT)]
-    unsafe extern "thiscall" fn in_target_habitat(this: *const c_void) -> u32 {
-        ZTKeeper(this as u32).in_target_habitat() as u32
+    unsafe extern "thiscall" fn in_target_habitat(this: *const c_void) -> bool {
+        ZTKeeper(this as u32).in_target_habitat()
     }
 
     #[detour(CHECK_ASSIGNED_HABITATS)]
@@ -916,8 +913,13 @@ mod keeper_detours {
     }
 
     #[detour(CLEANS_UP)]
-    unsafe extern "thiscall" fn cleans_up(this: *const u32, entity: *const u32) -> u32 {
-        ZTKeeper(this as u32).cleans_up(entity as u32) as u32
+    unsafe extern "thiscall" fn cleans_up(this: *const u32, entity: *const u32) -> bool {
+        ZTKeeper(this as u32).cleans_up(entity as u32)
+    }
+
+    #[detour(INIT_AFTER_LOAD)]
+    unsafe extern "thiscall" fn init_after_load(this: *const u32, param: u32) -> bool {
+        ZTKeeper(this as u32).init_after_load(param)
     }
 
     #[detour(DROP)]
@@ -1033,7 +1035,7 @@ mod keeper_detours {
             unsafe { super::GET_EVENTS_0X43F40D_DETOUR.call(std::ptr::null::<c_void>(), arg1, arg2, arg3) }
         }
 
-        pub(crate) fn in_target_habitat(this: u32) -> u32 {
+        pub(crate) fn in_target_habitat(this: u32) -> bool {
             unsafe { super::IN_TARGET_HABITAT_DETOUR.call(this as *const c_void) }
         }
 
@@ -1045,7 +1047,11 @@ mod keeper_detours {
             unsafe { super::DO_CONDITIONALS_DETOUR.call(this as *const u32) }
         }
 
-        pub(crate) fn cleans_up(this: u32, entity: u32) -> u32 {
+        pub(crate) fn init_after_load(this: u32, param: u32) -> bool {
+            unsafe { super::INIT_AFTER_LOAD_DETOUR.call(this as *const u32, param) }
+        }
+
+        pub(crate) fn cleans_up(this: u32, entity: u32) -> bool {
             unsafe { super::CLEANS_UP_DETOUR.call(this as *const u32, entity as *const u32) }
         }
 
@@ -1185,12 +1191,4 @@ pub(crate) mod live_support {
     }
 
     pub(crate) use super::keeper_detours::test_real as real;
-
-    /// Vanilla `ZTKeeper::initAfterLoad`, called by address with its real return value. The entry is not detoured.
-    pub fn real_init_after_load(keeper: ZTKeeper, param: u32) -> u32 {
-        let function = unsafe {
-            std::mem::transmute::<u32, unsafe extern "thiscall" fn(*const u32, u32) -> u32>(openzt_detour::generated::ztkeeper::INIT_AFTER_LOAD.address)
-        };
-        unsafe { function(keeper.0 as *const u32, param) }
-    }
 }

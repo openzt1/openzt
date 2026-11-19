@@ -349,10 +349,10 @@ pub(crate) fn run_ztkeeper_behaviour_live_test(failure_log: &mut Option<std::fs:
             failures.push("tile (10, 10) is inside a habitat; initAfterLoad would register with a live show".to_string());
             continue;
         }
-        let real_result = live_support::real_init_after_load(real_keeper, 1);
+        let real_result = live_support::real::init_after_load(real_keeper.0, 1);
         let port_result = port_keeper.init_after_load(1);
-        if real_result & 0xff != port_result & 0xff {
-            failures.push(format!("initAfterLoad (goal state {goal_state:#x}): real returned {real_result:#x}, port {port_result:#x}"));
+        if real_result != port_result {
+            failures.push(format!("initAfterLoad (goal state {goal_state:#x}): real returned {real_result}, port {port_result}"));
         }
         compare_memory(&format!("initAfterLoad (goal state {goal_state:#x})"), real_keeper, port_keeper, &shared, &mut failures);
         live_support::destroy_standalone_keeper(real_keeper);
@@ -416,9 +416,9 @@ pub(crate) fn run_ztkeeper_cleans_up_live_test(failure_log: &mut Option<std::fs:
     for ty in &types {
         entity[(unit_offsets::ENTITY_TYPE / 4) as usize] = *ty;
         let target = entity.as_ptr() as u32;
-        let real_result = real::cleans_up(keeper.0, target) & 0xff != 0;
+        let real_result = real::cleans_up(keeper.0, target);
         let port_result = keeper.cleans_up(target);
-        let hooked = unsafe { CLEANS_UP.hooked()(keeper.0 as *const u32, target as *const u32) } & 0xff != 0;
+        let hooked = unsafe { CLEANS_UP.hooked()(keeper.0 as *const u32, target as *const u32) };
         if real_result != port_result || real_result != hooked {
             failures.push(format!("type {ty:#x}: real {real_result}, port {port_result}, hooked {hooked}"));
         }
@@ -430,7 +430,7 @@ pub(crate) fn run_ztkeeper_cleans_up_live_test(failure_log: &mut Option<std::fs:
 
     entity[(unit_offsets::ENTITY_TYPE / 4) as usize] = 0;
     for (label, target) in [("null entity", 0u32), ("entity without a type", entity.as_ptr() as u32)] {
-        let (real_result, port_result) = (real::cleans_up(keeper.0, target) & 0xff != 0, keeper.cleans_up(target));
+        let (real_result, port_result) = (real::cleans_up(keeper.0, target), keeper.cleans_up(target));
         if real_result != port_result {
             failures.push(format!("{label}: real {real_result}, port {port_result}"));
         }
@@ -440,7 +440,7 @@ pub(crate) fn run_ztkeeper_cleans_up_live_test(failure_log: &mut Option<std::fs:
         save_to_memory(keeper.0 + unit_offsets::ENTITY_TYPE, other_type);
         entity[(unit_offsets::ENTITY_TYPE / 4) as usize] = keeper_type;
         let target = entity.as_ptr() as u32;
-        let (real_result, port_result) = (real::cleans_up(keeper.0, target) & 0xff != 0, keeper.cleans_up(target));
+        let (real_result, port_result) = (real::cleans_up(keeper.0, target), keeper.cleans_up(target));
         if real_result || port_result {
             failures.push(format!("non-keeper type: real {real_result}, port {port_result}, expected false"));
         }
@@ -472,9 +472,9 @@ pub(crate) fn run_ztkeeper_in_target_habitat_live_test(failure_log: &mut Option<
     for (position, target) in [(habitat, habitat), (plain, habitat), (habitat, plain), (plain, plain)] {
         place_at_tile(keeper, position);
         save_to_memory(keeper.0 + unit_offsets::TARGET_TILE, world.get_tile_ptr(target.0, target.1));
-        let real_result = real::in_target_habitat(keeper.0) & 0xff != 0;
+        let real_result = real::in_target_habitat(keeper.0);
         let port_result = keeper.in_target_habitat();
-        let hooked = unsafe { IN_TARGET_HABITAT.hooked()(keeper.0 as *const std::ffi::c_void) } & 0xff != 0;
+        let hooked = unsafe { IN_TARGET_HABITAT.hooked()(keeper.0 as *const std::ffi::c_void) };
         if real_result != port_result || real_result != hooked {
             failures.push(format!("at {position:?} targeting {target:?}: real {real_result}, port {port_result}, hooked {hooked}"));
         }
