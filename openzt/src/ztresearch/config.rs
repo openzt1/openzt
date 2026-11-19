@@ -7,7 +7,7 @@ pub(crate) mod research_config_reimplementation {
     use openzt_detour_macro::detour_mod;
     use tracing::{debug, error, info};
 
-    use crate::bfconfigfile::ini_compat::{first, first_parse, read_cfg, values};
+    use crate::bfconfigfile::ini_compat::{first, float_or, int_or, read_cfg, values};
     use crate::bfconfigfile::BFConfigFile;
     use crate::string_registry::load_string_by_id;
     use crate::util::{get_from_memory, ZTArray, ZTBufferString, ZTString};
@@ -58,20 +58,20 @@ pub(crate) mod research_config_reimplementation {
     fn load_program(path: &str) -> Option<ReimplementedProgram> {
         let ini = read_cfg(path)?;
         Some(ReimplementedProgram {
-            name_id: first_parse(&ini, "research", "name").unwrap_or_default(),
-            desc_id: first_parse(&ini, "research", "desc").unwrap_or_default(),
+            name_id: int_or(&ini, "research", "name", 0),
+            desc_id: int_or(&ini, "research", "desc", 0),
             icon: first(&ini, "research", "icon"),
             entity_icon: first(&ini, "research", "entityIcon"),
-            cost: first_parse(&ini, "research", "cost").unwrap_or_default(),
-            order: first_parse(&ini, "research", "order").unwrap_or_default(),
-            target: first_parse(&ini, "research", "target").unwrap_or(-1),
-            effect: first_parse(&ini, "research", "effect").unwrap_or(-1),
+            cost: float_or(&ini, "research", "cost", 0.0),
+            order: int_or(&ini, "research", "order", 0),
+            target: int_or(&ini, "research", "target", -1),
+            effect: int_or(&ini, "research", "effect", -1),
             effect_params: (
-                first_parse(&ini, "research", "effectval1").unwrap_or_default(),
-                first_parse(&ini, "research", "effectval2").unwrap_or_default(),
-                first_parse(&ini, "research", "effectval3").unwrap_or_default(),
+                int_or(&ini, "research", "effectval1", 0),
+                int_or(&ini, "research", "effectval2", 0),
+                int_or(&ini, "research", "effectval3", 0),
             ),
-            help_id: first_parse(&ini, "research", "helpid").unwrap_or_default(),
+            help_id: int_or(&ini, "research", "helpid", 0),
         })
     }
 
@@ -79,11 +79,11 @@ pub(crate) mod research_config_reimplementation {
         let ini = read_cfg(path)?;
         let programs = values(&ini, "category", "program").iter().filter_map(|p| load_program(p)).collect();
         Some(ReimplementedCategory {
-            name_id: first_parse(&ini, "category", "name").unwrap_or_default(),
-            desc_id: first_parse(&ini, "category", "desc").unwrap_or_default(),
+            name_id: int_or(&ini, "category", "name", 0),
+            desc_id: int_or(&ini, "category", "desc", 0),
             icon: first(&ini, "category", "icon"),
-            help_id: first_parse(&ini, "category", "helpid").unwrap_or_default(),
-            expansion_id: first_parse(&ini, "category", "expansion").unwrap_or_default(),
+            help_id: int_or(&ini, "category", "helpid", 0),
+            expansion_id: int_or(&ini, "category", "expansion", 0),
             programs,
         })
     }
@@ -93,14 +93,14 @@ pub(crate) mod research_config_reimplementation {
         let funding = values(ini, "branch", "funding")
             .iter()
             .map(|block| ReimplementedFundingLevel {
-                name_id: first_parse(ini, block, "name").unwrap_or_default(),
-                rate: first_parse(ini, block, "work").unwrap_or_default(),
-                cost: first_parse(ini, block, "cost").unwrap_or_default(),
+                name_id: int_or(ini, block, "name", 0),
+                rate: float_or(ini, block, "work", 0.0),
+                cost: float_or(ini, block, "cost", 0.0),
             })
             .collect();
         ReimplementedBranch {
-            name_id: first_parse(ini, "branch", "name").unwrap_or_default(),
-            desc_id: first_parse(ini, "branch", "desc").unwrap_or_default(),
+            name_id: int_or(ini, "branch", "name", 0),
+            desc_id: int_or(ini, "branch", "desc", 0),
             icon: first(ini, "branch", "icon"),
             noprogicon: first(ini, "branch", "noprogicon"),
             funding,
@@ -228,7 +228,10 @@ pub(crate) mod research_config_reimplementation {
     #[cfg(feature = "vanilla-research-config")]
     fn peek_branch_id(path: &str) -> Option<i32> {
         let ini = read_cfg(path)?;
-        first_parse(&ini, "branch", "name")
+        {
+            let mut id = 0;
+            crate::bfconfigfile::ini_compat::get_int(&ini, "branch", "name", &mut id).then_some(id)
+        }
     }
 
     fn load_manifest(ini: &Ini) -> Vec<String> {

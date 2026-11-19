@@ -1,5 +1,4 @@
 use openzt_detour::generated::{
-    bfevent::{CONSTRUCTOR as BFEVENT_CONSTRUCTOR, LOAD as BFEVENT_LOAD, SAVE as BFEVENT_SAVE},
     poolalloc::ALLOCATE as ALLOCATE_UNIT_ARRAY,
     standalone::{DEALLOCATE, OPERATOR_NEW, WRITE_BYTES_TO_FILE},
     ztshow::{ABORT_SHOW, LOAD as ZTSHOW_LOAD, SAVE as ZTSHOW_SAVE},
@@ -307,7 +306,7 @@ pub fn show_info_save(this: u32, file: *const i8) -> bool {
     ok &= write_field(&ev_count as *const u32 as u32, 4, file);
     let mut ev_cursor = ev_begin;
     while ev_cursor != ev_end {
-        let saved = unsafe { BFEVENT_SAVE.original()(ev_cursor as *const u32, file) };
+        let saved = crate::bfevent::save_at(ev_cursor, file);
         ok &= saved;
         if !ok {
             return false;
@@ -477,8 +476,8 @@ pub fn show_info_load(this: u32, file: *const u32, version: u32) -> bool {
             let buf = unsafe { ALLOCATE_UNIT_ARRAY.original()(ev_count * 0x1c) as u32 };
             for i in 0..ev_count {
                 let slot = buf + i * 0x1c;
-                unsafe { BFEVENT_CONSTRUCTOR.original()(slot as *const u32) };
-                let loaded = unsafe { BFEVENT_LOAD.original()(slot as *const u32, file, version) };
+                crate::bfevent::construct_at(slot);
+                let loaded = crate::bfevent::load_at(slot, file, version);
                 ok &= loaded;
                 if !ok {
                     return false;

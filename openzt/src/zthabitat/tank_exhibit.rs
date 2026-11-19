@@ -14,8 +14,7 @@ use openzt_detour::generated::{
     poolalloc::ALLOCATE as POOLALLOC_ALLOCATE,
     ztui_general::GET_MAPVIEW,
     ztworldmgr::{BOX_UP_AND_FIND_APLACE_FOR_ANIMAL, FIND_APLACE_FOR_STAFF_MEMBER},
-    gxmixer::UPDATE as GXMIXER_UPDATE,
-    msvc_std_basic_string::COMPARE as BASIC_STRING_ASSIGN_RANGE,
+    msvc_std_basic_string::BASIC_STRING_RANGE,
     msvc_std_vectorbyte::VECTORBYTE,
     standalone::SET_NEEDS_ORDER_RECALCULATE,
     ztui_tankmodify::FETCH_VALUES_FROM_TANK,
@@ -788,7 +787,7 @@ impl ZTTankExhibit {
     fn find_entity_type(name: &[u8]) -> Option<u32> {
         fn build_string(string: &mut [u32; 3], text: &[u8]) {
             let begin = text.as_ptr() as u32;
-            unsafe { BASIC_STRING_ASSIGN_RANGE.original()(string.as_mut_ptr() as *const std::ffi::c_void, begin as *const u32, (begin + text.len() as u32) as i32) };
+            unsafe { BASIC_STRING_RANGE.original()(string.as_mut_ptr() as *const std::ffi::c_void, begin as *const u32, (begin + text.len() as u32) as i32) };
         }
         fn free_string(string: &[u32; 3]) {
             free_event_vector_buffer(string[0], string[2].wrapping_sub(string[0]));
@@ -1057,7 +1056,7 @@ impl ZTTankExhibit {
         save_to_memory(entity + ENTITY_ROTATION_OFFSET, direction);
         unsafe { SET_WORLD_POS.original()(entity as *const u32, (wall + ENTITY_WORLD_POS_OFFSET) as *const IVec3) };
         let animation_start = (next_game_random() % RIPPLE_ANIMATION_START_RANGE) as i32;
-        unsafe { GXMIXER_UPDATE.original()((entity + ENTITY_MIXER_OFFSET) as *const u32, animation_start, 0) };
+        unsafe { crate::gxmixer::update(entity + ENTITY_MIXER_OFFSET, animation_start, 0) };
         if !Self::add_transient(entity, tile) {
             return;
         }
@@ -2268,8 +2267,8 @@ impl ZTTankExhibit {
     }
 
     /// Ports `ZTTankExhibit::loadProperties` (`0x00463a0e`): reads the tank settings globals out of
-    /// `tanks.cfg` (`[cost]` and `[tank]`). A key that is missing or does not parse leaves its global
-    /// untouched. `veryMurkyWaterPurity` and `extremelyMurkyWaterPurity` both write
+    /// `tanks.cfg` (`[cost]` and `[tank]`). A key that is missing leaves its global untouched; a present
+    /// key is converted the way `BFConfigFile::getInt`/`getFloat` convert it (non-numeric text is `0`). `veryMurkyWaterPurity` and `extremelyMurkyWaterPurity` both write
     /// [`VERY_MURKY_WATER_PURITY_RVA`], the second winning; nothing writes `DAT_006390b0`.
     pub fn load_properties() {
         let Some(ini) = ini_compat::read_cfg("tanks.cfg") else {
@@ -2278,7 +2277,8 @@ impl ZTTankExhibit {
         let base = get_module_base("zoo.exe") as u32;
         let float_settings: [(&str, &str, u32); 2] = [("cost", "saltWater", SALT_WATER_COST_RVA), ("cost", "freshWater", FRESH_WATER_COST_RVA)];
         for (section, key, rva) in float_settings {
-            if let Some(value) = ini_compat::first_parse::<f32>(&ini, section, key) {
+            let mut value = 0.0f32;
+            if ini_compat::get_float(&ini, section, key, &mut value) {
                 save_to_memory(base + rva, value);
             }
         }
@@ -2303,7 +2303,8 @@ impl ZTTankExhibit {
             ("tank", "waterPurityDecayTime", WATER_PURITY_TIMER_RELOAD_RVA),
         ];
         for (section, key, rva) in int_settings {
-            if let Some(value) = ini_compat::first_parse::<i32>(&ini, section, key) {
+            let mut value = 0i32;
+            if ini_compat::get_int(&ini, section, key, &mut value) {
                 save_to_memory(base + rva, value);
             }
         }

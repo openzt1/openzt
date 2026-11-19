@@ -16,7 +16,7 @@ use tracing::{error, info};
 use crate::globals::{get_module_base, globals};
 use crate::reimplementation_tests::harness::{finish_test, write_success_line};
 use crate::util::{get_from_memory, save_to_memory};
-use crate::ztsoundscape::{live_support as soundscape_live_support, ZTSoundscape};
+use crate::ztsoundscape::{live_support as soundscape_live_support, ZTSoundscape, DEFAULT_CROWD_FILENAME_RVAS};
 
 /// `ZTSOUNDSCAPE_DETOURS_ENABLED` - wiring check: `reimplementation_tests::init()` installs
 /// `ztsoundscape::init()`, and this asserts all three of its detours actually report enabled.
@@ -393,9 +393,20 @@ pub(crate) fn run_ztsoundscape_init_test(failure_log: &mut Option<std::fs::File>
             mismatches.push(format!("byte +{i:#04x}: vanilla={:#04x}, reimpl={:#04x}", vanilla_snap[i], reimpl_bytes[i]));
         }
 
-        // crowd_filename: per-slot content compare of snapshot vs. the live reimpl pointers.
+        // crowd_filename: per-slot content compare of snapshot vs. the live reimpl pointers. A slot whose
+        // config key was found holds an owned/interned string, otherwise the `.rdata` default pointer; the
+        // content compare alone cannot tell "read the file" from "fell back to a default that happens to
+        // match", so default-ness must agree too.
+        let module_base = get_module_base("zoo.exe") as u32;
         for (slot, vanilla_name) in vanilla_crowd_names.iter().enumerate() {
             let reimpl_ptr_val = dword(reimpl_bytes, 0x1c + slot * 4);
+            let default_ptr = module_base + DEFAULT_CROWD_FILENAME_RVAS[slot];
+            if (vanilla_name_ptrs[slot] == default_ptr) != (reimpl_ptr_val == default_ptr) {
+                mismatches.push(format!(
+                    "crowd_filename[{slot}] default-ness: vanilla={:#010x}, reimpl={reimpl_ptr_val:#010x}, default={default_ptr:#010x}",
+                    vanilla_name_ptrs[slot]
+                ));
+            }
             match (vanilla_name.as_deref(), copy_cstr(reimpl_ptr_val).as_deref()) {
                 (Some(v), Some(r)) if v == r => {}
                 (v, r) => mismatches.push(format!(
@@ -449,7 +460,17 @@ pub(crate) fn run_ztsoundscape_init_test(failure_log: &mut Option<std::fs::File>
             let _ = log_file.write_all(format!("Test Failed {}: mismatch(es): {:?}\n", test_name, mismatches).as_bytes());
         }
     } else {
-        write_success_line(failure_log, &format!("{} (vanilla crowd_filename pointers pairwise distinct: {})", test_name, vanilla_distinct));
+        let configured_slots = (0..4).filter(|&slot| vanilla_name_ptrs[slot] != get_module_base("zoo.exe") as u32 + DEFAULT_CROWD_FILENAME_RVAS[slot]).count();
+        write_success_line(
+            failure_log,
+            &format!(
+                "{} (vanilla crowd_filename pointers pairwise distinct: {}; crowd slots read from config: {}/4; world sound configured: {})",
+                test_name,
+                vanilla_distinct,
+                configured_slots,
+                vanilla_world_name_ptr != 0
+            ),
+        );
     }
 
     soundscape_live_support::destroy_standalone_after_init(real_ptr);

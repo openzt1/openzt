@@ -119,6 +119,10 @@ mod ztmegatilemgr;
 /// zoo-achievement awards and the award.cfg catalogue.
 mod ztawardmgr;
 
+/// ztaimgr module has the vanilla ZTAIMgr/BFAIMgr AI manager's leaf vtable methods (random-walk extents,
+/// move-speed classifiers, constant parameter lookup, entity removal).
+mod ztaimgr;
+
 /// ztshow module contains the Marine Mania show subsystem:
 /// ZTShow, ZTShowInfo, ZTShowMgr, ZTShowScriptMgr, ZTShowState, ZTShowScriptState, ZTShowUI.
 mod ztshow;
@@ -134,6 +138,30 @@ pub(crate) use ztshow::script_state as ztshowscriptstate;
 pub(crate) use ztshow::state as ztshowstate;
 #[allow(unused_imports)]
 pub(crate) use ztshow::ui as ztshowui;
+
+/// bfevent module reimplements the `BFEvent` record (constructor/init/load/save) that `ZTShowInfo`'s and
+/// `BFEventMgr`'s event vectors hold by value.
+mod bfevent;
+
+/// owned_strings module holds the Rust-owned buffers behind vanilla-layout strings and `vector<string>`s that the
+/// behavior-set code keeps (`BFFunctionCall`, `BFBehaviorSet`), freeing vanilla-built ones through vanilla's allocator.
+mod owned_strings;
+
+/// bfscriptmgr module reimplements `BFScriptMgr::parseFunction`, the call-string parser behind
+/// `BFBehaviorSet::executeCall`.
+mod bfscriptmgr;
+
+/// bfbehaviorset module reimplements the small `BFBehaviorSet` methods (`setName`, `removeHead`, `clear`,
+/// `killChild`, `executeHead`, `executeCall`) that drive the AI behavior-script runner.
+mod bfbehaviorset;
+
+/// bfentity module reimplements `BFEntity`'s constructor, the base of every entity class.
+mod bfentity;
+
+/// bfunit module reimplements `BFUnit::getMoveAnimSpeed`.
+mod bfunit;
+/// gxmixer module reimplements `GXMixer`'s read-side methods.
+mod gxmixer;
 
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
@@ -269,6 +297,13 @@ mod zoo_init {
             ztthoughtmgr::init();
             ztmegatilemgr::init();
             ztawardmgr::init();
+            ztaimgr::init();
+            bfevent::init();
+            bfscriptmgr::init();
+            bfbehaviorset::init();
+            bfentity::init();
+            bfunit::init();
+            gxmixer::init();
             ztshow::init();
             ztguest::init();
             ambients::init();

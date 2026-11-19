@@ -2,7 +2,10 @@ use crate::ambients::Ambients;
 use crate::globals::{get_module_base, globals};
 use crate::util::{get_from_memory, ref_from_memory, save_to_memory, write_live_ptr};
 use crate::write_live;
-use openzt_detour::generated::bfconfigfile::{ATTEMPT_0, GET_INT, GET_STRING_1, RELEASE};
+use crate::bfconfigfile::ini_compat;
+use openzt_configparser::ini::Ini;
+use std::ffi::{CStr, CString};
+use std::sync::Mutex;
 use openzt_detour::generated::bfsndmgr::GET_SCREEN_CENTER;
 use glam::IVec3;
 use openzt_detour::generated::sndsound::{
@@ -24,11 +27,9 @@ use super::snd_slot::{
 /// Sound-device singleton: a global *pointer* (`MOV %ECX, dword ptr GLOBAL_DX8SndMgr` in
 /// `ZTSoundscape_init.asm:141`), so its *value* is read, not the address itself.
 pub const GLOBAL_DX8SNDMGR_RVA: u32 = 0x006380a8 - 0x400000;
-/// The two live `BFConfigFile` instances are **inline objects** at these addresses, not pointers to
-/// them - `MOV %ECX, DAT_00641850` with no `dword ptr` qualifier (`ZTSoundscape_init.asm:41`/`:61`):
-/// the resolved address itself is passed as `this`.
-pub const CROWD_CONFIG_INSTANCE_RVA: u32 = 0x00641850 - 0x400000;
-pub const WORLD_CONFIG_INSTANCE_RVA: u32 = 0x00641840 - 0x400000;
+// Vanilla `init` reads its two config files through static `BFConfigFile` objects at `0x00641850` (crowd) and
+// `0x00641840` (world), referenced by no other decompiled function. This port reads the files through
+// `ini_compat` and never touches them; only the live battery's real-vanilla pole still drives them.
 /// Per-crowd-level default `.wav` filenames (quiet/small/medium/large, matching `crowd_filename`'s
 /// indices), the `.rdata` C-string addresses vanilla stores on the init-defaults path.
 pub const DEFAULT_CROWD_FILENAME_RVAS: [u32; 4] = [
@@ -183,6 +184,46 @@ pub fn ambients_jitter(seed: u32, x: i32, y: i32, z: i32) -> ([i32; 3], u32) {
     ([x.wrapping_add(x_offset), y.wrapping_add(y_offset), z], r4)
 }
 
+/// The filename strings each initialised soundscape points at, owned here so they outlive `init`: vanilla
+/// stores the pointers in the struct (`crowd_filename`, `world_name`) and `update` reads them on every
+/// crowd-track start. Keyed by the soundscape's address so initialising one soundscape never frees
+/// strings another live one still points at; re-initialising the same address replaces that entry's
+/// strings (the struct's pointers are overwritten with the new ones first). The soundscape's destructor
+/// is real vanilla code, so an entry for an object that has been destroyed stays until its address is
+/// initialised again - at most a handful of short strings per game start.
+static OWNED_FILENAMES: Mutex<Vec<(u32, Vec<CString>)>> = Mutex::new(Vec::new());
+
+fn own_filenames(owner: u32, strings: Vec<CString>) {
+    let mut entries = OWNED_FILENAMES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    match entries.iter_mut().find(|(address, _)| *address == owner) {
+        Some(entry) => entry.1 = strings,
+        None => entries.push((owner, strings)),
+    }
+}
+
+/// A C string holding `text` up to its first NUL, which is what vanilla's `char*` view of the value would
+/// read.
+fn c_string_up_to_nul(text: &str) -> CString {
+    let bytes = text.as_bytes();
+    let end = bytes.iter().position(|&byte| byte == 0).unwrap_or(bytes.len());
+    CString::new(&bytes[..end]).expect("truncated at the first NUL")
+}
+
+/// Reads the `.cfg` resource named by a `BFScenarioMgr` getter result. A null or empty name is a failed
+/// `BFConfigFile::attempt` in vanilla, so it yields `None` without logging.
+fn read_soundscape_config(name: *const u8) -> Option<Ini> {
+    if name.is_null() || get_from_memory::<u8>(name as u32) == 0 {
+        return None;
+    }
+    let name = unsafe { CStr::from_ptr(name as *const i8) }.to_string_lossy().into_owned();
+    ini_compat::read_cfg(&name)
+}
+
+/// A NUL-terminated string literal in `zoo.exe`'s data (the section and key names `init` looks up).
+fn rdata_string(address: u32) -> String {
+    unsafe { CStr::from_ptr(address as *const i8) }.to_string_lossy().into_owned()
+}
+
 impl ZTSoundscape {
     /// Reimplementation of `ZTSoundscape::ZTSoundscape` (`0x00592596`), per
     /// `ZTSoundscape_ZTSoundscape.c`/`.asm`. Pure constant writes, no calls: `{vtable:
@@ -199,30 +240,15 @@ impl ZTSoundscape {
         write_live!(self, world_ambients, 0);
     }
 
-    /// One `(crowd_filename[index]`, `crowd_atten[index])` config lookup, shared by all four crowd
-    /// levels: real vanilla `BFConfigFile::getString` into the filename slot, and - only if that
-    /// succeeded - the vanilla default `0x5dc` into the atten slot followed by a real
-    /// `BFConfigFile::getInt` into it (return ignored, vanilla-faithfully). The two Ambients
-    /// constructs and the world name/atten pair are deliberately *not* routed through here (the
-    /// former are cross-allocator-critical and stay inline in [`ZTSoundscape::init`]; the latter
-    /// writes two different fields, so the helper's shape doesn't fit - and the asymmetry is the
-    /// point).
-    fn get_crowd_config_pair(&self, config: *const u32, section: u32, index: usize, key: u32, atten_key: u32) {
-        let filename_ptr = core::ptr::addr_of!(self.crowd_filename[index]).cast_mut();
-        let atten_ptr = core::ptr::addr_of!(self.crowd_atten[index]).cast_mut();
-        let got = unsafe { GET_STRING_1.original()(config, section as *const u32, key as *const u32, filename_ptr as *const u32) };
-        if got {
-            unsafe { write_live_ptr(atten_ptr, DEFAULT_CROWD_ATTEN) };
-            unsafe {
-                GET_INT.original()(config, section, atten_key, atten_ptr as *const u32);
-            }
-        }
-    }
-
     /// Reimplementation of `ZTSoundscape::init` (`0x005922fd`), per `ZTSoundscape_init.asm` - the
     /// Windows `.asm` is ground truth here, the shipped `.c` garbles the three world-sound vtable
     /// calls. Vanilla is void; the four arguments are exactly what `ztgamemgr.rs`'s `start` gets from
     /// its four `BFScenarioMgr` getters (`*const u8`), passed through uncasted.
+    ///
+    /// The crowd and world config files are read through `bfconfigfile::ini_compat`, not the two static
+    /// vanilla `BFConfigFile` objects. The filename pointers stored in `crowd_filename`/`world_name` point
+    /// at `CString`s this object's entry in [`OWNED_FILENAMES`] keeps alive (see there), because `update`
+    /// reads them long after `init` returns.
     pub fn init(
         &self,
         crowd_ambients_name: *const u8,
@@ -231,8 +257,6 @@ impl ZTSoundscape {
         world_config_name: *const u8,
     ) {
         let base = get_module_base("zoo.exe") as u32;
-        let crowd_config = (base + CROWD_CONFIG_INSTANCE_RVA) as *const u32;
-        let world_config = (base + WORLD_CONFIG_INSTANCE_RVA) as *const u32;
 
         let crowd_block = unsafe { OPERATOR_NEW.original()(0x18) };
         let crowd_ambients = if crowd_block.is_null() {
@@ -261,40 +285,42 @@ impl ZTSoundscape {
         }
         write_live!(self, crowd_atten, [DEFAULT_CROWD_ATTEN; 4]);
 
-        // Crowd config: unconditional release, then attempt gates all four key pairs.
-        unsafe { RELEASE.original()(crowd_config) };
-        if unsafe { ATTEMPT_0.original()(crowd_config, crowd_config_name as *const i8) } {
-            let section = base + CROWD_SECTION_RVA;
-            for (index, &(key, atten_key)) in CROWD_KEY_RVAS.iter().enumerate() {
-                self.get_crowd_config_pair(crowd_config, section, index, base + key, base + atten_key);
-            }
-        }
+        // Both config files are read through `ini_compat` into Rust memory. Vanilla stores the interned `char*`
+        // values `getString` returns directly in this struct, and `update` passes `crowd_filename[n]` to
+        // `SNDSound::attempt` long after `init` returns, so each value is copied into a `CString` that
+        // `own_filenames` keeps alive in a static, keyed by this object's address.
+        let mut owned: Vec<CString> = Vec::new();
+        let mut take = |text: &str| -> u32 {
+            let c_string = c_string_up_to_nul(text);
+            let pointer = c_string.as_ptr() as u32;
+            owned.push(c_string);
+            pointer
+        };
 
-        // World config: same shape; the name lookup writes world_name, and only on success does
-        // the atten lookup run (behind a plain-0 default, per this method's doc comment).
-        unsafe { RELEASE.original()(world_config) };
-        if unsafe { ATTEMPT_0.original()(world_config, world_config_name as *const i8) } {
-            let section = base + WORLD_SECTION_RVA;
-            let got_name = unsafe {
-                GET_STRING_1.original()(
-                    world_config,
-                    section as *const u32,
-                    (base + WORLD_NAME_KEY_RVA) as *const u32,
-                    core::ptr::addr_of!(self.world_name).cast_mut() as *const u32,
-                )
-            };
-            if got_name {
-                write_live!(self, world_atten, 0);
-                unsafe {
-                    GET_INT.original()(
-                        world_config,
-                        section,
-                        base + WORLD_ATTEN_KEY_RVA,
-                        core::ptr::addr_of!(self.world_atten).cast_mut() as *const u32,
-                    );
+        // Crowd config: a successful read gates all four key pairs; a found filename resets its
+        // attenuation to the default before the (optional) attenuation key overrides it.
+        if let Some(ini) = read_soundscape_config(crowd_config_name) {
+            let section = rdata_string(base + CROWD_SECTION_RVA);
+            for (index, &(key, atten_key)) in CROWD_KEY_RVAS.iter().enumerate() {
+                if let Some(name) = ini_compat::first(&ini, &section, &rdata_string(base + key)) {
+                    unsafe { write_live_ptr(core::ptr::addr_of!(self.crowd_filename[index]).cast_mut(), take(&name)) };
+                    let atten = ini_compat::int_or(&ini, &section, &rdata_string(base + atten_key), DEFAULT_CROWD_ATTEN);
+                    unsafe { write_live_ptr(core::ptr::addr_of!(self.crowd_atten[index]).cast_mut(), atten) };
                 }
             }
         }
+
+        // World config: same shape; the name lookup writes world_name, and only when it is found does
+        // the attenuation lookup run (over a plain-0 default, per this method's doc comment).
+        if let Some(ini) = read_soundscape_config(world_config_name) {
+            let section = rdata_string(base + WORLD_SECTION_RVA);
+            if let Some(name) = ini_compat::first(&ini, &section, &rdata_string(base + WORLD_NAME_KEY_RVA)) {
+                write_live!(self, world_name, take(&name));
+                let atten = ini_compat::int_or(&ini, &section, &rdata_string(base + WORLD_ATTEN_KEY_RVA), 0);
+                write_live!(self, world_atten, atten);
+            }
+        }
+        own_filenames(self as *const Self as u32, owned);
 
         // World sound: the sndmgr singleton is loaded unconditionally before the world_name test.
         let world_name = self.world_name;
@@ -452,5 +478,39 @@ impl ZTSoundscape {
         destruct_slot(core::ptr::addr_of!(self.world_snd));
         destruct_slot(core::ptr::addr_of!(self.crowd_snd_b));
         destruct_slot(core::ptr::addr_of!(self.crowd_snd_a));
+    }
+}
+
+#[cfg(test)]
+mod filename_ownership_tests {
+    use super::*;
+    use std::ffi::CStr;
+
+    #[test]
+    fn c_string_stops_at_the_first_nul() {
+        assert_eq!(c_string_up_to_nul("sounds/crowds.wav").to_str().unwrap(), "sounds/crowds.wav");
+        assert_eq!(c_string_up_to_nul("abc def").to_str().unwrap(), "abc");
+        assert_eq!(c_string_up_to_nul("").to_bytes().len(), 0);
+    }
+
+    #[test]
+    fn owned_strings_stay_valid_across_moves_and_other_owners() {
+        let first = c_string_up_to_nul("first.wav");
+        let pointer = first.as_ptr();
+        own_filenames(0x1000_0001, vec![first]);
+        // Registering and replacing other owners must not touch this owner's strings.
+        own_filenames(0x1000_0002, vec![c_string_up_to_nul("other.wav")]);
+        own_filenames(0x1000_0002, vec![c_string_up_to_nul("replaced.wav")]);
+        assert_eq!(unsafe { CStr::from_ptr(pointer) }.to_str().unwrap(), "first.wav");
+    }
+
+    #[test]
+    fn reinitialising_an_owner_replaces_only_its_own_entry() {
+        own_filenames(0x1000_0003, vec![c_string_up_to_nul("a.wav")]);
+        own_filenames(0x1000_0003, vec![c_string_up_to_nul("b.wav")]);
+        let entries = OWNED_FILENAMES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let owned: Vec<_> = entries.iter().filter(|(address, _)| *address == 0x1000_0003).collect();
+        assert_eq!(owned.len(), 1, "one entry per owner address");
+        assert_eq!(owned[0].1[0].to_str().unwrap(), "b.wav");
     }
 }

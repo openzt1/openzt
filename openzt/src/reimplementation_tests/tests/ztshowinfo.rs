@@ -735,8 +735,8 @@ pub(crate) fn run_ztshowinfo_event_system_live_test(failure_log: &mut Option<std
     }
 
     // getEvents, called directly (the same call `listen` above already made indirectly) - confirms the
-    // real, un-detoured `+0xc` vtable target (`bfunit::GET_EVENTS_3`) still runs correctly through
-    // `GET_EVENTS.original()`'s now-corrected (post-regeneration) 2-arg signature.
+    // real, un-detoured `+0xc` vtable target (`getEvents` at `0x0043f40d`) still runs correctly through
+    // `GET_EVENTS.original()`'s 2-arg signature.
     unsafe { GET_EVENTS.original()(real_info as *const u32, real_info + 0x5c) };
 
     // cleanupEvents: a non-empty, Rust-owned scratch range on both poles - see this test's own doc
@@ -1363,10 +1363,9 @@ fn install_empty_show_state_tree_header(show_info: u32) {
 /// pending-scripts node's full value-field set (seeded directly via [`find_or_insert_pending_script_node`]
 /// for `current`/`pending`, then [`increment_attendance`]/[`increment_receipts`] for the accumulator pairs -
 /// both already independently live-tested), and the eleven trailing scalars. The `BFEvent` array is left at
-/// zero elements deliberately - `BFEvent` itself is not reimplemented anywhere in this codebase, so this
-/// test exercises the array's own count-gating/allocation-skip path (`ev_count == 0`) rather than real
-/// element content, which is outside this stage's own scope (see the module doc comment's own note on why
-/// `BFEvent`'s per-element content isn't ported). Captures [`SAVE`]'s `.hooked()` output via `io_redirect`,
+/// zero elements deliberately, so this test exercises the array's own count-gating/allocation-skip path
+/// (`ev_count == 0`) rather than element content; `BFEvent`'s own save/load is covered by
+/// `BFEVENT_SAVE_LOAD`. Captures [`SAVE`]'s `.hooked()` output via `io_redirect`,
 /// replays it into a second fresh fixture's `.hooked()` [`LOAD`], and compares every field plus the
 /// roundtripped array/node contents.
 ///

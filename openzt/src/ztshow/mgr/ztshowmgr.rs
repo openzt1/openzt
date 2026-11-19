@@ -95,15 +95,15 @@ impl ZTShowMgr {
         if expansion_2_installed
             && let Some(ini) = bfconfigfile::ini_compat::read_cfg("shows.cfg")
         {
-            use bfconfigfile::ini_compat::first_parse;
-            write_live!(self, threshold_a, first_parse(&ini, "trickSatisfactionThresholds", "badTrick").unwrap_or(self.threshold_a));
-            write_live!(self, threshold_b, first_parse(&ini, "trickSatisfactionThresholds", "goodTrick").unwrap_or(self.threshold_b));
-            write_live!(self, threshold_c, first_parse(&ini, "trickSatisfactionThresholds", "greatTrick").unwrap_or(self.threshold_c));
-            write_live!(self, min_ideal_length, first_parse(&ini, "show", "minIdealLength").unwrap_or(self.min_ideal_length));
-            write_live!(self, max_ideal_length, first_parse(&ini, "show", "maxIdealLength").unwrap_or(self.max_ideal_length));
-            write_live!(self, bad_show, first_parse(&ini, "showSatisfactionThresholds", "badShow").unwrap_or(self.bad_show));
-            write_live!(self, good_show, first_parse(&ini, "showSatisfactionThresholds", "goodShow").unwrap_or(self.good_show));
-            write_live!(self, great_show, first_parse(&ini, "showSatisfactionThresholds", "greatShow").unwrap_or(self.great_show));
+            use bfconfigfile::ini_compat::int_or;
+            write_live!(self, threshold_a, int_or(&ini, "trickSatisfactionThresholds", "badTrick", self.threshold_a as i32) as u32);
+            write_live!(self, threshold_b, int_or(&ini, "trickSatisfactionThresholds", "goodTrick", self.threshold_b as i32) as u32);
+            write_live!(self, threshold_c, int_or(&ini, "trickSatisfactionThresholds", "greatTrick", self.threshold_c as i32) as u32);
+            write_live!(self, min_ideal_length, int_or(&ini, "show", "minIdealLength", self.min_ideal_length as i32) as u32);
+            write_live!(self, max_ideal_length, int_or(&ini, "show", "maxIdealLength", self.max_ideal_length as i32) as u32);
+            write_live!(self, bad_show, int_or(&ini, "showSatisfactionThresholds", "badShow", self.bad_show as i32) as u32);
+            write_live!(self, good_show, int_or(&ini, "showSatisfactionThresholds", "goodShow", self.good_show as i32) as u32);
+            write_live!(self, great_show, int_or(&ini, "showSatisfactionThresholds", "greatShow", self.great_show as i32) as u32);
         }
 
         1

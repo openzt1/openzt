@@ -2012,7 +2012,7 @@ impl ZooStatus {
         let year_offset = self.current_year_index as u32 * 4;
         save_to_memory(base_ptr + 0x600 + month_offset, 0.0f32);
 
-        write_live!(self, field_0x4c, globals().ztgamemgr().cash() as i32);
+        write_live!(self, field_0x4c, crate::util::ftol_low32(globals().ztgamemgr().cash()));
         write_live!(self, field_0x58, 0);
         write_live!(self, non_blank_tile_fraction, 0.0);
 
@@ -2078,14 +2078,14 @@ impl ZooStatus {
                 if type_ptr != 0 {
                     let vtable: u32 = get_from_memory(type_ptr);
                     let get_avg = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> f32>(get_from_memory::<u32>(vtable + 0xbc)) };
-                    write_live!(self, field_0x4c, self.field_0x4c + get_avg(type_ptr) as i32);
+                    write_live!(self, field_0x4c, self.field_0x4c + crate::util::ftol_low32(get_avg(type_ptr)));
                 }
             } else if entity_type_matches(entity_ptr, raw_globals::BUILDING_TYPE_CHECK_RVA) {
                 let type_ptr: u32 = get_from_memory(entity_ptr + 0x128);
                 if type_ptr != 0 {
                     let vtable: u32 = get_from_memory(type_ptr);
                     let get_purchase_cost = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32) -> f32>(get_from_memory::<u32>(vtable + 0xa4)) };
-                    write_live!(self, field_0x4c, self.field_0x4c + get_purchase_cost(type_ptr) as i32);
+                    write_live!(self, field_0x4c, self.field_0x4c + crate::util::ftol_low32(get_purchase_cost(type_ptr)));
                 }
 
                 let entity_vtable: u32 = get_from_memory(entity_ptr);

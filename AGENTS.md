@@ -623,6 +623,68 @@ bug, then read the output file.
   a plain module RVA, with no debugger needed at all - a fast first triage, and a good sanity check that a
   live cdb capture's own `eip - <module ModLoad base>` lines up with what Windows independently recorded.
 
+### Page-Heap Testing (finding heap overreads and foreign frees)
+
+Full page heap puts every heap allocation on its own pages with an inaccessible guard page directly after
+it, and fills fresh allocations with `0xE0` bytes. A read or write one byte past a block, or a free through
+the wrong allocator, faults at the offending instruction instead of corrupting silently. Neither batteries
+nor normal play catch these: an overread of a few bytes only faults when the block happens to end at a page
+boundary. Run this pass after any change that reads or writes vanilla memory through a hand-written
+`#[repr(C)]` struct, wraps a vanilla buffer, or changes who owns an allocation.
+
+Found this way so far: a `#[repr(C)]` `BFTile` whose padding made it `0x90` bytes against vanilla's `0x8c`
+(every `get_from_memory::<BFTile>` over-read 4 bytes, faulting on the last tile of the map array);
+`CString::from_raw` over a vanilla file buffer that is not NUL-terminated at `content_size`; and a
+float-to-int conversion that depended on an uninitialised field (see below).
+
+**Enable and disable** (needs an elevated prompt; this session cannot do it, so give the user the command).
+In PowerShell the quoted path needs the `&` call operator:
+
+```powershell
+& "C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\gflags.exe" /p /enable zoo.exe /full /size 0x1 0x2000
+& "C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\gflags.exe" /p                          # list: expect "full size traces"
+& "C:\Program Files (x86)\Windows Kits\10\Debuggers\x86\gflags.exe" /p /disable zoo.exe         # always turn it off afterwards
+```
+
+- **Always pass `/size 0x1 0x2000`.** Plain `/full` makes large allocations fail in a 32-bit process.
+  Vanilla does not check `operator_new` for NULL, so loading a save then crashes writing through a null
+  `this` (the 125x125 tile array is about 2.2 MB). That crash is an artifact, not a bug. The size filter
+  keeps full page heap on small blocks (strings, call objects, list nodes) where overreads live.
+- Leave it **off** for normal development, `crash-capture` timing comparisons and any run whose result is
+  going into a commit message. It slows the game and uses far more memory. Confirm it is off before the
+  final battery runs.
+
+**What to run** (`debug-play`, so the first fault writes a symbolized dump; see "Getting Real Symbols From a
+Live Crash"):
+
+1. `./openzt.bat debug-play --out <file>` with page heap on. The user loads a busy save, lets it run, saves,
+   reloads, and watches the area under test. Read the dump afterwards: a clean run contains only cdb's
+   initial `Break instruction exception - code 80000003`.
+2. `./openzt.bat run --test --wait` with page heap on, then read `openzt_test.log`. It must end with the
+   `battery finished` line.
+
+**Reading a fault.**
+- A faulting address on a page boundary (`...000`) with a register holding `boundary - sizeof(T)` is an
+  overread past the last element of an array. Compare `size_of::<T>()` against vanilla's real size; add a
+  `const _: () = assert!(size_of::<T>() == 0x..)` next to the struct.
+- A fault inside `strlen`/`CString::from_raw` means a vanilla buffer was treated as NUL-terminated or
+  Rust-owned. Read `content_size` bytes as a slice and leave vanilla's buffer to vanilla.
+- `RtlpFreeHeap`/`RtlFreeHeap` frames mean a free through the wrong allocator.
+- A write through a null pointer in vanilla code right after an `operator_new` is a failed large allocation
+  (see `/size` above), not a bug in our code.
+
+**Test mismatches that appear only under page heap.** Fresh allocations hold `0xE0E0E0E0` instead of zero
+(about -1.3e20 as an `f32`), so a real-vs-port comparison can diverge when vanilla reads a field it never
+initialised (e.g. `ZTGameMgr`'s cash before `setNewGameDefaults` runs). Check what the port does with an
+out-of-range value before assuming the field needs zeroing: vanilla converts floats with
+`(int)(longlong)f` (`_ftol2`, which yields `0` out of range and wraps otherwise), while Rust's `f as i32`
+saturates. Use `util::ftol_low32` wherever a decompile shows `(int)(longlong)ROUND(x)`. Confirm by
+reverting to the old behaviour and watching the failure reproduce, then log the raw float bits
+to a file (the test DLL's `error!` output does not reach `openzt.log`).
+
+Do not conclude anything from a single truncated run (log with a `started` line but no `finished` line):
+rerun first. A one-off early exit has been seen without a reproducible cause.
+
 ### Manual Testing
 
 For features not covered by integration tests:

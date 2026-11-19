@@ -1,4 +1,4 @@
-//! A real, vanilla-allocator-owned `std::string` (MSVC `{char* ptr; u32 len; u32 capacity}`, 12 bytes,
+//! A real, vanilla-allocator-owned `std::string` (MSVC `{char* begin; char* end; char* cap_end}`, 12 bytes,
 //! no small-string-optimization buffer for this build - confirmed independently by
 //! `MenuMusicHandler_MenuMusicHandler.asm`'s stack-slot accounting). Shared by every
 //! class-reimplementation file that needs to build a temporary vanilla `std::string` argument or
@@ -13,8 +13,8 @@ use openzt_detour::generated::msvc_std_basic_string::{BASIC_STRING_0, BASIC_STRI
 #[repr(C)]
 pub(crate) struct VanillaString {
     ptr: *mut u8,
-    len: u32,
-    capacity: u32,
+    end: *mut u8,
+    cap_end: *mut u8,
 }
 
 impl VanillaString {
@@ -23,7 +23,12 @@ impl VanillaString {
     /// trailing allocator argument is an uninitialized/unused stack slot in vanilla's own call site too,
     /// passed as `0` here).
     pub(crate) fn new(s: &str) -> Self {
-        let mut this = VanillaString { ptr: std::ptr::null_mut(), len: 0, capacity: 0 };
+        Self::from_bytes(s.as_bytes())
+    }
+
+    /// [`Self::new`] for arbitrary bytes (a call parameter need not be UTF-8).
+    pub(crate) fn from_bytes(s: &[u8]) -> Self {
+        let mut this = VanillaString { ptr: std::ptr::null_mut(), end: std::ptr::null_mut(), cap_end: std::ptr::null_mut() };
         let start = s.as_ptr();
         let end = unsafe { start.add(s.len()) };
         unsafe {
@@ -36,7 +41,7 @@ impl VanillaString {
     /// placement-constructs its return value at the address it's given - the callee never reads this
     /// memory before writing it, so a zeroed instance is a safe destination.
     pub(crate) fn rvo_target() -> Self {
-        VanillaString { ptr: std::ptr::null_mut(), len: 0, capacity: 0 }
+        VanillaString { ptr: std::ptr::null_mut(), end: std::ptr::null_mut(), cap_end: std::ptr::null_mut() }
     }
 
     pub(crate) fn as_ptr(&self) -> *const u32 {
@@ -44,10 +49,11 @@ impl VanillaString {
     }
 
     pub(crate) fn as_str(&self) -> std::borrow::Cow<'_, str> {
-        if self.ptr.is_null() || self.len == 0 {
+        if self.ptr.is_null() || self.end <= self.ptr {
             return std::borrow::Cow::Borrowed("");
         }
-        let bytes = unsafe { std::slice::from_raw_parts(self.ptr, self.len as usize) };
+        let len = self.end as usize - self.ptr as usize;
+        let bytes = unsafe { std::slice::from_raw_parts(self.ptr, len) };
         String::from_utf8_lossy(bytes)
     }
 }

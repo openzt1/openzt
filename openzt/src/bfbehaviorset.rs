@@ -1,0 +1,974 @@
+//! `BFBehaviorSet` stage 2: the small methods `setName`, `removeHead`, `clear`, `killChild`, `executeHead` and
+//! `executeCall`. The set is embedded in `BFEntity` at `+0x14`, child sets are separate vanilla-allocated
+//! objects, and the struct mirrors vanilla's layout and is operated on in place (style 1), because un-ported vanilla
+//! code still reads the members raw. The name stack, call list, current-call string, name and the parsed call object
+//! keep vanilla's layout (`{begin, end, cap}` strings with a NUL, 12-byte vector entries) because un-ported
+//! `BFUnit` and goal code reads them, but only reads them, so their buffers are Rust-allocated through
+//! `owned_strings.rs` (and `bfscriptmgr.rs` for the call object). Vanilla-built buffers are still freed correctly,
+//! through vanilla's allocator.
+//!
+//! ## Layout (`0x60` bytes)
+//! `+0x00` `vector<string>` stack of active child-set names; `+0x0c` the parsed `BFFunctionCall`
+//! (see `bfscriptmgr.rs`); `+0x28` `vector<string>` call list; `+0x34` string, the call text being executed;
+//! `+0x40` string, the set's name; `+0x4c` child set; `+0x50` entity; `+0x54` pointer derived from the entity;
+//! `+0x58` flag set by `clear`; `+0x59` dirty (set by `setName` and `executeCall`); `+0x5a` "child removed /
+//! reparse needed", also the `done` out-parameter `ZTAIMgr::executeCall` writes; `+0x5b` entity flag
+//! pending; `+0x5c` loaded. Strings are `{begin, end, cap}`.
+//!
+//! ## Behaviour a reader should know
+//! - `executeCall`'s early checks (null entity, empty name, null `+0x54`, not loaded) only store `*out = true`,
+//!   and the store is overwritten by the dispatch result below them, so the port omits them.
+//! - `executeCall` writes `*out = (AL == 0)` from the return register of `ZTAIMgr::executeCall`. That function
+//!   returns its handler's own result (its tail only touches `CL`), and the port reads `AL` from the same
+//!   vtable slot. The Rust `ZTAIMgr::executeCall` returns the same value (see `ztaimgr.rs`).
+//! - `removeHead` and `executeHead` on an empty call list read through a null/one-past-end element in
+//!   vanilla. The port returns without touching anything; `execute` never calls either with an empty list.
+//! - `killChild` destroys the child with `destroy_set_members`, the port of `~BFBehaviorSet` (`0x43e9be`, which
+//!   recurses into a grandchild through `killChild`), where vanilla's `killChild` recurses and then repeats the
+//!   same teardown inline. The resulting state is identical. `~BFEntity` runs the same helper on its embedded
+//!   set. `0x43ee6d` (destructor plus `operator delete`) stays vanilla and reaches the port through `0x43e9be`.
+
+
+use openzt_detour::{
+    generated::{
+        bfbehaviorset::{
+            CLEAR, CONSTRUCTOR, DESTRUCTOR, EXECUTE, EXECUTE_CALL, EXECUTE_CHILD, EXECUTE_HEAD, INIT_CHILD, KILL_CHILD,
+            LOAD_0, LOAD_1, REMOVE_HEAD, SAVE, SET_NAME,
+        },
+        poolalloc::DEALLOCATE as POOL_DEALLOCATE,
+    },
+};
+use openzt_detour_macro::detour_mod;
+use tracing::error;
+
+use crate::{
+    bfscriptmgr::{
+        construct_call, destroy_call, load_call, parse_function, read_file_bytes, read_file_count, read_file_owned_string, read_file_strvec, reset_call, save_call,
+        write_file_bytes, write_file_string, write_file_string_list, BfFunctionCall, RawString, FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS,
+    },
+    owned_strings::{alloc_block, free_block, string_assign, string_construct, string_release, strvec_clear, strvec_free, strvec_pop, strvec_push, strvec_remove_first, StringSlot},
+    util::{get_from_memory, ref_from_memory, LiveMemory},
+    write_live,
+};
+
+/// `GLOBAL_ZTAIMgr`, a pointer to the real manager.
+const GLOBAL_ZTAIMGR: u32 = 0x0063_8098;
+/// `ZTAIMgr` vtable slot `executeCall(call, entity, done)`.
+const AIMGR_VTABLE_EXECUTE_CALL: u32 = 0xc;
+/// `BFEntity` vtable slot called after a freshly parsed call was accepted.
+const ENTITY_VTABLE_AFTER_PARSE: u32 = 0x4c;
+/// Byte in the entity that `execute` sets when it consumes the pending flag.
+const ENTITY_PENDING_FLAG: u32 = 0xd6;
+/// Vtable slot `BFEntityType::loadBSFunctions(this, vector<const char*>* out, string* name) -> bool` on the
+/// entity's type object (`entity+0x128`). Overridden by `ZTGuestType`, `ZTAnimalType`, `BFUnitType` and
+/// `ZTUnitType`, so it is called through the vtable.
+const MANAGER_VTABLE_GET_SCRIPT: u32 = 0x38;
+
+pub(crate) const BFBEHAVIORSET_SIZE: usize = 0x60;
+/// Child sets are allocated from Rust (see `owned_strings::alloc_block`) with this alignment.
+const SET_ALIGN: usize = 4;
+const STRING_SIZE: u32 = 12;
+/// A freshly constructed string has room for this many bytes (vanilla builds its strings with capacity 8).
+const NEW_STRING_CAPACITY: usize = 8;
+
+#[repr(C)]
+pub(crate) struct BfBehaviorSet {
+    pub(crate) stack_begin: *const u8,
+    pub(crate) stack_end: *const u8,
+    pub(crate) stack_capacity: *const u8,
+    pub(crate) call: BfFunctionCall,
+    pub(crate) list_begin: *const u8,
+    pub(crate) list_end: *const u8,
+    pub(crate) list_capacity: *const u8,
+    pub(crate) current_call: RawString,
+    pub(crate) name: RawString,
+    pub(crate) child: *const BfBehaviorSet,
+    pub(crate) entity: *const u32,
+    pub(crate) field_54: *const u32,
+    pub(crate) flag_58: u8,
+    pub(crate) dirty: u8,
+    pub(crate) removed: u8,
+    pub(crate) pending: u8,
+    pub(crate) loaded: u8,
+    pub _live: LiveMemory,
+}
+
+const _: () = assert!(std::mem::size_of::<BfBehaviorSet>() == BFBEHAVIORSET_SIZE);
+
+/// Empties a string the way vanilla's inlined clear does: terminator at `begin`, `end = begin`.
+pub(crate) unsafe fn clear_string(string: *const RawString) {
+    unsafe {
+        let begin = (*string).begin;
+        if begin != (*string).end {
+            (begin as *mut u8).write_volatile(0);
+            std::ptr::addr_of!((*string).end).cast_mut().write_volatile(begin);
+        }
+    }
+}
+
+impl BfBehaviorSet {
+    fn list_len(&self) -> u32 {
+        (self.list_end as u32).wrapping_sub(self.list_begin as u32) / STRING_SIZE
+    }
+
+    /// Destroys the newest entry of the child-name stack, if any.
+    unsafe fn pop_stack(&self) {
+        unsafe { strvec_pop(self as *const BfBehaviorSet as u32) };
+    }
+
+    /// `BFBehaviorSet::setName`: false for an empty name, else assigns `+0x40` and marks the set dirty.
+    pub(crate) unsafe fn set_name(&self, name: *const RawString) -> bool {
+        let source = unsafe { &*name };
+        if source.begin == source.end {
+            return false;
+        }
+        let own = std::ptr::addr_of!(self.name);
+        if name != own {
+            unsafe { string_assign(own as StringSlot, source.bytes()) };
+        }
+        write_live!(self, dirty, 1u8);
+        true
+    }
+
+    /// `BFBehaviorSet::removeHead`: erases the first call-list entry and empties the parsed call's name.
+    pub(crate) unsafe fn remove_head(&self) {
+        if self.list_len() == 0 {
+            return;
+        }
+        unsafe { strvec_remove_first(std::ptr::addr_of!(self.list_begin) as u32) };
+        unsafe { clear_string(std::ptr::addr_of!(self.call) as *const RawString) };
+    }
+
+    /// `BFBehaviorSet::killChild`: destroys the child set, pops its name and flags a reparse. A set without a
+    /// child is left untouched.
+    pub(crate) unsafe fn kill_child(&self) {
+        let child = self.child;
+        if child.is_null() {
+            return;
+        }
+        unsafe {
+            destroy_set_members(child as u32);
+            free_block(child as *mut u8, BFBEHAVIORSET_SIZE, SET_ALIGN);
+        }
+        write_live!(self, child, std::ptr::null());
+        unsafe { self.pop_stack() };
+        write_live!(self, removed, 1u8);
+    }
+
+    /// `BFBehaviorSet::clear`.
+    pub(crate) unsafe fn clear(&self) {
+        unsafe { clear_string(std::ptr::addr_of!(self.name)) };
+        write_live!(self, flag_58, 1u8);
+        unsafe {
+            clear_string(std::ptr::addr_of!(self.current_call));
+            reset_call(std::ptr::addr_of!(self.call) as *const u32);
+            strvec_clear(std::ptr::addr_of!(self.list_begin) as u32);
+            self.kill_child();
+        }
+        write_live!(self, loaded, 0u8);
+        write_live!(self, removed, 0u8);
+        write_live!(self, dirty, 0u8);
+        write_live!(self, pending, 0u8);
+    }
+
+    /// `BFBehaviorSet::executeHead`: runs the first call-list entry through a private copy, since executing it
+    /// can change the list.
+    pub(crate) unsafe fn execute_head(&self, out: *mut u8) {
+        if self.list_len() == 0 {
+            return;
+        }
+        let head = unsafe { &*(self.list_begin as *const RawString) };
+        // `executeCall` can change the list, so it runs on a private copy: the text, a NUL, and the three words.
+        let mut text = head.bytes().to_vec();
+        text.push(0);
+        let range = text.as_ptr_range();
+        let copy = [range.start as u32, range.end as u32 - 1, range.end as u32];
+        unsafe { self.execute_call(copy.as_ptr(), out) };
+    }
+
+    /// `BFBehaviorSet::executeCall`: reparses when needed, dispatches through `GLOBAL_ZTAIMgr`'s vtable, and
+    /// reports whether the call is still running (`*out = true` when the dispatch left `AL == 0`).
+    pub(crate) unsafe fn execute_call(&self, call_text: *const u32, out: *mut u8) {
+        let call_text = call_text as *const RawString;
+        let call = std::ptr::addr_of!(self.call);
+        let mut parsed = false;
+        if self.removed != 0 || self.call.name_begin == self.call.name_end {
+            let own = std::ptr::addr_of!(self.current_call);
+            if call_text != own {
+                let source = unsafe { &*call_text };
+                unsafe { string_assign(own as StringSlot, source.bytes()) };
+            }
+            unsafe { parse_function(call_text as *const u32, call as *const u32) };
+            write_live!(self, removed, 0u8);
+            parsed = true;
+        }
+        write_live!(self, dirty, 1u8);
+
+        let manager = get_from_memory::<u32>(GLOBAL_ZTAIMGR);
+        if manager == 0 {
+            unsafe { out.write_volatile(1) };
+            return;
+        }
+        let vtable = get_from_memory::<u32>(manager);
+        let slot = get_from_memory::<u32>(vtable + AIMGR_VTABLE_EXECUTE_CALL);
+        let dispatch = unsafe { std::mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32) -> u8>(slot) };
+        let result = unsafe { dispatch(manager, call as u32, self.entity as u32, std::ptr::addr_of!(self.removed) as u32) };
+        unsafe { out.write_volatile((result == 0) as u8) };
+        if result != 0 && parsed {
+            let vtable = get_from_memory::<u32>(self.entity as u32);
+            let slot = get_from_memory::<u32>(vtable + ENTITY_VTABLE_AFTER_PARSE);
+            unsafe { std::mem::transmute::<u32, unsafe extern "thiscall" fn(u32)>(slot)(self.entity as u32) };
+        }
+    }
+}
+
+/// The operations `BFBehaviorSet::execute` performs on a set, so its loop can be run over a script.
+trait ExecuteOps {
+    fn dirty(&self) -> bool;
+    fn removed(&self) -> bool;
+    fn pending(&self) -> bool;
+    fn list_len(&self) -> u32;
+    /// Flags the entity's pending bit and clears the set's own.
+    fn take_pending(&mut self);
+    fn remove_head(&mut self);
+    /// Clears dirty, kills the child, erases the list and clears the set.
+    fn finish(&mut self);
+    fn execute_head(&mut self, result: &mut u8);
+    fn has_child(&self) -> bool;
+    fn child_dirty(&self) -> bool;
+    /// `executeChild`: returns the child's result and may set `removed`.
+    fn execute_child(&mut self) -> bool;
+    fn kill_child(&mut self);
+    fn set_removed(&mut self);
+}
+
+/// `execute`'s loop. Returns the result byte, or `None` when it ran more than `max_iterations` times (vanilla
+/// has a state in which it never terminates).
+fn run_execute(ops: &mut dyn ExecuteOps, max_iterations: usize) -> Option<u8> {
+    let mut result = 0u8;
+    for _ in 0..max_iterations {
+        if ops.dirty() && ops.removed() {
+            if ops.pending() {
+                ops.take_pending();
+            } else {
+                ops.remove_head();
+            }
+        } else if ops.pending() {
+            ops.take_pending();
+        }
+
+        if ops.list_len() == 0 {
+            ops.finish();
+        } else {
+            if !ops.has_child() {
+                ops.execute_head(&mut result);
+            } else {
+                result = ops.execute_child() as u8;
+                if ops.has_child() && !ops.child_dirty() {
+                    ops.kill_child();
+                }
+            }
+            if result != 0 {
+                ops.set_removed();
+                ops.finish();
+            }
+        }
+        if !ops.removed() || ops.list_len() == 0 {
+            return Some(result);
+        }
+    }
+    None
+}
+
+struct LiveSet<'a>(&'a BfBehaviorSet);
+
+impl ExecuteOps for LiveSet<'_> {
+    fn dirty(&self) -> bool {
+        self.0.dirty != 0
+    }
+    fn removed(&self) -> bool {
+        self.0.removed != 0
+    }
+    fn pending(&self) -> bool {
+        self.0.pending != 0
+    }
+    fn list_len(&self) -> u32 {
+        self.0.list_len()
+    }
+    fn take_pending(&mut self) {
+        unsafe { ((self.0.entity as u32 + ENTITY_PENDING_FLAG) as *mut u8).write_volatile(1) };
+        write_live!(self.0, pending, 0u8);
+    }
+    fn remove_head(&mut self) {
+        unsafe { self.0.remove_head() };
+    }
+    fn finish(&mut self) {
+        unsafe { self.0.finish() };
+    }
+    fn execute_head(&mut self, result: &mut u8) {
+        unsafe { self.0.execute_head(result) };
+    }
+    fn has_child(&self) -> bool {
+        !self.0.child.is_null()
+    }
+    fn child_dirty(&self) -> bool {
+        unsafe { (*self.0.child).dirty != 0 }
+    }
+    fn execute_child(&mut self) -> bool {
+        unsafe { self.0.execute_child() }
+    }
+    fn kill_child(&mut self) {
+        unsafe { self.0.kill_child() };
+    }
+    fn set_removed(&mut self) {
+        write_live!(self.0, removed, 1u8);
+    }
+}
+
+impl BfBehaviorSet {
+    pub(crate) unsafe fn erase_list(&self) {
+        unsafe { strvec_clear(std::ptr::addr_of!(self.list_begin) as u32) };
+    }
+
+    /// The shared tail `execute` runs when a call finished or the list ran dry: reset the set.
+    unsafe fn finish(&self) {
+        write_live!(self, dirty, 0u8);
+        unsafe {
+            self.kill_child();
+            self.erase_list();
+            self.clear();
+        }
+    }
+
+    /// `BFBehaviorSet::executeChild`: runs the child set and flags a reparse once the child has gone idle.
+    pub(crate) unsafe fn execute_child(&self) -> bool {
+        let mut result = 0u8;
+        if !self.child.is_null() {
+            unsafe { (*self.child).execute(&mut result) };
+        }
+        if !self.child.is_null() && unsafe { (*self.child).dirty } == 0 {
+            write_live!(self, removed, 1u8);
+        }
+        result != 0
+    }
+
+    /// `BFBehaviorSet::execute`: advances the script by one or more calls. `*out` is true when the set has
+    /// nothing more to run.
+    pub(crate) unsafe fn execute(&self, out: *mut u8) {
+        let name_empty = self.name.begin == self.name.end;
+        if self.loaded == 0 || self.entity.is_null() || name_empty || self.field_54.is_null() {
+            unsafe { out.write_volatile(1) };
+            return;
+        }
+        let result = run_execute(&mut LiveSet(self), usize::MAX).expect("unbounded loop returns");
+        unsafe { out.write_volatile(result) };
+    }
+
+    /// Binds the set to `entity`, as vanilla's inlined `setEntity` does.
+    unsafe fn bind_entity(&self, entity: u32) {
+        if entity == 0 {
+            return;
+        }
+        write_live!(self, entity, entity as *const u32);
+        let behavior = get_from_memory::<u32>(entity + 0x128);
+        let field = if get_from_memory::<u32>(behavior + 0x84) == 0 { std::ptr::null() } else { (behavior + 0x80) as *const u32 };
+        write_live!(self, field_54, field);
+    }
+
+    /// `BFBehaviorSet::load()`: fetches the call list for the current name from the entity's behavior
+    /// manager. False when the set has no entity, name or manager.
+    pub(crate) unsafe fn load(&self) -> bool {
+        if self.entity.is_null() || self.name.begin == self.name.end || self.field_54.is_null() {
+            return false;
+        }
+        let manager = get_from_memory::<u32>(self.entity as u32 + 0x128);
+        if manager == 0 {
+            return false;
+        }
+        unsafe { self.erase_list() };
+
+        let mut lines: [u32; 3] = [0; 3];
+        let vtable = get_from_memory::<u32>(manager);
+        let slot = get_from_memory::<u32>(vtable + MANAGER_VTABLE_GET_SCRIPT);
+        let fetch = unsafe { std::mem::transmute::<u32, unsafe extern "thiscall" fn(u32, *mut [u32; 3], *const RawString) -> u8>(slot) };
+        let mut result = unsafe { fetch(manager, &mut lines, std::ptr::addr_of!(self.name)) } != 0;
+
+        let mut cursor = lines[0];
+        while cursor != lines[1] {
+            let text = get_from_memory::<u32>(cursor);
+            let mut length = 0u32;
+            while get_from_memory::<u8>(text + length) != 0 {
+                length += 1;
+            }
+            let line = unsafe { std::slice::from_raw_parts(text as *const u8, length as usize) };
+            unsafe { strvec_push(std::ptr::addr_of!(self.list_begin) as u32, line) };
+            cursor += 4;
+        }
+
+        if self.list_len() == 0 {
+            write_live!(self, dirty, 0u8);
+        } else {
+            result = true;
+            write_live!(self, loaded, 1u8);
+        }
+        if lines[0] != 0 {
+            unsafe { POOL_DEALLOCATE.original()(lines[0] as *const u32, (lines[2] - lines[0]) & !3) };
+        }
+        result
+    }
+
+    /// `BFBehaviorSet::initChild`: allocates a child set under the deepest existing child, names it, loads
+    /// its call list and records the name on this set's stack. False only for a null set or a failed
+    /// allocation.
+    pub(crate) unsafe fn init_child(&self, entity: u32, name: *const RawString) -> bool {
+        let mut parent = self as *const BfBehaviorSet;
+        while unsafe { !(*parent).child.is_null() } {
+            parent = unsafe { (*parent).child };
+        }
+        let raw = alloc_block(BFBEHAVIORSET_SIZE, SET_ALIGN) as *mut u32;
+        unsafe { construct_set(raw, entity) };
+        let child = unsafe { &*(raw as *const BfBehaviorSet) };
+        write_live!(unsafe { &*parent }, child, raw as *const BfBehaviorSet);
+        unsafe { child.set_name(name) };
+        write_live!(child, removed, 0u8);
+        unsafe { child.load() };
+        unsafe { strvec_push(self as *const BfBehaviorSet as u32, (*name).bytes()) };
+        true
+    }
+
+    /// `BFBehaviorSet::save(file)` (`0x4777a7`): writes the set in the order `load_file` reads it. Every write
+    /// is attempted; the result is true only when all succeeded (a string of `0x1000` bytes or more is skipped
+    /// and fails).
+    pub(crate) unsafe fn save(&self, file: *const i8) -> bool {
+        let mut ok = unsafe { write_file_string(file, std::ptr::addr_of!(self.name)) };
+        ok &= unsafe { write_file_bytes(std::ptr::addr_of!(self.flag_58), 1, file) };
+        unsafe {
+            ok &= write_file_string_list(file, std::ptr::addr_of!(self.stack_begin) as *const u32);
+            ok &= write_file_string(file, std::ptr::addr_of!(self.current_call));
+            ok &= save_call(std::ptr::addr_of!(self.call) as *const u32, file);
+        }
+        let has_child = !self.child.is_null() as u8;
+        ok &= unsafe { write_file_bytes(&has_child, 1, file) };
+        if has_child != 0 {
+            ok &= unsafe { (*self.child).save(file) };
+        }
+        unsafe {
+            ok &= write_file_string_list(file, std::ptr::addr_of!(self.list_begin) as *const u32);
+            for flag in [std::ptr::addr_of!(self.loaded), std::ptr::addr_of!(self.removed), std::ptr::addr_of!(self.dirty), std::ptr::addr_of!(self.pending)] {
+                ok &= write_file_bytes(flag, 1, file);
+            }
+        }
+        ok
+    }
+
+    /// `BFBehaviorSet::load(file, version, entity)` (`0x44fb77`): restores a saved set. Saves older than
+    /// version `0x3f` hold nothing and load as success. Every read is attempted even after an earlier one
+    /// failed, except where vanilla stops: after the header, after the child flag and after the call-list
+    /// count. The result is true only when every read succeeded.
+    ///
+    /// Field order: name, flag `+0x58`, name stack, current call, parsed call, child flag and child, call
+    /// list, then the flags `+0x5c`, `+0x5a`, `+0x59`, `+0x5b`.
+    pub(crate) unsafe fn load_file(&self, file: *const u8, version: u32, entity: i32) -> bool {
+        if version <= FILE_VERSION_LAST_WITHOUT_BEHAVIOR_SETS {
+            return true;
+        }
+        let mut ok = unsafe { read_file_owned_string(file, std::ptr::addr_of!(self.name)) };
+        ok &= unsafe { read_file_bytes(std::ptr::addr_of!(self.flag_58) as *mut u8, 1, file) };
+        let stack_count = unsafe { read_file_count(file) };
+        ok &= stack_count.is_some();
+        if !ok {
+            return false;
+        }
+        let stack = std::ptr::addr_of!(self.stack_begin) as u32;
+        unsafe {
+            strvec_clear(stack);
+            ok &= read_file_strvec(file, stack, stack_count.unwrap_or(0));
+            ok &= read_file_owned_string(file, std::ptr::addr_of!(self.current_call));
+            load_call(std::ptr::addr_of!(self.call) as *const u32, file, version);
+        }
+
+        let mut has_child = 0u8;
+        ok &= unsafe { read_file_bytes(&mut has_child, 1, file) };
+        if !ok {
+            return false;
+        }
+        if has_child != 0 {
+            let raw = alloc_block(BFBEHAVIORSET_SIZE, SET_ALIGN) as *mut u32;
+            unsafe { construct_set(raw, entity as u32) };
+            write_live!(self, child, raw as *const BfBehaviorSet);
+            ok &= unsafe { (*self.child).load_file(file, version, entity) };
+        }
+
+        let list_count = unsafe { read_file_count(file) };
+        ok &= list_count.is_some();
+        if !ok {
+            return false;
+        }
+        unsafe {
+            self.erase_list();
+            ok &= read_file_strvec(file, std::ptr::addr_of!(self.list_begin) as u32, list_count.unwrap_or(0));
+            for flag in [std::ptr::addr_of!(self.loaded), std::ptr::addr_of!(self.removed), std::ptr::addr_of!(self.dirty), std::ptr::addr_of!(self.pending)] {
+                ok &= read_file_bytes(flag as *mut u8, 1, file);
+            }
+        }
+        ok
+    }
+}
+
+/// Builds a set in place at `raw` (`0x60` bytes of uninitialised memory): empty strings and vectors, no child,
+/// reset flags, bound to `entity` when it is non-null. Shared by the constructor and `initChild`.
+unsafe fn construct_set(raw: *mut u32, entity: u32) {
+    unsafe {
+        std::ptr::write_bytes(raw, 0, BFBEHAVIORSET_SIZE / 4);
+        construct_set_members(raw as u32);
+        (&*(raw as *const BfBehaviorSet)).bind_entity(entity);
+    }
+}
+
+/// Writes exactly what the set's constructor writes, as `BFEntity`'s constructor inlines it at `+0x14`: both
+/// vectors zeroed, the call object and strings built, no child, no entity, then `clear`. `+0x54` is never
+/// written, so a set built without an entity keeps whatever was there.
+pub(crate) unsafe fn construct_set_members(base: u32) {
+    unsafe {
+        for offset in [0x0u32, 0x4, 0x8, 0x28, 0x2c, 0x30, 0x4c, 0x50] {
+            ((base + offset) as *mut u32).write_volatile(0);
+        }
+        construct_call(base + 0xc);
+        string_construct((base + 0x34) as StringSlot, NEW_STRING_CAPACITY);
+        string_construct((base + 0x40) as StringSlot, NEW_STRING_CAPACITY);
+        (&*(base as *const BfBehaviorSet)).clear();
+    }
+}
+
+/// Tears down the set at `base` the way `BFEntity`'s destructor inlines `~BFBehaviorSet`: the child (with its
+/// name-stack entry and the removed flag), then the two strings, the call list, the call object and the name
+/// stack. Every buffer is freed through `owned_strings`, which hands a vanilla-built buffer back to vanilla's allocator.
+pub(crate) unsafe fn destroy_set_members(base: u32) {
+    unsafe {
+        (&*(base as *const BfBehaviorSet)).kill_child();
+        string_release((base + 0x40) as StringSlot);
+        string_release((base + 0x34) as StringSlot);
+        strvec_free(base + 0x28);
+        destroy_call(base + 0xc);
+        strvec_free(base);
+    }
+}
+
+/// Entry point for other ported code: `initChild` on the set at `set`.
+pub(crate) unsafe fn init_child(set: *const u32, entity: u32, name: u32) -> bool {
+    if set.is_null() {
+        return false;
+    }
+    unsafe { ref_from_memory::<BfBehaviorSet>(set as u32).init_child(entity, name as *const RawString) }
+}
+
+#[detour_mod]
+mod detours {
+    use super::*;
+
+    #[detour(CONSTRUCTOR)]
+    unsafe extern "thiscall" fn constructor_detour(this: *const u32, entity: i32) -> *const u32 {
+        unsafe { construct_set(this as *mut u32, entity as u32) };
+        this
+    }
+
+    #[detour(SAVE)]
+    unsafe extern "thiscall" fn save_detour(this: *const u32, file: *const i8) -> bool {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).save(file) }
+    }
+
+    #[detour(LOAD_1)]
+    unsafe extern "thiscall" fn load_file_detour(this: *const u32, file: *const u8, version: u32, entity: i32) -> bool {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).load_file(file, version, entity) }
+    }
+
+    #[detour(EXECUTE)]
+    unsafe extern "thiscall" fn execute_detour(this: *const u32, out: *const bool) {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).execute(out as *mut u8) }
+    }
+
+    #[detour(EXECUTE_CHILD)]
+    unsafe extern "thiscall" fn execute_child_detour(this: *const u32) -> bool {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).execute_child() }
+    }
+
+    #[detour(LOAD_0)]
+    unsafe extern "thiscall" fn load_detour(this: *const u32) -> bool {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).load() }
+    }
+
+    #[detour(INIT_CHILD)]
+    unsafe extern "thiscall" fn init_child_detour(this: *const u32, entity: i32, name: *const i32) -> bool {
+        unsafe { init_child(this, entity as u32, name as u32) }
+    }
+
+    #[detour(SET_NAME)]
+    unsafe extern "thiscall" fn set_name_detour(this: *const u32, name: *const i32) -> bool {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).set_name(name as *const RawString) }
+    }
+
+    #[detour(REMOVE_HEAD)]
+    unsafe extern "thiscall" fn remove_head_detour(this: *const u32) {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).remove_head() }
+    }
+
+    #[detour(CLEAR)]
+    unsafe extern "thiscall" fn clear_detour(this: *const u32) {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).clear() }
+    }
+
+    #[detour(DESTRUCTOR)]
+    unsafe extern "thiscall" fn destructor_detour(this: *const u32) {
+        unsafe { destroy_set_members(this as u32) }
+    }
+
+    #[detour(KILL_CHILD)]
+    unsafe extern "thiscall" fn kill_child_detour(this: *const u32) {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).kill_child() }
+    }
+
+    #[detour(EXECUTE_HEAD)]
+    unsafe extern "thiscall" fn execute_head_detour(this: *const u32, out: *const u8) {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).execute_head(out as *mut u8) }
+    }
+
+    #[detour(EXECUTE_CALL)]
+    unsafe extern "thiscall" fn execute_call_detour(this: *const u32, call: *const u32, out: *const u8) {
+        unsafe { ref_from_memory::<BfBehaviorSet>(this as u32).execute_call(call, out as *mut u8) }
+    }
+
+    /// Real vanilla bodies for the live battery's "real" pole, valid in every profile.
+    #[cfg(feature = "reimplementation-tests")]
+    pub(crate) mod test_real {
+        pub(crate) fn set_name(this: u32, name: *const i32) -> bool {
+            unsafe { super::SET_NAME_DETOUR.call(this as *const u32, name) }
+        }
+        pub(crate) fn remove_head(this: u32) {
+            unsafe { super::REMOVE_HEAD_DETOUR.call(this as *const u32) }
+        }
+        pub(crate) fn clear(this: u32) {
+            unsafe { super::CLEAR_DETOUR.call(this as *const u32) }
+        }
+        pub(crate) fn destructor(this: u32) {
+            unsafe { super::DESTRUCTOR_DETOUR.call(this as *const u32) }
+        }
+        pub(crate) fn kill_child(this: u32) {
+            unsafe { super::KILL_CHILD_DETOUR.call(this as *const u32) }
+        }
+        pub(crate) fn execute_head(this: u32, out: *const u8) {
+            unsafe { super::EXECUTE_HEAD_DETOUR.call(this as *const u32, out) }
+        }
+        pub(crate) fn execute_call(this: u32, call: *const u32, out: *const u8) {
+            unsafe { super::EXECUTE_CALL_DETOUR.call(this as *const u32, call, out) }
+        }
+        pub(crate) fn execute(this: u32, out: *const u8) {
+            unsafe { super::EXECUTE_DETOUR.call(this as *const u32, out as *const bool) }
+        }
+        pub(crate) fn execute_child(this: u32) -> bool {
+            unsafe { super::EXECUTE_CHILD_DETOUR.call(this as *const u32) }
+        }
+        pub(crate) fn load(this: u32) -> bool {
+            unsafe { super::LOAD_0_DETOUR.call(this as *const u32) }
+        }
+        pub(crate) fn constructor(this: u32, entity: u32) -> u32 {
+            unsafe { super::CONSTRUCTOR_DETOUR.call(this as *const u32, entity as i32) as u32 }
+        }
+        pub(crate) fn save(this: u32, file: *const i8) -> bool {
+            unsafe { super::SAVE_DETOUR.call(this as *const u32, file) }
+        }
+        pub(crate) fn load_file(this: u32, file: *const u8, version: u32, entity: u32) -> bool {
+            unsafe { super::LOAD_1_DETOUR.call(this as *const u32, file, version, entity as i32) }
+        }
+        pub(crate) fn init_child(this: u32, entity: u32, name: *const i32) -> bool {
+            unsafe { super::INIT_CHILD_DETOUR.call(this as *const u32, entity as i32, name) }
+        }
+    }
+}
+
+/// Installs this module's detours. Called from both `lib.rs`'s boot cascade and
+/// `reimplementation_tests::init()`.
+pub fn init() {
+    if let Err(e) = unsafe { detours::init_detours() } {
+        error!("Failed to initialise bfbehaviorset detours: {e:?}");
+    }
+}
+
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) mod live_support {
+    use openzt_detour::generated::{msvc_std_basic_string::BASIC_STRING_2, msvc_std_vectorbasic_string::INSERT_0X406DE7, standalone::OPERATOR_NEW};
+
+    use super::*;
+    use std::ffi::c_void;
+
+    use crate::{bfscriptmgr::live_support as call_support, vanilla_string::VanillaString};
+
+    /// Everything the stage-2 methods read or write.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct SetSnapshot {
+        pub name: Vec<u8>,
+        pub current_call: Vec<u8>,
+        pub call: call_support::CallSnapshot,
+        pub list: Vec<Vec<u8>>,
+        pub stack: Vec<Vec<u8>>,
+        pub has_child: bool,
+        pub flags: [u8; 5],
+        pub entity: u32,
+        pub field_54: u32,
+    }
+
+    /// Points `set` and every nested child at `entity`, deriving `+0x54` from its behavior manager.
+    pub(crate) fn bind(set: u32, entity: u32) {
+        for node in chain(set) {
+            unsafe {
+                ((node + 0x50) as *mut u32).write(entity);
+                let manager = get_from_memory::<u32>(entity + 0x128);
+                ((node + 0x54) as *mut u32).write(manager + 0x80);
+            }
+        }
+    }
+
+    /// `set` followed by its nested children.
+    pub(crate) fn chain(set: u32) -> Vec<u32> {
+        let mut nodes = Vec::new();
+        let mut current = set;
+        while current != 0 {
+            nodes.push(current);
+            current = get_from_memory::<u32>(current + 0x4c);
+        }
+        nodes
+    }
+
+    pub(crate) fn snapshot_chain(set: u32) -> Vec<SetSnapshot> {
+        chain(set).into_iter().map(snapshot).collect()
+    }
+
+    fn construct_string(at: *mut RawString, text: &[u8]) {
+        let range = text.as_ptr_range();
+        unsafe { BASIC_STRING_2.original()(at as *const c_void, range.start as *const u32, range.end as i32, 0) };
+    }
+
+    fn push_string(vector: *const u32, text: &[u8]) {
+        let value = VanillaString::from_bytes(text);
+        let end = unsafe { std::ptr::read_volatile((vector as u32 + 4) as *const u32) };
+        unsafe { INSERT_0X406DE7.original()(vector, end as *const u32, value.as_ptr(), 1) };
+    }
+
+    /// A set built from vanilla-allocated strings, itself allocated through vanilla's `operator_new` so
+    /// `killChild` can delete it when it is a child. `children` is the chain of nested child names. A root set
+    /// is leaked: its strings and vectors belong to vanilla's allocator and are never freed from Rust.
+    pub(crate) fn build_set(name: &[u8], current_call: &[u8], list: &[&[u8]], children: &[&[u8]], entity: u32) -> u32 {
+        let set = unsafe { OPERATOR_NEW.original()(BFBEHAVIORSET_SIZE as u32) } as *mut u32;
+        unsafe { std::ptr::write_bytes(set, 0, BFBEHAVIORSET_SIZE / 4) };
+        let set = set as u32;
+        init_set(set, name, current_call, list, entity);
+        if let Some((first, rest)) = children.split_first() {
+            let child = build_set(first, b"", &[], rest, entity);
+            push_string(set as *const u32, first);
+            unsafe { ((set + 0x4c) as *mut u32).write(child) };
+        }
+        set
+    }
+
+    fn init_set(set: u32, name: &[u8], current_call: &[u8], list: &[&[u8]], entity: u32) {
+        unsafe {
+            call_support::construct_vanilla_call(set + 0xc);
+            construct_string((set + 0x34) as *mut RawString, current_call);
+            construct_string((set + 0x40) as *mut RawString, name);
+            ((set + 0x50) as *mut u32).write(entity);
+        }
+        for entry in list {
+            push_string((set + 0x28) as *const u32, entry);
+        }
+    }
+
+    pub(crate) fn push_list(set: u32, text: &[u8]) {
+        push_string((set + 0x28) as *const u32, text);
+    }
+
+    pub(crate) fn push_stack(set: u32, text: &[u8]) {
+        push_string(set as *const u32, text);
+    }
+
+    pub(crate) fn set_flags(set: u32, flags: [u8; 5]) {
+        for (i, flag) in flags.iter().enumerate() {
+            unsafe { ((set + 0x58 + i as u32) as *mut u8).write(*flag) };
+        }
+    }
+
+    pub(crate) fn name_ptr(set: u32) -> *const i32 {
+        (set + 0x40) as *const i32
+    }
+
+    pub(crate) fn snapshot(set: u32) -> SetSnapshot {
+        let set_ref = unsafe { &*(set as *const BfBehaviorSet) };
+        let strings = |begin: *const u8, end: *const u8| {
+            let count = (end as usize - begin as usize) / STRING_SIZE as usize;
+            (0..count).map(|i| unsafe { &*(begin as *const RawString).add(i) }.bytes().to_vec()).collect::<Vec<_>>()
+        };
+        SetSnapshot {
+            name: set_ref.name.bytes().to_vec(),
+            current_call: set_ref.current_call.bytes().to_vec(),
+            call: call_support::snapshot(set + 0xc),
+            list: strings(set_ref.list_begin, set_ref.list_end),
+            stack: strings(set_ref.stack_begin, set_ref.stack_end),
+            has_child: !set_ref.child.is_null(),
+            flags: [set_ref.flag_58, set_ref.dirty, set_ref.removed, set_ref.pending, set_ref.loaded],
+            entity: set_ref.entity as u32,
+            field_54: set_ref.field_54 as u32,
+        }
+    }
+
+    /// Parses `text` into the set's call object, so the call name is non-empty.
+    pub(crate) fn prime_call(set: u32, text: &str) {
+        let source = VanillaString::new(text);
+        call_support::real_parse_function(source.as_ptr(), set + 0xc);
+    }
+
+    pub(crate) use super::detours::test_real as real;
+
+    /// `(name, is_enabled)` per detour.
+    pub(crate) fn detour_status() -> Vec<(&'static str, bool)> {
+        detours::status()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scripted set; `execute_head`/`execute_child` pop their next result from the front of a queue.
+    #[derive(Default)]
+    struct Script {
+        dirty: bool,
+        removed: bool,
+        pending: bool,
+        len: u32,
+        child: bool,
+        child_dirty: bool,
+        head_results: Vec<u8>,
+        child_results: Vec<(bool, bool)>,
+        log: Vec<&'static str>,
+    }
+
+    impl ExecuteOps for Script {
+        fn dirty(&self) -> bool {
+            self.dirty
+        }
+        fn removed(&self) -> bool {
+            self.removed
+        }
+        fn pending(&self) -> bool {
+            self.pending
+        }
+        fn list_len(&self) -> u32 {
+            self.len
+        }
+        fn take_pending(&mut self) {
+            self.log.push("take_pending");
+            self.pending = false;
+        }
+        fn remove_head(&mut self) {
+            self.log.push("remove_head");
+            self.len = self.len.saturating_sub(1);
+        }
+        fn finish(&mut self) {
+            self.log.push("finish");
+            self.dirty = false;
+            self.child = false;
+            self.len = 0;
+        }
+        fn execute_head(&mut self, result: &mut u8) {
+            self.log.push("execute_head");
+            *result = self.head_results.remove(0);
+        }
+        fn has_child(&self) -> bool {
+            self.child
+        }
+        fn child_dirty(&self) -> bool {
+            self.child_dirty
+        }
+        fn execute_child(&mut self) -> bool {
+            self.log.push("execute_child");
+            let (result, still_dirty) = self.child_results.remove(0);
+            self.child_dirty = still_dirty;
+            result
+        }
+        fn kill_child(&mut self) {
+            self.log.push("kill_child");
+            self.child = false;
+        }
+        fn set_removed(&mut self) {
+            self.log.push("set_removed");
+            self.removed = true;
+        }
+    }
+
+    #[test]
+    fn unfinished_head_returns_zero_after_one_pass() {
+        let mut script = Script { len: 2, head_results: vec![0], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["execute_head"]);
+    }
+
+    #[test]
+    fn finished_head_resets_the_set_and_reports_done() {
+        let mut script = Script { len: 1, dirty: true, head_results: vec![1], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(1));
+        assert_eq!(script.log, ["execute_head", "set_removed", "finish"]);
+    }
+
+    #[test]
+    fn empty_list_finishes_without_running_anything() {
+        let mut script = Script::default();
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["finish"]);
+    }
+
+    #[test]
+    fn pending_is_taken_first_and_a_removed_set_keeps_looping_until_the_list_is_empty() {
+        let mut script = Script { len: 2, dirty: true, removed: true, pending: true, head_results: vec![0, 0], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["take_pending", "execute_head", "remove_head", "execute_head", "remove_head", "finish"]);
+    }
+
+    #[test]
+    fn removed_head_is_dropped_when_nothing_is_pending() {
+        let mut script = Script { len: 1, dirty: true, removed: true, ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["remove_head", "finish"]);
+    }
+
+    #[test]
+    fn idle_child_is_killed_after_it_runs() {
+        let mut script = Script { len: 1, child: true, child_results: vec![(false, false)], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["execute_child", "kill_child"]);
+    }
+
+    #[test]
+    fn busy_child_is_left_alone() {
+        let mut script = Script { len: 1, child: true, child_dirty: true, child_results: vec![(false, true)], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 8), Some(0));
+        assert_eq!(script.log, ["execute_child"]);
+    }
+
+    #[test]
+    fn the_never_terminating_state_hits_the_bound() {
+        // removed set but not dirty, so the head is never dropped, and a busy child never finishes.
+        let mut script = Script { len: 1, removed: true, child: true, child_dirty: true, child_results: vec![(false, true); 50], ..Default::default() };
+        assert_eq!(run_execute(&mut script, 50), None);
+    }
+
+    #[test]
+    fn layout_offsets_match_vanilla() {
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, call), 0x0c);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, list_begin), 0x28);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, current_call), 0x34);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, name), 0x40);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, child), 0x4c);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, entity), 0x50);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, flag_58), 0x58);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, removed), 0x5a);
+        assert_eq!(std::mem::offset_of!(BfBehaviorSet, loaded), 0x5c);
+    }
+}

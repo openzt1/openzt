@@ -275,7 +275,7 @@ impl Ambients {
     /// flat list, unlike vanilla's own unchecked parallel-array indexing.
     fn build_groups_from_ini(&self, ini: &Ini) {
         let names = bfconfigfile::ini_compat::values(ini, "ambientlevels", "group");
-        let flat_ranges: Vec<i32> = bfconfigfile::ini_compat::values(ini, "ambientlevels", "value").iter().filter_map(|v| v.parse().ok()).collect();
+        let flat_ranges: Vec<i32> = bfconfigfile::ini_compat::int_list(ini, "ambientlevels", "value");
         let ranges: Vec<(i32, i32)> =
             (0..names.len()).map(|i| (flat_ranges.get(2 * i).copied().unwrap_or(0), flat_ranges.get(2 * i + 1).copied().unwrap_or(0))).collect();
 
@@ -456,7 +456,7 @@ impl AmbientsGroup {
     /// [`Ambients::build_groups_from_ini`]'s own Rust-to-Rust call path - see the module doc comment's
     /// "two construction paths" section for why this exists alongside, rather than instead of,
     /// [`Self::construct`]. `chance`/`sound`/`prob` are read from `ini`'s `name`-named section, matching
-    /// real vanilla's own per-level-section convention (`ini_compat::first_parse`/`word_list`, the
+    /// real vanilla's own per-level-section convention (`ini_compat::int_or`/`word_list`, the
     /// `Ini`-backed equivalents of `getInt`/`getStringList`/`getIntList`).
     ///
     /// `NEW_SOUND_GROUP` is itself real, un-ported `BFSndMgr` pool code, so it still needs real
@@ -482,9 +482,9 @@ impl AmbientsGroup {
             write_live_ptr(core::ptr::addr_of!(self.name[copy_len]).cast_mut(), 0u8);
         }
 
-        let chance: i32 = bfconfigfile::ini_compat::first_parse(ini, name, "chance").unwrap_or(0);
+        let chance: i32 = bfconfigfile::ini_compat::int_or(ini, name, "chance", 0);
         let sound_names = bfconfigfile::ini_compat::word_list(ini, name, "sound");
-        let probs: Vec<i32> = bfconfigfile::ini_compat::word_list(ini, name, "prob").iter().filter_map(|v| v.parse().ok()).collect();
+        let probs: Vec<i32> = bfconfigfile::ini_compat::word_list(ini, name, "prob").iter().map(|v| bfconfigfile::ini_compat::vanilla_int(v).unwrap_or(0)).collect();
 
         write_live!(self, sound_group, 0);
         let Some((sound_array, sound_ptrs)) = build_vanilla_string_array(&sound_names) else {
