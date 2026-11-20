@@ -160,6 +160,8 @@ mod bfentity;
 
 /// bfunit module reimplements `BFUnit::getMoveAnimSpeed`.
 mod bfunit;
+/// gxlle module reimplements `GXLLE`'s 32-bit no-zoom locked blits (`drawLockedD32ZnF0`/`ZnF1`).
+mod gxlle;
 /// gxmixer module reimplements `GXMixer`'s read-side methods.
 mod gxmixer;
 
@@ -307,6 +309,7 @@ mod zoo_init {
             bfentity::init();
             bfunit::init();
             gxmixer::init();
+            gxlle::init();
             ztshow::init();
             ztguest::init();
             ambients::init();

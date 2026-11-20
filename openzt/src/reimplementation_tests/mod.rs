@@ -113,6 +113,7 @@ pub fn init() {
         crate::bfentity::init();
         crate::bfunit::init();
         crate::gxmixer::init();
+        crate::gxlle::init();
         crate::ztshowscriptmgr::init();
         crate::ztshow::init();
         crate::ztshowstate::init();
