@@ -75,11 +75,11 @@ pub(super) unsafe fn exact_class_routine(unit: u32, done: *const bool, tag_rva: 
 }
 
 pub(super) unsafe fn guest_f_routine(unit: u32, done: *const bool) {
-    unsafe { ZTGUEST_F_ROUTINE.original()(unit as *const u32, done) };
+    crate::ztmaint::ZTMaint::f_routine(unit, done);
 }
 
 pub(super) unsafe fn guide_f_routine(unit: u32, done: *const bool) {
-    unsafe { ZTGUIDE_F_ROUTINE.original()(unit as *const u32, done) };
+    crate::ztguide::ZTGuide::f_routine(unit, done);
 }
 
 pub unsafe fn f_guest_routine(unit: u32, done: *const bool) -> bool {

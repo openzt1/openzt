@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use openzt_detour::generated::{
     standalone::OPERATOR_DELETE,
     ztunit::UPDATE_GOALS as ZTUNIT_UPDATE_GOALS,
-    ztkeeper::{CLEANS_UP, DESTRUCTOR_0, F_ESCAPED_ANIMAL_ROUTINE, F_HABITAT_ROUTINE, GET_TERRAIN_COST, IN_TARGET_HABITAT, REMOVE_FROM_MAP, SET_SPEED},
+    ztkeeper::{CLEANS_UP, DESTRUCTOR_0, F_ESCAPED_ANIMAL_ROUTINE, F_HABITAT_ROUTINE, F_ROUTINE, GET_TERRAIN_COST, IN_TARGET_HABITAT, REMOVE_FROM_MAP, SET_SPEED},
 };
 
 use crate::{
@@ -1180,7 +1180,7 @@ pub(crate) fn run_ztkeeper_listen_live_test(failure_log: &mut Option<std::fs::Fi
 
 /// While set, `ZTUnit::updateGoals` (the tail every `ZTKeeper::updateGoals` path ends with) is recorded instead of run: the
 /// real one evaluates the cog goal's `decide`, which reaches habitat code that cannot take the fake habitats below.
-static GOALS_INTERCEPT: AtomicU32 = AtomicU32::new(0);
+pub(crate) static GOALS_INTERCEPT: AtomicU32 = AtomicU32::new(0);
 
 #[openzt_detour_macro::detour_mod]
 mod unit_goals_hook {
@@ -1196,16 +1196,16 @@ mod unit_goals_hook {
     }
 }
 
-static GOALS_LOG: std::sync::Mutex<Vec<[u32; 4]>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static GOALS_LOG: std::sync::Mutex<Vec<[u32; 4]>> = std::sync::Mutex::new(Vec::new());
 static GOALS_HABITAT: AtomicU32 = AtomicU32::new(0);
-static GOALS_PREDATOR: AtomicU32 = AtomicU32::new(0);
+pub(crate) static GOALS_PREDATOR: AtomicU32 = AtomicU32::new(0);
 static GOALS_ESCAPED: AtomicU32 = AtomicU32::new(0);
 static GOALS_TANK: AtomicU32 = AtomicU32::new(0);
 /// When set, `getHabitatFromTile` answers differently for the target tile and the current tile.
 static GOALS_DIFFERENT_TILES: AtomicU32 = AtomicU32::new(0);
 static GOALS_TILE_CALLS: AtomicU32 = AtomicU32::new(0);
 
-fn goals_record(kind: u32, a: u32, b: u32, c: u32) {
+pub(crate) fn goals_record(kind: u32, a: u32, b: u32, c: u32) {
     GOALS_LOG.lock().unwrap().push([kind, a, b, c]);
 }
 
@@ -1221,7 +1221,7 @@ extern "thiscall" fn goals_get_habitat_from_tile(_this: u32, _tile: u32) -> u32 
     GOALS_HABITAT.load(Ordering::SeqCst)
 }
 
-extern "thiscall" fn goals_find_predator(_this: u32, arg: u32) -> u32 {
+pub(crate) extern "thiscall" fn goals_find_predator(_this: u32, arg: u32) -> u32 {
     goals_record(1, arg, 0, 0);
     GOALS_PREDATOR.load(Ordering::SeqCst)
 }
@@ -1235,16 +1235,28 @@ extern "thiscall" fn goals_stop_everything(_this: u32, a: u32, b: u32, c: u32) {
     goals_record(3, a, b, c);
 }
 
-extern "thiscall" fn goals_goal_set(_this: u32, goal: u32, subtype: u32) {
+pub(crate) extern "thiscall" fn goals_goal_set(_this: u32, goal: u32, subtype: u32) {
     goals_record(4, goal, subtype, 0);
 }
 
-extern "thiscall" fn goals_set_target_tile(_this: u32, tile: u32, flag: u32) {
+pub(crate) extern "thiscall" fn goals_set_target_tile(_this: u32, tile: u32, flag: u32) {
     goals_record(5, tile, flag, 0);
 }
 
 extern "thiscall" fn goals_is_tank(_habitat: u32) -> u32 {
     GOALS_TANK.load(Ordering::SeqCst)
+}
+
+/// Installs the `ZTUnit::updateGoals` recording hook once; returns an error message on failure.
+pub(crate) fn install_goals_hook() -> Result<(), String> {
+    static HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
+    let mut result = Ok(());
+    HOOK_INSTALLED.call_once(|| {
+        if let Err(e) = unsafe { unit_goals_hook::init_detours() } {
+            result = Err(format!("could not install the ZTUnit::updateGoals hook: {e:?}"));
+        }
+    });
+    result
 }
 
 /// `ZTKEEPER_UPDATE_GOALS_LIVE`: `updateGoals` on twin fixtures over the cross product of every input the branches
@@ -1261,12 +1273,9 @@ pub(crate) fn run_ztkeeper_update_goals_live_test(failure_log: &mut Option<std::
         failures.push("the live world holds no keeper type".to_string());
         return finish_test(test_name, failures, failure_log);
     };
-    static HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
-    HOOK_INSTALLED.call_once(|| {
-        if let Err(e) = unsafe { unit_goals_hook::init_detours() } {
-            failures.push(format!("could not install the ZTUnit::updateGoals hook: {e:?}"));
-        }
-    });
+    if let Err(message) = install_goals_hook() {
+        failures.push(message);
+    }
     GOALS_INTERCEPT.store(1, Ordering::SeqCst);
     let shared = vec![keeper_type];
     let real_vtable_address = get_module_base("zoo.exe") as u32 + KEEPER_VTABLE_RVA;
@@ -1440,4 +1449,159 @@ pub(crate) fn run_ztkeeper_update_goals_live_test(failure_log: &mut Option<std::
     save_to_memory(rng_address, rng_seed);
     GOALS_INTERCEPT.store(0, Ordering::SeqCst);
     finish_test(test_name, failures, failure_log)
+}
+
+/// Median nanoseconds per call for each pole. Each pole's `pass` makes `calls_per_pass` calls; the poles alternate
+/// within every round so slow drift in machine load affects them equally, after one untimed warm-up pass each.
+fn median_ns_per_call(poles: &mut [&mut dyn FnMut()], rounds: usize, calls_per_pass: usize) -> Vec<f64> {
+    for pass in poles.iter_mut() {
+        pass();
+    }
+    let mut samples: Vec<Vec<f64>> = vec![Vec::new(); poles.len()];
+    for _ in 0..rounds {
+        for (index, pass) in poles.iter_mut().enumerate() {
+            let start = std::time::Instant::now();
+            pass();
+            samples[index].push(start.elapsed().as_nanos() as f64 / calls_per_pass as f64);
+        }
+    }
+    samples
+        .into_iter()
+        .map(|mut values| {
+            values.sort_by(|a, b| a.total_cmp(b));
+            values[values.len() / 2]
+        })
+        .collect()
+}
+
+/// A per-call timing for one hot function: vanilla body (through the detour's call-through), the Rust body called
+/// directly, and the hooked address the game itself calls.
+struct PoleTimes {
+    label: String,
+    vanilla: f64,
+    port: f64,
+    hooked: f64,
+}
+
+impl PoleTimes {
+    fn summary(&self) -> String {
+        format!(
+            "{}: vanilla {:.1}ns, port {:.1}ns ({:.2}x), hooked {:.1}ns ({:.2}x)",
+            self.label,
+            self.vanilla,
+            self.port,
+            self.port / self.vanilla,
+            self.hooked,
+            self.hooked / self.vanilla
+        )
+    }
+}
+
+/// Ratio of hooked to vanilla time above which the benchmark fails. Timing on a shared battery is noisy, so this only
+/// catches a gross regression; the logged numbers are the actual result.
+const PERF_FAIL_RATIO: f64 = 5.0;
+
+/// `ZTKEEPER_PERF_COMPARE_LIVE`: per-call cost of the two hot `ZTKeeper` functions, vanilla against the Rust port,
+/// run in the release battery only (skipped in debug builds). `getTerrainCost` runs over every live tile (up to 200x200) for both settings of the
+/// gate-pathing byte, the pathfinder's access pattern; `fRoutine` runs on the habitat-duties path and on the idle
+/// fall-through, where the shared `BFUnit::idle` dominates both poles. The timings are logged on the pass line.
+/// Run with page heap off.
+pub(crate) fn run_ztkeeper_perf_compare_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::hint::black_box;
+
+    let test_name = "ZTKEEPER_PERF_COMPARE_LIVE";
+    // A debug build's `.original()` looks the address up in the hook registry on every call, which dwarfs the
+    // ported bodies' own cost, so the comparison is only meaningful in release.
+    if cfg!(debug_assertions) {
+        write_success_line(failure_log, &format!("{test_name} (skipped: debug build)"));
+        return false;
+    }
+    let mut failures: Vec<String> = Vec::new();
+    let Some(keeper_type) = live_support::find_keeper_type() else {
+        failures.push("the live world holds no keeper type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world = globals().ztworldmgr();
+    let mut results: Vec<PoleTimes> = Vec::new();
+
+    let keeper = live_support::build_standalone_keeper(keeper_type);
+    place_at_tile(keeper, (world.map_x_size / 2, world.map_y_size / 2));
+    let mut tiles: Vec<u32> = Vec::new();
+    for y in 0..world.map_y_size.min(200) {
+        for x in 0..world.map_x_size.min(200) {
+            tiles.push(world.get_tile_ptr(x, y));
+        }
+    }
+    for gate in [0u8, 1] {
+        keeper.set_pathing_to_habitat_gate(gate);
+        let calls = tiles.len();
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(real::get_terrain_cost(keeper.0, black_box(tile)));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(keeper.get_terrain_cost(black_box(tile)));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { GET_TERRAIN_COST.hooked()(keeper.0 as *const u32, black_box(tile) as *const u32) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("getTerrainCost gate {gate} ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    }
+    keeper.set_pathing_to_habitat_gate(0);
+    live_support::destroy_standalone_keeper(keeper);
+
+    let probe = live_support::build_standalone_keeper(keeper_type);
+    let tiles = routine_tiles(probe);
+    live_support::destroy_standalone_keeper(probe);
+    for (label, tile, goal) in [("fRoutine habitat duties", tiles.habitat, 0x6e_u32), ("fRoutine idle fall-through", tiles.none, 0x01)] {
+        let Some(tile) = tile else {
+            failures.push(format!("no tile found for {label}"));
+            continue;
+        };
+        let keeper = live_support::build_standalone_keeper(keeper_type);
+        place_at_tile(keeper, tile);
+        save_to_memory(keeper.0 + unit_offsets::GOAL_ID, goal);
+        save_to_memory(keeper.0 + unit_offsets::COG_GOAL_FLAG, 0u8);
+        save_to_memory(keeper.0 + unit_offsets::STOPPED, 1u8);
+        const CALLS: usize = 20_000;
+        let mut done_byte = 0u8;
+        let done = &mut done_byte as *mut u8 as *const bool;
+        let mut vanilla = || {
+            for _ in 0..CALLS {
+                black_box(real::f_routine(keeper.0, done));
+            }
+        };
+        let mut port = || {
+            for _ in 0..CALLS {
+                black_box(keeper.f_routine(done));
+            }
+        };
+        let mut hooked = || {
+            for _ in 0..CALLS {
+                black_box(unsafe { F_ROUTINE.hooked()(keeper.0 as *const u32, done) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, CALLS);
+        results.push(PoleTimes { label: label.to_string(), vanilla: times[0], port: times[1], hooked: times[2] });
+        live_support::destroy_standalone_keeper(keeper);
+    }
+
+    for result in &results {
+        if result.hooked / result.vanilla > PERF_FAIL_RATIO {
+            failures.push(format!("hooked is more than {PERF_FAIL_RATIO}x vanilla: {}", result.summary()));
+        }
+    }
+    if failures.is_empty() {
+        let summary = results.iter().map(PoleTimes::summary).collect::<Vec<_>>().join("; ");
+        write_success_line(failure_log, &format!("{test_name} ({summary})"));
+        false
+    } else {
+        finish_test(test_name, failures, failure_log)
+    }
 }

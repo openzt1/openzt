@@ -61,4 +61,6 @@ patch-integration-tests = []
 integration-tests = []
 command-console = []
 tui = ["dep:ratatui", "dep:crossterm"]
+# Per-detour call counts and timings (see src/perf_stats.rs); `perf_stats()` in the Lua console reads them.
+perf-stats = []
 proptest = ["dep:proptest"]

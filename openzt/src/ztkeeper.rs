@@ -250,12 +250,12 @@ const AIMGR_LISTENER_OFFSET: u32 = 0x8;
 
 /// Writes `size` bytes at `address` through vanilla's file-write primitive. `.hooked()` so a test build's I/O
 /// redirect sees the write.
-fn write_field(address: u32, size: u32, file: *const u32) -> bool {
+pub(crate) fn write_field(address: u32, size: u32, file: *const u32) -> bool {
     unsafe { WRITE_BYTES_TO_FILE.hooked()(address as *const u32, size, 1, file as *const i8) == 1 }
 }
 
 /// Reads `size` bytes into `address` through vanilla's file-read primitive (the misnamed `deallocate`).
-fn read_field(address: u32, size: u32, file: *const u32) -> bool {
+pub(crate) fn read_field(address: u32, size: u32, file: *const u32) -> bool {
     unsafe { DEALLOCATE.hooked()(address as *const u32, size, 1, file as *const u8) == 1 }
 }
 
@@ -272,26 +272,26 @@ fn item_string(item: u32, offset: u32) -> Vec<u8> {
     (begin..end).map(get_from_memory::<u8>).collect()
 }
 
-fn vtable_slot(this: u32, offset: u32) -> u32 {
+pub(crate) fn vtable_slot(this: u32, offset: u32) -> u32 {
     get_from_memory(get_from_memory::<u32>(this) + offset)
 }
 
-fn call_slot_0(this: u32, offset: u32) -> u32 {
+pub(crate) fn call_slot_0(this: u32, offset: u32) -> u32 {
     let function = unsafe { transmute::<u32, extern "thiscall" fn(u32) -> u32>(vtable_slot(this, offset)) };
     function(this)
 }
 
-fn call_slot_1(this: u32, offset: u32, arg: u32) -> u32 {
+pub(crate) fn call_slot_1(this: u32, offset: u32, arg: u32) -> u32 {
     let function = unsafe { transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(vtable_slot(this, offset)) };
     function(this, arg)
 }
 
-fn call_slot_2(this: u32, offset: u32, arg1: u32, arg2: u32) {
+pub(crate) fn call_slot_2(this: u32, offset: u32, arg1: u32, arg2: u32) {
     let function = unsafe { transmute::<u32, extern "thiscall" fn(u32, u32, u32)>(vtable_slot(this, offset)) };
     function(this, arg1, arg2);
 }
 
-fn call_slot_3(this: u32, offset: u32, arg1: u32, arg2: u32, arg3: u32) {
+pub(crate) fn call_slot_3(this: u32, offset: u32, arg1: u32, arg2: u32, arg3: u32) {
     let function = unsafe { transmute::<u32, extern "thiscall" fn(u32, u32, u32, u32)>(vtable_slot(this, offset)) };
     function(this, arg1, arg2, arg3);
 }

@@ -129,6 +129,8 @@ pub(super) mod detour_zoo_main {
         tests.push(RegisteredTest { name: "AMBIENTS_DETOURS_ENABLED", run: tests::ambients::run_ambients_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTKEEPER_DETOURS_ENABLED", run: tests::ztkeeper::run_ztkeeper_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTMAINT_DETOURS_ENABLED", run: tests::ztmaint::run_ztmaint_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTGUIDE_DETOURS_ENABLED", run: tests::ztguide::run_ztguide_detours_enabled_test });
         tests.extend([
             RegisteredTest { name: "ZTAIMGR_DETOURS_ENABLED", run: tests::ztaimgr::run_ztaimgr_detours_enabled_test },
             RegisteredTest { name: "ZTAIMGR_GET_RANDOM_XY", run: tests::ztaimgr::run_ztaimgr_get_random_xy_test },
@@ -1174,10 +1176,39 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTKEEPER_F_ROUTINE_LIVE", run: tests::ztkeeper::run_ztkeeper_f_routine_live_test },
             RegisteredTest { name: "ZTKEEPER_INIT_STATUS_VARS_LIVE", run: tests::ztkeeper::run_ztkeeper_init_status_vars_live_test },
             RegisteredTest { name: "ZTKEEPER_TERRAIN_COST_LIVE", run: tests::ztkeeper::run_ztkeeper_terrain_cost_live_test },
+            RegisteredTest { name: "ZTKEEPER_PERF_COMPARE_LIVE", run: tests::ztkeeper::run_ztkeeper_perf_compare_live_test },
             RegisteredTest { name: "ZTKEEPER_NOTIFY_REMOVE_LIVE", run: tests::ztkeeper::run_ztkeeper_notify_remove_live_test },
             RegisteredTest { name: "ZTKEEPER_SAVE_LOAD_LIVE", run: tests::ztkeeper::run_ztkeeper_save_load_live_test },
             RegisteredTest { name: "ZTKEEPER_LISTEN_LIVE", run: tests::ztkeeper::run_ztkeeper_listen_live_test },
             RegisteredTest { name: "ZTKEEPER_UPDATE_GOALS_LIVE", run: tests::ztkeeper::run_ztkeeper_update_goals_live_test },
+            RegisteredTest { name: "ZTMAINT_FIXTURE_LAYOUT_LIVE", run: tests::ztmaint::run_ztmaint_fixture_layout_live_test },
+            RegisteredTest { name: "ZTMAINT_F_ROUTINE_LIVE", run: tests::ztmaint::run_ztmaint_f_routine_live_test },
+            RegisteredTest { name: "ZTMAINT_UPDATE_LIVE", run: tests::ztmaint::run_ztmaint_update_live_test },
+            RegisteredTest { name: "ZTMAINT_UPDATE_GOALS_LIVE", run: tests::ztmaint::run_ztmaint_update_goals_live_test },
+            RegisteredTest { name: "ZTMAINT_INIT_STATUS_VARS_LIVE", run: tests::ztmaint::run_ztmaint_init_status_vars_live_test },
+            RegisteredTest { name: "ZTMAINT_TASK_AVAILABLE_LIVE", run: tests::ztmaint::run_ztmaint_task_available_live_test },
+            RegisteredTest { name: "ZTMAINT_TASKS_LIVE", run: tests::ztmaint::run_ztmaint_tasks_live_test },
+            RegisteredTest { name: "ZTMAINT_IS_TARGETED_LIVE", run: tests::ztmaint::run_ztmaint_is_targeted_live_test },
+            RegisteredTest { name: "ZTMAINT_SAVE_LOAD_LIVE", run: tests::ztmaint::run_ztmaint_save_load_live_test },
+            RegisteredTest { name: "ZTMAINT_FIND_FENCE_LIVE", run: tests::ztmaint::run_ztmaint_find_fence_live_test },
+            RegisteredTest { name: "ZTMAINT_TASK_POOL_LIVE", run: tests::ztmaint::run_ztmaint_task_pool_live_test },
+            RegisteredTest { name: "ZTGUIDE_FIXTURE_LAYOUT_LIVE", run: tests::ztguide::run_ztguide_fixture_layout_live_test },
+            RegisteredTest { name: "ZTGUIDE_F_ROUTINE_LIVE", run: tests::ztguide::run_ztguide_f_routine_live_test },
+            RegisteredTest { name: "ZTGUIDE_TERRAIN_COST_LIVE", run: tests::ztguide::run_ztguide_terrain_cost_live_test },
+            RegisteredTest { name: "ZTGUIDE_FENCES_OK_LIVE", run: tests::ztguide::run_ztguide_fences_ok_live_test },
+            RegisteredTest { name: "ZTGUIDE_IS_SPEAKING_LIVE", run: tests::ztguide::run_ztguide_is_speaking_live_test },
+            RegisteredTest { name: "ZTGUIDE_TILE_FILTER_LIVE", run: tests::ztguide::run_ztguide_tile_filter_live_test },
+            RegisteredTest { name: "ZTGUIDE_DO_CONDITIONALS_LIVE", run: tests::ztguide::run_ztguide_do_conditionals_live_test },
+            RegisteredTest { name: "ZTGUIDE_REMOVE_GUEST_LIVE", run: tests::ztguide_lifecycle::run_ztguide_remove_guest_live_test },
+            RegisteredTest { name: "ZTGUIDE_RELEASE_GUESTS_LIVE", run: tests::ztguide_lifecycle::run_ztguide_release_guests_live_test },
+            RegisteredTest { name: "ZTGUIDE_CLEAR_GOAL_LIVE", run: tests::ztguide_lifecycle::run_ztguide_clear_goal_live_test },
+            RegisteredTest { name: "ZTGUIDE_INIT_STATUS_VARS_LIVE", run: tests::ztguide_lifecycle::run_ztguide_init_status_vars_live_test },
+            RegisteredTest { name: "ZTGUIDE_SAVE_LOAD_LIVE", run: tests::ztguide_lifecycle::run_ztguide_save_load_live_test },
+            RegisteredTest { name: "ZTGUIDE_GET_HAB_FROM_VA_LIVE", run: tests::ztguide_habitats::run_ztguide_get_hab_from_va_live_test },
+            RegisteredTest { name: "ZTGUIDE_GET_RANDOM_ASSIGNED_HABITAT_LIVE", run: tests::ztguide_habitats::run_ztguide_get_random_assigned_habitat_live_test },
+            RegisteredTest { name: "ZTGUIDE_GET_NEEDIEST_VA_LIVE", run: tests::ztguide_habitats::run_ztguide_get_neediest_va_live_test },
+            RegisteredTest { name: "ZTGUIDE_TRIGGER_NEARBY_GUESTS_LIVE", run: tests::ztguide_trigger::run_ztguide_trigger_nearby_guests_live_test },
+            RegisteredTest { name: "ZTGUIDE_UPDATE_GOALS_LIVE", run: tests::ztguide_goals::run_ztguide_update_goals_live_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_DESTRUCT", run: tests::ztsoundscape::run_ztsoundscape_destruct_test },
             // Run last (see this test's own doc comment): a one-shot wiring smoke test for start()/stop(),
             // which read the live GLOBAL_ZTScenarioMgr/GLOBAL_ZTApp singletons, run the Rust

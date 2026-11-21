@@ -160,15 +160,22 @@ mod bfentity;
 
 /// bfunit module reimplements `BFUnit::getMoveAnimSpeed`.
 mod bfunit;
+
 /// gxmixer module reimplements `GXMixer`'s read-side methods.
 mod gxmixer;
+#[cfg(feature = "perf-stats")]
+mod perf_stats;
 
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
 mod ztguest;
 
+/// ztguide module reimplements the vanilla ZTGuide staff entity in place over vanilla memory.
+mod ztguide;
 /// ztkeeper module reimplements the vanilla ZTKeeper staff entity in place over vanilla memory.
 mod ztkeeper;
+/// ztmaint module reimplements the vanilla ZTMaint staff entity (and the ZTMaintTaskPool helpers) in place over vanilla memory.
+mod ztmaint;
 
 /// ztsoundscape module reimplements the vanilla ZTSoundscape crowd/world ambient-audio crossfade
 /// class (structs + constructor + init + update, plus the CONSTRUCTOR/INIT/UPDATE detours; see
@@ -312,6 +319,8 @@ mod zoo_init {
             ambients::init();
             ztsoundscape::init();
             ztkeeper::init();
+            ztmaint::init();
+            ztguide::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }
     }

@@ -167,6 +167,8 @@ pub fn init() {
         // ZTKeeper: no detours yet; the call stays here so each method group's detours are installed under the
         // battery as soon as they exist.
         crate::ztkeeper::init();
+        crate::ztmaint::init();
+        crate::ztguide::init();
 
         // ZooStatus: installs the class's 31 detours (zoostatus-implementation-plan.md Stage 8) so
         // ZOOSTATUS_DETOURS_ENABLED can assert the wiring itself (same rationale as the MenuMusicHandler/
