@@ -131,6 +131,7 @@ pub(super) mod detour_zoo_main {
         tests.push(RegisteredTest { name: "ZTKEEPER_DETOURS_ENABLED", run: tests::ztkeeper::run_ztkeeper_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTMAINT_DETOURS_ENABLED", run: tests::ztmaint::run_ztmaint_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTGUIDE_DETOURS_ENABLED", run: tests::ztguide::run_ztguide_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTGUEST_DETOURS_ENABLED", run: tests::ztguest_leaf::run_ztguest_detours_enabled_test });
         tests.extend([
             RegisteredTest { name: "ZTAIMGR_DETOURS_ENABLED", run: tests::ztaimgr::run_ztaimgr_detours_enabled_test },
             RegisteredTest { name: "ZTAIMGR_GET_RANDOM_XY", run: tests::ztaimgr::run_ztaimgr_get_random_xy_test },
@@ -1192,6 +1193,27 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTMAINT_SAVE_LOAD_LIVE", run: tests::ztmaint::run_ztmaint_save_load_live_test },
             RegisteredTest { name: "ZTMAINT_FIND_FENCE_LIVE", run: tests::ztmaint::run_ztmaint_find_fence_live_test },
             RegisteredTest { name: "ZTMAINT_TASK_POOL_LIVE", run: tests::ztmaint::run_ztmaint_task_pool_live_test },
+            RegisteredTest { name: "ZTGUEST_LEAF_LIVE", run: tests::ztguest_leaf::run_ztguest_leaf_live_test },
+            RegisteredTest { name: "ZTGUEST_LEAF_SETTERS_LIVE", run: tests::ztguest_leaf::run_ztguest_leaf_setters_live_test },
+            RegisteredTest { name: "ZTGUEST_SAVE_LIVE", run: tests::ztguest_lifecycle::run_ztguest_save_live_test },
+            RegisteredTest { name: "ZTGUEST_LOAD_LIVE", run: tests::ztguest_lifecycle::run_ztguest_load_live_test },
+            RegisteredTest { name: "ZTGUEST_INIT_STATUS_VARS_LIVE", run: tests::ztguest_status::run_ztguest_init_status_vars_live_test },
+            RegisteredTest { name: "ZTGUEST_CLEAR_GOAL_LIVE", run: tests::ztguest_lifecycle::run_ztguest_clear_goal_live_test },
+            RegisteredTest { name: "ZTGUEST_INIT_LIVE", run: tests::ztguest_lifecycle::run_ztguest_init_live_test },
+            RegisteredTest { name: "ZTGUEST_RESET_AI_LIVE", run: tests::ztguest_lifecycle::run_ztguest_reset_ai_live_test },
+            RegisteredTest { name: "ZTGUEST_ABORT_GOAL_LIVE", run: tests::ztguest_lifecycle::run_ztguest_abort_goal_live_test },
+            RegisteredTest { name: "ZTGUEST_CHECKS_LIVE", run: tests::ztguest_checks::run_ztguest_checks_live_test },
+            RegisteredTest { name: "ZTGUEST_SEARCH_LIVE", run: tests::ztguest_checks::run_ztguest_search_live_test },
+            RegisteredTest { name: "ZTGUEST_VIEWING_LIVE", run: tests::ztguest_checks::run_ztguest_viewing_live_test },
+            RegisteredTest { name: "ZTGUEST_VIEWING_AREA_LIVE", run: tests::ztguest_viewing::run_ztguest_viewing_area_live_test },
+            RegisteredTest { name: "ZTGUEST_START_PUKING_LIVE", run: tests::ztguest_viewing::run_ztguest_start_puking_live_test },
+            RegisteredTest { name: "ZTGUEST_TERRAIN_COST_LIVE", run: tests::ztguest_movement::run_ztguest_terrain_cost_live_test },
+            RegisteredTest { name: "ZTGUEST_FENCES_FILTER_LIVE", run: tests::ztguest_movement::run_ztguest_fences_filter_live_test },
+            RegisteredTest { name: "ZTGUEST_NEED_PREDICATES_LIVE", run: tests::ztguest_movement::run_ztguest_need_predicates_live_test },
+            RegisteredTest { name: "ZTGUEST_NEARBY_NEED_LIVE", run: tests::ztguest_movement::run_ztguest_nearby_need_live_test },
+            RegisteredTest { name: "ZTGUEST_GRANDSTAND_LIVE", run: tests::ztguest_movement::run_ztguest_grandstand_live_test },
+            RegisteredTest { name: "ZTGUEST_INVENTORY_LIVE", run: tests::ztguest_inventory::run_ztguest_inventory_live_test },
+            RegisteredTest { name: "ZTGUEST_REMOVE_FROM_MAP_LIVE", run: tests::ztguest_lifecycle::run_ztguest_remove_from_map_live_test },
             RegisteredTest { name: "ZTGUIDE_FIXTURE_LAYOUT_LIVE", run: tests::ztguide::run_ztguide_fixture_layout_live_test },
             RegisteredTest { name: "ZTGUIDE_F_ROUTINE_LIVE", run: tests::ztguide::run_ztguide_f_routine_live_test },
             RegisteredTest { name: "ZTGUIDE_TERRAIN_COST_LIVE", run: tests::ztguide::run_ztguide_terrain_cost_live_test },

@@ -41,6 +41,7 @@ use crate::{
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
     zthabitat::{next_game_random, viewing_area::has_oa, ZTHabitat, MAX_PATH_COST_RVA},
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, read_field, unit_offsets, write_field},
+    ztguest::guest_offsets,
     ztmegatilemgr::entity_type_matches,
 };
 
@@ -121,16 +122,6 @@ mod unit_string {
 }
 
 const SPEAK_STRING: &[u8] = b"bSpeak";
-
-/// `ZTGuest` fields the follower methods read and write; `ztguest.rs` does not export them.
-mod guest_offsets {
-    /// The entity id of the guide the guest follows.
-    pub const GUIDE_ID: u32 = 0x2e4;
-    /// Byte `releaseGuests` clears when it lets a guest go.
-    pub const FOLLOWING_FLAG: u32 = 0x337;
-    /// Dword (`0` or `1`) `triggerNearbyGuests` compares with the guide type's name to adjust the follow chance.
-    pub const STATE: u32 = 0x320;
-}
 
 /// `ZTWorldMgr` fields: the entity pointer vector's begin and end.
 mod world_offsets {
@@ -231,7 +222,7 @@ impl ZTGuide {
     }
 
     /// Pushes `node` on vanilla's 12-byte freelist, as every vanilla list erase does.
-    fn free_node(node: u32) {
+    pub(crate) fn free_node(node: u32) {
         if node != 0 {
             let head = base() + globals_rva::FREELIST_12;
             save_to_memory(node, get_from_memory::<u32>(head));

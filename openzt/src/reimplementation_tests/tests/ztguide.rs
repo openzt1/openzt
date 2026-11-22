@@ -229,7 +229,7 @@ pub(crate) fn run_ztguide_terrain_cost_live_test(failure_log: &mut Option<std::f
     finish_test(test_name, failures, failure_log)
 }
 
-static FENCE_CAST_RESULT: AtomicU32 = AtomicU32::new(1);
+pub(super) static FENCE_CAST_RESULT: AtomicU32 = AtomicU32::new(1);
 
 extern "thiscall" fn fake_is_cast_class(_this: u32, _tag: u32) -> u32 {
     FENCE_CAST_RESULT.load(Ordering::SeqCst)
@@ -237,7 +237,7 @@ extern "thiscall" fn fake_is_cast_class(_this: u32, _tag: u32) -> u32 {
 
 /// A fake fence entity: its entity type answers `isCastClass` with [`FENCE_CAST_RESULT`], names itself `type_name`,
 /// and the fence's passable byte is `passable`. The buffers are leaked.
-fn make_fake_fence(type_name: &'static [u8], passable: u8) -> u32 {
+pub(super) fn make_fake_fence(type_name: &'static [u8], passable: u8) -> u32 {
     let mut vtable = vec![0u32; 16];
     vtable[7] = fake_is_cast_class as *const () as usize as u32;
     let vtable = Box::leak(vtable.into_boxed_slice());

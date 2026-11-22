@@ -1,19 +1,15 @@
 //! Live checks for `ztguide.rs`'s `triggerNearbyGuests`, plus the follow-the-guide harness the `doConditionals` test
-//! shares. `ZTGuest::followGuide` is not ported, so a recording hook on its address stands in for it: it logs the
-//! guest's id and appends that id to the guide's follower list (vanilla's `addGuest`), so the "group still has room"
-//! re-check sees the group grow. Fake guests are planted in the entity lists of real map tiles and removed again.
-//!
-//! The real `followGuide` body is not exercised here; it is covered only by play-testing until `ZTGuest` is ported.
+//! shares. A recording override on `ZTGuest::followGuide` stands in for it: it logs the guest's id and appends that id
+//! to the guide's follower list (vanilla's `addGuest`), so the "group still has room" re-check sees the group grow.
+//! Fake guests are planted in the entity lists of real map tiles and removed again. `followGuide` itself is covered
+//! by `ztguest_viewing.rs`.
 
-use std::{
-    ffi::c_void,
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Mutex, Once,
-    },
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Mutex,
 };
 
-use openzt_detour::generated::{msvc_std_listuint::INSERT as LIST_UINT_INSERT, ztguest::FOLLOW_GUIDE, ztguide::TRIGGER_NEARBY_GUESTS};
+use openzt_detour::generated::{msvc_std_listuint::INSERT as LIST_UINT_INSERT, ztguide::TRIGGER_NEARBY_GUESTS};
 
 use super::{
     ztguide::{base, compare_memory, pin_rng, place_at_tile, rng},
@@ -43,34 +39,24 @@ const GUIDE_TYPE_COPY_BYTES: usize = 0x20c;
 static FOLLOW_INTERCEPT: AtomicU32 = AtomicU32::new(0);
 static FOLLOW_LOG: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-#[openzt_detour_macro::detour_mod]
-mod follow_hook {
-    use super::*;
-
-    #[detour(FOLLOW_GUIDE)]
-    unsafe extern "thiscall" fn follow_guide(this: *const u32, guide: *const c_void) {
-        if FOLLOW_INTERCEPT.load(Ordering::SeqCst) != 0 {
-            let guest_id: u32 = get_from_memory(this as u32 + unit_offsets::ENTITY_ID);
-            FOLLOW_LOG.lock().unwrap().push(guest_id);
-            let sentinel: u32 = get_from_memory(guide as u32 + FOLLOWERS_OFFSET);
-            let mut result: u32 = 0;
-            unsafe { LIST_UINT_INSERT.original()(&mut result as *mut u32 as *const i32, sentinel as i32, &guest_id as *const u32 as *const i32) };
-        } else {
-            unsafe { FOLLOW_GUIDE_DETOUR.call(this, guide) }
-        }
+/// The `followGuide` override: while the intercept is on it logs the guest's id and appends it to the guide's follower
+/// list (vanilla's `addGuest`) instead of running the guest's follow logic.
+fn follow_override(this: u32, guide: u32) -> bool {
+    if FOLLOW_INTERCEPT.load(Ordering::SeqCst) == 0 {
+        return false;
     }
+    let guest_id: u32 = get_from_memory(this + unit_offsets::ENTITY_ID);
+    FOLLOW_LOG.lock().unwrap().push(guest_id);
+    let sentinel: u32 = get_from_memory(guide + FOLLOWERS_OFFSET);
+    let mut result: u32 = 0;
+    unsafe { LIST_UINT_INSERT.original()(&mut result as *mut u32 as *const i32, sentinel as i32, &guest_id as *const u32 as *const i32) };
+    true
 }
 
-/// Installs the `followGuide` recording hook once; returns an error message on failure.
+/// Installs the `followGuide` override once; returns an error message on failure.
 pub(super) fn install_follow_hook() -> Result<(), String> {
-    static INSTALLED: Once = Once::new();
-    let mut result = Ok(());
-    INSTALLED.call_once(|| {
-        if let Err(e) = unsafe { follow_hook::init_detours() } {
-            result = Err(format!("could not install the followGuide hook: {e:?}"));
-        }
-    });
-    result
+    *crate::ztguest::live_support::viewing_overrides::FOLLOW.lock().map_err(|e| format!("follow override lock poisoned: {e}"))? = Some(follow_override);
+    Ok(())
 }
 
 pub(super) fn set_follow_intercept(on: bool) {

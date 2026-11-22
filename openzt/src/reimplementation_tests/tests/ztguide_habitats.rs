@@ -49,7 +49,7 @@ mod rand_hook {
     }
 }
 
-fn install_rand_hook() -> Result<(), String> {
+pub(super) fn install_rand_hook() -> Result<(), String> {
     static INSTALLED: Once = Once::new();
     let mut result = Ok(());
     INSTALLED.call_once(|| {
@@ -60,9 +60,19 @@ fn install_rand_hook() -> Result<(), String> {
     result
 }
 
-fn script_rand(values: &[u32]) {
+pub(super) fn script_rand(values: &[u32]) {
     *RAND_VALUES.lock().unwrap() = values.to_vec();
     RAND_POSITION.store(0, Ordering::SeqCst);
+}
+
+/// Turns the scripted `rand()` on or off for tests outside this file.
+pub(super) fn set_rand_intercept(on: bool) {
+    RAND_INTERCEPT.store(on as u32, Ordering::SeqCst);
+}
+
+/// How many scripted `rand()` calls have been served since the last [`script_rand`].
+pub(super) fn rand_calls() -> usize {
+    RAND_POSITION.load(Ordering::SeqCst)
 }
 
 /// The live zoo's habitats, in `exhibit_array` order.

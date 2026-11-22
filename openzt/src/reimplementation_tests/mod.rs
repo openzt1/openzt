@@ -168,6 +168,7 @@ pub fn init() {
         // battery as soon as they exist.
         crate::ztkeeper::init();
         crate::ztmaint::init();
+        crate::ztguest::init();
         crate::ztguide::init();
 
         // ZooStatus: installs the class's 31 detours (zoostatus-implementation-plan.md Stage 8) so
