@@ -8,16 +8,18 @@ use openzt_detour::{
     generated::{
         bfentity::{GET_TILE as BFENTITY_GET_TILE, SET_BSNEW},
         bfmap::GET_NEIGHBORS,
+        bfunit::{GET_PATH_1 as GET_PATH, GO_TO_DEST_1 as GO_TO_DEST},
         msvc_std::RAND,
         msvc_std_basic_string::BASIC_STRING_RANGE,
         poolalloc::DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4,
         ztguest::{CHECK_VIEWING_AREA, DO_BUILDING, FIND_VIEWING_AREA, FOLLOW_GUIDE, RUN_SCREAMING, SET_VISIBLE, START_PUKING, VIEW_NEARBY_EXHIBIT},
+        standalone::HABITAT_FACING,
         zthabitat::GET_ALL_ANIMALS,
+        ztguide::ADD_GUEST as GUIDE_ADD_GUEST,
         ztui_guestinfo::SET_GUEST_VISIBLE,
         ztunit::{DO_BUILDING as ZTUNIT_DO_BUILDING, IS_FUN_SATISFIER},
         ztviewingarea::HAS_OA,
     },
-    FunctionDef,
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -33,15 +35,6 @@ use crate::{
 fn base() -> u32 {
     get_module_base("zoo.exe") as u32
 }
-
-/// `BFUnit::getPath(tile, flag)` (`0x00422238`), which leaves whether a path exists in `AL`.
-const GET_PATH: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, bool) -> bool> = FunctionDef::new(0x0042_2238);
-/// `BFUnit::goToDest(0, 0)` (`0x00422127`).
-const GO_TO_DEST_NONE: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32, u32) -> u32> = FunctionDef::new(0x0042_2127);
-/// `ZTGuide::addGuest(guest id)` (`0x0058dad9`).
-const GUIDE_ADD_GUEST: u32 = 0x0058_dad9;
-/// `habitatFacing(guest)` (`0x005a0774`), a `cdecl` that returns the habitat the guest faces.
-const HABITAT_FACING: u32 = 0x005a_0774;
 
 /// `GLOBAL_ZTHabitatMgr`, as an RVA, and the per-column table of habitat rows at `+0x28`.
 const HABITAT_MGR_RVA: u32 = 0x0023_805c;
@@ -112,16 +105,6 @@ pub(crate) mod overrides {
     pub static SET_BS: Mutex<Option<SetBs>> = Mutex::new(None);
 }
 
-fn call_raw_cdecl_1(address: u32, arg: u32) -> u32 {
-    let function = unsafe { std::mem::transmute::<u32, extern "cdecl" fn(u32) -> u32>(address) };
-    function(arg)
-}
-
-fn call_raw_thiscall_1(address: u32, this: u32, arg: u32) -> u32 {
-    let function = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(address) };
-    function(this, arg)
-}
-
 impl ZTGuest {
     fn viewing_tile(self) -> u32 {
         unsafe { BFENTITY_GET_TILE.hooked()(self.0 as *const u32) as u32 }
@@ -156,6 +139,12 @@ impl ZTGuest {
     /// `ZTGuest::findViewingArea` (`0x0043b92e`): one draw from the shared RNG picks a starting direction, and the
     /// eight directions are tried from there until one has a viewing area.
     pub fn find_viewing_area(self) -> bool {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = crate::ztguest::check_overrides::FIND_VIEWING_AREA.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return answer;
+            }
+        }
         let start = next_game_random() & 7;
         (0..8u32).any(|step| unsafe { CHECK_VIEWING_AREA.hooked()(self.0 as *const u32, (step + start) & 7) })
     }
@@ -219,14 +208,14 @@ impl ZTGuest {
             return;
         };
         call_slot_2(self.0, viewing_slots::GOAL_SET, GOAL_FOLLOWING, 3);
-        if !low_byte_bool(unsafe { GO_TO_DEST_NONE.hooked()(self.0 as *const u32, 0, 0) }) {
+        if !unsafe { GO_TO_DEST.hooked()(self.0 as *const u32, false, 0) } {
             return;
         }
         call_slot_2(self.0, viewing_slots::SET_TARGET_TILE, target, 1);
         if self.read::<u32>(guest_fields::GUIDE_ID) != guide_id {
             let own_id: u32 = self.read(guest_fields::ENTITY_ID);
             self.write(guest_fields::GUIDE_ID, guide_id);
-            call_raw_thiscall_1(GUIDE_ADD_GUEST, guide, own_id);
+            unsafe { GUIDE_ADD_GUEST.hooked()(guide as *const u32, own_id as i32) };
         }
         self.write(guest_fields::FOLLOWING, 1u8);
         self.write(guest_fields::FOLLOW_PENDING, 0u8);
@@ -236,7 +225,7 @@ impl ZTGuest {
     /// of its overjoyed animals (happiness `0x51..=0x64`), takes the guest type's bonus into its happiness change
     /// (`+0x2ac`) and thinks `0x2772` about it.
     pub fn view_nearby_exhibit(self) {
-        let habitat = call_raw_cdecl_1(HABITAT_FACING, self.0);
+        let habitat = unsafe { HABITAT_FACING.hooked()(self.0 as *const u32) } as u32;
         if habitat == 0 || get_from_memory::<u8>(habitat + HABITAT_IS_EXHIBIT) != 0 {
             return;
         }

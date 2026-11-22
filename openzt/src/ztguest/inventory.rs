@@ -6,7 +6,9 @@
 //! (`0x63c508`) slot 4. A vector without storage reads as empty.
 
 use openzt_detour::generated::{
+    poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
     ztguest::{ADD_VISITED_SITE, GET_ITEM},
+    ztworldmgr::{GET_NEED_FROM_INDEX, SATISFIES},
     zthabitatmgr::{GET_HABITAT as HABITATMGR_GET_HABITAT, HABITAT_SEEN_FROM_BUILDING},
     ztshowmgr::GET_SHOW_INFO,
 };
@@ -18,7 +20,7 @@ use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
     zthabitat::{next_game_random, ZTHabitat},
-    ztkeeper::{call_slot_0, unit_offsets},
+    ztkeeper::{call_slot_0, call_slot_1, unit_offsets},
     ztmegatilemgr::entity_type_matches,
 };
 
@@ -71,6 +73,21 @@ const ITEM_SLOTS: [(u32, u32); 6] = [
     (0x0023_c528, 3),
     (0x0023_c508, 4),
 ];
+
+/// The item-name strings `addItem` files an item under, as RVAs, with the carried-item slot each fills.
+const ADD_ITEM_SLOTS: [(u32, u32); 5] = [(0x0023_c4e8, 0), (0x0023_c4c8, 1), (0x0023_b058, 2), (0x0023_c528, 3), (0x0023_c508, 4)];
+/// `ZTGuest` bytes: the "has souvenir" flag `addItem` clears, and the need index.
+const SOUVENIR_FLAG: u32 = 0x33c;
+const NEED_INDEX: u32 = 0x24e;
+const NEED_INDEX_A: u32 = 0x24d;
+/// Item record fields `consumeItem` reads: the thought, the six mood words, and the remove/trash flags.
+const ITEM_THOUGHT: u32 = 0x20;
+const ITEM_MOOD_WORDS: u32 = 0x4;
+const ITEM_REMOVE_FLAG: u32 = 0x1e;
+const ITEM_TRASH_FLAG: u32 = 0x1d;
+const MOOD_CHANGE_SLOT: u32 = 0x1fc;
+/// `FUN_00449f50` (`cdecl(id) -> entry or 0`): finds a carried item's record by id in the item-type map.
+const ITEM_RECORD_LOOKUP: u32 = 0x0044_9f50;
 
 fn base() -> u32 {
     get_module_base("zoo.exe") as u32
@@ -150,6 +167,99 @@ impl ZTGuest {
             }
         }
         false
+    }
+
+    /// `ZTGuest::addItem` (`0x0042d54e`): files `item` in the slot the name selects (the name argument is a by-value
+    /// string the call frees; an empty name is replaced by the need name at `+0x24e`). `true` when the name is one of the
+    /// five known kinds; a trash item (`0x63c508`) only fills an empty slot but still answers `true`.
+    pub fn add_item(self, item: u32, begin: u32, end: u32, capacity: u32) -> bool {
+        let name: Vec<u8> = if end == begin {
+            let mut need = [0u32; 3];
+            unsafe { GET_NEED_FROM_INDEX.hooked()(need.as_mut_ptr(), self.read::<u8>(NEED_INDEX)) };
+            let bytes = (need[0]..need[1]).map(get_from_memory::<u8>).collect();
+            if need[0] != 0 {
+                unsafe { POOLALLOC_DEALLOCATE.hooked()(need[0] as *const u32, need[2].wrapping_sub(need[0])) };
+            }
+            bytes
+        } else {
+            (begin..end).map(get_from_memory::<u8>).collect()
+        };
+        let items: u32 = self.read(guest_offsets::ITEMS);
+        let mut stored = false;
+        if items != 0 {
+            for (rva, slot) in ADD_ITEM_SLOTS {
+                if bytes_of(base() + rva) != name {
+                    continue;
+                }
+                stored = true;
+                match slot {
+                    3 => {
+                        save_to_memory(items + 12, item);
+                        save_to_memory(self.0 + SOUVENIR_FLAG, 0u8);
+                    }
+                    4 => {
+                        if get_from_memory::<u32>(items + 16) == 0 {
+                            save_to_memory(items + 16, item);
+                        }
+                    }
+                    _ => save_to_memory(items + slot * 4, item),
+                }
+                break;
+            }
+        }
+        if begin != 0 {
+            unsafe { POOLALLOC_DEALLOCATE.hooked()(begin as *const u32, capacity.wrapping_sub(begin)) };
+        }
+        stored
+    }
+
+    /// `ZTGuest::consumeItem` (`0x0042d380`): with an item record, thinks its thought, applies its six mood words
+    /// through the virtual mood slot (`+0x1fc`), removes it when flagged (`+0x1e`) and drops trash when flagged (`+0x1d`).
+    /// The answer is the bytewise AND of those steps.
+    pub fn consume_item(self, record: u32) -> u8 {
+        if record == 0 {
+            return 0;
+        }
+        let thought: u32 = get_from_memory(record + ITEM_THOUGHT);
+        if thought != 0 {
+            self.thought(thought, 0);
+        }
+        let words: [u32; 6] = std::array::from_fn(|index| get_from_memory(record + ITEM_MOOD_WORDS + index as u32 * 4));
+        let mood = call_slot_1(self.0, MOOD_CHANGE_SLOT, words.as_ptr() as u32) as u8;
+        let id: u32 = get_from_memory(record);
+        let removed = if get_from_memory::<u8>(record + ITEM_REMOVE_FLAG) == 0 { 1u8 } else { self.remove_item(id as i32) as u8 };
+        let mut result = mood & removed;
+        if removed != 0 && get_from_memory::<u8>(record + ITEM_TRASH_FLAG) != 0 {
+            result &= self.add_trash() as u8;
+        }
+        result
+    }
+
+    /// `ZTGuest::getNeedItem` (`0x0042d74e`): the item record for what the guest carries toward the need at `+0x24e`,
+    /// when the building on its grid cell (`+0x244`) satisfies that need; `0` otherwise.
+    pub fn get_need_item(self) -> u32 {
+        let grid: u32 = self.read(BUILDING_GRID);
+        let (x, y): (i32, i32) = (self.read(POSITION_RECORD), self.read(POSITION_RECORD + 4));
+        let mut building = building_at(grid, x, y);
+        if building != 0 && !unsafe { entity_type_matches(building, BUILDING_TAG_RVA) } {
+            building = 0;
+        }
+        let mut result = 0;
+        if self.read::<u8>(NEED_INDEX_A) != 0xff && building != 0 {
+            let mut need = [0u32; 3];
+            unsafe { GET_NEED_FROM_INDEX.hooked()(need.as_mut_ptr(), self.read::<u8>(NEED_INDEX)) };
+            if low_byte_bool(unsafe { SATISFIES.hooked()(building as i32, need.as_ptr() as *const i8, std::ptr::null()) }) {
+                let item = self.get_item(need.as_ptr() as u32);
+                if item as i32 > 0 {
+                    let lookup = unsafe { std::mem::transmute::<u32, extern "cdecl" fn(u32) -> u32>(ITEM_RECORD_LOOKUP) };
+                    result = lookup(item);
+                }
+            }
+            if need[0] != 0 {
+                unsafe { POOLALLOC_DEALLOCATE.hooked()(need[0] as *const u32, need[2].wrapping_sub(need[0])) };
+            }
+        }
+        result
     }
 
     /// `ZTGuest::getItem` (`0x0042d6aa`): the item in the slot the need-name string selects; `0` for any other name.
@@ -323,7 +433,7 @@ impl ZTGuest {
 #[detour_mod]
 mod detours {
     use super::*;
-    use openzt_detour::generated::ztguest::{ADD_CHANGES, ADD_VISITED_SITE, GET_GAWK_TIME, GET_SCENERY, LEAVING_SHOW, REMOVE_ITEM, SEEN_ATTRACTION, SEEN_HABITAT, SEEN_SHOW};
+    use openzt_detour::generated::ztguest::{ADD_CHANGES, ADD_ITEM, ADD_VISITED_SITE, CONSUME_ITEM, GET_GAWK_TIME, GET_NEED_ITEM, GET_SCENERY, LEAVING_SHOW, REMOVE_ITEM, SEEN_ATTRACTION, SEEN_HABITAT, SEEN_SHOW};
 
     #[detour(ADD_CHANGES)]
     unsafe extern "thiscall" fn add_changes(this: *const u32, changes: *const u32) -> bool {
@@ -338,6 +448,21 @@ mod detours {
     #[detour(REMOVE_ITEM)]
     unsafe extern "thiscall" fn remove_item(this: *const u32, item: i32) -> bool {
         ZTGuest(this as u32).remove_item(item)
+    }
+
+    #[detour(ADD_ITEM)]
+    unsafe extern "thiscall" fn add_item(this: *const u32, item: *const u8, begin: *const u32, end: *const u32, capacity: i32) -> bool {
+        ZTGuest(this as u32).add_item(item as u32, begin as u32, end as u32, capacity as u32)
+    }
+
+    #[detour(CONSUME_ITEM)]
+    unsafe extern "thiscall" fn consume_item(this: *const u32, record: *const u32) -> u32 {
+        ZTGuest(this as u32).consume_item(record as u32) as u32
+    }
+
+    #[detour(GET_NEED_ITEM)]
+    unsafe extern "thiscall" fn get_need_item(this: *const u32) -> *const i32 {
+        ZTGuest(this as u32).get_need_item() as *const i32
     }
 
     #[detour(GET_ITEM)]
@@ -378,6 +503,15 @@ mod detours {
     /// Live-test access to the real vanilla bodies.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) mod test_real {
+        pub(crate) fn add_item(this: u32, item: u32, begin: u32, end: u32, capacity: u32) -> bool {
+            unsafe { super::ADD_ITEM_DETOUR.call(this as *const u32, item as *const u8, begin as *const u32, end as *const u32, capacity as i32) }
+        }
+        pub(crate) fn consume_item(this: u32, record: u32) -> u32 {
+            unsafe { super::CONSUME_ITEM_DETOUR.call(this as *const u32, record as *const u32) }
+        }
+        pub(crate) fn get_need_item(this: u32) -> u32 {
+            unsafe { super::GET_NEED_ITEM_DETOUR.call(this as *const u32) as u32 }
+        }
         pub(crate) fn add_changes(this: u32, changes: u32) -> bool {
             unsafe { super::ADD_CHANGES_DETOUR.call(this as *const u32, changes as *const u32) }
         }

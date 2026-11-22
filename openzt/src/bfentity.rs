@@ -521,6 +521,16 @@ pub(crate) unsafe fn clear_queue(this: u32) -> bool {
     true
 }
 
+/// Hook the live tests install on `setBS`: gets the guest, the name `{begin, end}` and the three flags, and answers in
+/// place of the real call (`None` runs the real one).
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) mod set_bs_override {
+    use std::sync::Mutex;
+
+    pub type Hook = fn(this: u32, begin: u32, end: u32, call_flag: i8, force: i8, clear_mode: i32) -> Option<bool>;
+    pub static HOOK: Mutex<Option<Hook>> = Mutex::new(None);
+}
+
 #[detour_mod]
 mod detours {
     use super::*;
@@ -547,6 +557,14 @@ mod detours {
 
     #[detour(SET_BS)]
     unsafe extern "thiscall" fn set_bs_detour(this: *const u32, begin: *const u32, end: *const u32, capacity: *const u32, call_flag: i8, force: i8, clear_mode: i32) -> bool {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(hook) = crate::bfentity::set_bs_override::HOOK.lock().ok().and_then(|hook| *hook) {
+                if let Some(answer) = hook(this as u32, begin as u32, end as u32, call_flag, force, clear_mode) {
+                    return answer;
+                }
+            }
+        }
         let name = RawString { begin: begin as *const u8, end: end as *const u8, capacity: capacity as *const u8 };
         unsafe { set_bs(this as u32, name, call_flag as u8, force as u8, clear_mode) }
     }

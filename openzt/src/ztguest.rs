@@ -50,8 +50,10 @@ use openzt_detour_macro::detour_mod;
 use tracing::error;
 
 mod checks;
+mod goals;
 mod inventory;
 mod movement;
+mod sites;
 mod viewing;
 
 use crate::{
@@ -65,6 +67,18 @@ use crate::{
     ztworldmgr::BFEntity,
     vanilla_vector::push_word,
 };
+
+/// Overrides the live tests install on the viewing-area check's collaborators.
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) mod check_overrides {
+    use std::sync::Mutex;
+
+    pub type FindViewingArea = fn(this: u32) -> Option<bool>;
+    pub type AnimalHappy = fn(this: u32) -> Option<i32>;
+
+    pub static FIND_VIEWING_AREA: Mutex<Option<FindViewingArea>> = Mutex::new(None);
+    pub static ANIMAL_HAPPY: Mutex<Option<AnimalHappy>> = Mutex::new(None);
+}
 
 /// `ZTGuestType::createEntity` allocates this many bytes.
 pub const GUEST_SIZE: u32 = 0x348;
@@ -381,6 +395,12 @@ impl ZTGuest {
     /// `ZTGuest::fAnimalHappy` (`0x00423354`): the average animal happiness of the viewing area's habitat, `0`
     /// without a viewing area.
     pub fn animal_happy(self) -> i32 {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = check_overrides::ANIMAL_HAPPY.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return answer;
+            }
+        }
         let habitat = self.habitat_from_va();
         if habitat == 0 {
             return 0;
@@ -769,8 +789,20 @@ impl ZTGuest {
 
 
 /// First save version whose guest data carries `+0x284` and the return-building string directly; older streams carry
-/// two discarded legacy strings instead and are read by the real body.
-pub const MODERN_LOAD_VERSION: u32 = 0x5e;
+/// two length-prefixed strings that are read and discarded instead.
+const MODERN_LOAD_VERSION: u32 = 0x5e;
+/// Streams older than this carry the four per-slot bytes of the `BFEntity` byte vector at `+0xfc`.
+const SLOT_MARK_VERSION: u32 = 0x43;
+/// Streams older than this carry three more discarded values (a byte, a dword, a byte) after the `+0x324` word.
+const LEGACY_TRIPLE_VERSION: u32 = 0x41;
+/// `BFEntity` byte vector (begin, end, cap) `load` resizes to four entries for streams older than [`SLOT_MARK_VERSION`].
+const SLOT_MARK_VECTOR: u32 = 0xfc;
+/// Number of entries the slot-mark vector holds after such a load.
+const SLOT_MARK_COUNT: u32 = 4;
+/// `ZTGuestType` field holding the array of four `vector<u32>` (12 bytes each) whose lengths bound the slot marks.
+const TYPE_SLOT_LISTS: u32 = 0x28;
+/// `vector<byte>::insert(this, position, count, &value)` (`0x004128c5`, `thiscall`, `RET 0xc`), unnamed in `generated.rs`.
+const BYTE_VECTOR_INSERT: u32 = 0x0041_28c5;
 /// `FUN_00449f50` (`cdecl(id) -> entry or 0`): finds a carried item's record by id in the item-type map
 /// (`DAT_006390c8`); `generated.rs` has no entry for it.
 const ITEM_RECORD_LOOKUP: u32 = 0x0044_9f50;
@@ -826,8 +858,68 @@ impl ZTGuest {
         get_from_memory::<u32>(vector + 4).wrapping_sub(get_from_memory::<u32>(vector)) / element
     }
 
-    /// `ZTGuest::load` (`0x00455fa2`) for streams of version `0x5e` and later (the earlier layouts are read by the
-    /// real body). Reads the needs, `+0x336` and the per-need words, sets the viewing area ids (`+0x32c` zero, `+0x328`
+    /// Reads and discards one length-prefixed legacy string; a length of `0x1000` or more fails.
+    fn skip_legacy_string(file: *const u32) -> bool {
+        let mut length: u32 = 0;
+        if !read_field(&mut length as *mut u32 as u32, 4, file) || length >= 0x1000 {
+            return false;
+        }
+        if length == 0 {
+            return true;
+        }
+        let mut bytes = vec![0u8; length as usize];
+        read_field(bytes.as_mut_ptr() as u32, length, file)
+    }
+
+    /// Streams older than [`SLOT_MARK_VERSION`]: resizes the `+0xfc` byte vector to four entries (zero-filled when it
+    /// grows) and reads one value per entry, `4` bytes wide up to version `7` and `1` byte wide after. Each entry keeps
+    /// the value's low byte, or `0` when it reaches the length of the guest type's matching list. `ok` is whether every
+    /// read so far succeeded; returns it with this method's reads folded in, and stops after the first read once it is
+    /// `false`, as vanilla does.
+    fn load_slot_marks(self, file: *const u32, version: u32, mut ok: bool) -> bool {
+        let vector = self.0 + SLOT_MARK_VECTOR;
+        let size = get_from_memory::<u32>(vector + 4).wrapping_sub(get_from_memory::<u32>(vector));
+        if (size as i32) < SLOT_MARK_COUNT as i32 + 1 {
+            let zero = 0u8;
+            let insert = unsafe { mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32, *const u8)>(BYTE_VECTOR_INSERT) };
+            insert(vector, get_from_memory(vector + 4), SLOT_MARK_COUNT - size, &zero);
+        } else {
+            save_to_memory(vector + 4, get_from_memory::<u32>(vector) + SLOT_MARK_COUNT);
+        }
+        let width = if version > 7 { 1 } else { 4 };
+        let lists: u32 = match self.guest_type() {
+            0 => 0,
+            guest_type => get_from_memory(guest_type + TYPE_SLOT_LISTS),
+        };
+        for slot in 0..SLOT_MARK_COUNT {
+            let mut value: u32 = 0;
+            let read_ok = read_field(&mut value as *mut u32 as u32, width, file);
+            // A read wider than one byte lands on the following entries too; only the entries inside the vector are
+            // kept, and the next read overwrites all but the first of them.
+            let begin: u32 = get_from_memory(vector);
+            if read_ok {
+                for spill in 0..width.min(SLOT_MARK_COUNT - slot) {
+                    save_to_memory(begin + slot + spill, (value >> (8 * spill)) as u8);
+                }
+            }
+            ok &= read_ok;
+            if !ok {
+                return false;
+            }
+            let mut mark = value as u8;
+            if lists != 0 {
+                let list = lists + slot * 12;
+                let length = (get_from_memory::<u32>(list + 4).wrapping_sub(get_from_memory::<u32>(list)) as i32 >> 2) as u32;
+                if length <= u32::from(mark) {
+                    mark = 0;
+                }
+            }
+            save_to_memory(begin + slot, mark);
+        }
+        true
+    }
+
+    /// `ZTGuest::load` (`0x00455fa2`) for every stream version. Reads the needs, `+0x336` and the per-need words, sets the viewing area ids (`+0x32c` zero, `+0x328`
     /// from `+0x12c`), then the `+0x320`/`+0x324` words, the check slots, the carried-item vector (each id is looked up
     /// and zeroed when unknown; at most 5 kept) and the saved-id vector (at most 5 kept), `+0x284`, the
     /// return-building string (a length of `0x1000` or more fails the load), the visited sites (at most 10 kept), the
@@ -850,124 +942,182 @@ impl ZTGuest {
         }
         self.write(guest_offsets::VIEWING_AREA, 0u32);
         self.write(guest_offsets::VIEWING_AREA_ID, self.read::<u32>(VIEWING_AREA_SEED_OFFSET));
-        read!(0x320, 4);
-        read!(0x324, 4);
-        for offset in [0x2e8u32, 0x2ec, 0x2f0, 0x2f4, 0x2f8, 0x2fc, 0x304, 0x308, 0x30c, 0x310] {
-            read!(offset, 4);
+        if version > 2 {
+            if version < SLOT_MARK_VERSION && !self.load_slot_marks(file, version, ok) {
+                return false;
+            }
+            read!(0x320, 4);
+            read!(0x324, 4);
+            if version < LEGACY_TRIPLE_VERSION {
+                let mut discarded: u64 = 0;
+                ok &= read_field(&mut discarded as *mut u64 as u32, 1, file);
+                ok &= read_field(&mut discarded as *mut u64 as u32, 4, file);
+                ok &= read_field(&mut discarded as *mut u64 as u32, 1, file);
+            }
         }
-        let mut count: u32 = 0;
-        ok &= read_field(&mut count as *mut u32 as u32, 4, file);
-        if !ok {
-            return false;
-        }
-        let items = this + guest_offsets::ITEMS;
-        save_to_memory(items + 4, get_from_memory::<u32>(items));
-        for _ in 0..count {
-            let mut id: u32 = 0;
-            ok &= read_field(&mut id as *mut u32 as u32, 4, file);
+        if version > 4 {
+            for offset in [0x2e8u32, 0x2ec, 0x2f0, 0x2f4, 0x2f8, 0x2fc, 0x304, 0x308, 0x30c, 0x310] {
+                read!(offset, 4);
+            }
+            let mut count: u32 = 0;
+            ok &= read_field(&mut count as *mut u32 as u32, 4, file);
             if !ok {
                 return false;
             }
-            if id != 0 && unsafe { mem::transmute::<u32, extern "cdecl" fn(u32) -> u32>(ITEM_RECORD_LOOKUP)(id) } == 0 {
-                id = 0;
-            }
-            if Self::vector_len(items, 4) < LOAD_MAX_SMALL_VECTOR {
-                Self::push_pool_word(items, id);
-            }
-        }
-
-        ok &= read_field(&mut count as *mut u32 as u32, 4, file);
-        if !ok {
-            return false;
-        }
-        let ids = this + guest_offsets::SAVED_IDS;
-        save_to_memory(ids + 4, get_from_memory::<u32>(ids));
-        for _ in 0..count {
-            let mut id: u32 = 0;
-            ok &= read_field(&mut id as *mut u32 as u32, 4, file);
-            if !ok {
-                return false;
-            }
-            if Self::vector_len(ids, 4) < LOAD_MAX_SMALL_VECTOR {
-                Self::push_pool_word(ids, id);
-            }
-        }
-        read!(guest_offsets::RETURN_BUILDING_BITS, 4);
-        if !ok {
-            return false;
-        }
-        let mut length: u32 = 0;
-        let mut string_ok = read_field(&mut length as *mut u32 as u32, 4, file);
-        if string_ok {
-            if length < 0x1000 {
-                let mut bytes = vec![0u8; length as usize];
-                if length > 0 {
-                    string_ok &= read_field(bytes.as_mut_ptr() as u32, length, file);
+            let items = this + guest_offsets::ITEMS;
+            save_to_memory(items + 4, get_from_memory::<u32>(items));
+            for _ in 0..count {
+                let mut id: u32 = 0;
+                ok &= read_field(&mut id as *mut u32 as u32, 4, file);
+                if !ok {
+                    return false;
                 }
-                let range = bytes.as_ptr() as u32;
-                unsafe {
-                    ASSIGN_RANGE.original()((this + guest_offsets::RETURN_BUILDING_STRING) as *const c_void, range as *const u32, (range + length) as *const u8, std::ptr::null())
-                };
-            } else {
-                string_ok = false;
+                if id != 0 && unsafe { mem::transmute::<u32, extern "cdecl" fn(u32) -> u32>(ITEM_RECORD_LOOKUP)(id) } == 0 {
+                    id = 0;
+                }
+                if Self::vector_len(items, 4) < LOAD_MAX_SMALL_VECTOR {
+                    Self::push_pool_word(items, id);
+                }
             }
-        }
-        ok &= string_ok;
-        if !ok {
-            return false;
-        }
 
-        ok &= read_field(&mut count as *mut u32 as u32, 4, file);
-        if !ok {
-            return false;
-        }
-        let sites = this + guest_offsets::VISITED_SITES;
-        save_to_memory(sites + 4, get_from_memory::<u32>(sites));
-        for _ in 0..count {
-            let (mut first, mut second): (u32, u32) = (0, 0);
-            ok &= read_field(&mut first as *mut u32 as u32, 4, file);
-            ok &= read_field(&mut second as *mut u32 as u32, 4, file);
+            if version == 5 {
+                ok &= read_field(&mut count as *mut u32 as u32, 4, file);
+                if !ok {
+                    return false;
+                }
+                for _ in 0..count {
+                    let mut discarded: u64 = 0;
+                    ok &= read_field(&mut discarded as *mut u64 as u32, 8, file);
+                }
+            }
+            ok &= read_field(&mut count as *mut u32 as u32, 4, file);
             if !ok {
                 return false;
             }
-            if Self::vector_len(sites, 12) < LOAD_MAX_SITES {
-                Self::push_site(sites, first, second, 0);
+            let ids = this + guest_offsets::SAVED_IDS;
+            save_to_memory(ids + 4, get_from_memory::<u32>(ids));
+            for _ in 0..count {
+                let mut id: u32 = 0;
+                ok &= read_field(&mut id as *mut u32 as u32, 4, file);
+                if !ok {
+                    return false;
+                }
+                if Self::vector_len(ids, 4) < LOAD_MAX_SMALL_VECTOR {
+                    Self::push_pool_word(ids, id);
+                }
+            }
+            if version < MODERN_LOAD_VERSION {
+                if !Self::skip_legacy_string(file) {
+                    return false;
+                }
+                ok &= Self::skip_legacy_string(file);
+            } else {
+                read!(guest_offsets::RETURN_BUILDING_BITS, 4);
+                if !ok {
+                    return false;
+                }
+                let mut length: u32 = 0;
+                let mut string_ok = read_field(&mut length as *mut u32 as u32, 4, file);
+                if string_ok {
+                    if length < 0x1000 {
+                        let mut bytes = vec![0u8; length as usize];
+                        if length > 0 {
+                            string_ok &= read_field(bytes.as_mut_ptr() as u32, length, file);
+                        }
+                        let range = bytes.as_ptr() as u32;
+                        unsafe {
+                            ASSIGN_RANGE.original()(
+                                (this + guest_offsets::RETURN_BUILDING_STRING) as *const c_void,
+                                range as *const u32,
+                                (range + length) as *const u8,
+                                std::ptr::null(),
+                            )
+                        };
+                    } else {
+                        string_ok = false;
+                    }
+                }
+                ok &= string_ok;
+            }
+            if !ok {
+                return false;
             }
         }
-        read!(0x300, 4);
-        read!(0x339, 1);
-        read!(0x33a, 1);
-        read!(0x314, 4);
-        read!(0x33b, 1);
-        read!(0x33c, 1);
-        if !ok {
-            return false;
+
+        let sites = this + guest_offsets::VISITED_SITES;
+        if version > 8 {
+            let mut count: u32 = 0;
+            ok &= read_field(&mut count as *mut u32 as u32, 4, file);
+            if !ok {
+                return false;
+            }
+            save_to_memory(sites + 4, get_from_memory::<u32>(sites));
+            for _ in 0..count {
+                let (mut first, mut second): (u32, u32) = (0, 0);
+                ok &= read_field(&mut first as *mut u32 as u32, 4, file);
+                ok &= read_field(&mut second as *mut u32 as u32, 4, file);
+                if !ok {
+                    return false;
+                }
+                if Self::vector_len(sites, 12) < LOAD_MAX_SITES {
+                    Self::push_site(sites, first, second, 0);
+                }
+            }
         }
-        let first_item: u32 = get_from_memory(items);
-        if first_item != 0 && get_from_memory::<u32>(first_item + 0xc) != 0 {
-            self.write(0x33c, 0u8);
+        if version > 0x12 {
+            read!(0x300, 4);
         }
-        read!(guest_offsets::DATE, 8);
-        read!(0x31c, 4);
-        if !ok {
-            return false;
+        if version > 0x15 {
+            read!(0x339, 1);
+            read!(0x33a, 1);
+            read!(0x314, 4);
         }
-        if unsafe { ZTANIMALTYPE_GET_TYPE_FROM_ID.original()(self.read::<u8>(0x31c)) } == 0 {
-            self.write(0x31c, unsafe { mem::transmute::<u32, extern "cdecl" fn() -> u32>(RANDOM_ANIMAL_TYPE)() });
+        if version > 0x1e {
+            read!(0x33b, 1);
+            read!(0x33c, 1);
+            if !ok {
+                return false;
+            }
+            let items: u32 = get_from_memory(this + guest_offsets::ITEMS);
+            if items != 0 && get_from_memory::<u32>(items + 0xc) != 0 {
+                self.write(0x33c, 0u8);
+            }
         }
-        read!(0x33e, 1);
-        read!(0x33f, 1);
-        read!(guest_offsets::FIELD_0X298, 8);
-        read!(0x334, 2);
-        if !ok {
-            return false;
+        if version > 0x20 {
+            read!(guest_offsets::DATE, 8);
+            read!(0x31c, 4);
+            if !ok {
+                return false;
+            }
+            if unsafe { ZTANIMALTYPE_GET_TYPE_FROM_ID.original()(self.read::<u8>(0x31c)) } == 0 {
+                self.write(0x31c, unsafe { mem::transmute::<u32, extern "cdecl" fn() -> u32>(RANDOM_ANIMAL_TYPE)() });
+            }
         }
-        if self.read::<u16>(0x334) == 0 {
-            self.write(0x334, Self::vector_len(sites, 12) as u16);
+        if version > 0x22 {
+            read!(0x33e, 1);
+            read!(0x33f, 1);
         }
-        read!(0x337, 1);
-        read!(0x338, 1);
-        read!(guest_offsets::GUIDE_ID, 4);
+        if version > 0x24 {
+            read!(guest_offsets::FIELD_0X298, 8);
+        }
+        if version > 0x29 {
+            read!(0x334, 2);
+            if !ok {
+                return false;
+            }
+            if self.read::<u16>(0x334) == 0 {
+                self.write(0x334, Self::vector_len(sites, 12) as u16);
+            }
+        }
+        if version > 0x35 {
+            read!(0x337, 1);
+        }
+        if version > 0x37 {
+            read!(0x338, 1);
+        }
+        if version > 0x40 {
+            read!(guest_offsets::GUIDE_ID, 4);
+        }
         if !ok {
             return false;
         }
@@ -1466,9 +1616,6 @@ mod detours {
 
     #[detour(LOAD)]
     unsafe extern "thiscall" fn load(this: *const u32, file: *const u32, version: u32) -> bool {
-        if version < MODERN_LOAD_VERSION {
-            return unsafe { LOAD_DETOUR.call(this, file, version) };
-        }
         ZTGuest(this as u32).load(file, version)
     }
 
@@ -1591,8 +1738,10 @@ pub fn init() {
         error!("Failed to initialise ztguest detours: {e:?}");
     }
     checks::init();
+    goals::init();
     inventory::init();
     movement::init();
+    sites::init();
     viewing::init();
 }
 
@@ -1633,8 +1782,10 @@ pub(crate) mod live_support {
     pub fn detour_status() -> Vec<(&'static str, bool)> {
         let mut status = detours::status();
         status.extend(super::checks::live_support::detour_status());
+        status.extend(super::goals::live_support::detour_status());
         status.extend(super::inventory::live_support::detour_status());
         status.extend(super::movement::live_support::detour_status());
+        status.extend(super::sites::live_support::detour_status());
         status.extend(super::viewing::live_support::detour_status());
         status
     }
@@ -1671,8 +1822,13 @@ pub(crate) mod live_support {
 
     pub(crate) use super::detours::test_real as real;
     pub(crate) use super::checks::live_support::real as checks_real;
+    pub(crate) use super::goals::live_support::real as goals_real;
+    pub(crate) use super::goals::overrides as goals_overrides;
+    pub(crate) use super::check_overrides;
     pub(crate) use super::inventory::live_support::real as inventory_real;
     pub(crate) use super::movement::live_support::real as movement_real;
+    pub(crate) use super::sites::live_support::real as sites_real;
+    pub(crate) use super::sites::overrides as sites_overrides;
     pub(crate) use super::movement::overrides as movement_overrides;
     pub(crate) use super::viewing::live_support::real as viewing_real;
     pub(crate) use super::viewing::overrides as viewing_overrides;

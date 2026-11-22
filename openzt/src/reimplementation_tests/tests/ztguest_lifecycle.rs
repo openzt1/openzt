@@ -472,7 +472,7 @@ fn run_load(guest: ZTGuest, bytes: &[u8], version: u32, pole: usize) -> (bool, u
 /// `ZTGUEST_LOAD_LIVE`: a stream `save` wrote (with item, id, site and string counts that exceed what `load` keeps,
 /// and one with an over-long string) is loaded through the real body, the port and the hooked address, whole and cut at
 /// every byte offset, then a second stream is loaded over the first. Result, bytes consumed, whole-guest memory and
-/// the container contents must agree. Versions below `0x5e` go to the real body through the hooked address.
+/// the container contents must agree. `ZTGUEST_LOAD_LEGACY_LIVE` covers the older layouts.
 pub(crate) fn run_ztguest_load_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTGUEST_LOAD_LIVE";
     let mut failures: Vec<String> = Vec::new();
@@ -548,7 +548,7 @@ pub(crate) fn run_ztguest_load_live_test(failure_log: &mut Option<std::fs::File>
         failures.push("reload: container contents differ".to_string());
     }
 
-    // An older version is read by the real body through every pole that reaches the hooked address.
+    // A modern stream read under an older version parses differently but identically through every pole.
     for version in [0x5du32, 0x42, 0x10] {
         let a = live_support::build_standalone_guest(guest_type);
         let b = live_support::build_standalone_guest(guest_type);
@@ -558,6 +558,223 @@ pub(crate) fn run_ztguest_load_live_test(failure_log: &mut Option<std::fs::File>
             failures.push(format!("v{version:#x}: real {real_outcome:?}, hooked {hooked_outcome:?}"));
         }
         compare_guests(&format!("v{version:#x}"), a, b, &shared, &mut failures);
+    }
+    if full_reads == 0 {
+        failures.push(format!("no complete stream was consumed in full over {compared} cases: {full_summary:?}"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Builds a guest stream in the layout `version` reads: needs, the version-gated legacy values, the item and saved-id
+/// vectors (`items` and `ids` entries, then the version-`5` and pre-`0x5e` extras), `sites` visited-site records, the
+/// gated flags and words, then `tail` zero bytes standing in for the `ZTUnit` data. Returns the stream and the length of
+/// the guest part.
+fn legacy_stream(version: u32, seed: u32, items: u32, ids: u32, sites: u32, string: usize, tail: usize) -> (Vec<u8>, usize) {
+    let mut rng = Lcg(seed);
+    let mut out: Vec<u8> = Vec::new();
+    let dword = |out: &mut Vec<u8>, rng: &mut Lcg| out.extend_from_slice(&rng.next().to_le_bytes());
+    let byte = |out: &mut Vec<u8>, rng: &mut Lcg| out.push((rng.next() >> 8) as u8);
+    for _ in 0..5 {
+        dword(&mut out, &mut rng);
+    }
+    byte(&mut out, &mut rng);
+    for _ in 0..5 {
+        dword(&mut out, &mut rng);
+    }
+    if version > 2 {
+        if version < 0x43 {
+            for slot in 0..4u32 {
+                // Values on both sides of the guest type's list lengths.
+                let value = [0u32, 1, 3, 200][((slot + seed) % 4) as usize];
+                if version > 7 {
+                    out.push(value as u8);
+                } else {
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+        }
+        dword(&mut out, &mut rng);
+        dword(&mut out, &mut rng);
+        if version < 0x41 {
+            byte(&mut out, &mut rng);
+            dword(&mut out, &mut rng);
+            byte(&mut out, &mut rng);
+        }
+    }
+    if version > 4 {
+        for _ in 0..10 {
+            dword(&mut out, &mut rng);
+        }
+        out.extend_from_slice(&items.to_le_bytes());
+        for index in 0..items {
+            let id = if index % 3 == 2 { 0 } else { 0x1000 + rng.next() % 40 };
+            out.extend_from_slice(&id.to_le_bytes());
+        }
+        if version == 5 {
+            out.extend_from_slice(&3u32.to_le_bytes());
+            for _ in 0..6 {
+                dword(&mut out, &mut rng);
+            }
+        }
+        out.extend_from_slice(&ids.to_le_bytes());
+        for _ in 0..ids {
+            dword(&mut out, &mut rng);
+        }
+        let string_bytes = |out: &mut Vec<u8>, length: usize| {
+            out.extend_from_slice(&(length as u32).to_le_bytes());
+            out.extend((0..length).map(|index| b'a' + (index % 26) as u8));
+        };
+        if version < 0x5e {
+            string_bytes(&mut out, string);
+            string_bytes(&mut out, string / 2);
+        } else {
+            dword(&mut out, &mut rng);
+            string_bytes(&mut out, string);
+        }
+    }
+    if version > 8 {
+        out.extend_from_slice(&sites.to_le_bytes());
+        for _ in 0..sites * 2 {
+            dword(&mut out, &mut rng);
+        }
+    }
+    if version > 0x12 {
+        dword(&mut out, &mut rng);
+    }
+    if version > 0x15 {
+        byte(&mut out, &mut rng);
+        byte(&mut out, &mut rng);
+        dword(&mut out, &mut rng);
+    }
+    if version > 0x1e {
+        out.push(1);
+        out.push(0);
+    }
+    if version > 0x20 {
+        for _ in 0..3 {
+            dword(&mut out, &mut rng);
+        }
+    }
+    if version > 0x22 {
+        byte(&mut out, &mut rng);
+        byte(&mut out, &mut rng);
+    }
+    if version > 0x24 {
+        dword(&mut out, &mut rng);
+        dword(&mut out, &mut rng);
+    }
+    if version > 0x29 {
+        let word = if seed % 2 == 0 { 0u16 } else { 7 };
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    if version > 0x35 {
+        byte(&mut out, &mut rng);
+    }
+    if version > 0x37 {
+        byte(&mut out, &mut rng);
+    }
+    if version > 0x40 {
+        dword(&mut out, &mut rng);
+    }
+    let guest_len = out.len();
+    out.extend(std::iter::repeat(0u8).take(tail));
+    (out, guest_len)
+}
+
+/// The bytes of the `BFEntity` byte vector at `+0xfc` that `load` resizes for streams older than `0x43`.
+fn slot_marks(guest: ZTGuest) -> Vec<u8> {
+    let begin: u32 = get_from_memory(guest.0 + 0xfc);
+    let end: u32 = get_from_memory(guest.0 + 0x100);
+    if begin == 0 || end < begin || end - begin > 64 {
+        return Vec::new();
+    }
+    (begin..end).map(get_from_memory::<u8>).collect()
+}
+
+/// `ZTGUEST_LOAD_LEGACY_LIVE`: streams in the layout of every version gate, from `1` to `0x5d`, loaded through the real
+/// body, the port and the hooked address. Result, bytes consumed, RNG, whole-guest memory, container contents and the
+/// slot-mark vector must agree, for whole streams, for streams cut at every byte, for an over-long legacy string and
+/// for a slot-mark vector that starts shorter or longer than four entries.
+pub(crate) fn run_ztguest_load_legacy_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTGUEST_LOAD_LEGACY_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some(guest_type) = live_support::find_guest_type() else {
+        failures.push("the live world holds no guest type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let shared = [guest_type];
+    let versions = [
+        1u32, 2, 3, 4, 5, 6, 7, 8, 9, 0x10, 0x12, 0x13, 0x15, 0x16, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x40, 0x41, 0x42,
+        0x43, 0x5d,
+    ];
+    let mut compared = 0usize;
+    let mut full_reads = 0usize;
+    let mut full_summary: Vec<String> = Vec::new();
+    let byte_insert = |vector: u32, count: u32| {
+        let insert = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32, u32, *const u8)>(0x0041_28c5) };
+        let value = 7u8;
+        insert(vector, get_from_memory(vector + 4), count, &value);
+    };
+    for version in versions {
+        // (stream name, stream, guest part length, slot-mark vector pre-size or None for untouched)
+        let mut cases: Vec<(String, Vec<u8>, usize, Option<u32>)> = Vec::new();
+        for (name, seed, items, ids, sites, string) in [("small", 31u32, 5u32, 1u32, 2u32, 5usize), ("capped", 32, 12, 9, 17, 40), ("odd", 33, 5, 0, 0, 0)] {
+            let (bytes, guest_len) = legacy_stream(version, seed, items, ids, sites, string, 64);
+            cases.push((name.to_string(), bytes, guest_len, None));
+        }
+        let (bytes, guest_len) = legacy_stream(version, 34, 5, 1, 1, 0x1000, 64);
+        cases.push(("long string".to_string(), bytes, guest_len, None));
+        for presize in [2u32, 4, 6] {
+            let (bytes, guest_len) = legacy_stream(version, 35 + presize, 5, 1, 2, 5, 64);
+            cases.push((format!("presized {presize}"), bytes, guest_len, Some(presize)));
+        }
+        for (name, bytes, guest_len, presize) in &cases {
+            let cuts: Vec<usize> = if name == "small" || name == "odd" {
+                (0..*guest_len + 4).collect()
+            } else {
+                vec![0, guest_len / 3, guest_len / 2, guest_len - 1, *guest_len]
+            };
+            for cut in cuts.into_iter().chain([bytes.len()]) {
+                let label = format!("load v{version:#x} {name} cut {cut}");
+                let fixtures: Vec<ZTGuest> = (0..3).map(|_| live_support::build_standalone_guest(guest_type)).collect();
+                if let Some(count) = presize {
+                    for guest in &fixtures {
+                        byte_insert(guest.0 + 0xfc, *count);
+                    }
+                }
+                let mut outcomes = Vec::new();
+                for (pole, guest) in fixtures.iter().enumerate() {
+                    outcomes.push(run_load(*guest, &bytes[..cut], version, pole));
+                }
+                // `ZTUnit::load` draws fresh entity ids (`+0x124`, `+0x148`) from process-wide counters for streams that do not
+                // carry them, so the three sequential poles legitimately differ there.
+                for offset in [0x124u32, 0x148] {
+                    let id: u32 = get_from_memory(fixtures[0].0 + offset);
+                    for guest in &fixtures[1..] {
+                        save_to_memory(guest.0 + offset, id);
+                    }
+                }
+                if cut == bytes.len() {
+                    if outcomes[0].1 + 1 >= bytes.len() {
+                        full_reads += 1;
+                    }
+                    full_summary.push(format!("v{version:#x} {name}: {:?} consumed {} of {}", outcomes[0].0, outcomes[0].1, bytes.len()));
+                }
+                if outcomes[0] != outcomes[1] || outcomes[0] != outcomes[2] {
+                    failures.push(format!("{label}: (result, consumed, RNG) real {:?}, port {:?}, hooked {:?}", outcomes[0], outcomes[1], outcomes[2]));
+                }
+                compare_guests(&label, fixtures[0], fixtures[1], &shared, &mut failures);
+                compare_guests(&format!("{label} hooked"), fixtures[0], fixtures[2], &shared, &mut failures);
+                let reference = (container_contents(fixtures[0]), slot_marks(fixtures[0]));
+                if reference != (container_contents(fixtures[1]), slot_marks(fixtures[1])) || reference != (container_contents(fixtures[2]), slot_marks(fixtures[2])) {
+                    failures.push(format!("{label}: containers or slot marks differ: real {:?}, port {:?}", reference.1, slot_marks(fixtures[1])));
+                }
+                compared += 1;
+                if failures.len() > 20 {
+                    return finish_test(test_name, failures, failure_log);
+                }
+            }
+        }
     }
     if full_reads == 0 {
         failures.push(format!("no complete stream was consumed in full over {compared} cases: {full_summary:?}"));

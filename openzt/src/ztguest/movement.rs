@@ -21,11 +21,11 @@ use openzt_detour::generated::{
     ztbuilding::{EMPTY_GRANDSTANDS, HAS_OPEN_SLOT},
     ztguest::{
         ADD_ITEM, ADD_TRASH, DROP, FENCES_OK, FIND_NEARBY_NEED_SATISFIER, FIND_PLACE_TO_SIT, FIND_TRASH_CAN, F_GUEST_THOUGHT, GET_TERRAIN_COST, GOTO_NEARBY_NEED,
-        IN_GRANDSTAND, IS_NEED_SATISFIER, IS_PRESSING_NEED_SATISFIER, PICK_RANDOM_DEST, TILE_FILTER, TRIGGER_GRANDSTAND_ESCAPE_0, TRIGGER_GRANDSTAND_ESCAPE_1,
+        IN_GRANDSTAND, IS_NEED_SATISFIER, IS_PRESSING_NEED_SATISFIER, PICK_RANDOM_DEST, THROW_TRASH, TILE_FILTER, TRIGGER_GRANDSTAND_ESCAPE_0, TRIGGER_GRANDSTAND_ESCAPE_1,
     },
     zthabitat::GET_GATE_TILE_PASS_OUT,
     ztunit::{FIND_ANY_SATISFIER, FIND_NEAREST_SATISFIER, PICK_RANDOM_DEST as ZTUNIT_PICK_RANDOM_DEST, UPDATE_BUILDING_TILES},
-    ztworldmgr::{GET_BUILDING_LIST, SATISFIES},
+    ztworldmgr::{GET_BUILDING_LIST, REMOVE_FROM_MEMBER_LISTS, SATISFIES},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -58,10 +58,6 @@ const NEARBY_BUILDING_NAME_RVA: u32 = 0x0024_6390;
 const SEARCH_GLOBAL_RVA: u32 = 0x0023_90d8;
 /// `DAT_0063c538`: the `{begin, end, cap}` vector `findNearbyNeedSatisfier` collects its candidates in.
 const CANDIDATE_VECTOR_RVA: u32 = 0x0023_c538;
-/// `ZTGuest::throwTrash(this, 0)`, which `findTrashCan` uses to dispose of carried trash.
-const THROW_TRASH: u32 = 0x0052_da40;
-/// `ZTWorldMgr::removeFromMemberLists(guest)`.
-const REMOVE_FROM_MEMBER_LISTS: u32 = 0x0046_b5bf;
 
 /// Tile fields.
 mod tile_fields {
@@ -225,12 +221,6 @@ fn tile_distance_squared(from: u32, to: u32) -> i32 {
     dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
 }
 
-/// Calls a thiscall function at a raw address taking one argument.
-fn call_raw_1(address: u32, this: u32, arg: u32) -> u32 {
-    let function = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(address) };
-    function(this, arg)
-}
-
 /// Overrides the live tests install on the three functions `ztguest/checks.rs`'s live test scripts. Each takes the
 /// call's arguments and answers `Some` when it has handled the call.
 #[cfg(feature = "reimplementation-tests")]
@@ -240,10 +230,12 @@ pub(crate) mod overrides {
     pub type FindPlace = fn(this: u32, arg: u32) -> Option<bool>;
     pub type FindTrash = fn(this: u32, arg: u32) -> Option<bool>;
     pub type Escape = fn(this: u32, arg: i32) -> bool;
+    pub type InGrandstand = fn(this: u32) -> Option<bool>;
 
     pub static FIND_PLACE: Mutex<Option<FindPlace>> = Mutex::new(None);
     pub static FIND_TRASH: Mutex<Option<FindTrash>> = Mutex::new(None);
     pub static ESCAPE: Mutex<Option<Escape>> = Mutex::new(None);
+    pub static IN_GRANDSTAND: Mutex<Option<InGrandstand>> = Mutex::new(None);
 }
 
 impl ZTGuest {
@@ -284,11 +276,11 @@ impl ZTGuest {
         let tile = unsafe { BFENTITY_GET_TILE.hooked()(building as *const u32) } as u32;
         call_slot_1(self.0, movement_slots::GO_TO_TILE, tile);
         self.take_building_position(building);
-        low_byte_bool(unsafe { UPDATE_BUILDING_TILES.hooked()(self.0 as *const u32, flag) })
+        unsafe { UPDATE_BUILDING_TILES.hooked()(self.0 as *const u32, flag) }
     }
 
     fn throw_trash(self) {
-        call_raw_1(THROW_TRASH, self.0, 0);
+        unsafe { THROW_TRASH.hooked()(self.0 as *const u32, std::ptr::null()) };
     }
 
     /// `ZTGuest::getTerrainCost` (`0x0043a8fb`): the pathfinder's cost of stepping onto `tile`. The guest's own tile
@@ -481,6 +473,12 @@ impl ZTGuest {
 
     /// `ZTGuest::inGrandstand` (`0x0050d152`): whether the guest's validated building provides the grandstand need.
     pub fn in_grandstand(self) -> bool {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = overrides::IN_GRANDSTAND.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return answer;
+            }
+        }
         let building = self.validated_building();
         building != 0 && satisfies(building, GRANDSTAND_NAME_RVA)
     }
@@ -601,13 +599,13 @@ impl ZTGuest {
     }
 
     /// `ZTGuest::addTrash` (`0x0059d2c9`): adds the item `0x18a6` named `"trash"`. `addItem` frees the name.
-    pub fn add_trash(self) {
+    pub fn add_trash(self) -> bool {
         const NAME: &[u8; 6] = b"trash\0";
         let mut name = [0u32; 3];
         let start = NAME.as_ptr();
         unsafe {
             BASIC_STRING_RANGE.hooked()(name.as_mut_ptr() as *const c_void, start as *const u32, start.add(NAME.len() - 1) as i32);
-            ADD_ITEM.hooked()(self.0 as *const u32, TRASH_ITEM_ID as *const u8, name[0] as *const u32, name[1] as *const u32, name[2] as i32);
+            ADD_ITEM.hooked()(self.0 as *const u32, TRASH_ITEM_ID as *const u8, name[0] as *const u32, name[1] as *const u32, name[2] as i32)
         }
     }
 
@@ -616,7 +614,7 @@ impl ZTGuest {
     /// looks for a pressing need's building; a guest with neither stands down.
     pub fn drop_guest(self) {
         let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
-        call_raw_1(REMOVE_FROM_MEMBER_LISTS, world, self.0);
+        unsafe { REMOVE_FROM_MEMBER_LISTS.hooked()(world as *const u32, self.0 as i32) };
         call_slot_1(self.0, movement_slots::SET_RETURN_BUILDING_NAME_ID, 0);
         let mut empty = [0u32; 3];
         let start = b"\0".as_ptr();
@@ -741,13 +739,13 @@ mod detours {
     }
 
     #[detour(FENCES_OK)]
-    unsafe extern "thiscall" fn fences_ok(this: *const u32, tile: *const u32, direction: u32, out_a: *const bool, out_b: *const bool) -> u32 {
-        ZTGuest(this as u32).fences_ok(tile as u32, direction as i32, out_a as u32, out_b as u32) as u32
+    unsafe extern "thiscall" fn fences_ok(this: *const u32, tile: *const u32, direction: u32, out_a: *const bool, out_b: *const bool) -> bool {
+        ZTGuest(this as u32).fences_ok(tile as u32, direction as i32, out_a as u32, out_b as u32)
     }
 
     #[detour(TILE_FILTER)]
-    unsafe extern "thiscall" fn tile_filter(this: *const u32, tile: *const u32, flag: *const u32) -> bool {
-        ZTGuest(this as u32).tile_filter(tile as u32, flag as usize as u8 != 0)
+    unsafe extern "thiscall" fn tile_filter(this: *const u32, tile: *const u32, flag: bool) -> bool {
+        ZTGuest(this as u32).tile_filter(tile as u32, flag)
     }
 
     #[detour(PICK_RANDOM_DEST)]
@@ -798,8 +796,8 @@ mod detours {
     }
 
     #[detour(ADD_TRASH)]
-    unsafe extern "thiscall" fn add_trash(this: *const u32) {
-        ZTGuest(this as u32).add_trash();
+    unsafe extern "thiscall" fn add_trash(this: *const u32) -> bool {
+        ZTGuest(this as u32).add_trash()
     }
 
     #[detour(DROP)]
@@ -836,11 +834,11 @@ mod detours {
         pub(crate) fn get_terrain_cost(this: u32, tile: u32) -> i32 {
             unsafe { super::GET_TERRAIN_COST_DETOUR.call(this as *const u32, tile as *const u32) }
         }
-        pub(crate) fn fences_ok(this: u32, tile: u32, direction: u32, out_a: u32, out_b: u32) -> u32 {
+        pub(crate) fn fences_ok(this: u32, tile: u32, direction: u32, out_a: u32, out_b: u32) -> bool {
             unsafe { super::FENCES_OK_DETOUR.call(this as *const u32, tile as *const u32, direction, out_a as *const bool, out_b as *const bool) }
         }
-        pub(crate) fn tile_filter(this: u32, tile: u32, flag: u32) -> bool {
-            unsafe { super::TILE_FILTER_DETOUR.call(this as *const u32, tile as *const u32, flag as *const u32) }
+        pub(crate) fn tile_filter(this: u32, tile: u32, flag: bool) -> bool {
+            unsafe { super::TILE_FILTER_DETOUR.call(this as *const u32, tile as *const u32, flag) }
         }
         pub(crate) fn pick_random_dest(this: u32, position: *const IVec3) -> bool {
             unsafe { super::PICK_RANDOM_DEST_DETOUR.call(this as *const u32, position) }
@@ -863,7 +861,7 @@ mod detours {
         pub(crate) fn find_trash_can(this: u32, arg: u32) -> bool {
             unsafe { super::FIND_TRASH_CAN_DETOUR.call(this as *const u32, arg) }
         }
-        pub(crate) fn add_trash(this: u32) {
+        pub(crate) fn add_trash(this: u32) -> bool {
             unsafe { super::ADD_TRASH_DETOUR.call(this as *const u32) }
         }
         pub(crate) fn drop_guest(this: u32) {

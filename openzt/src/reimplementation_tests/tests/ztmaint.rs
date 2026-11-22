@@ -250,8 +250,8 @@ pub(crate) fn run_ztmaint_f_routine_live_test(failure_log: &mut Option<std::fs::
 
 /// While set, `BFEntity::update` (the tail `ZTMaint::update` ends with) is recorded instead of run: the real one
 /// animates and moves the unit, which a bare fixture cannot take.
-static UPDATE_INTERCEPT: AtomicU32 = AtomicU32::new(0);
-static UPDATE_LOG: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+pub(super) static UPDATE_INTERCEPT: AtomicU32 = AtomicU32::new(0);
+pub(super) static UPDATE_LOG: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 #[openzt_detour_macro::detour_mod]
 mod entity_update_hook {
@@ -267,6 +267,18 @@ mod entity_update_hook {
     }
 }
 
+/// Installs the `BFEntity::update` hook once; other live tests share it.
+pub(super) fn install_entity_update_hook() -> Result<(), String> {
+    static HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
+    let mut result = Ok(());
+    HOOK_INSTALLED.call_once(|| {
+        if let Err(e) = unsafe { entity_update_hook::init_detours() } {
+            result = Err(format!("could not install the BFEntity::update hook: {e:?}"));
+        }
+    });
+    result
+}
+
 /// `ZTMAINT_UPDATE_LIVE`: `update` over every combination of starting timer (above, at and below the elapsed time) and
 /// elapsed time, with the two staff pointer pairs set and the type present or absent, comparing the worker's whole
 /// memory and the elapsed time handed to `BFEntity::update` (recorded by a test hook).
@@ -277,12 +289,9 @@ pub(crate) fn run_ztmaint_update_live_test(failure_log: &mut Option<std::fs::Fil
         failures.push("the live world holds no maintenance-worker type".to_string());
         return finish_test(test_name, failures, failure_log);
     };
-    static HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
-    HOOK_INSTALLED.call_once(|| {
-        if let Err(e) = unsafe { entity_update_hook::init_detours() } {
-            failures.push(format!("could not install the BFEntity::update hook: {e:?}"));
-        }
-    });
+    if let Err(message) = install_entity_update_hook() {
+        failures.push(message);
+    }
     UPDATE_INTERCEPT.store(1, Ordering::SeqCst);
     let shared = vec![maint_type];
     let (real_worker, port_worker) = (live_support::build_standalone_maint(maint_type), live_support::build_standalone_maint(maint_type));

@@ -221,11 +221,11 @@ pub(crate) fn run_ztguest_fences_filter_live_test(failure_log: &mut Option<std::
             return 1;
         }
         let (mut real_a, mut real_b, mut port_a, mut port_b, mut hooked_a, mut hooked_b) = (0xaau8, 0xbbu8, 0xaau8, 0xbbu8, 0xaau8, 0xbbu8);
-        let real_result = real::fences_ok(guest.0, tile, direction, &mut real_a as *mut u8 as u32, &mut real_b as *mut u8 as u32) & 0xff;
-        let port_result = guest.fences_ok(tile, direction as i32, &mut port_a as *mut u8 as u32, &mut port_b as *mut u8 as u32) as u32;
+        let real_result = real::fences_ok(guest.0, tile, direction, &mut real_a as *mut u8 as u32, &mut real_b as *mut u8 as u32);
+        let port_result = guest.fences_ok(tile, direction as i32, &mut port_a as *mut u8 as u32, &mut port_b as *mut u8 as u32);
         let hooked_result = unsafe {
             FENCES_OK.hooked()(guest.0 as *const u32, tile as *const u32, direction, &mut hooked_a as *mut u8 as *const bool, &mut hooked_b as *mut u8 as *const bool)
-        } & 0xff;
+        };
         let outs = [real_a, real_b, port_a, port_b, hooked_a, hooked_b];
         if real_result != port_result || real_result != hooked_result || outs != [0, 0, 0, 0, 0, 0] {
             mismatches += 1;
@@ -233,7 +233,7 @@ pub(crate) fn run_ztguest_fences_filter_live_test(failure_log: &mut Option<std::
                 failures.push(format!("{label}: results real {real_result}, port {port_result}, hooked {hooked_result}; out bytes {outs:?}"));
             }
         }
-        real_result
+        real_result as u32
     };
     for position in guest_positions() {
         place_guest(guest, position);
@@ -275,10 +275,10 @@ pub(crate) fn run_ztguest_fences_filter_live_test(failure_log: &mut Option<std::
             for flag in [0u32, 1, 0x100, 0x1ff] {
                 for (x, y) in tile_positions(MAP_LIMIT) {
                     let tile = world.get_tile_ptr(x, y);
-                    let real_result = real::tile_filter(guest.0, tile, flag);
+                    let real_result = real::tile_filter(guest.0, tile, flag as u8 != 0);
                     let port_result = guest.tile_filter(tile, flag as u8 != 0);
                     filter_results.insert(real_result);
-                    let hooked_result = unsafe { TILE_FILTER.hooked()(guest.0 as *const u32, tile as *const u32, std::ptr::without_provenance::<u32>(flag as usize)) };
+                    let hooked_result = unsafe { TILE_FILTER.hooked()(guest.0 as *const u32, tile as *const u32, flag as u8 != 0) };
                     if real_result != port_result || real_result != hooked_result {
                         mismatches += 1;
                         if mismatches <= 10 {
@@ -485,4 +485,110 @@ pub(crate) fn run_ztguest_grandstand_live_test(failure_log: &mut Option<std::fs:
     }
     tracing::info!("{test_name}: {in_grandstand} building answers were grandstands");
     finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTGUEST_PERF_COMPARE_LIVE`: per-call cost of the pathfinder callbacks `getTerrainCost`, `fencesOK` and `tileFilter`,
+/// vanilla against the Rust port, in the release battery only (skipped in debug builds). Each runs over every tile of
+/// the live map's top-left `64x64` block, the pathfinder's access pattern. The timings are logged on the pass line.
+/// Run with page heap off.
+pub(crate) fn run_ztguest_perf_compare_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::hint::black_box;
+
+    use super::ztkeeper::{median_ns_per_call, PoleTimes, PERF_FAIL_RATIO};
+    use crate::reimplementation_tests::harness::write_success_line;
+
+    let test_name = "ZTGUEST_PERF_COMPARE_LIVE";
+    if cfg!(debug_assertions) {
+        write_success_line(failure_log, &format!("{test_name} (skipped: debug build)"));
+        return false;
+    }
+    let mut failures: Vec<String> = Vec::new();
+    let Some(Standalone { guest }) = standalone(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world = globals().ztworldmgr();
+    place_guest(guest, guest_positions()[0]);
+    let tiles: Vec<u32> = tile_positions(MAP_LIMIT).into_iter().map(|(x, y)| world.get_tile_ptr(x, y)).collect();
+    let saved_flags: Vec<u8> = tiles.iter().map(|&tile| get_from_memory(tile + 0x85)).collect();
+    let mut results: Vec<PoleTimes> = Vec::new();
+
+    let calls = tiles.len();
+    let mut vanilla = || {
+        for &tile in &tiles {
+            black_box(real::get_terrain_cost(guest.0, black_box(tile)));
+        }
+    };
+    let mut port = || {
+        for &tile in &tiles {
+            black_box(guest.get_terrain_cost(black_box(tile)));
+        }
+    };
+    let mut hooked = || {
+        for &tile in &tiles {
+            black_box(unsafe { GET_TERRAIN_COST.hooked()(guest.0 as *const u32, black_box(tile) as *const u32) });
+        }
+    };
+    let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+    results.push(PoleTimes { label: format!("getTerrainCost ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    for (&tile, &flags) in tiles.iter().zip(&saved_flags) {
+        save_to_memory(tile + 0x85, flags);
+    }
+
+    let pairs: Vec<(u32, u32)> =
+        tiles.iter().flat_map(|&tile| (0u32..8).map(move |direction| (tile, direction))).filter(|&(tile, direction)| !live_support::movement_fences_would_fault(guest, tile, direction as i32)).collect();
+    let calls = pairs.len();
+    let (mut out_a, mut out_b) = (0u8, 0u8);
+    let (a, b) = (&mut out_a as *mut u8 as u32, &mut out_b as *mut u8 as u32);
+    let mut vanilla = || {
+        for &(tile, direction) in &pairs {
+            black_box(real::fences_ok(guest.0, black_box(tile), direction, a, b));
+        }
+    };
+    let mut port = || {
+        for &(tile, direction) in &pairs {
+            black_box(guest.fences_ok(black_box(tile), direction as i32, a, b));
+        }
+    };
+    let mut hooked = || {
+        for &(tile, direction) in &pairs {
+            black_box(unsafe { FENCES_OK.hooked()(guest.0 as *const u32, black_box(tile) as *const u32, direction, a as *const bool, b as *const bool) });
+        }
+    };
+    let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+    results.push(PoleTimes { label: format!("fencesOK ({calls} tile/direction pairs)"), vanilla: times[0], port: times[1], hooked: times[2] });
+
+    for mode in [0i32, 3] {
+        save_to_memory(guest.0 + TILE_FILTER_MODE, mode);
+        let calls = tiles.len();
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(real::tile_filter(guest.0, black_box(tile), false));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(guest.tile_filter(black_box(tile), false));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { TILE_FILTER.hooked()(guest.0 as *const u32, black_box(tile) as *const u32, false) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("tileFilter mode {mode} ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    }
+
+    for result in &results {
+        if result.hooked / result.vanilla > PERF_FAIL_RATIO {
+            failures.push(format!("hooked is more than {PERF_FAIL_RATIO}x vanilla: {}", result.summary()));
+        }
+    }
+    if failures.is_empty() {
+        let summary = results.iter().map(PoleTimes::summary).collect::<Vec<_>>().join("; ");
+        write_success_line(failure_log, &format!("{test_name} ({summary})"));
+        false
+    } else {
+        finish_test(test_name, failures, failure_log)
+    }
 }

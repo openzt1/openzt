@@ -15,7 +15,8 @@ use openzt_detour::generated::{
     ztanimal::PREYS_ON_MAN,
     ztguest::{
         DO_BATHROOM_CHECK, DO_BUY_SOUVENIR_CHECK, DO_CHASE_CHECK, DO_CONDITIONALS, DO_ENERGY_CHECK, DO_ENVIRONMENT_EFFECT_CHECK, DO_HUNGER_CHECK, DO_LEAVE_ZOO_CHECK,
-        DO_THIRSTY_CHECK, DO_TRASH_CHECK, DO_VIEWING_AREA_CHECK, FIND_PLACE_TO_SIT, FIND_TRASH_CAN, F_CROWD_DENSITY_MEGATILE, F_ESTHETIC_BONUS_MEGATILE,
+        DO_THIRSTY_CHECK, DO_TRASH_CHECK, DO_VIEWING_AREA_CHECK, FIND_ANIMAL_BY_HAPPINESS, F_CROWD_DENSITY, F_DIFFERENT_SPECIES, F_NUM_ANIMALS, F_NUM_SICK_ANIMALS,
+        F_SICK_ANIMALS, FIND_PLACE_TO_SIT, FIND_TRASH_CAN, F_CROWD_DENSITY_MEGATILE, F_ESTHETIC_BONUS_MEGATILE,
         F_GUEST_THOUGHT, F_STINKY_MEGATILE, PICK_RANDOM_BUILDING_OF_TYPE, TRIGGER_GRANDSTAND_ESCAPE_1, CHECK_LEAVE_ZOO, CHECK_PREDATOR, LEAVE_OK,
         UPDATE_STATUS_VARIABLES,
     },
@@ -34,6 +35,23 @@ use crate::{
     ztkeeper::{call_slot_0, call_slot_1, unit_offsets},
     ztmegatilemgr::entity_type_matches,
 };
+
+/// `ZTGuestType` fields and guest slots `doViewingAreaCheck` uses.
+mod viewing_check {
+    pub const PERIOD: u32 = 0x1d8;
+    pub const VARIETY_BONUS: u32 = 0x274;
+    pub const VARIETY_MIN: u32 = 0x278;
+    pub const SICK_BONUS: u32 = 0x27c;
+    pub const CROWD_MIN: u32 = 0x280;
+    pub const CROWD_BONUS: u32 = 0x284;
+    pub const OVERJOYED: u32 = 0x28c;
+    pub const HAPPY: u32 = 0x290;
+    pub const PLEASED: u32 = 0x294;
+    pub const ANGRY: u32 = 0x298;
+    pub const FURIOUS: u32 = 0x29c;
+    /// Animal the guest is looking at, remembered for the viewing thoughts.
+    pub const TARGET: u32 = 0x330;
+}
 
 /// `ZTGuest` fields the checks use beyond the layout table.
 mod fields {
@@ -165,12 +183,12 @@ fn base() -> u32 {
 }
 
 /// `x % 64` as C computes it (the sign of the dividend), the shape the position record's first two words take.
-fn position_xy(value: i32) -> i32 {
+pub(super) fn position_xy(value: i32) -> i32 {
     value.wrapping_rem(64)
 }
 
 /// The record's third word: `value % 16` as C computes it, plus `16` for a negative value.
-fn position_z(value: i32) -> i32 {
+pub(super) fn position_z(value: i32) -> i32 {
     let remainder = value.wrapping_rem(16);
     if value < 0 {
         remainder + 16
@@ -290,7 +308,7 @@ impl ZTGuest {
         get_entity(world, id, 1)
     }
 
-    fn position_record(self) -> [u32; 3] {
+    pub(super) fn position_record(self) -> [u32; 3] {
         [
             self.read(lifecycle_offsets::POSITION_RECORD),
             self.read(lifecycle_offsets::POSITION_RECORD + 4),
@@ -299,7 +317,7 @@ impl ZTGuest {
     }
 
     /// `ZTUnit::isNeedOrFunSatisfier` on the building grid with a copy of the guest's position record.
-    fn standing_on_satisfier(self) -> bool {
+    pub(super) fn standing_on_satisfier(self) -> bool {
         let record = self.position_record();
         let grid: i32 = self.read(lifecycle_offsets::BUILDING_GRID);
         unsafe { IS_NEED_OR_FUN_SATISFIER.hooked()(self.0 as *const u32, grid, record.as_ptr()) }
@@ -780,6 +798,79 @@ impl ZTGuest {
         !self.is_on_water()
     }
 
+    /// `ZTGuest::doViewingAreaCheck` (`0x0043afde`): when its countdown (`+0x30c`) runs out it reloads from the type
+    /// (`+0x1d8`), forgets the viewing area (`+0x328` = `-1`, `+0x32c` = `0`) and looks for one. With a viewing area
+    /// holding animals: sick animals add the sick bonus (`+0x27c`) and think `0x2931` (and `0x2770` for several); the
+    /// average animal happiness picks one of six bands, each adding its own bonus (`+0x28c`..`+0x29c`), remembering a
+    /// matching animal (`+0x330`) and thinking about it; a variety of species and a crowded area add theirs too.
+    pub fn do_viewing_area_check(self) {
+        let guest_type = self.guest_type();
+        let old: i32 = self.read(fields::VIEWING_COUNTDOWN);
+        self.write(fields::VIEWING_COUNTDOWN, old.wrapping_sub(1));
+        if old != 0 || guest_type == 0 {
+            return;
+        }
+        self.write(fields::VIEWING_COUNTDOWN, self.type_word(guest_type, viewing_check::PERIOD).wrapping_sub(1));
+        self.write(guest_offsets::VIEWING_AREA, 0u32);
+        self.write(guest_offsets::VIEWING_AREA_ID, -1i32);
+        if !self.find_viewing_area() {
+            return;
+        }
+        let this = self.0 as *const c_void;
+        if unsafe { F_NUM_ANIMALS.hooked()(this) } as i32 <= 0 {
+            return;
+        }
+        if low_byte_bool(unsafe { F_SICK_ANIMALS.hooked()(this) }) {
+            self.add_happiness_delta(self.type_word(guest_type, viewing_check::SICK_BONUS));
+            if unsafe { F_NUM_SICK_ANIMALS.hooked()(this) } as i32 > 1 {
+                self.thought(0x2770, 0);
+            }
+            let animal = self.find_animal(-100, 100);
+            self.write(viewing_check::TARGET, animal);
+            self.thought(0x2931, animal);
+        }
+        let happiness = self.animal_happy();
+        // (low, high, bonus offset, thought) for the band the average happiness falls in.
+        let band: Option<(i32, i32, u32, u32)> = if happiness >= 0x51 {
+            Some((0x51, 100, viewing_check::OVERJOYED, 0x2772))
+        } else if happiness >= 0x3d {
+            Some((0x3d, 0x50, viewing_check::HAPPY, 0x2829))
+        } else if (-0x3c..=0x3c).contains(&happiness) {
+            if happiness >= 0 {
+                Some((0, 0x3c, viewing_check::PLEASED, 0x282a))
+            } else {
+                Some((-0x3d, -1, viewing_check::PLEASED, 0x282c))
+            }
+        } else if happiness >= -0x50 {
+            Some((-0x50, -0x3d, viewing_check::ANGRY, 0x282b))
+        } else {
+            Some((-100, -0x51, viewing_check::FURIOUS, 0x2773))
+        };
+        if let Some((low, high, bonus, thought)) = band {
+            self.add_happiness_delta(self.type_word(guest_type, bonus));
+            let animal = self.find_animal(low, high);
+            self.write(viewing_check::TARGET, animal);
+            if animal != 0 {
+                self.thought(thought, animal);
+            }
+        }
+        if unsafe { F_DIFFERENT_SPECIES.hooked()(this) } as i32 >= self.type_word(guest_type, viewing_check::VARIETY_MIN) {
+            self.add_happiness_delta(self.type_word(guest_type, viewing_check::VARIETY_BONUS));
+            self.thought(0x2774, 0);
+        }
+        if (unsafe { F_CROWD_DENSITY.hooked()(this) } as i32) >= self.type_word(guest_type, viewing_check::CROWD_MIN) {
+            self.add_happiness_delta(self.type_word(guest_type, viewing_check::CROWD_BONUS));
+            let animal = self.find_animal(-100, 100);
+            if animal != 0 {
+                self.thought(0x2776, animal);
+            }
+        }
+    }
+
+    fn find_animal(self, low: i32, high: i32) -> u32 {
+        unsafe { FIND_ANIMAL_BY_HAPPINESS.hooked()(self.0 as *const u32, low, high) as u32 }
+    }
+
     /// `ZTGuest::checkLeaveZoo` (`0x004a6acc`): with an AI manager and a guest type, and outside goal `0x71` and off the
     /// water, one draw against the type's leave chance (`+0x258`) decides: on success the guest is marked as leaving
     /// (`+0x339`) and thinks `0x27fe`.
@@ -801,6 +892,11 @@ impl ZTGuest {
 #[detour_mod]
 mod detours {
     use super::*;
+
+    #[detour(DO_VIEWING_AREA_CHECK)]
+    unsafe extern "thiscall" fn do_viewing_area_check(this: *const u32) {
+        ZTGuest(this as u32).do_viewing_area_check();
+    }
 
     #[detour(DO_CONDITIONALS)]
     unsafe extern "thiscall" fn do_conditionals(this: *const u32) {
@@ -875,6 +971,9 @@ mod detours {
     /// Live-test access to the real vanilla bodies.
     #[cfg(feature = "reimplementation-tests")]
     pub(crate) mod test_real {
+        pub(crate) fn do_viewing_area_check(this: u32) {
+            unsafe { super::DO_VIEWING_AREA_CHECK_DETOUR.call(this as *const u32) }
+        }
         pub(crate) fn do_conditionals(this: u32) {
             unsafe { super::DO_CONDITIONALS_DETOUR.call(this as *const u32) }
         }

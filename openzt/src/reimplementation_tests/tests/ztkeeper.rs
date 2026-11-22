@@ -1453,7 +1453,7 @@ pub(crate) fn run_ztkeeper_update_goals_live_test(failure_log: &mut Option<std::
 
 /// Median nanoseconds per call for each pole. Each pole's `pass` makes `calls_per_pass` calls; the poles alternate
 /// within every round so slow drift in machine load affects them equally, after one untimed warm-up pass each.
-fn median_ns_per_call(poles: &mut [&mut dyn FnMut()], rounds: usize, calls_per_pass: usize) -> Vec<f64> {
+pub(super) fn median_ns_per_call(poles: &mut [&mut dyn FnMut()], rounds: usize, calls_per_pass: usize) -> Vec<f64> {
     for pass in poles.iter_mut() {
         pass();
     }
@@ -1476,15 +1476,15 @@ fn median_ns_per_call(poles: &mut [&mut dyn FnMut()], rounds: usize, calls_per_p
 
 /// A per-call timing for one hot function: vanilla body (through the detour's call-through), the Rust body called
 /// directly, and the hooked address the game itself calls.
-struct PoleTimes {
-    label: String,
-    vanilla: f64,
-    port: f64,
-    hooked: f64,
+pub(super) struct PoleTimes {
+    pub(super) label: String,
+    pub(super) vanilla: f64,
+    pub(super) port: f64,
+    pub(super) hooked: f64,
 }
 
 impl PoleTimes {
-    fn summary(&self) -> String {
+    pub(super) fn summary(&self) -> String {
         format!(
             "{}: vanilla {:.1}ns, port {:.1}ns ({:.2}x), hooked {:.1}ns ({:.2}x)",
             self.label,
@@ -1499,7 +1499,7 @@ impl PoleTimes {
 
 /// Ratio of hooked to vanilla time above which the benchmark fails. Timing on a shared battery is noisy, so this only
 /// catches a gross regression; the logged numbers are the actual result.
-const PERF_FAIL_RATIO: f64 = 5.0;
+pub(super) const PERF_FAIL_RATIO: f64 = 5.0;
 
 /// `ZTKEEPER_PERF_COMPARE_LIVE`: per-call cost of the two hot `ZTKeeper` functions, vanilla against the Rust port,
 /// run in the release battery only (skipped in debug builds). `getTerrainCost` runs over every live tile (up to 200x200) for both settings of the
