@@ -166,6 +166,8 @@ mod gxmixer;
 #[cfg(feature = "perf-stats")]
 mod perf_stats;
 
+/// ztanimal module reimplements the vanilla ZTAnimal zoo animal entity in place over vanilla memory.
+mod ztanimal;
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
 mod ztguest;
@@ -321,6 +323,7 @@ mod zoo_init {
             ztkeeper::init();
             ztmaint::init();
             ztguide::init();
+            ztanimal::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }
     }

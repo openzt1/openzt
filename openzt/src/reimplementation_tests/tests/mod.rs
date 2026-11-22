@@ -28,6 +28,7 @@ pub(crate) mod ztmarketing;
 pub(crate) mod ztmegatilemgr;
 pub(crate) mod zoostatus;
 pub(crate) mod ztkeeper;
+pub(crate) mod ztanimal;
 pub(crate) mod ztmaint;
 pub(crate) mod ztguest_leaf;
 pub(crate) mod ztguest_lifecycle;

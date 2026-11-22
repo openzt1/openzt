@@ -170,6 +170,7 @@ pub fn init() {
         crate::ztmaint::init();
         crate::ztguest::init();
         crate::ztguide::init();
+        crate::ztanimal::init();
 
         // ZooStatus: installs the class's 31 detours (zoostatus-implementation-plan.md Stage 8) so
         // ZOOSTATUS_DETOURS_ENABLED can assert the wiring itself (same rationale as the MenuMusicHandler/

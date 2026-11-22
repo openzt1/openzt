@@ -7,7 +7,6 @@ use openzt_detour::generated::{
     bfentity::GET_TILE as BFENTITY_GET_TILE,
     bfmap::{GET_DIRECTION_0 as BFMAP_GET_DIRECTION_0, WORLD_TO_TILE},
     standalone::OPERATOR_NEW,
-    ztanimal::CAN_SERVICE as ZTANIMAL_CAN_SERVICE,
     zthabitat, zthabitatmgr, ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW, ztviewingarea,
 };
 use std::fmt::Debug;
@@ -6927,7 +6926,7 @@ fn assert_keeper_arrival_flagged_set_pass(
         }
         if written
             && !expected_set.contains(&animal_ptr)
-            && low_byte_bool(unsafe { ZTANIMAL_CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) })
+            && low_byte_bool(crate::ztanimal::live_support::real::can_service(animal_ptr as u32, keeper_ptr as u32))
         {
             expected_set.push(animal_ptr);
         }
@@ -7005,7 +7004,7 @@ fn assert_trigger_keeper_arrived_pass(
         }
     }
     for &(animal_ptr, before, written) in &flag_snapshots {
-        let passes = low_byte_bool(unsafe { ZTANIMAL_CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) });
+        let passes = low_byte_bool(crate::ztanimal::live_support::real::can_service(animal_ptr as u32, keeper_ptr as u32));
         let expected = if written && passes { 1 } else { before };
         let actual: u8 = get_from_memory(animal_ptr + 0x39c);
         if actual != expected {
@@ -13539,7 +13538,6 @@ const EVAL06_EDGE_HABITATS: usize = 12;
 /// union, the de-duplicated overlap, and how many neighbour animals pass the home-habitat gate
 /// (`home == 0 || home == habitat`) versus are filtered by it.
 pub(crate) fn run_scenario_goal_eval06_matches_real_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
-    use openzt_detour::generated::ztanimal::GET_HABITAT_RATING as ZTANIMAL_GET_HABITAT_RATING;
     use std::collections::{BTreeMap, BTreeSet};
 
     let test_name = "ZTHABITAT_SCENARIO_GOAL_EVAL06_MATCHES_REAL_LIVE";
@@ -13653,7 +13651,7 @@ pub(crate) fn run_scenario_goal_eval06_matches_real_live_test(failure_log: &mut 
                 }
             }
             for animal in animals_of(habitat_ptr).into_iter().chain(union.iter().flat_map(|&nb| animals_of(nb))) {
-                ratings.insert(unsafe { ZTANIMAL_GET_HABITAT_RATING.original()(animal as *const u32, habitat_ptr as *const u32) });
+                ratings.insert(crate::ztanimal::live_support::real::get_habitat_rating(animal as u32, habitat_ptr as u32));
             }
             // Would a missing de-duplication change this habitat's goal-free average? Average of the
             // home-gated animals with the union counted once vs with overlapping neighbours counted twice.
@@ -13663,7 +13661,7 @@ pub(crate) fn run_scenario_goal_eval06_matches_real_live_test(failure_log: &mut 
                     let home = animal_home(animal);
                     if home == 0 || home == habitat_ptr {
                         count += 1;
-                        sum += unsafe { ZTANIMAL_GET_HABITAT_RATING.original()(animal as *const u32, habitat_ptr as *const u32) };
+                        sum += crate::ztanimal::live_support::real::get_habitat_rating(animal as u32, habitat_ptr as u32);
                     }
                 }
                 (count > 0).then(|| sum / count)
@@ -14875,7 +14873,7 @@ pub(crate) fn run_habitat_egg_service_matches_real_live_test(failure_log: &mut O
 
         for &staff_ptr in &staff {
             for &egg in &eggs {
-                let can_service = low_byte_bool(unsafe { openzt_detour::generated::ztanimal::CAN_SERVICE.original()(egg as *const u32, staff_ptr as *const u32) });
+                let can_service = low_byte_bool(crate::ztanimal::live_support::real::can_service(egg as u32, staff_ptr as u32));
                 let sickly = low_byte_bool(unsafe { openzt_detour::generated::ztanimal::IS_SICKLY.original()(egg as *const u32) });
                 if can_service {
                     serviceable_pairs += 1;
@@ -14902,7 +14900,7 @@ pub(crate) fn run_habitat_egg_service_matches_real_live_test(failure_log: &mut O
                                 egg,
                                 get_from_memory::<u8>(egg + ANIMAL_EGG_FLAG_OFFSET),
                                 get_from_memory::<i32>(egg + 0x2b8),
-                                low_byte_bool(unsafe { openzt_detour::generated::ztanimal::CAN_SERVICE.original()(egg as *const u32, staff_ptr as *const u32) }),
+                                low_byte_bool(crate::ztanimal::live_support::real::can_service(egg as u32, staff_ptr as u32)),
                                 ZTHabitat::keeper_lists_animal(staff_ptr, egg),
                                 tile,
                                 if tile != 0 { get_from_memory::<u8>(tile + 0x85) } else { 0 },

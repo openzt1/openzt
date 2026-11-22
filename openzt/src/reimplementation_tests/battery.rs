@@ -130,6 +130,7 @@ pub(super) mod detour_zoo_main {
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTKEEPER_DETOURS_ENABLED", run: tests::ztkeeper::run_ztkeeper_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTMAINT_DETOURS_ENABLED", run: tests::ztmaint::run_ztmaint_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTANIMAL_DETOURS_ENABLED", run: tests::ztanimal::run_ztanimal_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTGUIDE_DETOURS_ENABLED", run: tests::ztguide::run_ztguide_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTGUEST_DETOURS_ENABLED", run: tests::ztguest_leaf::run_ztguest_detours_enabled_test });
         tests.extend([
@@ -1183,6 +1184,10 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTKEEPER_SAVE_LOAD_LIVE", run: tests::ztkeeper::run_ztkeeper_save_load_live_test },
             RegisteredTest { name: "ZTKEEPER_LISTEN_LIVE", run: tests::ztkeeper::run_ztkeeper_listen_live_test },
             RegisteredTest { name: "ZTKEEPER_UPDATE_GOALS_LIVE", run: tests::ztkeeper::run_ztkeeper_update_goals_live_test },
+            RegisteredTest { name: "ZTANIMAL_LEAF_FIELDS_LIVE", run: tests::ztanimal::run_ztanimal_leaf_fields_live_test },
+            RegisteredTest { name: "ZTANIMAL_LEAF_HABITAT_LIVE", run: tests::ztanimal::run_ztanimal_leaf_habitat_live_test },
+            RegisteredTest { name: "ZTANIMAL_ENTITY_STATE_LIVE", run: tests::ztanimal::run_ztanimal_entity_state_live_test },
+            RegisteredTest { name: "ZTANIMAL_CHECK_DONE_LIVE", run: tests::ztanimal::run_ztanimal_check_done_live_test },
             RegisteredTest { name: "ZTMAINT_FIXTURE_LAYOUT_LIVE", run: tests::ztmaint::run_ztmaint_fixture_layout_live_test },
             RegisteredTest { name: "ZTMAINT_F_ROUTINE_LIVE", run: tests::ztmaint::run_ztmaint_f_routine_live_test },
             RegisteredTest { name: "ZTMAINT_UPDATE_LIVE", run: tests::ztmaint::run_ztmaint_update_live_test },
