@@ -8,7 +8,6 @@ use openzt_detour::generated::{
     bfworldmgr::{ADD_TRANSIENT, FIND_TYPES, GET_ENTITY, GET_ENTITY_REVERSE},
     zttankfilter::{IS_STILL_ATTACHED, REMOVE_BUBBLES},
     zttankwall::{SET_BOTH_EDGES_FENCE, SET_LEFT_EDGE_FENCE, SET_MIDDLE_FENCE, SET_RIGHT_EDGE_FENCE, SET_WALL_HEIGHT},
-    ztanimal::BOX as ZTANIMAL_BOX,
     ztmapview::{ADD_UNDO_ACTION, HAS_UNDO_ACTION, PREPARE_TO_DELETE_ENTITY, REMOVE_ENTITY_FROM_MAP},
     standalone::MEMMOVE,
     poolalloc::ALLOCATE as POOLALLOC_ALLOCATE,
@@ -1600,7 +1599,7 @@ impl ZTTankExhibit {
             let is_animal = unsafe { entity_type_matches(entity, RVA_ANIMAL_TYPE_CHECK_ARG) };
             if is_animal {
                 if mode == 0 {
-                    unsafe { ZTANIMAL_BOX.original()(entity as *const u32) };
+                    crate::ztanimal::ZTAnimal(entity).box_animal();
                 } else if (1..=2).contains(&mode) {
                     let placed = unsafe { BOX_UP_AND_FIND_APLACE_FOR_ANIMAL.original()(entity as *const u32, first_pair_second_tile() as *const u32) };
                     if !low_byte_bool(placed) {

@@ -10,7 +10,6 @@
 use std::cell::{Cell, RefCell};
 
 use openzt_detour::generated::{
-    ztanimal::ADD_FACE as ZTANIMAL_ADD_FACE,
     ztworldmgr::{PLAY_FROWN_SOUND_0, PLAY_FROWN_SOUND_1, PLAY_SMILE_SOUND_0, PLAY_SMILE_SOUND_1},
 };
 use openzt_detour_macro::detour_mod;
@@ -75,6 +74,16 @@ pub fn intercept(habitat: u32, species_type: u32, smile: bool) -> Option<bool> {
     Some(SCRIPTED_TRUE_RESULTS.with(|s| s.get()) && scripted_result(species_type, smile))
 }
 
+/// Called first by `ZTAnimal::add_face` (the production `addFace` port): while an animal-face capture window is open,
+/// records the request and returns `true` so the face is not added.
+pub fn intercept_animal_face(animal: u32, smile: bool) -> bool {
+    if !ANIMAL_FACE_CAPTURE_ACTIVE.with(|a| a.get()) {
+        return false;
+    }
+    record(Recorded::AnimalFace { animal, smile });
+    true
+}
+
 fn record(event: Recorded) {
     RECORDED.with(|r| r.borrow_mut().push(event));
 }
@@ -82,15 +91,6 @@ fn record(event: Recorded) {
 #[detour_mod]
 mod detours {
     use super::*;
-
-    #[detour(ZTANIMAL_ADD_FACE)]
-    unsafe extern "thiscall" fn animal_show_face(this: *const u32, smile: bool) {
-        if ANIMAL_FACE_CAPTURE_ACTIVE.with(|a| a.get()) {
-            record(Recorded::AnimalFace { animal: this as u32, smile });
-            return;
-        }
-        unsafe { ZTANIMAL_ADD_FACE_DETOUR.call(this, smile) }
-    }
 
     #[detour(PLAY_SMILE_SOUND_1)]
     unsafe extern "thiscall" fn play_smile_sound(this: *const u32) {

@@ -30,6 +30,7 @@ pub(crate) mod zoostatus;
 pub(crate) mod ztkeeper;
 pub(crate) mod ztanimal;
 pub(crate) mod ztanimal_checks;
+pub(crate) mod ztanimal_feeding;
 pub(crate) mod ztanimal_lifecycle;
 pub(crate) mod ztanimal_save;
 pub(crate) mod ztmaint;
