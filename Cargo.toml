@@ -14,7 +14,6 @@ members = [
     "openzt-test-dll",
     "openzt-detour",
     "openzt-dll",
-    "openzt-instance-manager",
 
     # vendor
     "vendor/retour-rs",

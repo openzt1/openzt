@@ -24,7 +24,7 @@ const TERRAIN_MODE_OFFSET: u32 = 0x258;
 const TYPE_PREY_BEGIN: u32 = 0x2e4;
 const TYPE_PREY_END: u32 = 0x2e8;
 
-fn base() -> u32 {
+pub(super) fn base() -> u32 {
     get_module_base("zoo.exe") as u32
 }
 
@@ -48,7 +48,7 @@ fn is_animal_type(entity_type: u32) -> bool {
 }
 
 /// Up to `limit` distinct animal types the live world holds.
-fn live_animal_types(limit: usize) -> Vec<u32> {
+pub(super) fn live_animal_types(limit: usize) -> Vec<u32> {
     let world = globals().ztworldmgr();
     let mut types = Vec::new();
     let mut slot = world.entity_type_array_start;
@@ -63,7 +63,7 @@ fn live_animal_types(limit: usize) -> Vec<u32> {
 }
 
 /// Every animal entity the live world holds.
-fn live_animals() -> Vec<u32> {
+pub(super) fn live_animals() -> Vec<u32> {
     let world = globals().ztworldmgr();
     let mut animals = Vec::new();
     let mut slot = world.entity_array_start();
@@ -81,14 +81,14 @@ fn live_animals() -> Vec<u32> {
     animals
 }
 
-fn build_animal(entity_type: u32) -> ZTAnimal {
+pub(super) fn build_animal(entity_type: u32) -> ZTAnimal {
     let memory = unsafe { OPERATOR_NEW.original()(ANIMAL_SIZE) } as u32;
     unsafe { std::ptr::write_bytes(memory as *mut u8, 0, ANIMAL_SIZE as usize) };
     unsafe { ZTANIMAL_CONSTRUCTOR.original()(memory as *const u32, entity_type) };
     ZTAnimal(memory)
 }
 
-fn destroy_animal(animal: ZTAnimal) {
+pub(super) fn destroy_animal(animal: ZTAnimal) {
     unsafe { ZTANIMAL_DESTRUCTOR_1.original()(animal.0 as *const u32, 1) };
 }
 
@@ -99,10 +99,10 @@ fn ranges_are_nonzero(entity_type: u32) -> bool {
 }
 
 /// A small deterministic generator so a failure reproduces.
-struct Lcg(u32);
+pub(super) struct Lcg(pub(super) u32);
 
 impl Lcg {
-    fn next(&mut self) -> u32 {
+    pub(super) fn next(&mut self) -> u32 {
         self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         self.0 >> 8
     }
