@@ -387,6 +387,11 @@ pub(crate) fn run_ztanimal_entity_state_live_test(failure_log: &mut Option<std::
         check("fFoodUnitsActuallyEaten", format!("{}", real::f_food_units_actually_eaten(entity)), format!("{}", animal.f_food_units_actually_eaten()));
         check("fIsThereKeeperFood", format!("{}", low_byte_bool(real::f_is_there_keeper_food(entity))), format!("{}", animal.f_is_there_keeper_food()));
         check("getIconAnim", format!("{}", real::get_icon_anim(entity)), format!("{}", animal.get_icon_anim()));
+        check("getOnlySwims", format!("{}", real::get_only_swims(entity)), format!("{}", animal.get_only_swims()));
+        check("getIdleAnimSymbol", format!("{:#x}", real::get_idle_anim_symbol(entity)), format!("{:#x}", animal.get_idle_anim_symbol()));
+        let walk = b"bWalk ";
+        let name = [walk.as_ptr() as u32, walk.as_ptr() as u32 + 5, walk.as_ptr() as u32 + 6];
+        check("getMoveAnim", format!("{:#x}", real::get_move_anim(entity, name.as_ptr() as u32)), format!("{:#x}", animal.get_move_anim(name.as_ptr() as *const i8) as u32));
         check("getSellPrice", format!("{:#x}", real::get_sell_price(entity).to_bits()), format!("{:#x}", animal.get_sell_price().to_bits()));
         check("getHabitatRating", format!("{}", real::get_habitat_rating(entity, habitat)), format!("{}", animal.habitat_rating_in(habitat)));
         check("getHabitatRating(null)", format!("{}", real::get_habitat_rating(entity, 0)), format!("{}", animal.habitat_rating_in(0)));
@@ -463,6 +468,7 @@ pub(crate) fn run_ztanimal_entity_state_live_test(failure_log: &mut Option<std::
                 ("canCapture", low_byte_bool(real::can_capture(first, second)), animal.can_capture(second)),
                 ("canService", low_byte_bool(real::can_service(first, second)), animal.can_service(second)),
                 ("isWalkableBy", low_byte_bool(real::is_walkable_by(first, second)), animal.is_walkable_by(second)),
+                ("compareLT", real::compare_lt(first, second), animal.compare_lt(second)),
             ];
             for (name, real_value, port_value) in pairs {
                 if real_value != port_value {

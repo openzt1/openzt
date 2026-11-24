@@ -572,6 +572,54 @@ pub(crate) fn run_bfentity_set_pending_bs_test(failure_log: &mut Option<std::fs:
     finish_test(test_name, failures, failure_log)
 }
 
+/// `BFENTITY_SET_QUEUED_CALL_NEW` - `setQueuedCallNew` (`0x4301b7`) against vanilla: a name equal to the set's current
+/// name (nothing queued, false) and unrelated or empty names, with the queued call's flag clear and set, forced and
+/// not. Compares the return value, the queued text and flag, and the freelist growth.
+pub(crate) fn run_bfentity_set_queued_call_new_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::tests::bfbehaviorset::build_fake_type;
+    use openzt_detour::generated::bfentity::SET_QUEUED_CALL_NEW;
+
+    let test_name = "BFENTITY_SET_QUEUED_CALL_NEW";
+    let mut failures: Vec<String> = Vec::new();
+    let type_object = build_fake_type();
+    for name in ["oldName", "abc", "walk", ""] {
+        for queued_flag in [0u8, 1] {
+            for force in [0u8, 1] {
+                for call_flag in [0u8, 1] {
+                    let label = format!("name={name:?} queued_flag={queued_flag} force={force} call_flag={call_flag}");
+                    let (real, port) = (build_clear_entity(type_object, false, [0; 5]), build_clear_entity(type_object, false, [0; 5]));
+                    unsafe {
+                        ((real + 0xe8) as *mut u8).write(queued_flag);
+                        ((port + 0xe8) as *mut u8).write(queued_flag);
+                    }
+
+                    warm_pool();
+                    let before = pool_lengths();
+                    let real_ret = bfentity_live_support::real::set_queued_call_new(real, string_words(name), call_flag, force);
+                    let middle = pool_lengths();
+                    let [w0, w1, w2] = string_words(name);
+                    let port_ret = unsafe { SET_QUEUED_CALL_NEW.hooked()(port as *const u32, w0 as *const u32, w1 as i32, w2 as i32, call_flag as u32, force as u32) } as u8 != 0;
+                    let after = pool_lengths();
+
+                    if real_ret != port_ret {
+                        failures.push(format!("{label}: returned real={real_ret} port={port_ret}"));
+                    }
+                    let (real_queue, port_queue) = (queue_string(real), queue_string(port));
+                    if real_queue != port_queue {
+                        failures.push(format!("{label}: queue real={real_queue:?} port={port_queue:?}"));
+                    }
+                    let real_delta: Vec<u32> = middle.iter().zip(&before).map(|(a, b)| a.wrapping_sub(*b)).collect();
+                    let port_delta: Vec<u32> = after.iter().zip(&middle).map(|(a, b)| a.wrapping_sub(*b)).collect();
+                    if real_delta != port_delta {
+                        failures.push(format!("{label}: freelist growth real={real_delta:?} port={port_delta:?}"));
+                    }
+                }
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
 fn entity_name(entity: u32) -> Vec<u8> {
     let (begin, end) = (get_from_memory::<u32>(entity + 0x108), get_from_memory::<u32>(entity + 0x10c));
     (0..end.wrapping_sub(begin)).map(|i| get_from_memory::<u8>(begin + i)).collect()

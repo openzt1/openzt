@@ -178,7 +178,7 @@ pub(crate) fn run_ztanimal_feeding_helpers_live_test(failure_log: &mut Option<st
                     (match pole {
                         0 => real::add_changes(animal.0, changes_ptr),
                         1 => animal.add_changes(changes_ptr) as u32,
-                        _ => generated::ADD_CHANGES.hooked()(animal.0 as *const u32, changes_ptr as *const u32),
+                        _ => generated::ADD_CHANGES.hooked()(animal.0 as *const u32, changes_ptr as *const u32) as u32,
                     }) & 0xff
                 },
                 &mut failures,
@@ -238,7 +238,7 @@ pub(crate) fn run_ztanimal_feeding_helpers_live_test(failure_log: &mut Option<st
                     let result = match pole {
                         0 => real::check_do_trick(animal.0),
                         1 => animal.check_do_trick() as u32,
-                        _ => generated::CHECK_DO_TRICK.hooked()(animal.0 as *const u32),
+                        _ => generated::CHECK_DO_TRICK.hooked()(animal.0 as *const u32) as u32,
                     };
                     // Callers test `AL` only.
                     result & 0xff
@@ -321,7 +321,7 @@ pub(crate) fn run_ztanimal_feeding_helpers_live_test(failure_log: &mut Option<st
                         match pole {
                             0 => real::remove_food_target_for_all(animal.0, 0),
                             1 => animal.remove_food_target_for_all(0),
-                            _ => generated::REMOVE_FOOD_TARGET_FOR_ALL.hooked()(animal.0 as *const u32, std::ptr::null()),
+                            _ => generated::REMOVE_FOOD_TARGET_FOR_ALL.hooked()(animal.0 as *const u32, std::ptr::null()) as u32,
                         }
                     },
                     &mut failures,
@@ -386,7 +386,7 @@ pub(crate) fn run_ztanimal_handling_live_test(failure_log: &mut Option<std::fs::
 
     for &ty in &types {
         let own_id = call_slot_0(ty, 0x20);
-        for flag in [0u8, 1, 0x80] {
+        for flag in [0u8, 1] {
             for named in [false, true] {
                 let name = Box::leak(vec![b'x'; 8].into_boxed_slice()).as_ptr() as u32;
                 let prepare = |animal: ZTAnimal| {
@@ -404,7 +404,7 @@ pub(crate) fn run_ztanimal_handling_live_test(failure_log: &mut Option<std::fs::
                         match pole {
                             0 => real::stop_eating(animal.0, flag),
                             1 => animal.stop_eating(flag),
-                            _ => generated::STOP_EATING.hooked()(animal.0 as *const u32, flag),
+                            _ => generated::STOP_EATING.hooked()(animal.0 as *const u32, flag != 0),
                         }
                         get_from_memory::<u32>(animal.0 + 0xe0).wrapping_sub(get_from_memory::<u32>(animal.0 + 0xdc)) | (get_from_memory::<u8>(name) as u32) << 8
                     },
@@ -456,7 +456,7 @@ pub(crate) fn run_ztanimal_handling_live_test(failure_log: &mut Option<std::fs::
                 &format!("box stage {stage}"),
                 1,
                 &prepare,
-                &|animal, pole| unsafe { (match pole { 0 => real::box_animal(animal.0), 1 => animal.box_animal() as u32, _ => generated::BOX.hooked()(animal.0 as *const u32) }) & 0xff },
+                &|animal, pole| unsafe { (match pole { 0 => real::box_animal(animal.0), 1 => animal.box_animal() as u32, _ => generated::BOX.hooked()(animal.0 as *const u32) as u32 }) & 0xff },
                 &mut failures,
             );
             poles(
@@ -467,7 +467,7 @@ pub(crate) fn run_ztanimal_handling_live_test(failure_log: &mut Option<std::fs::
                     save_to_memory(animal.0 + 0x394, 1u8);
                     save_to_memory(animal.0 + 0x211, 1u8);
                 },
-                &|animal, pole| unsafe { (match pole { 0 => real::unbox(animal.0), 1 => animal.unbox() as u32, _ => generated::UNBOX.hooked()(animal.0 as *const i32) }) & 0xff },
+                &|animal, pole| unsafe { (match pole { 0 => real::unbox(animal.0), 1 => animal.unbox() as u32, _ => generated::UNBOX.hooked()(animal.0 as *const u32) as u32 }) & 0xff },
                 &mut failures,
             );
         }

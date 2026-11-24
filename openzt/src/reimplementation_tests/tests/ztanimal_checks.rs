@@ -1242,3 +1242,655 @@ pub(crate) fn run_ztanimal_escaped_check_live_test(failure_log: &mut Option<std:
     }
     finish_test(test_name, failures, failure_log)
 }
+
+static SLEEP_GATE: AtomicBool = AtomicBool::new(false);
+
+extern "thiscall" fn fake_sleep_gate(_this: u32) -> u32 {
+    CALLS.lock().unwrap().push(0x170);
+    0x7700 | SLEEP_GATE.load(Ordering::SeqCst) as u32
+}
+
+extern "thiscall" fn fake_stop_everything(_this: u32, a: u32, b: u32, c: u32) {
+    CALLS.lock().unwrap().push(0x198 | a << 12 | b << 13 | c << 14);
+}
+
+fn install_sleep_vtable(animal: ZTAnimal) {
+    install_scripted_vtable(animal);
+    let current: u32 = get_from_memory(animal.0);
+    let mut vtable: Vec<u32> = (0..197u32).map(|slot| get_from_memory::<u32>(current + slot * 4)).collect();
+    vtable[0x170 / 4] = fake_sleep_gate as *const () as usize as u32;
+    vtable[0x288 / 4] = fake_pressing as *const () as usize as u32;
+    vtable[0x198 / 4] = fake_stop_everything as *const () as usize as u32;
+    let vtable = Box::leak(vtable.into_boxed_slice());
+    save_to_memory(animal.0, vtable.as_ptr() as u32);
+}
+
+/// The queued call's text, the set name's text and the queued call's flag byte.
+fn queue_snapshot(animal: ZTAnimal) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (begin, end) in [(0xdcu32, 0xe0u32), (0x54, 0x58)] {
+        let (b, e): (u32, u32) = (get_from_memory(animal.0 + begin), get_from_memory(animal.0 + end));
+        bytes.extend((0..e.wrapping_sub(b)).map(|i| get_from_memory::<u8>(b + i)));
+        bytes.push(0xff);
+    }
+    bytes.push(get_from_memory::<u8>(animal.0 + 0xe8));
+    bytes
+}
+
+fn plant_set_name(animal: ZTAnimal, text: &[u8]) {
+    let buffer: &'static mut [u8] = Box::leak(text.to_vec().into_boxed_slice());
+    let begin = buffer.as_ptr() as u32;
+    save_to_memory(animal.0 + 0x54, begin);
+    save_to_memory(animal.0 + 0x58, begin + text.len() as u32);
+}
+
+fn plant_queued_call(animal: ZTAnimal, text: &[u8]) {
+    let begin: u32 = get_from_memory(animal.0 + 0xdc);
+    for (i, byte) in text.iter().chain(std::iter::once(&0u8)).enumerate() {
+        save_to_memory(begin + i as u32, *byte);
+    }
+    save_to_memory(animal.0 + 0xe0, begin + text.len() as u32);
+}
+
+/// Runs the three poles over fixtures built by `install` and `prepare`, and records any difference in the slot calls,
+/// the state, the queued call and the shared RNG word. `seed` is written to the RNG before each pole.
+fn compare_three_poles(
+    ty: u32,
+    label: &str,
+    seed: u32,
+    install: &dyn Fn(ZTAnimal),
+    prepare: &dyn Fn(ZTAnimal),
+    body: &dyn Fn(ZTAnimal, usize),
+    failures: &mut Vec<String>,
+) {
+    let rng_address = super::ztanimal::base() + 0x0023_8060;
+    let mut logs = Vec::new();
+    let mut snapshots = Vec::new();
+    for pole in 0..3usize {
+        let animal = build_animal(ty);
+        install(animal);
+        prepare(animal);
+        save_to_memory(rng_address, seed);
+        CALLS.lock().unwrap().clear();
+        body(animal, pole);
+        logs.push(CALLS.lock().unwrap().clone());
+        let mut snap = snapshot(animal);
+        snap.extend(queue_snapshot(animal));
+        snap.extend(get_from_memory::<u32>(animal.0 + 0x128).to_le_bytes());
+        snap.extend(get_from_memory::<u32>(rng_address).to_le_bytes());
+        snapshots.push(snap);
+    }
+    if logs[0] != logs[1] || logs[0] != logs[2] {
+        failures.push(format!("{label}: slot calls real {:x?}, port {:x?}, hooked {:x?}", logs[0], logs[1], logs[2]));
+    }
+    for (pole, name) in [(1usize, "port"), (2, "hooked")] {
+        if snapshots[0] != snapshots[pole] {
+            let first = snapshots[0].iter().zip(&snapshots[pole]).position(|(a, b)| a != b);
+            failures.push(format!("{label}: state differs from real for {name} (first differing snapshot byte {first:?})"));
+        }
+    }
+}
+
+/// `ZTANIMAL_SLEEP_CHECK_LIVE`: `doSleepCheck` over awake and sleeping fixtures with the sleep gate, need, escape and
+/// playmate bytes, the set name and the queued call varied. The queued text and the RNG word are compared.
+pub(crate) fn run_ztanimal_sleep_check_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_SLEEP_CHECK_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(4);
+    if types.is_empty() {
+        failures.push("the live world holds no animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let mut rng = Lcg(0x51ee);
+    let names: [&[u8]; 3] = [b"", b"bSleep", b"bWalk"];
+    for &ty in &types {
+        let sleep_at: i32 = get_from_memory(ty + 0x324);
+        for round in 0..400 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let (asleep, gate, egg, show, escaped, arrived, playmate) =
+                (pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng));
+            let countdown = [0i32, 0, 1][(rng.next() as usize) % 3];
+            let need = [sleep_at.wrapping_sub(1), sleep_at, sleep_at.wrapping_add(7)][(rng.next() as usize) % 3];
+            let rate = (rng.next() % 9) as i32 - 3;
+            let set_name = names[(rng.next() as usize) % 3];
+            let queued = names[(rng.next() as usize) % 3];
+            let queued_flag = (rng.next() & 1) as u8;
+            let prepare = |animal: ZTAnimal| {
+                SLEEP_GATE.store(gate, Ordering::SeqCst);
+                DOING_SHOW.store(show, Ordering::SeqCst);
+                save_to_memory(animal.0 + 0x3a8, asleep as u8);
+                save_to_memory(animal.0 + 0x300, countdown);
+                save_to_memory(animal.0 + 0x2c0, need);
+                save_to_memory(animal.0 + 0x2d8, rate);
+                save_to_memory(animal.0 + animal_offsets::EGG, egg as u8);
+                save_to_memory(animal.0 + 0x3a3, escaped as u8);
+                save_to_memory(animal.0 + 0x393, arrived as u8);
+                save_to_memory(animal.0 + 0x3a4, playmate as u8);
+                plant_set_name(animal, set_name);
+                plant_queued_call(animal, queued);
+                save_to_memory(animal.0 + 0xe8, queued_flag);
+            };
+            compare_three_poles(
+                ty,
+                &format!("doSleepCheck round {round} asleep {asleep} gate {gate} egg {egg} show {show} escaped {escaped}/{arrived} playmate {playmate} countdown {countdown} need {need} set {set_name:?} queued {queued:?}/{queued_flag}"),
+                0x1357,
+                &install_sleep_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_sleep_check(animal.0),
+                        1 => animal.do_sleep_check(),
+                        _ => generated::DO_SLEEP_CHECK.hooked()(animal.0 as *const u32),
+                    }
+                },
+                &mut failures,
+            );
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Answers `setBS` for `doZapCheck`'s `setBSNew`, recording the name length and flags; `SLEEP_GATE` is the answer.
+fn scripted_zap_set_bs(_this: u32, begin: u32, end: u32, call_flag: i8, force: i8, mode: i32) -> Option<bool> {
+    CALLS.lock().unwrap().push(0xb500_0000 | (end.wrapping_sub(begin) << 12) | (call_flag as u8 as u32) << 8 | (force as u8 as u32) << 4 | (mode as u32 & 0xf));
+    Some(SLEEP_GATE.load(Ordering::SeqCst))
+}
+
+/// A position on which `FUN_004a3383` finds a direction for an animal of `ty`, if any tile of the loaded map offers one.
+fn find_zap_position(ty: u32) -> Option<[i32; 3]> {
+    let world: u32 = get_from_memory(super::ztanimal::base() + 0x0023_8040);
+    let find = unsafe { std::mem::transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32) -> u32>(0x004a_3383) };
+    let probe = build_animal(ty);
+    for tile_y in 0..125i32 {
+        for tile_x in 0..125i32 {
+            let position = [tile_x * 64 + 32, tile_y * 64 + 32, 0];
+            for (i, word) in position.iter().enumerate() {
+                save_to_memory(probe.0 + 0x114 + 4 * i as u32, *word);
+            }
+            if unsafe { find(world, probe.0, probe.0 + 0x114) } != 0xffff_ffff {
+                return Some(position);
+            }
+        }
+    }
+    None
+}
+
+/// `ZTANIMAL_ZAP_CHECK_LIVE`: `doZapCheck` with the pressing-need slot, armed word, countdown and RNG varied; where the
+/// loaded map offers a position that finds a fence direction, the branch through `stopEverything`, `setDirection` and
+/// `setBSNew` (with `setBS` answered by a script) is compared too.
+pub(crate) fn run_ztanimal_zap_check_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_ZAP_CHECK_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(4);
+    if types.is_empty() {
+        failures.push("the live world holds no animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let mut rng = Lcg(0x2a9c);
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_zap_set_bs);
+    for &ty in &types {
+        let positions: Vec<[i32; 3]> = std::iter::once([0, 0, 0]).chain(find_zap_position(ty)).collect();
+        for round in 0..300 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let (egg, show, pressing, took) = (pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng));
+            let armed = [0i32, 1, 5][(rng.next() as usize) % 3];
+            let countdown = [0i32, 0, 1][(rng.next() as usize) % 3];
+            let position = positions[(rng.next() as usize) % positions.len()];
+            let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x4321;
+            let prepare = |animal: ZTAnimal| {
+                PRESSING.store(pressing, Ordering::SeqCst);
+                DOING_SHOW.store(show, Ordering::SeqCst);
+                SLEEP_GATE.store(took, Ordering::SeqCst);
+                save_to_memory(animal.0 + animal_offsets::EGG, egg as u8);
+                save_to_memory(animal.0 + 0x31c, countdown);
+                save_to_memory(animal.0 + 0x3ac, armed);
+                for (i, word) in position.iter().enumerate() {
+                    save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
+                }
+            };
+            compare_three_poles(
+                ty,
+                &format!("doZapCheck round {round} egg {egg} show {show} pressing {pressing} armed {armed} countdown {countdown} position {position:?} took {took} seed {seed:#x}"),
+                seed,
+                &install_sleep_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_zap_check(animal.0),
+                        1 => animal.do_zap_check(),
+                        _ => {
+                            generated::DO_ZAP_CHECK.hooked()(animal.0 as *const u32);
+                        }
+                    }
+                },
+                &mut failures,
+            );
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = None;
+    finish_test(test_name, failures, failure_log)
+}
+
+static TANK: AtomicU32 = AtomicU32::new(0);
+
+extern "thiscall" fn fake_tank(_this: u32, arg: u32) -> u32 {
+    CALLS.lock().unwrap().push(0x250 | arg << 16);
+    TANK.load(Ordering::SeqCst)
+}
+
+extern "thiscall" fn fake_remove_from_map(_this: u32, arg: u32) {
+    CALLS.lock().unwrap().push(0x78 | arg << 16);
+}
+
+extern "thiscall" fn fake_add_to_map(_this: u32) {
+    CALLS.lock().unwrap().push(0x74);
+}
+
+fn install_boxed_vtable(animal: ZTAnimal) {
+    install_scripted_vtable(animal);
+    let current: u32 = get_from_memory(animal.0);
+    let mut vtable: Vec<u32> = (0..197u32).map(|slot| get_from_memory::<u32>(current + slot * 4)).collect();
+    vtable[0x170 / 4] = fake_sleep_gate as *const () as usize as u32;
+    vtable[0x250 / 4] = fake_tank as *const () as usize as u32;
+    vtable[0x78 / 4] = fake_remove_from_map as *const () as usize as u32;
+    vtable[0x74 / 4] = fake_add_to_map as *const () as usize as u32;
+    let vtable = Box::leak(vtable.into_boxed_slice());
+    save_to_memory(animal.0, vtable.as_ptr() as u32);
+}
+
+/// `ZTANIMAL_BOXED_CHECK_LIVE`: `doBoxedCheck` with scripted habitat, tank and map slots over fixtures at a live animal's
+/// position and at the origin, with the boxed, on-map and countdown bytes, the tank's state and the rattle roll varied.
+/// `unbox` runs for real on the fixture in the release branches, as the handling test already does.
+pub(crate) fn run_ztanimal_boxed_check_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_BOXED_CHECK_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(3);
+    let live = live_animals();
+    let (Some(&live_animal), false) = (live.first(), types.is_empty()) else {
+        failures.push("the live world holds no animal".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let live_position: [i32; 3] = [get_from_memory(live_animal + 0x114), get_from_memory(live_animal + 0x118), get_from_memory(live_animal + 0x11c)];
+    let habitat_memory: &'static mut [u8] = Box::leak(vec![0u8; 0x100].into_boxed_slice());
+    let habitat_address = habitat_memory.as_ptr() as u32;
+    let habitats: Vec<u32> = vec![0, habitat_address];
+    let tank_memory: &'static mut [u8] = Box::leak(vec![0u8; 0x200].into_boxed_slice());
+    let tank_address = tank_memory.as_ptr() as u32;
+    let mut rng = Lcg(0xb0c5);
+    for &ty in &types {
+        for round in 0..300 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let (boxed, on_map, has_tank, filled, gate) = (pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng));
+            let water = [-1i32, 0, 5][(rng.next() as usize) % 3];
+            let countdown = [0i32, 0, 1][(rng.next() as usize) % 3];
+            let habitat = habitats[(rng.next() as usize) % habitats.len()];
+            let position = if pick(&mut rng) { live_position } else { [0, 0, 0] };
+            let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x777;
+            let habitat_block = pick(&mut rng);
+            let prepare = |animal: ZTAnimal| {
+                save_to_memory(habitat_address + 0x2c, habitat_block as u8);
+                HABITAT.store(habitat, Ordering::SeqCst);
+                SLEEP_GATE.store(gate, Ordering::SeqCst);
+                TANK.store(if has_tank { tank_address } else { 0 }, Ordering::SeqCst);
+                save_to_memory(tank_address + 0x198, filled as u8);
+                save_to_memory(tank_address + 0x188, water);
+                save_to_memory(animal.0 + 0x394, boxed as u8);
+                save_to_memory(animal.0 + 0x211, on_map as u8);
+                save_to_memory(animal.0 + 0x354, countdown);
+                for (i, word) in position.iter().enumerate() {
+                    save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
+                }
+            };
+            compare_three_poles(
+                ty,
+                &format!("doBoxedCheck round {round} boxed {boxed} on_map {on_map} tank {has_tank}/{filled}/{water} gate {gate} habitat {habitat:#x}/{habitat_block} countdown {countdown} position {position:?} seed {seed:#x}"),
+                seed,
+                &install_boxed_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_boxed_check(animal.0),
+                        1 => animal.do_boxed_check(),
+                        _ => {
+                            generated::DO_BOXED_CHECK.hooked()(animal.0 as *const u32);
+                        }
+                    }
+                },
+                &mut failures,
+            );
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+static REMOVED_MESSAGE: AtomicBool = AtomicBool::new(false);
+
+extern "thiscall" fn fake_removed_message(_this: u32) -> u32 {
+    CALLS.lock().unwrap().push(0xac);
+    0x3300 | REMOVED_MESSAGE.load(Ordering::SeqCst) as u32
+}
+
+fn install_health_vtable(animal: ZTAnimal) {
+    install_sleep_vtable(animal);
+    let current: u32 = get_from_memory(animal.0);
+    let mut vtable: Vec<u32> = (0..197u32).map(|slot| get_from_memory::<u32>(current + slot * 4)).collect();
+    vtable[0xac / 4] = fake_removed_message as *const () as usize as u32;
+    let vtable = Box::leak(vtable.into_boxed_slice());
+    save_to_memory(animal.0, vtable.as_ptr() as u32);
+}
+
+/// `ZTANIMAL_HEALTH_CHECK_LIVE`: `doHealthCheck` over health values from zero to full, the escape and playmate bytes, the
+/// sleep gate and the removal-message slot varied, with many RNG seeds so the contagion and sickness rolls both fire. The
+/// consecutive-zero-health counter stays below the type's limit, since `fRemoveAnimal` runs real vanilla code.
+pub(crate) fn run_ztanimal_health_check_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_HEALTH_CHECK_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(4);
+    if types.is_empty() {
+        failures.push("the live world holds no animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let mut rng = Lcg(0x4ea1);
+    for &ty in &types {
+        let limit: i32 = get_from_memory(ty + 0x330);
+        let zero_hunger: i32 = get_from_memory(ty + 0x240);
+        for round in 0..600 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let (egg, show, escaped, playmate, gate, removed) = (pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng));
+            let health = [0i32, 1, 50, 100_000][(rng.next() as usize) % 4];
+            let countdown = [0i32, 0, 1][(rng.next() as usize) % 3];
+            let hunger = if limit > 1 && pick(&mut rng) { zero_hunger } else { zero_hunger.wrapping_add(1) };
+            let was_sick = pick(&mut rng);
+            let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x5151;
+            let prepare = |animal: ZTAnimal| {
+                SLEEP_GATE.store(gate, Ordering::SeqCst);
+                DOING_SHOW.store(show, Ordering::SeqCst);
+                REMOVED_MESSAGE.store(removed, Ordering::SeqCst);
+                save_to_memory(animal.0 + 0x2f8, countdown);
+                save_to_memory(animal.0 + 0x2b8, health);
+                save_to_memory(animal.0 + 0x2b0, hunger);
+                save_to_memory(animal.0 + 0x358, 0i32);
+                save_to_memory(animal.0 + animal_offsets::EGG, egg as u8);
+                save_to_memory(animal.0 + 0x3a3, escaped as u8);
+                save_to_memory(animal.0 + 0x3a4, playmate as u8);
+                save_to_memory(animal.0 + 0x3a7, was_sick as u8);
+                for offset in [0x298u32, 0x29c, 0x2a0, 0x2a4] {
+                    save_to_memory(animal.0 + offset, 0x0f0fu32 ^ seed);
+                }
+            };
+            compare_three_poles(
+                ty,
+                &format!("doHealthCheck round {round} health {health} hunger {hunger} egg {egg} show {show} escaped {escaped} playmate {playmate} gate {gate} removed {removed} sick {was_sick} countdown {countdown} seed {seed:#x}"),
+                seed,
+                &install_health_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_health_check(animal.0),
+                        1 => animal.do_health_check(),
+                        _ => generated::DO_HEALTH_CHECK.hooked()(animal.0 as *const u32),
+                    }
+                },
+                &mut failures,
+            );
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_REPRODUCE_CHECK_LIVE`: `doReproduceCheck` over fixtures with a far-off death timer and a cooldown that has not
+/// elapsed, so neither the dying branch (`setIsRemoved`, `loadBSFunctions`, `setBS`) nor the reproduction branch
+/// (`fCheckReproduction` spawns babies) runs real code on a fixture. Varies the countdowns, mate id and wait, the habitat,
+/// the show slot, the dying byte and happiness; compares the state, slot calls and the shared RNG.
+pub(crate) fn run_ztanimal_reproduce_check_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_REPRODUCE_CHECK_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types: Vec<u32> = live_animal_types(4).into_iter().filter(|&ty| get_from_memory::<i32>(ty + 0x27c) > 0).collect();
+    let live = live_animals();
+    let Some(&live_animal) = live.first().filter(|_| !types.is_empty()) else {
+        failures.push("the live world holds no animal or suitable type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let live_mate_id: u32 = get_from_memory(live_animal + 0x124);
+    let live_habitat = crate::ztkeeper::call_slot_0(live_animal, 0x24c);
+    let habitats: Vec<u32> = std::iter::once(0).chain(Some(live_habitat).filter(|&h| h != 0)).collect();
+    let base = super::ztanimal::base();
+    let period: i32 = get_from_memory(base + 0x0023_9454);
+    let mut rng = Lcg(0x7e90);
+    for &ty in &types {
+        let happy_at: i32 = get_from_memory(ty + 0x378);
+        for round in 0..500 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let (show, dying) = (pick(&mut rng), pick(&mut rng));
+            let countdown = [0i32, 0, 1][(rng.next() as usize) % 3];
+            let mate_id = [0u32, live_mate_id, 0x7ffe_0001][(rng.next() as usize) % 3];
+            let wait = [period.wrapping_sub(1), 5, 0, 1][(rng.next() as usize) % 4];
+            let happiness = [happy_at.wrapping_sub(1), happy_at.wrapping_add(1)][(rng.next() as usize) % 2];
+            let habitat = habitats[(rng.next() as usize) % habitats.len()];
+            let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x2468;
+            let prepare = |animal: ZTAnimal| {
+                HABITAT.store(habitat, Ordering::SeqCst);
+                DOING_SHOW.store(show, Ordering::SeqCst);
+                save_to_memory(animal.0 + 0x328, countdown);
+                save_to_memory(animal.0 + 0x34c, 1_000_000i32);
+                save_to_memory(animal.0 + 0x330, 0i32);
+                save_to_memory(animal.0 + 0x3a6, dying as u8);
+                save_to_memory(animal.0 + 0x2e8, mate_id);
+                save_to_memory(animal.0 + 0x348, wait);
+                save_to_memory(animal.0 + 0x2a8, happiness);
+                save_to_memory(animal.0 + 0x2ac, 0i32);
+            };
+            compare_three_poles(
+                ty,
+                &format!("doReproduceCheck round {round} show {show} dying {dying} countdown {countdown} mate {mate_id:#x} wait {wait} happiness {happiness} habitat {habitat:#x} seed {seed:#x}"),
+                seed,
+                &install_scripted_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_reproduce_check(animal.0),
+                        1 => animal.do_reproduce_check(),
+                        _ => generated::DO_REPRODUCE_CHECK.hooked()(animal.0 as *const u32),
+                    }
+                },
+                &mut failures,
+            );
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+static AMBIENT_SHOW_ACTIVE: AtomicBool = AtomicBool::new(false);
+static ON_LAND: AtomicBool = AtomicBool::new(false);
+static AT_EDGE: AtomicBool = AtomicBool::new(false);
+
+extern "thiscall" fn fake_show_active(_this: u32) -> u32 {
+    CALLS.lock().unwrap().push(0x230);
+    0x1100 | AMBIENT_SHOW_ACTIVE.load(Ordering::SeqCst) as u32
+}
+
+extern "thiscall" fn fake_on_land(_this: u32) -> u32 {
+    CALLS.lock().unwrap().push(0xbc);
+    0x2200 | ON_LAND.load(Ordering::SeqCst) as u32
+}
+
+extern "thiscall" fn fake_at_edge(_this: u32) -> u32 {
+    CALLS.lock().unwrap().push(0x16c);
+    0x4400 | AT_EDGE.load(Ordering::SeqCst) as u32
+}
+
+fn install_ambient_vtable(animal: ZTAnimal) {
+    install_sleep_vtable(animal);
+    let current: u32 = get_from_memory(animal.0);
+    let mut vtable: Vec<u32> = (0..197u32).map(|slot| get_from_memory::<u32>(current + slot * 4)).collect();
+    vtable[0x230 / 4] = fake_show_active as *const () as usize as u32;
+    vtable[0xbc / 4] = fake_on_land as *const () as usize as u32;
+    vtable[0x16c / 4] = fake_at_edge as *const () as usize as u32;
+    let vtable = Box::leak(vtable.into_boxed_slice());
+    save_to_memory(animal.0, vtable.as_ptr() as u32);
+}
+
+/// `ZTANIMAL_AMBIENT_ANIMS_LIVE`: `doAmbientAnims` over fixtures standing on the tiles of live animals, with the gate bytes,
+/// goal, set name, queued call, rampage and escape bytes, sleep need and the scripted slots (`+0x22c`/`+0x230`/`+0xbc`/`+0x16c`/
+/// `+0x24c`) varied. `setBS` is answered by a script (the `SLEEP_GATE` flag); `ZTUnit::doAmbientAnims` and `doSleepCheck` run for real.
+pub(crate) fn run_ztanimal_ambient_anims_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_AMBIENT_ANIMS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(2);
+    let live = live_animals();
+    if live.is_empty() || types.is_empty() {
+        failures.push("the live world holds no animal".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let positions: Vec<[i32; 3]> = live.iter().take(6).map(|&a| [get_from_memory(a + 0x114), get_from_memory(a + 0x118), get_from_memory(a + 0x11c)]).collect();
+    let habitat_memory: &'static mut [u8] = Box::leak(vec![0u8; 0x100].into_boxed_slice());
+    let habitat_address = habitat_memory.as_ptr() as u32;
+    let names: [&[u8]; 7] = [b"", b"bSleep", b"bSick", b"bHatch", b"bHabitatRampage", b"bEscapedRampage", b"bWalk"];
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_zap_set_bs);
+    let mut rng = Lcg(0xa3b1);
+    for &ty in &types {
+        let sleep_at: i32 = get_from_memory(ty + 0x324);
+        for round in 0..600 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let rare = |rng: &mut Lcg| rng.next() % 8 == 0;
+            let gates: [bool; 6] = [rare(&mut rng), rare(&mut rng), rare(&mut rng), rare(&mut rng), rare(&mut rng), rare(&mut rng)];
+            let (show, show_active, goal_chase) = (rare(&mut rng), pick(&mut rng), rare(&mut rng));
+            let (rampage, escaped, no_escape_set, pending, gate, land, edge, habitat_block) =
+                (pick(&mut rng), pick(&mut rng), pick(&mut rng), rare(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng));
+            let (name, queued) = (names[(rng.next() as usize) % 7], names[(rng.next() as usize) % 7]);
+            let need = [sleep_at.wrapping_sub(1), sleep_at.wrapping_add(1)][(rng.next() as usize) % 2];
+            let sick = rare(&mut rng);
+            let position = positions[(rng.next() as usize) % positions.len()];
+            let prepare = |animal: ZTAnimal| {
+                SLEEP_GATE.store(gate, Ordering::SeqCst);
+                DOING_SHOW.store(show, Ordering::SeqCst);
+                AMBIENT_SHOW_ACTIVE.store(show_active, Ordering::SeqCst);
+                ON_LAND.store(land, Ordering::SeqCst);
+                AT_EDGE.store(edge, Ordering::SeqCst);
+                HABITAT.store(habitat_address, Ordering::SeqCst);
+                save_to_memory(habitat_address + 0x2c, habitat_block as u8);
+                for (offset, gate) in [0x3a6u32, 0x394, 0x3a4, 0x24c, 0x393, 0x395].into_iter().zip(gates) {
+                    save_to_memory(animal.0 + offset, gate as u8);
+                }
+                save_to_memory(animal.0 + 0x170, if goal_chase { 0x74i32 } else { 1 });
+                save_to_memory(animal.0 + 0x3b0, rampage as u8);
+                save_to_memory(animal.0 + 0x3b1, 1u8);
+                save_to_memory(animal.0 + 0x3a3, escaped as u8);
+                save_to_memory(animal.0 + 0x20c, no_escape_set as u8);
+                save_to_memory(animal.0 + 0x3a7, sick as u8);
+                save_to_memory(animal.0 + 0x2c0, need);
+                for (i, word) in position.iter().enumerate() {
+                    save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
+                }
+                plant_set_name(animal, name);
+                unsafe { crate::bfentity::set_pending_bs(animal.0, crate::bfentity::new_owned_name(queued), 1, 1) };
+                save_to_memory(animal.0 + 0x6d, pending as u8);
+            };
+            compare_three_poles(
+                ty,
+                &format!("doAmbientAnims round {round} gates {gates:?} show {show}/{show_active} chase {goal_chase} rampage {rampage} escaped {escaped} no_escape_set {no_escape_set} pending {pending} gate {gate} land {land} edge {edge} block {habitat_block} name {name:?} queued {queued:?} need {need} sick {sick} position {position:?}"),
+                0x1b2b,
+                &install_ambient_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_ambient_anims(animal.0),
+                        1 => animal.do_ambient_anims(),
+                        _ => generated::DO_AMBIENT_ANIMS.hooked()(animal.0 as *const u32, std::ptr::null()),
+                    }
+                },
+                &mut failures,
+            );
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = None;
+    finish_test(test_name, failures, failure_log)
+}
+
+extern "thiscall" fn fake_slot_110(_this: u32, a: u32, b: u32) {
+    CALLS.lock().unwrap().push(0x110 | a << 12 | b << 13);
+}
+
+fn install_baby_vtable(animal: ZTAnimal) {
+    install_sleep_vtable(animal);
+    let current: u32 = get_from_memory(animal.0);
+    let mut vtable: Vec<u32> = (0..197u32).map(|slot| get_from_memory::<u32>(current + slot * 4)).collect();
+    vtable[0x110 / 4] = fake_slot_110 as *const () as usize as u32;
+    let vtable = Box::leak(vtable.into_boxed_slice());
+    save_to_memory(animal.0, vtable.as_ptr() as u32);
+}
+
+/// `ZTANIMAL_BABY_TO_ADULT_CHECK_LIVE`: `doBabyToAdultCheck` on fixtures of every live baby type (name starting with `y`) and of
+/// adult types, with the countdown and the gender text varied. `findTypes` and the new type's vtable `+0x10` run for real; the animal's
+/// `+0x110` and `+0x198` are recorded. Compares the animal's type and state and the slot calls.
+pub(crate) fn run_ztanimal_baby_to_adult_check_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_BABY_TO_ADULT_CHECK_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let all_types = live_animal_types(400);
+    let is_baby = |ty: u32| get_from_memory::<u8>(get_from_memory::<u32>(ty + 0xa4)) == b'y';
+    let mut types: Vec<u32> = all_types.iter().copied().filter(|&ty| is_baby(ty)).take(6).collect();
+    types.extend(all_types.iter().copied().filter(|&ty| !is_baby(ty)).take(2));
+    if !types.iter().any(|&ty| is_baby(ty)) {
+        failures.push("the live world holds no baby animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let texts: [&'static [u8]; 3] = [b"Male\0", b"Female\0", b"\0"];
+    let text_addresses: Vec<u32> = texts.iter().map(|text| text.as_ptr() as u32).collect();
+    let morphs = |ty: u32| {
+        let animal = build_animal(ty);
+        install_baby_vtable(animal);
+        save_to_memory(animal.0 + 0x32c, 0i32);
+        save_to_memory(animal.0 + 0x26c, text_addresses[0]);
+        real::do_baby_to_adult_check(animal.0);
+        get_from_memory::<u32>(animal.0 + 0x128) != ty
+    };
+    if !types.iter().filter(|&&ty| is_baby(ty)).any(|&ty| morphs(ty)) {
+        failures.push("no baby type morphed under the real body, so the findTypes branch was not exercised".to_string());
+    }
+    for &ty in &types {
+        for (round, countdown) in [0i32, 0, 1, 5].into_iter().cycle().take(12).enumerate() {
+            let text = text_addresses[round % 3];
+            let prepare = |animal: ZTAnimal| {
+                save_to_memory(animal.0 + 0x32c, countdown);
+                save_to_memory(animal.0 + 0x26c, text);
+            };
+            compare_three_poles(
+                ty,
+                &format!("doBabyToAdultCheck type {ty:#x} baby {} round {round} countdown {countdown} text {:?}", is_baby(ty), texts[round % 3]),
+                0x77,
+                &install_baby_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_baby_to_adult_check(animal.0),
+                        1 => animal.do_baby_to_adult_check(),
+                        _ => generated::DO_BABY_TO_ADULT_CHECK.hooked()(animal.0 as *const u32),
+                    }
+                },
+                &mut failures,
+            );
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}

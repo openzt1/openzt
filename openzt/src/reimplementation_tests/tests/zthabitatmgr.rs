@@ -14874,7 +14874,7 @@ pub(crate) fn run_habitat_egg_service_matches_real_live_test(failure_log: &mut O
         for &staff_ptr in &staff {
             for &egg in &eggs {
                 let can_service = low_byte_bool(crate::ztanimal::live_support::real::can_service(egg as u32, staff_ptr as u32));
-                let sickly = low_byte_bool(unsafe { openzt_detour::generated::ztanimal::IS_SICKLY.original()(egg as *const u32) });
+                let sickly = unsafe { openzt_detour::generated::ztanimal::IS_SICKLY.original()(egg as *const u32) };
                 if can_service {
                     serviceable_pairs += 1;
                 }
@@ -14905,7 +14905,7 @@ pub(crate) fn run_habitat_egg_service_matches_real_live_test(failure_log: &mut O
                                 tile,
                                 if tile != 0 { get_from_memory::<u8>(tile + 0x85) } else { 0 },
                                 if tile != 0 { get_from_memory::<u8>(tile + 0x83) } else { 0 },
-                                low_byte_bool(unsafe { openzt_detour::generated::ztanimal::IS_SICKLY.original()(egg as *const u32) }),
+                                unsafe { openzt_detour::generated::ztanimal::IS_SICKLY.original()(egg as *const u32) },
                             )
                         })
                         .collect();

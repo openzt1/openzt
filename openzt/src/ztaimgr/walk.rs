@@ -186,7 +186,7 @@ pub(super) const RANDOM_WALK_VANILLA: RandomWalkOps = RandomWalkOps {
 };
 
 pub(super) unsafe fn animal_target_building_vanilla(unit: u32) -> bool {
-    unsafe { ZTANIMAL_TARGET_BUILDING.original()(unit as *const u32, true) }
+    unsafe { ZTANIMAL_TARGET_BUILDING.hooked()(unit as *const u32, true) }
 }
 
 pub(super) unsafe fn f_move_vanilla(this: u32, none: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32) -> bool {
