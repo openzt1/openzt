@@ -210,7 +210,7 @@ pub(crate) unsafe fn set_bs(this: u32, name: RawString, call_flag: u8, force: u8
 
 /// `set_bs`, except that under the live battery an installed [`set_bs_override`] hook may answer in its place.
 /// `setBSNew` reaches `setBS` through here, as vanilla's `setBSNew` reaches the hooked `setBS` address.
-unsafe fn set_bs_overridable(this: u32, name: RawString, call_flag: u8, force: u8, clear_mode: i32) -> bool {
+pub(crate) unsafe fn set_bs_overridable(this: u32, name: RawString, call_flag: u8, force: u8, clear_mode: i32) -> bool {
     #[cfg(feature = "reimplementation-tests")]
     {
         if let Some(hook) = set_bs_override::HOOK.lock().ok().and_then(|hook| *hook) {

@@ -126,7 +126,7 @@ extern "thiscall" fn fake_update_animation(_this: u32, arg: u32) {
 fn install_scripted_vtable(animal: ZTAnimal) {
     let real_vtable: u32 = get_from_memory(animal.0);
     let mut vtable: Vec<u32> = (0..197u32).map(|slot| get_from_memory(real_vtable + slot * 4)).collect();
-    let scripted: [(u32, u32); 15] = [
+    let scripted: [(u32, u32); 17] = [
         (0xbc, fake_get_swims as *const () as usize as u32),
         (0x16c, fake_get_underwater as *const () as usize as u32),
         (0x170, fake_only_underwater as *const () as usize as u32),
@@ -142,6 +142,8 @@ fn install_scripted_vtable(animal: ZTAnimal) {
         (0x198, fake_stop_everything as *const () as usize as u32),
         (0x40, fake_update_animation as *const () as usize as u32),
         (0x300, fake_check_prey as *const () as usize as u32),
+        (0x1f8, fake_set_destination as *const () as usize as u32),
+        (0x1a0, fake_set_position as *const () as usize as u32),
     ];
     for (slot, function) in scripted {
         vtable[(slot / 4) as usize] = function;
@@ -641,6 +643,533 @@ pub(crate) fn run_ztanimal_movement_prey_live_test(failure_log: &mut Option<std:
                 return finish_test(test_name, failures, failure_log);
             }
         }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// A fake fence type's `isCastClass`: the tank-wall tag answers the byte at type `+0x1a0`, every other tag (the fence
+/// tag) answers true. The upper bytes are dirty on purpose.
+extern "thiscall" fn fence_type_is_cast(this: u32, tag: u32) -> u32 {
+    if tag == base() + 0x0023_8720 {
+        0xabcd_ef00 | get_from_memory::<u8>(this + 0x1a0) as u32
+    } else {
+        0xabcd_ef01
+    }
+}
+
+/// The fake type's virtual `+0x30`, which `isZooGate` searches through: no name list.
+extern "thiscall" fn fence_type_no_gate_list(_this: u32) -> u32 {
+    0
+}
+
+/// The fence entity's virtual `+0x144` (show-gate predicate): the byte at entity `+0x5f0`.
+extern "thiscall" fn fence_show_gate(this: u32) -> u32 {
+    0xabcd_ef00 | get_from_memory::<u8>(this + 0x5f0) as u32
+}
+
+/// A fake fence entity with a random type: the fence-type flags, name, height, strength, open word, electrified
+/// state, show-gate answer and tank-wall cast and bytes `fencesOK` reads. The buffers are leaked.
+fn make_random_fence(rng: &mut Lcg) -> u32 {
+    let mut type_vtable = vec![0u32; 0x40];
+    type_vtable[7] = fence_type_is_cast as *const () as usize as u32;
+    type_vtable[12] = fence_type_no_gate_list as *const () as usize as u32;
+    let type_vtable = Box::leak(type_vtable.into_boxed_slice());
+    let name: &[u8] = if rng.next() % 4 == 0 { b"gate\0" } else { b"wall\0" };
+    let name = Box::leak(name.to_vec().into_boxed_slice());
+    let fence_type = Box::leak(vec![0u8; 0x200].into_boxed_slice()).as_mut_ptr() as u32;
+    save_to_memory(fence_type, type_vtable.as_ptr() as u32);
+    save_to_memory(fence_type + 0xa4, name.as_ptr() as u32);
+    save_to_memory(fence_type + 0xa8, name.as_ptr() as u32 + 4);
+    save_to_memory(fence_type + 0x64, [0i32, 5, 50][(rng.next() % 3) as usize]);
+    save_to_memory(fence_type + 0x170, [0i32, 3][(rng.next() % 2) as usize]);
+    for (offset, odds) in [(0x190u32, 5), (0x191, 5), (0x193, 2), (0x195, 2), (0x196, 2), (0x198, 2), (0x1a0, 2)] {
+        save_to_memory(fence_type + offset, (rng.next() % odds == 0) as u8);
+    }
+    let mut entity_vtable = vec![0u32; 0x60];
+    entity_vtable[0x144 / 4] = fence_show_gate as *const () as usize as u32;
+    let entity_vtable = Box::leak(entity_vtable.into_boxed_slice());
+    let fence = Box::leak(vec![0u8; 0x600].into_boxed_slice()).as_mut_ptr() as u32;
+    save_to_memory(fence, entity_vtable.as_ptr() as u32);
+    save_to_memory(fence + 0x128, fence_type);
+    save_to_memory(fence + 0x15c, [0i32, 2, 9][(rng.next() % 3) as usize]);
+    save_to_memory(fence + 0x160, [0i32, 1, 5][(rng.next() % 3) as usize]);
+    save_to_memory(fence + 0x164, (rng.next() % 3 == 0) as u8);
+    for offset in [0x464u32, 0x466, 0x5f0] {
+        save_to_memory(fence + offset, (rng.next() % 2 == 0) as u8);
+    }
+    fence
+}
+
+/// `ZTANIMAL_FENCES_OK_LIVE`: `fencesOK` over null and live tiles in every direction, then over a copy of a live
+/// animal's tile whose near edge, and whose real neighbour's far edge, hold random fake fences, with random escape
+/// state, show goal and animal-type climb/jump/strength/height fields (restored afterwards). Real against port and the
+/// hooked address: answers and both output bytes.
+pub(crate) fn run_ztanimal_fences_ok_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_FENCES_OK_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((types, live)) = fixture_inputs(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let run_poles = |animal: ZTAnimal, pole: usize, tile: u32, direction: i32| -> i64 {
+        let (mut out_a, mut out_b) = (0xaau8, 0xaau8);
+        let (a, b) = (&mut out_a as *mut u8 as u32, &mut out_b as *mut u8 as u32);
+        let result = match pole {
+            0 => real::fences_ok(animal.0, tile, direction, a, b),
+            1 => animal.fences_ok(tile, direction, a, b),
+            _ => unsafe { generated::FENCES_OK.hooked()(animal.0 as *const u32, tile as *const u32, direction as u32, a as *const bool, b as *const bool) & 0xff != 0 },
+        };
+        result as i64 | (get_from_memory::<u8>(a) as i64) << 8 | (get_from_memory::<u8>(b) as i64) << 16
+    };
+    for &animal_address in live.iter().take(12) {
+        let tile = own_tile(animal_address);
+        for direction in (0i32..8).chain([-1]) {
+            let results: Vec<i64> = (0..3).map(|pole| run_poles(ZTAnimal(animal_address), pole, tile, direction)).collect();
+            if results[0] != results[1] || results[0] != results[2] {
+                failures.push(format!("live animal {animal_address:#x} direction {direction}: real {:#x}, port {:#x}, hooked {:#x}", results[0], results[1], results[2]));
+            }
+        }
+    }
+    let null_results: Vec<i64> = (0..3).map(|pole| run_poles(ZTAnimal(live[0]), pole, 0, 2)).collect();
+    if null_results.iter().any(|&result| result != null_results[0]) {
+        failures.push(format!("null tile: {null_results:x?}"));
+    }
+
+    let mut rng = Lcg(0xfe7c);
+    let (mut blocked, mut passed) = (0, 0);
+    for &ty in &types {
+        for round in 0..400 {
+            let source = live[(rng.next() as usize) % live.len()];
+            let live_tile = own_tile(source);
+            if live_tile == 0 {
+                continue;
+            }
+            let copy = Box::leak(vec![0u8; 0x8c].into_boxed_slice());
+            unsafe { std::ptr::copy_nonoverlapping(live_tile as *const u8, copy.as_mut_ptr(), 0x8c) };
+            let copy_address = copy.as_ptr() as u32;
+            let direction = (rng.next() % 8) as i32;
+            let far_edge = (direction - 4) & 7;
+            let world: u32 = get_from_memory(base() + 0x0023_8040);
+            let neighbour = unsafe { BFMAP_GET_NEIGHBOR.original()((world + 8) as *const u32, copy_address as *const u32, direction as u32) };
+            if neighbour == 0 {
+                continue;
+            }
+            let near_slot = copy_address + 0x14 + (direction as u32 / 2) * 4;
+            let far_slot = neighbour + 0x14 + (far_edge as u32 / 2) * 4;
+            let (near_saved, far_saved): (u32, u32) = (get_from_memory(near_slot), get_from_memory(far_slot));
+            let near_fence = if rng.next() % 4 != 0 { make_random_fence(&mut rng) } else { 0 };
+            let far_fence = if rng.next() % 4 != 0 { make_random_fence(&mut rng) } else { 0 };
+            save_to_memory(near_slot, near_fence);
+            save_to_memory(far_slot, far_fence);
+            let saved_flags: [u8; 2] = [get_from_memory(ty + 0x3cc), get_from_memory(ty + 0x3cd)];
+            let (strength_saved, height_saved): (i32, i32) = (get_from_memory(ty + 0x3b4), get_from_memory(ty + 0x3dc));
+            save_to_memory(ty + 0x3cc, (rng.next() % 2 == 0) as u8);
+            save_to_memory(ty + 0x3cd, (rng.next() % 2 == 0) as u8);
+            save_to_memory(ty + 0x3b4, [0i32, 3, 9][(rng.next() % 3) as usize]);
+            save_to_memory(ty + 0x3dc, [0i32, 5, 80][(rng.next() % 3) as usize]);
+            let escaping = rng.next() % 2 == 0;
+            let goal = [0i32, 0x85, 0x86][(rng.next() % 3) as usize];
+            let prepare = |animal: ZTAnimal| {
+                stand_on(animal, source);
+                save_to_memory(animal.0 + animal_offsets::HAS_ESCAPE_INFO, escaping as u8);
+                save_to_memory(animal.0 + 0x170, goal);
+            };
+            poles(
+                ty,
+                &format!("fencesOK round {round} direction {direction} escaping {escaping} goal {goal:#x} near {near_fence:#x} far {far_fence:#x}"),
+                &prepare,
+                &|animal, pole| run_poles(animal, pole, copy_address, direction),
+                &mut failures,
+            );
+            let probe = build_animal(ty);
+            prepare(probe);
+            if run_poles(probe, 0, copy_address, direction) & 1 == 0 {
+                blocked += 1;
+            } else {
+                passed += 1;
+            }
+            save_to_memory(ty + 0x3cc, saved_flags[0]);
+            save_to_memory(ty + 0x3cd, saved_flags[1]);
+            save_to_memory(ty + 0x3b4, strength_saved);
+            save_to_memory(ty + 0x3dc, height_saved);
+            save_to_memory(near_slot, near_saved);
+            save_to_memory(far_slot, far_saved);
+            if failures.len() > 20 {
+                return finish_test(test_name, failures, failure_log);
+            }
+        }
+    }
+    if blocked == 0 || passed == 0 {
+        failures.push(format!("the random fence cases only reached one answer (blocked {blocked}, passed {passed})"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Vtable `+0x1f8` (the destination setter `pickRandomDest` ends with): records a hash of the three position words.
+extern "thiscall" fn fake_set_destination(_this: u32, position: u32) -> u32 {
+    let words: [u32; 3] = [get_from_memory(position), get_from_memory(position + 4), get_from_memory(position + 8)];
+    record(0x1f8, words[0] ^ words[1].rotate_left(7) ^ words[2].rotate_left(14));
+    0xabcd_ef00
+}
+
+/// Vtable `+0x1a0`: the escape destination hand-off.
+extern "thiscall" fn fake_set_position(_this: u32, position: u32) -> u32 {
+    let words: [u32; 3] = [get_from_memory(position), get_from_memory(position + 4), get_from_memory(position + 8)];
+    record(0x1a0, words[0] ^ words[1].rotate_left(7) ^ words[2].rotate_left(14));
+    0xabcd_ef00
+}
+
+/// `ZTANIMAL_PICK_RANDOM_DEST_LIVE`: `pickRandomDest` on fixtures standing on live animals' tiles, in the live
+/// animal's own habitat, over random pending directions, activity modes, swim/underwater answers and RNG seeds; the
+/// position written, the answer, the destination-setter call and the animal's state agree between real, port and the
+/// hooked address. A round is skipped when the escape branch would run (`evaluateEscape` runs the real pathing over a
+/// fixture) or when a failed pick would call `setTerrainMode` into its walking branch.
+pub(crate) fn run_ztanimal_pick_random_dest_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_PICK_RANDOM_DEST_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((types, live)) = fixture_inputs(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let rng_address = base() + 0x0023_8060;
+    let mut rng = Lcg(0x5eed);
+    let (mut ran, mut found, mut missed) = (0, 0, 0);
+    for &ty in &types {
+        for round in 0..300 {
+            let source = live[(rng.next() as usize) % live.len()];
+            let habitat = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(source) + 0x24c))(source) };
+            if habitat == 0 || get_from_memory::<u8>(habitat + 0x2c) != 0 {
+                continue;
+            }
+            let habitat_ref = unsafe { crate::util::ref_from_memory::<crate::zthabitat::ZTHabitat>(habitat) };
+            let pending = rng.next() % 3 == 0;
+            let direction: i32 = [-1i32, -1, 0, 2, 4, 6][(rng.next() as usize) % 6];
+            let mode = [0i32, 1, 2, 5][(rng.next() as usize) % 4];
+            let (swims, underwater) = (random_bool(&mut rng), random_bool(&mut rng));
+            let seed = rng.next();
+            let key = ty;
+            let entry = unsafe {
+                openzt_detour::generated::msvc_std_tree36::OPERATOR_INDEX.original()((habitat + 0x16c) as *const u32, &key as *const u32)
+            } as u32;
+            if !pending && get_from_memory::<u8>(entry) != 0 {
+                continue;
+            }
+            // Dry run with the same seed: skip rounds that would end in `setTerrainMode`'s walking branch.
+            save_to_memory(rng_address, seed);
+            let predicted = if direction != -1 {
+                1
+            } else {
+                match mode {
+                    1 => habitat_ref.get_random_water_tile(),
+                    2 => {
+                        let land_roamer = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(habitat) + 0x20))(habitat) } & 0xff != 0;
+                        if land_roamer { 1 } else { habitat_ref.get_random_land_tile() }
+                    }
+                    _ => habitat_ref.get_random_underwater_tile(),
+                }
+            };
+            let may_set_mode = predicted == 0 && (matches!(mode, 1 | 2) || swims || underwater);
+            if may_set_mode {
+                continue;
+            }
+            let prepare = |animal: ZTAnimal| {
+                SWIMS.store(swims, Ordering::SeqCst);
+                UNDERWATER.store(underwater, Ordering::SeqCst);
+                HABITAT.store(habitat, Ordering::SeqCst);
+                stand_on(animal, source);
+                save_to_memory(animal.0 + animal_offsets::ACTIVITY_MODE, mode);
+                save_to_memory(animal.0 + 0x37c, direction);
+                save_to_memory(animal.0 + 0x395, pending as u8);
+                save_to_memory(animal.0 + animal_offsets::HAS_ESCAPE_INFO, 0u8);
+                save_to_memory(rng_address, seed);
+            };
+            poles(
+                ty,
+                &format!("pickRandomDest round {round} pending {pending} direction {direction} mode {mode} swims {swims} underwater {underwater} seed {seed:#x}"),
+                &prepare,
+                &|animal, pole| {
+                    let mut position = [0xaau32; 3];
+                    let address = position.as_mut_ptr() as u32;
+                    let result = match pole {
+                        0 => real::pick_random_dest(animal.0, address),
+                        1 => animal.pick_random_dest(address),
+                        _ => unsafe { generated::PICK_RANDOM_DEST.hooked()(animal.0 as *const u32, address as *const glam::i32::IVec3) & 0xff != 0 },
+                    };
+                    result as i64 | ((position[0] ^ position[1].rotate_left(7) ^ position[2].rotate_left(14) ^ get_from_memory::<u32>(rng_address).rotate_left(21)) as i64) << 1
+                },
+                &mut failures,
+            );
+            ran += 1;
+            if predicted != 0 {
+                found += 1;
+            } else {
+                missed += 1;
+            }
+            if failures.len() > 20 {
+                return finish_test(test_name, failures, failure_log);
+            }
+        }
+    }
+    if ran == 0 || found == 0 {
+        failures.push(format!("the comparison cases never found a destination (ran {ran}, found {found}, missed {missed})"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// The unit's path list (`+0x154`): the `(x, y, z)` words of every node, in order.
+fn path_list(animal: u32) -> Vec<[i32; 3]> {
+    let sentinel: u32 = get_from_memory(animal + 0x154);
+    let mut nodes = Vec::new();
+    let mut node: u32 = get_from_memory(sentinel);
+    while node != sentinel && nodes.len() < 4096 {
+        nodes.push([get_from_memory(node + 8), get_from_memory(node + 0xc), get_from_memory(node + 0x10)]);
+        node = get_from_memory(node);
+    }
+    nodes
+}
+
+/// `ZTANIMAL_FEEDING_PATH_LIVE`: `getFeedingPath` on fixtures standing on live animals' positions, towards the grid
+/// positions of other live animals, with and without the shortcut flag and over several RNG seeds (the shortcut roll
+/// below and above `0x32` both occur). Each pole gets a fresh fixture because `getPath` answers by the unit's current path
+/// state. Real, port and the hooked address must agree on the answer, the RNG state afterwards and the path list.
+pub(crate) fn run_ztanimal_feeding_path_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_FEEDING_PATH_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((types, live)) = fixture_inputs(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let rng_address = base() + 0x0023_8060;
+    let mut rng = Lcg(0xfeed);
+    for &ty in types.iter().take(2) {
+        for round in 0..60 {
+            let source = live[(rng.next() as usize) % live.len()];
+            let other = live[(rng.next() as usize) % live.len()];
+            let habitat = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(source) + 0x24c))(source) };
+            let mut scratch = [0i32; 3];
+            let grid = unsafe { openzt_detour::generated::bfentity::GET_GRID_POS.hooked()(other as *const u32, scratch.as_mut_ptr()) } as u32;
+            let destination: &'static [i32; 3] = Box::leak(Box::new([get_from_memory(grid), get_from_memory(grid + 4), get_from_memory(grid + 8)]));
+            let destination_address = destination.as_ptr() as u32;
+            let shortcut = random_bool(&mut rng);
+            let seed = rng.next();
+            let prepare = |animal: ZTAnimal| {
+                HABITAT.store(habitat, Ordering::SeqCst);
+                stand_on(animal, source);
+                save_to_memory(rng_address, seed);
+            };
+            poles(
+                ty,
+                &format!("getFeedingPath round {round} destination {destination:?} shortcut {shortcut} seed {seed:#x}"),
+                &prepare,
+                &|animal, pole| {
+                    let result = match pole {
+                        0 => real::get_feeding_path(animal.0, destination_address, shortcut),
+                        1 => animal.get_feeding_path(destination_address, shortcut),
+                        _ => unsafe { generated::GET_FEEDING_PATH.hooked()(animal.0 as *const c_void, destination_address as *const i32, shortcut as u8) & 0xff != 0 },
+                    };
+                    let path = path_list(animal.0);
+                    let hash = path.iter().flatten().fold(path.len() as u32, |hash, word| (hash ^ *word as u32).wrapping_mul(0x0100_0193));
+                    result as i64 | ((hash ^ get_from_memory::<u32>(rng_address).rotate_left(11)) as i64) << 1 | (path.len() as i64) << 40
+                },
+                &mut failures,
+            );
+            if failures.len() > 10 {
+                return finish_test(test_name, failures, failure_log);
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// The scripted answers of the AI manager's path search (`ZTAIMgr + 0x10`, first virtual): one `(found, path)` per call, in
+/// call order; a call past the script fails.
+static SEARCH_SCRIPT: Mutex<Vec<(bool, Vec<[i32; 3]>)>> = Mutex::new(Vec::new());
+static SEARCH_NEXT: AtomicU32 = AtomicU32::new(0);
+/// `ZTAIMgr`'s address while `ZTANIMAL_EVALUATE_ESCAPE_LIVE` runs, for the scripted search to write its result list into.
+static SEARCH_AIMGR: AtomicU32 = AtomicU32::new(0);
+
+/// The scripted search: records its arguments and the unit's "searching" byte, then publishes the scripted path as the
+/// AI manager's result list (a leaked sentinel and nodes `{next, prev, x, y, z}`).
+extern "thiscall" fn fake_path_search(_this: u32, from: u32, to: u32, unit: u32, flag: u32) -> u32 {
+    let words = |position: u32| -> u32 {
+        let [x, y, z]: [u32; 3] = [get_from_memory(position), get_from_memory(position + 4), get_from_memory(position + 8)];
+        x ^ y.rotate_left(7) ^ z.rotate_left(14)
+    };
+    record(0x1000, words(from) ^ words(to).rotate_left(3) ^ (get_from_memory::<u8>(unit + 0x391) as u32) << 24 ^ flag << 25);
+    let index = SEARCH_NEXT.fetch_add(1, Ordering::SeqCst) as usize;
+    let (found, path) = SEARCH_SCRIPT.lock().unwrap().get(index).cloned().unwrap_or((false, Vec::new()));
+    let sentinel = Box::leak(Box::new([0u32; 5])) as *mut [u32; 5] as u32;
+    let mut previous = sentinel;
+    for position in &path {
+        let node = Box::leak(Box::new([0u32, previous, position[0] as u32, position[1] as u32, position[2] as u32])) as *mut [u32; 5] as u32;
+        save_to_memory(previous, node);
+        previous = node;
+    }
+    save_to_memory(previous, sentinel);
+    save_to_memory(sentinel + 4, previous);
+    save_to_memory(SEARCH_AIMGR.load(Ordering::SeqCst) + 0x80, sentinel);
+    0xabcd_ef00 | found as u32
+}
+
+/// Swaps the path-search object's vtable for a copy with the scripted first virtual and restores both it and the result
+/// list head on drop.
+struct ScriptedSearch {
+    pather: u32,
+    vtable: u32,
+    result_head: u32,
+}
+
+impl ScriptedSearch {
+    fn install(aimgr: u32) -> Self {
+        let pather = aimgr + 0x10;
+        let vtable: u32 = get_from_memory(pather);
+        let result_head: u32 = get_from_memory(aimgr + 0x80);
+        let mut copy: Vec<u32> = (0..32u32).map(|slot| get_from_memory(vtable + slot * 4)).collect();
+        copy[0] = fake_path_search as *const () as usize as u32;
+        save_to_memory(pather, Box::leak(copy.into_boxed_slice()).as_ptr() as u32);
+        SEARCH_AIMGR.store(aimgr, Ordering::SeqCst);
+        Self { pather, vtable, result_head }
+    }
+}
+
+impl Drop for ScriptedSearch {
+    fn drop(&mut self) {
+        save_to_memory(self.pather, self.vtable);
+        save_to_memory(SEARCH_AIMGR.load(Ordering::SeqCst) + 0x80, self.result_head);
+    }
+}
+
+/// `ZTANIMAL_EVALUATE_ESCAPE_LIVE`: `evaluateEscape` on fixtures standing on fenced tiles of the live map (in a habitat, as
+/// vanilla's search requires), with an escape record (allocated through vanilla's `operator_new`) towards the tile across
+/// the fence, over random record kinds. The AI manager's path search is scripted (a walk across the fenced edge with
+/// random extra steps, then a second-search answer of none, two or three positions), since vanilla's search needs a
+/// species that can escape. Real, port and the hooked address must agree on the path list left in the unit, the record's
+/// bytes, the recorded search arguments, destination hand-off and slot calls, the unit's state (including the "searching"
+/// byte) and the search object's scratch words.
+pub(crate) fn run_ztanimal_evaluate_escape_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_EVALUATE_ESCAPE_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((types, live)) = fixture_inputs(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world: u32 = get_from_memory(base() + 0x0023_8040);
+    let map = world + 8;
+    let (width, height): (i32, i32) = (get_from_memory(map + 0x2c), get_from_memory(map + 0x30));
+    let tiles: u32 = get_from_memory(map + 0x38);
+    let aimgr: u32 = get_from_memory(base() + 0x0023_8098);
+    let tile_position = |tile: u32| -> [i32; 3] { [get_from_memory(tile + 0x34), get_from_memory(tile + 0x38), get_from_memory(tile + 0x3c)] };
+    let neighbour = |tile: u32, direction: u32| unsafe { BFMAP_GET_NEIGHBOR.original()(map as *const u32, tile as *const u32, direction) };
+    // Every (tile, direction, tile across a fenced edge) of the live map whose starting tile lies in a habitat.
+    let mut fenced: Vec<(u32, u32, u32)> = Vec::new();
+    for index in 0..(width * height) as u32 {
+        let tile = tiles + index * 0x8c;
+        let tile_habitat = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(live[0]) + 0x248))(live[0], tile) };
+        if tile_habitat == 0 {
+            continue;
+        }
+        for direction in (0..8u32).step_by(2) {
+            if get_from_memory::<u32>(tile + 0x14 + direction / 2 * 4) != 0 {
+                let across = neighbour(tile, direction);
+                if across != 0 {
+                    fenced.push((tile, direction, across));
+                }
+            }
+        }
+    }
+    if fenced.is_empty() {
+        failures.push("the live map holds no fenced edge inside a habitat".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let search = ScriptedSearch::install(aimgr);
+    let mut rng = Lcg(0xe5c4);
+    let (mut ran, mut handed_off, mut with_kind, mut second_search) = (0, 0, 0, 0);
+    for &ty in types.iter() {
+        for round in 0..60 {
+            let source = live[(rng.next() as usize) % live.len()];
+            let habitat = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(source) + 0x24c))(source) };
+            if habitat == 0 {
+                continue;
+            }
+            let (from, direction, across) = fenced[(rng.next() as usize) % fenced.len()];
+            let stand = [tile_position(from)[0] * 64 + 32, tile_position(from)[1] * 64 + 32, tile_position(from)[2]];
+            let kind = (rng.next() % 5) as i32;
+            // First search: optionally a lead-in step, the fenced crossing, then up to two more steps.
+            let mut path: Vec<[i32; 3]> = Vec::new();
+            if rng.next() % 3 == 0 {
+                let lead = neighbour(from, (rng.next() % 4) * 2);
+                if lead != 0 {
+                    path.push(tile_position(lead));
+                }
+            }
+            path.push(tile_position(from));
+            path.push(tile_position(across));
+            let mut tail = across;
+            for _ in 0..rng.next() % 3 {
+                let next = neighbour(tail, (rng.next() % 4) * 2);
+                if next != 0 {
+                    path.push(tile_position(next));
+                    tail = next;
+                }
+            }
+            let first_found = rng.next() % 8 != 0;
+            let short_first = rng.next() % 10 == 0;
+            let first = if short_first { vec![tile_position(from)] } else { path.clone() };
+            let second_kind = rng.next() % 4;
+            let second: (bool, Vec<[i32; 3]>) = match second_kind {
+                0 => (false, Vec::new()),
+                1 => (true, vec![tile_position(from), tile_position(across)]),
+                2 => (true, vec![tile_position(from), tile_position(across), tile_position(across)]),
+                _ => (true, vec![tile_position(across), tile_position(from)]),
+            };
+            let prepare = |animal: ZTAnimal| {
+                HABITAT.store(habitat, Ordering::SeqCst);
+                for (offset, word) in [0x114u32, 0x118, 0x11c].into_iter().zip(stand) {
+                    save_to_memory(animal.0 + offset, word);
+                }
+                let record = unsafe { OPERATOR_NEW.original()(0x10) } as u32;
+                for offset in 0..4u32 {
+                    save_to_memory(record + offset, (offset == 0) as u8);
+                }
+                save_to_memory(record + 4, from);
+                save_to_memory(record + 8, across);
+                save_to_memory(record + 0xc, kind);
+                save_to_memory(animal.0 + animal_offsets::ESCAPE_RECORD, record);
+                *SEARCH_SCRIPT.lock().unwrap() = vec![(first_found, first.clone()), second.clone()];
+                SEARCH_NEXT.store(0, Ordering::SeqCst);
+            };
+            poles(
+                ty,
+                &format!("evaluateEscape round {round} from {from:#x} direction {direction} across {across:#x} kind {kind} second {second_kind} first found {first_found} short {short_first}"),
+                &prepare,
+                &|animal, pole| {
+                    match pole {
+                        0 => real::evaluate_escape(animal.0),
+                        1 => animal.evaluate_escape(),
+                        _ => unsafe { generated::EVALUATE_ESCAPE.hooked()(animal.0 as *const c_void) },
+                    }
+                    let path = path_list(animal.0);
+                    let record: u32 = get_from_memory(animal.0 + animal_offsets::ESCAPE_RECORD);
+                    let mut hash = path.iter().flatten().fold(path.len() as u32, |hash, word| (hash ^ *word as u32).wrapping_mul(0x0100_0193));
+                    for offset in 0..0x10u32 {
+                        hash = (hash ^ get_from_memory::<u8>(record + offset) as u32).wrapping_mul(0x0100_0193);
+                    }
+                    for offset in [0x18u32, 0x1c, 0x20, 0x5c] {
+                        hash = (hash ^ get_from_memory::<u32>(aimgr + offset)).wrapping_mul(0x0100_0193);
+                    }
+                    path.len() as i64 | (hash as i64) << 8
+                },
+                &mut failures,
+            );
+            ran += 1;
+            let calls = CALLS.lock().unwrap().clone();
+            handed_off += calls.iter().any(|(slot, _)| *slot == 0x1a0) as u32;
+            with_kind += (kind != 0 && calls.iter().any(|(slot, _)| *slot == 0x1a0)) as u32;
+            second_search += (calls.iter().filter(|(slot, _)| *slot == 0x1000).count() == 2) as u32;
+            if failures.len() > 10 {
+                break;
+            }
+        }
+    }
+    drop(search);
+    if ran == 0 || handed_off == 0 || second_search == 0 {
+        failures.push(format!("the comparison cases did not cover the fence branches (ran {ran}, fence cases {handed_off}, with a kind {with_kind}, second searches {second_search})"));
     }
     finish_test(test_name, failures, failure_log)
 }

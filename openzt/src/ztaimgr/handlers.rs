@@ -135,7 +135,7 @@ pub unsafe fn f_show_predator(unit: u32, done: *const bool) -> Option<bool> {
     }
     let predator = unsafe { GET_PREDATOR_UNIT.original()(unit as *const u32) } as u32;
     if predator != 0 && unsafe { is_animal(predator) } {
-        unsafe { ZTANIMAL_CONSUME.original()(predator as *const u32, unit as *const i32) };
+        crate::ztanimal::ZTAnimal(predator).consume(unit);
     }
     unsafe { call_entity_virtual(unit, ENTITY_VTABLE_REFRESH) };
     unsafe { ((unit + UNIT_SHOW_PREDATOR_FLAG_OFFSET) as *mut u8).write_volatile(0) };
@@ -156,7 +156,7 @@ pub unsafe fn f_caught_prey(unit: u32, done: *const bool) -> bool {
                 return true;
             }
         }
-        unsafe { ZTANIMAL_CONSUME.original()(unit as *const u32, prey as *const i32) };
+        crate::ztanimal::ZTAnimal(unit).consume(prey);
         let hunter_id = get_from_memory::<u32>(unit + ENTITY_ID_OFFSET);
         unsafe { ((prey + UNIT_PREY_HUNTER_FIELD_OFFSET) as *mut u32).write_volatile(hunter_id) };
         unsafe { call_entity_virtual(prey, ENTITY_VTABLE_REFRESH) };
@@ -206,7 +206,7 @@ pub unsafe fn f_hatch(unit: u32, done: *const bool) -> bool {
     if !unsafe { is_animal(unit) } {
         return false;
     }
-    unsafe { FINISH_HATCH.original()(unit as *const u32) };
+    crate::ztanimal::ZTAnimal(unit).finish_hatch();
     unsafe { set_done(done) };
     true
 }

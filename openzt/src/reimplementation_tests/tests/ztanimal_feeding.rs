@@ -488,6 +488,40 @@ pub(crate) fn run_ztanimal_handling_live_test(failure_log: &mut Option<std::fs::
             &mut failures,
         );
     }
+
+    // `putDownDirt` on a tile with a blocking bit answers false before creating anything; the dirt-creating and tank branches
+    // would mutate the live map and are not exercised.
+    let blocked_tile = Box::leak(vec![0u8; 0x100].into_boxed_slice()).as_mut_ptr() as u32;
+    save_to_memory(blocked_tile + 0x83, 1u8);
+    for &ty in &types {
+        poles(
+            ty,
+            "putDownDirt on a blocked tile",
+            1,
+            &|_| {},
+            &|animal, pole| unsafe {
+                (match pole {
+                    0 => real::put_down_dirt(animal.0, blocked_tile),
+                    1 => animal.put_down_dirt(blocked_tile),
+                    _ => generated::PUT_DOWN_DIRT.hooked()(animal.0 as *const u32, blocked_tile as *const u32),
+                }) as u32
+            },
+            &mut failures,
+        );
+    }
+
+    // `chaseDone` only forwards to `ZTUnit::chaseDone`, which reads real grid positions: compare over live animal pairs.
+    let animals = live_animals();
+    for &this in animals.iter().take(6) {
+        for &other in animals.iter().take(6) {
+            let real_result = real::chase_done(this, other);
+            let port = ZTAnimal(this).chase_done(other);
+            let hooked = unsafe { generated::CHASE_DONE.hooked()(this as *const u32, other as *const u32) };
+            if real_result != port || real_result != hooked {
+                failures.push(format!("chaseDone {this:#x} {other:#x}: real {real_result}, port {port}, hooked {hooked}"));
+            }
+        }
+    }
     finish_test(test_name, failures, failure_log)
 }
 

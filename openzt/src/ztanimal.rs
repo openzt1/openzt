@@ -26,8 +26,15 @@ use openzt_detour::generated::{
     bfunit::{CHECK_DONE as BFUNIT_CHECK_DONE, GET_MOVE_ANIM_1 as BFUNIT_GET_MOVE_ANIM},
     poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
     standalone::{OPERATOR_DELETE, OPERATOR_NEW},
-    ai_cls_0x404fd6::{TREE_ERASE_RANGE_0X4FE4AF as TREE_ERASE_RANGE, TREE_INSERT_UNIQUE_0X453BCC as TREE_INSERT_UNIQUE, TREE_LOWER_BOUND_0X4FE4F5 as TREE_LOWER_BOUND},
-    ztui_multianimal::{ADD_ENTITY as MULTIANIMAL_ADD_ENTITY, FORCE_UPDATE as MULTIANIMAL_FORCE_UPDATE, REMOVE_ENTITY as MULTIANIMAL_UPPER_BOUND},
+    ai_cls_0x404fd6::{
+        TREE_ERASE_RANGE_0X4FE4AF as TREE_ERASE_RANGE, TREE_INSERT_UNIQUE_0X453BCC as TREE_INSERT_UNIQUE, TREE_LOWER_BOUND_0X4FE4F5 as TREE_LOWER_BOUND,
+        TREE_UPPER_BOUND_0X4FE532 as TREE_UPPER_BOUND,
+    },
+    ztui_multianimal::{ADD_ENTITY as MULTIANIMAL_ADD_ENTITY, FORCE_UPDATE as MULTIANIMAL_FORCE_UPDATE, REMOVE_ENTITY as MULTIANIMAL_REMOVE_ENTITY},
+    bf3dsorter::SORT_POSITIONS as BF3DSORTER_SORT_POSITIONS,
+    bfmap::GET_NEIGHBOR_2 as BFMAP_GET_NEIGHBOR_STEP,
+    bftile::IS_CLEAR_FOR_WALK_BY as BFTILE_IS_CLEAR_FOR_WALK_BY,
+    bfunit::INVALIDATE_TARGET as BFUNIT_INVALIDATE_TARGET,
     ztui_animalinfo::SET_ANIMAL_DYING as ANIMALINFO_SET_ANIMAL_DYING,
     ztscenery::SET_NAME as ZTSCENERY_SET_NAME,
     msvc_std_basic_string::ASSIGN_RANGE,
@@ -40,14 +47,26 @@ use openzt_detour::generated::{
     bftile::IS_IN_ZOO as BFTILE_IS_IN_ZOO,
     bfunit::{GET_DEST_TILE, GET_PATH_1 as BFUNIT_GET_PATH, GO_TO_DEST_0 as BFUNIT_GO_TO_DEST, IS_MAX_COST_FOR_ALL, IS_SAME_TILE},
     ztbuilding::EMPTY_GRANDSTANDS as ZTBUILDING_EMPTY_GRANDSTANDS,
-    ztfence::SET_BROKEN as ZTFENCE_SET_BROKEN,
-    ztunit::{FIND_ANY_SATISFIER, STOP_EVERYTHING as ZTUNIT_STOP_EVERYTHING, UPDATE_BUILDING_TILES as ZTUNIT_UPDATE_BUILDING_TILES},
+    ztfence::{IS_ELECTRIFIED as ZTFENCE_IS_ELECTRIFIED, SET_BROKEN as ZTFENCE_SET_BROKEN},
+    ztscenerytype::IS_ZOO_GATE as ZTSCENERYTYPE_IS_ZOO_GATE,
+    msvc_std_tree36::OPERATOR_INDEX as TREE36_OPERATOR_INDEX,
+    bfmap::{GET_DIRECTION_1 as BFMAP_GET_DIRECTION_FROM_OFFSET, VALIDATE as BFMAP_VALIDATE},
+    bfentity::GET_GRID_POS as BFENTITY_GET_GRID_POS,
+    bfunit::GET_PATH_0 as BFUNIT_GET_PATH_TO_POSITION,
+    msvc_std_list_ivec3::INSERT_IVEC3 as LIST_IVEC3_INSERT,
+    ztunittype::{GET_DIRT_TYPE, GET_DINO_DIRT_TYPE},
+    gxmixer::SET_BASE_0 as GXMIXER_SET_BASE,
+    msvc_std::RAND as MSVC_RAND,
+    bfentity::SET_WORLD_POS as BFENTITY_SET_WORLD_POS,
+    bfmap::TILE_TO_WORLD as BFMAP_TILE_TO_WORLD,
+    gxmixerlink::{CONSTRUCTOR as GXMIXERLINK_CONSTRUCTOR, DESTRUCTOR as GXMIXERLINK_DESTRUCTOR},
+    ztunit::{CHASE_DONE as ZTUNIT_CHASE_DONE, FORMAT_NAME_MESSAGE as ZTUNIT_FORMAT_NAME_MESSAGE, FIND_ANY_SATISFIER, STOP_EVERYTHING as ZTUNIT_STOP_EVERYTHING, UPDATE_BUILDING_TILES as ZTUNIT_UPDATE_BUILDING_TILES},
     ztanimal::{
         COMPARE_LT, GET_IDLE_ANIM_SYMBOL, GET_MOVE_ANIM, GET_ONLY_SWIMS,
         BREAK_ESCAPE_FENCE, FIND_PREY, GET_TERRAIN_COST, INVALIDATE_TARGET, SET_REACHED_ESCAPE_DESTINATION_TILE, SET_REACHED_ESCAPE_TILE,
-        SET_REACHED_ESCAPE_TRANSITION_TILE, STOP_EVERYTHING, TILE_FILTER,
+        SET_REACHED_ESCAPE_TRANSITION_TILE, STOP_EVERYTHING, TILE_FILTER, FENCES_OK, EVALUATE_ESCAPE, PICK_RANDOM_DEST, GET_FEEDING_PATH,
         SET_FOOD, SET_KEEPER_ARRIVES, FACE_TOWARD_FOOD, REMOVE_FOOD_TARGET_FOR_ALL, F_REDUCE_FOOD, F_REMOVE_ANIMAL, DROP_TEST_FENCE_CHANCE, ADD_CHANGES,
-        DO_FOOD_TRICK, CHECK_DO_TRICK, BOX, UNBOX, ADD_FACE, CHECK_PREY, STOP_EATING, STOP_CHASE, CHANGE_TO_DIRT,
+        DO_FOOD_TRICK, CHECK_DO_TRICK, BOX, UNBOX, ADD_FACE, CHECK_PREY, STOP_EATING, STOP_CHASE, CHASE_DONE, CHANGE_TO_DIRT, FINISH_HATCH, CONSUME,
         CALC_HABITAT, CAN_CAPTURE, CAN_SERVICE, CAN_SLEEP_BE_SICK_EAT, CHECK_DONE, CLIFFS_OK, F_ANIMAL_SPACE_RATIO, F_FOOD_UNITS_ACTUALLY_EATEN,
         F_CHECK_REPRODUCTION, F_MATE_AVAILABLE, F_MATE_GONE, F_OTHER_ANIMAL_ANGRY, F_OTHER_ANIMAL_SICK, GET_HABITAT, GET_HOME_HABITAT, GET_ICON_ANIM, GET_PREY_UNIT,
         GET_SELL_PRICE, GET_SWIMS, GET_UNDERWATER, GET_UNDESIRABLE_SCENERY_IN_HABITAT, IS_NEED_SATISFIER, IS_WALKABLE_BY, RECALC_HOME_HABITAT,
@@ -63,10 +82,18 @@ use openzt_detour::generated::{
     ztworldmgr::GET_NEED_INDEX,
     ztgamemgr::GET_DATE as GAMEMGR_GET_DATE,
     msvc_std_listuint::INSERT as LIST_UINT_INSERT,
-    standalone::IS_ANIMAL_REST_SATISFIER,
+    standalone::{IS_ANIMAL_BUILDING_SATISFIER, IS_ANIMAL_REST_SATISFIER},
+    ztanimal::IS_ON_GRASS as ZTANIMAL_IS_ON_GRASS,
+    bfmap::{CAN_ADD_ENTITY as BFMAP_CAN_ADD_ENTITY, GET_NEIGHBORS_1 as BFMAP_GET_NEIGHBORS_AROUND},
+    ztworldmgr::{CREATE_SCENERY as ZTWORLDMGR_CREATE_SCENERY, FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL as ZTWORLDMGR_FIND_FENCE},
+    ztunit::{GET_SWIMS as ZTUNIT_GET_SWIMS, GET_UNDERWATER as ZTUNIT_GET_UNDERWATER},
+    msvc_std_dequegxmixerchain::CLEAR_0X41BF8F as MIXER_CHAIN_DEQUE_CLEAR,
+    gxmixerlink::COPY_0X40DDD5 as GXMIXERLINK_COPY,
+    ztui_animalinfo::SET_ANIMAL_ESCAPED as ANIMALINFO_SET_ANIMAL_ESCAPED,
     bfaimgr::F_RANDOM_WALK as BFAIMGR_F_RANDOM_WALK,
     bfcoggoal::{CLEAR as BFCOGGOAL_CLEAR, SET as BFCOGGOAL_SET, SET_ID as BFCOGGOAL_SET_ID, SET_TARGET_POS as BFCOGGOAL_SET_TARGET_POS},
-    bfuimgr::DISPLAY_MESSAGE_1 as BFUIMGR_DISPLAY_MESSAGE_1,
+    bfuimgr::{CONFIRM_DIALOG_0 as BFUIMGR_CONFIRM_DIALOG, DISPLAY_MESSAGE_1 as BFUIMGR_DISPLAY_MESSAGE_1, GET_ELEMENT_0 as BFUIMGR_GET_ELEMENT},
+    uicontrol::SET_ANIMATION as UICONTROL_SET_ANIMATION,
     bfunit::DECIDE as BFUNIT_DECIDE,
     ztapp::GET_APP,
     zthabitat::SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
@@ -78,10 +105,10 @@ use openzt_detour_macro::detour_mod;
 use tracing::error;
 
 use crate::{
-    bfentity::{new_owned_name, set_bs_new, set_pending_bs, set_queued_call_new},
+    bfentity::{new_owned_name, set_bs_overridable as set_bs, set_bs_new, set_pending_bs, set_queued_call_new},
     globals::{get_module_base, globals},
     util::{ftol_low32, get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
-    zthabitat::{next_game_random, ZTHabitat},
+    zthabitat::{next_game_random, ZTHabitat, ZTTankExhibit},
     vanilla_string::VanillaString,
     ztguide::ZTGuide,
     ztkeeper::{read_field, call_slot_0, call_slot_1, call_slot_2, call_slot_3, unit_offsets, write_field},
@@ -168,7 +195,7 @@ mod lifecycle {
     /// Begin and end pointers of the vector at `+0x260`.
     pub const VEC_BEGIN: u32 = 0x260;
     pub const VEC_END: u32 = 0x264;
-    /// The block at `+0x8c` that `setEgg` resets (`0x41bf8f`).
+    /// The block at `+0x8c` that `setEgg` resets (`0x41bf8f`, `deque<..>::clear_0x41bf8f`).
     pub const BLOCK_8C: u32 = 0x8c;
     pub const SLOT_CLEAR_GOAL: u32 = 0x174;
     pub const SLOT_STOP_EVERYTHING: u32 = 0x198;
@@ -176,9 +203,6 @@ mod lifecycle {
     pub const SLOT_IS_DOING_SHOW: u32 = 0x22c;
     pub const SLOT_ABORT_TRICK: u32 = 0x2c0;
     pub const SLOT_CLEAR_PREY: u32 = 0x258;
-    pub const RESET_BLOCK_8C: u32 = 0x0041_bf8f;
-    pub const REST_SATISFIER_2: u32 = 0x0061_349c;
-    pub const SELECTION_NOTIFY: u32 = 0x0044_0a27;
     pub const EGG_TYPE_HEALTH_BASE: u32 = 0x420;
     pub const EGG_TYPE_TIMER: u32 = 0x408;
     /// `DAT_0063cfa1`.
@@ -314,8 +338,6 @@ mod init_layout {
 mod multianimal {
     /// `DAT_00639460` as an RVA.
     pub const SET_RVA: u32 = 0x0023_9460;
-    /// `ZTUI::multianimal::removeEntity` (`0x004fe43a`, `cdecl(animal, 0)`; `generated.rs` has no entry).
-    pub const REMOVE_ROW: u32 = 0x004f_e43a;
     pub const SLOT_HABITAT: u32 = 0x24c;
     pub const SLOT_ON_LAND: u32 = 0xbc;
     pub const SLOT_IN_WATER: u32 = 0x16c;
@@ -564,8 +586,6 @@ mod conditionals {
     /// `-0x3d`: happiness at or below it posts the "Not happy" message.
     pub const MESSAGE_HAPPINESS: i32 = -0x3d;
     pub const MESSAGE_ID: u32 = 0x272c;
-    /// `ZTAnimal::isOnGrass`: the predicate gating the dirt patch.
-    pub const DIRT_PREDICATE: u32 = 0x0061_3bde;
     pub const TILE_DIRT_WORDS: [u32; 4] = [4, 8, 12, 16];
 }
 
@@ -1206,17 +1226,12 @@ impl ZTAnimal {
         function(entity_type, base() + tag_rva)
     }
 
-    /// Calls a vanilla `ZTUnit` method declared without a return in `generated.rs` but returning its result in `AL`/`EAX`.
-    fn call_unit_u32(address: u32, this: u32) -> u32 {
-        unsafe { transmute::<u32, extern "thiscall" fn(u32) -> u32>(address)(this) }
-    }
-
     /// `ZTAnimal::getSwims`: an egg never swims, everything else is `ZTUnit::getSwims` (`0x00410764`).
     pub fn get_swims(self) -> u32 {
         if self.is_egg() != 0 {
             return 0;
         }
-        Self::call_unit_u32(0x0041_0764, self.0)
+        u32::from(unsafe { ZTUNIT_GET_SWIMS.original()(self.0 as *const u32) })
     }
 
     /// `ZTAnimal::getUnderwater`: an egg is never underwater, everything else is `ZTUnit::getUnderwater` (`0x00410794`).
@@ -1224,7 +1239,7 @@ impl ZTAnimal {
         if self.is_egg() != 0 {
             return 0;
         }
-        Self::call_unit_u32(0x0041_0794, self.0)
+        u32::from(unsafe { ZTUNIT_GET_UNDERWATER.original()(self.0 as *const u32) })
     }
 
     /// `ZTAnimal::isWalkableBy`: not boxed and the type's walkable-by slot accepts `other`.
@@ -1699,7 +1714,7 @@ impl ZTAnimal {
     pub fn set_egg(self, reset_timer: bool) {
         let entity_type: u32 = self.read(unit_offsets::ENTITY_TYPE);
         save_to_memory(self.0 + animal_offsets::EGG, 1u8);
-        unsafe { transmute::<u32, extern "thiscall" fn(u32)>(lifecycle::RESET_BLOCK_8C)(self.0 + lifecycle::BLOCK_8C) };
+        unsafe { MIXER_CHAIN_DEQUE_CLEAR.original()((self.0 + lifecycle::BLOCK_8C) as *const u32) };
         call_slot_3(self.0, lifecycle::SLOT_STOP_EVERYTHING, 1, 1, 1);
         save_to_memory(self.0 + lifecycle::VEC_END, self.read::<u32>(lifecycle::VEC_BEGIN));
         call_slot_1(self.0, lifecycle::SLOT_UPDATE_ANIMATION, 0);
@@ -1732,7 +1747,7 @@ impl ZTAnimal {
 
     /// `ZTAnimal::setEscaped` (`0x004409f8`): on a change of the escaped byte (`+0x3a3`) a cleared flag unlinks every
     /// node holding this animal from the escaped-animal list (`DAT_00638fb0`) and a set flag appends it and clears
-    /// `+0x3a1`/`+0x3a2`; the selection notifier (`0x00440a27`) always runs.
+    /// `+0x3a1`/`+0x3a2`; the selection notifier (`ZTUI::animalinfo::setAnimalEscaped`, `0x00440a27`) always runs.
     pub fn set_escaped(self, flag: u8) {
         if self.read::<u8>(lifecycle::ESCAPED) != flag {
             save_to_memory(self.0 + lifecycle::ESCAPED, flag);
@@ -1757,7 +1772,7 @@ impl ZTAnimal {
                 save_to_memory(self.0 + lifecycle::ESCAPE_STAGE_B, 0u8);
             }
         }
-        unsafe { transmute::<u32, extern "cdecl" fn(u32, u32)>(lifecycle::SELECTION_NOTIFY)(self.0, flag as u32) };
+        unsafe { ANIMALINFO_SET_ANIMAL_ESCAPED.original()(self.0 as *const u32, flag != 0) };
     }
 
     /// Whether the unit's need byte (`+0x24e`) names the need at `need_rva` and the unit has no building-use goal.
@@ -1785,8 +1800,7 @@ impl ZTAnimal {
             }
             if self.need_matches_without_building_goal(lifecycle::NEED_B) {
                 let tile: u32 = self.read(lifecycle::UNIT_REST_TILE);
-                let satisfied = unsafe { transmute::<u32, extern "cdecl" fn(u32, *const u32) -> u32>(lifecycle::REST_SATISFIER_2)(tile, position.as_ptr()) };
-                if low_byte_bool(satisfied) {
+                if unsafe { IS_ANIMAL_BUILDING_SATISFIER.hooked()(tile as *const u32, position.as_ptr()) } {
                     call_slot_0(self.0, lifecycle::SLOT_CLEAR_GOAL);
                     let found = unsafe { TARGET_BUILDING.hooked()(self.0 as *const u32, false) };
                     return self.finish_abort(found);
@@ -2209,7 +2223,7 @@ impl ZTAnimal {
         let (mut upper, mut lower): (u32, u32) = (0, 0);
         let key = self.0;
         unsafe {
-            MULTIANIMAL_UPPER_BOUND.original()(set as *const c_void, &mut upper as *mut u32 as *const i32, &key as *const u32 as *const c_void);
+            TREE_UPPER_BOUND.original()(set as *const u32, &mut upper as *mut u32 as *const i32, &key as *const u32 as *const c_void);
             TREE_LOWER_BOUND.original()(set as *const u32, &mut lower as *mut u32 as *const i32, &key as *const u32);
             TREE_ERASE_RANGE.original()(set as *const u32, lower as i32, upper as i32);
         }
@@ -2222,9 +2236,9 @@ impl ZTAnimal {
         unsafe { TREE_INSERT_UNIQUE.original()(Self::multianimal_set() as *const u32, result.as_mut_ptr() as *const i8, &key as *const u32 as *const c_void) };
     }
 
-    /// `ZTUI::multianimal::removeEntity` (`0x004fe43a`, `cdecl`): drops the animal's row from the panel's list box.
+    /// `ZTUI::multianimal::removeEntity`: drops the animal's row from the panel's list box.
     fn remove_multianimal_row(self) {
-        unsafe { transmute::<u32, extern "cdecl" fn(u32, u32)>(multianimal::REMOVE_ROW)(self.0, 0) };
+        unsafe { MULTIANIMAL_REMOVE_ENTITY.original()(self.0 as i32) };
     }
 
     fn mark_habitat_dirty(self) {
@@ -2472,7 +2486,7 @@ impl ZTAnimal {
         if self.flag(animal_offsets::NOT_SELECTABLE) {
             unsafe { ZTUNIT_SET_IS_REMOVED.original()(self.0 as *const u32, 1) };
         } else {
-            unsafe { HATCH_EGG.original()(self.0 as *const u32) };
+            self.hatch_egg();
         }
     }
 }
@@ -2648,11 +2662,11 @@ impl ZTAnimal {
                 }
             }
         } else if self.flag(hunger::BYTE_FOOD_WANTED) {
-            unsafe { F_EAT.original()(self.0 as *const u32) };
+            self.f_eat();
         }
         self.add_pending(hunger::DIRT_PENDING, Self::type_field(ty, hunger::TYPE_DIRT_STEP));
         if self.read::<i32>(hunger::DIRT_COUNTER) >= Self::type_field::<i32>(ty, hunger::TYPE_DIRT_AT)
-            && unsafe { PUT_DOWN_DIRT.original()(self.0 as *const u32, std::ptr::null()) }
+            && self.put_down_dirt(0)
         {
             save_to_memory(self.0 + hunger::DIRT_COUNTER, 0u32);
         }
@@ -2848,10 +2862,6 @@ mod behaviour_checks {
     pub const TEST_FENCE_SET: &[u8] = b"bTestFence";
     pub const POSITION: u32 = 0x114;
     pub const NO_DIRECTION: u32 = 0xffff_ffff;
-    /// `ZTWorldMgr::findAdjacentElectricFenceToAnimal` (`thiscall(world mgr, animal, &position) -> direction or -1`,
-    /// `RET 8`; macOS-confirmed name): the first direction in which an electrified fence stands next to the animal.
-    /// Still vanilla, called by address until `generated.rs` regenerates with the entry.
-    pub const FIND_FENCE_DIRECTION: u32 = 0x004a_3383;
 }
 
 impl ZTAnimal {
@@ -2938,8 +2948,7 @@ impl ZTAnimal {
         if chance <= roll {
             return;
         }
-        let find = unsafe { transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32) -> u32>(zap::FIND_FENCE_DIRECTION) };
-        let direction = unsafe { find(world, self.0, self.0 + zap::POSITION) };
+        let direction = unsafe { ZTWORLDMGR_FIND_FENCE.original()(world as *const u32, self.0 as *const u32, (self.0 + zap::POSITION) as *const i32) };
         if direction == zap::NO_DIRECTION {
             return;
         }
@@ -2974,9 +2983,6 @@ mod boxed_check {
     /// The map inside the world manager.
     pub const WORLD_MAP: u32 = 8;
     pub const RATTLE_SET: &[u8] = b"bRattle";
-    /// `BFMap::canAddEntity` (`0x004f7fbd`, `thiscall(map, entity, &position, flag, entity) -> bool`, `RET 0x10`;
-    /// macOS-confirmed name). Not in `generated.rs` yet; called by address.
-    pub const CAN_ADD_ENTITY: u32 = 0x004f_7fbd;
 }
 
 impl ZTAnimal {
@@ -3013,8 +3019,7 @@ impl ZTAnimal {
         }
         if !self.flag(boxed::BYTE_ON_MAP) {
             let world: u32 = get_from_memory(base() + globals_rva::WORLD_MGR);
-            let can_add = unsafe { transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, u32) -> u32>(boxed::CAN_ADD_ENTITY) };
-            if low_byte_bool(unsafe { can_add(world + boxed::WORLD_MAP, self.0, self.0 + boxed::POSITION, 0, self.0) }) {
+            if unsafe { BFMAP_CAN_ADD_ENTITY.original()((world + boxed::WORLD_MAP) as *const u32, self.0 as *const u32, (self.0 + boxed::POSITION) as *const i32, false, self.0 as *const u32) } {
                 call_slot_1(self.0, boxed::SLOT_REMOVE_FROM_MAP, 0);
                 save_to_memory(self.0 + boxed::BYTE_ON_MAP, 1u8);
                 call_slot_0(self.0, boxed::SLOT_ADD_TO_MAP);
@@ -3489,7 +3494,7 @@ impl ZTAnimal {
                 return;
             }
         }
-        if first_letter(ty) == b'm' && waited && self.f_mate_available(found_address) && unsafe { F_CHECK_REPRODUCTION.original()(self.0 as *const i32) } {
+        if first_letter(ty) == b'm' && waited && self.f_mate_available(found_address) && self.f_check_reproduction() {
             save_to_memory(self.0 + repro::TICKS, 0u32);
             let habitat = call_slot_0(self.0, repro::SLOT_HABITAT);
             if habitat != 0 {
@@ -3974,8 +3979,7 @@ impl ZTAnimal {
         if ((next_game_random() % 100) as i32) >= cap {
             return;
         }
-        let predicate = unsafe { transmute::<u32, extern "thiscall" fn(u32) -> u32>(conditionals::DIRT_PREDICATE) };
-        if !low_byte_bool(predicate(self.0)) {
+        if !unsafe { ZTANIMAL_IS_ON_GRASS.original()(self.0 as *const c_void) } {
             return;
         }
         let mut clear = true;
@@ -4415,6 +4419,360 @@ impl ZTAnimal {
         save_to_memory(self.0 + handling::NAME_DIRTY, 1u8);
     }
 
+    /// `ZTAnimal::chaseDone` (`0x004a4d5f`): forwards to `ZTUnit::chaseDone` on the same object with the same argument.
+    pub fn chase_done(self, unit: u32) -> bool {
+        unsafe { ZTUNIT_CHASE_DONE.original()(self.0 as *const u32, unit as *const u32) }
+    }
+
+    /// `ZTAnimal::consume` (`0x0050e648`): a guest that this type does not eat (`+0x3d5` clear) is left alone. Anything else
+    /// handed in is consumed: a staff member first raises the "staff eaten" toast (message `0x2afa` over both units' name words,
+    /// priority 2, tied to the animal), then the unit's slot `+0xcc(0)` runs and it is marked removed.
+    pub fn consume(self, unit: u32) {
+        if unit == 0 {
+            return;
+        }
+        let unit_type = get_from_memory::<u32>(unit + unit_offsets::ENTITY_TYPE);
+        let is_guest = unit_type != 0 && Self::type_is_cast(unit_type, faces_prey::GUEST_TAG);
+        let own_type = self.read::<u32>(unit_offsets::ENTITY_TYPE);
+        let own_type = if own_type != 0 && type_is_animal(own_type) { own_type } else { 0 };
+        if is_guest && (own_type == 0 || Self::type_field::<u8>(own_type, alerts::TYPE_EATS_GUESTS) == 0) {
+            return;
+        }
+        if unit_type != 0 && Self::type_is_cast(unit_type, faces_prey::STAFF_TAG) {
+            let text = VanillaString::rvo_target();
+            let build: unsafe extern "cdecl" fn(*const u32, *const u32, u32, u32, u32) -> *const u32 = unsafe { transmute(goal_flow::BUILD_STRING) };
+            unsafe {
+                build(
+                    GET_APP.original()(),
+                    text.as_ptr(),
+                    alerts::STAFF_CONSUMED_MESSAGE,
+                    get_from_memory::<u32>(unit + alerts::NAME_WORD),
+                    self.read(alerts::NAME_WORD),
+                )
+            };
+            let bfuimgr = base() + alerts::BFUIMGR_RVA;
+            unsafe {
+                BFUIMGR_DISPLAY_MESSAGE_1.hooked()(bfuimgr as *const u32, text.as_ptr() as *const i32, alerts::MESSAGE_PRIORITY, std::ptr::null(), self.0 as *const u32, true, false)
+            };
+        }
+        call_slot_1(unit, alerts::SLOT_BEFORE_REMOVE, 0);
+        unsafe { ZTUNIT_SET_IS_REMOVED.original()(unit as *const u32, 1) };
+    }
+
+    /// `ZTAnimal::showEscapedAnimalAlert` (`0x0058cb88`): plays the shared exclaim animation on the dialog's icon element,
+    /// and when the label element exists sets its caption to message `0x2717` formatted over this animal's name
+    /// (`formatNameMessage`, then the element's slot `+0xc4`) and opens the confirm dialog for this animal.
+    pub fn show_escaped_animal_alert(self) {
+        let b = base();
+        let half = |rva: u32| get_from_memory::<u16>(b + rva) as i32;
+        let dialog = half(alerts::DIALOG_ID_RVA);
+        let manager = (b + alerts::BFUIMGR_RVA) as *const u32;
+        let icon = unsafe { BFUIMGR_GET_ELEMENT.hooked()(manager, half(alerts::ICON_OFFSET_RVA) + dialog) };
+        let label = unsafe { BFUIMGR_GET_ELEMENT.hooked()(manager, half(alerts::LABEL_OFFSET_RVA) + dialog) };
+        if !icon.is_null() {
+            unsafe { UICONTROL_SET_ANIMATION.hooked()(icon, (b + alerts::EXCLAIM_ANIMATION_RVA) as *const i8, true) };
+        }
+        if label.is_null() {
+            return;
+        }
+        let mut text = [0u32; 3];
+        unsafe { ZTUNIT_FORMAT_NAME_MESSAGE.original()(self.0 as *const u32, text.as_mut_ptr() as *const u32, alerts::ESCAPED_MESSAGE) };
+        let set_caption = unsafe {
+            transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, u32)>(get_from_memory::<u32>(get_from_memory::<u32>(label as u32) + alerts::SLOT_SET_CAPTION))
+        };
+        unsafe {
+            set_caption(label as u32, text[0], text[1], text[2], 0);
+            BFUIMGR_CONFIRM_DIALOG.hooked()(manager, dialog, 0, 0, 1, self.0 as i32);
+        }
+    }
+
+    /// `findTypes` (world vtable `+0x14`) over three search strings; the result vector is vanilla's (`[begin, end, cap]`).
+    fn find_types_by(world: u32, class: *const u32, name: *const u32, subtype: *const u32) -> [u32; 3] {
+        let find_types = unsafe {
+            transmute::<u32, unsafe extern "thiscall" fn(u32, *mut [u32; 3], *const u32, *const u32, *const u32) -> *const [u32; 3]>(get_from_memory::<u32>(
+                get_from_memory::<u32>(world) + baby_to_adult::WORLD_VTABLE_FIND_TYPES,
+            ))
+        };
+        let mut found = [0u32; 3];
+        unsafe { find_types(world, &mut found, class, name, subtype) };
+        found
+    }
+
+    /// Releases a `findTypes` result vector to vanilla's pool (nothing for a null buffer).
+    fn free_found(found: [u32; 3]) {
+        if found[0] != 0 {
+            unsafe { POOLALLOC_DEALLOCATE_N_4.original()(found[0] as *const u32, (found[2].wrapping_sub(found[0]) as i32) >> 2) };
+        }
+    }
+
+    /// `ZTAnimal::resetAdultCheck` (the tail of the baby loop): the baby's growth countdown restarts from its type's period.
+    fn reset_adult_check(self) {
+        if let Some(ty) = self.animal_type() {
+            save_to_memory(self.0 + baby_to_adult::COUNTDOWN, Self::type_field::<i32>(ty, baby_to_adult::TYPE_PERIOD).wrapping_sub(1));
+        }
+    }
+
+    /// `ZTAnimal::fCheckReproduction` (`0x0043103b`, `fastcall`): rolls the type's birth percent (`+0x278`, the game RNG); the
+    /// unhappy-reproduction gate (`DAT_0063c2e3`) clears and forces the birth for a type with id `0x1398`/`0x1399`. Then it
+    /// looks the animal's type up through `findTypes` (class `"ZTAnimal"`, the type's own text, the empty text); with no result a
+    /// coin flip (`rand() & 1`) retries with the female or male text. The habitat must exist and not have its `+0x2c` flag.
+    /// Then `+0x284` babies are created from the first type found (an egg-laying type runs `findTypes` over its own class string
+    /// and becomes an egg with `setEgg(1)`), each placed on a random clear tile of the habitat (`getRandomClearTile`, up to
+    /// ten tries, `tileToWorld`, `setWorldPos`, `addEntity`, `validatePosition(1)`, `resetAdultCheck`) and recording its parent's
+    /// id and mate. A failed creation answers false; ten failed placements delete that baby and end the loop. Answers whether
+    /// the first baby was placed. The log strings are dropped.
+    pub fn f_check_reproduction(self) -> bool {
+        let Some(ty) = self.animal_type() else { return false };
+        let world = ZTAnimal::world();
+        if globals().ztaimgr_ptr() as u32 == 0 || world == 0 {
+            return false;
+        }
+        let rolled = ((next_game_random() % 100) as i32) < Self::type_field::<i32>(ty, birth::TYPE_BIRTH_PERCENT);
+        let mut proceed = rolled;
+        let gate = base() + reproduce_check::UNHAPPY_GATE_RVA;
+        if get_from_memory::<u8>(gate) != 0 {
+            let id = call_slot_0(ty, reproduce_check::SLOT_TYPE_ID);
+            if reproduce_check::TYPE_IDS_ALLOWING_UNHAPPY.contains(&id) {
+                save_to_memory(gate, 0u8);
+                proceed = true;
+            }
+        }
+        if !proceed {
+            return false;
+        }
+        let range_bytes = |begin: u32, end: u32| (0..end.wrapping_sub(begin)).map(|i| get_from_memory::<u8>(begin + i)).collect::<Vec<u8>>();
+        let global = base() + baby_to_adult::GLOBAL_STRING_RVA;
+        let search_class = VanillaString::from_bytes(&range_bytes(get_from_memory(global), get_from_memory(global + 4)));
+        let text = ty + baby_to_adult::TYPE_TEXT;
+        let search_name = VanillaString::from_bytes(&range_bytes(get_from_memory(text), get_from_memory(text + 4)));
+        let search_empty = VanillaString::from_bytes(&Self::c_string_bytes(base() + birth::EMPTY_SEARCH_RVA));
+        let mut found = Self::find_types_by(world, search_class.as_ptr(), search_name.as_ptr(), search_empty.as_ptr());
+        if found[0] == found[1] {
+            let gendered = if unsafe { MSVC_RAND.hooked()() } & 1 == 0 { baby_to_adult::FEMALE_RVA } else { baby_to_adult::MALE_RVA };
+            let search_gendered = VanillaString::from_bytes(&Self::c_string_bytes(base() + gendered));
+            let second = Self::find_types_by(world, search_class.as_ptr(), search_name.as_ptr(), search_gendered.as_ptr());
+            Self::free_found(found);
+            found = second;
+        }
+        if found[0] == found[1] {
+            Self::free_found(found);
+            return false;
+        }
+        let habitat = call_slot_0(self.0, reproduce_check::SLOT_HABITAT);
+        if habitat == 0 || get_from_memory::<u8>(habitat + 0x2c) != 0 {
+            Self::free_found(found);
+            return false;
+        }
+        let first_type: u32 = get_from_memory(found[0]);
+        let baby_type = if first_type != 0 && type_is_animal(first_type) { first_type } else { 0 };
+        let litter = Self::type_field::<i32>(ty, birth::TYPE_LITTER_SIZE);
+        if baby_type == 0 || litter <= 0 {
+            Self::free_found(found);
+            return false;
+        }
+        let map = (world + 8) as *const u32;
+        let mut first_placed = false;
+        for index in 0..litter {
+            let entity = if Self::type_field::<u8>(baby_type, birth::TYPE_LAYS_EGGS) != 0 {
+                let class_string = call_slot_0(baby_type, birth::TYPE_SLOT_CLASS_STRING);
+                let subtype = VanillaString::from_bytes(&Self::c_string_bytes(base() + birth::EMPTY_SEARCH_RVA));
+                let egg_found = Self::find_types_by(world, class_string as *const u32, (baby_type + baby_to_adult::TYPE_TEXT) as *const u32, subtype.as_ptr());
+                let egg_type = if egg_found[0] != egg_found[1] { get_from_memory::<u32>(egg_found[0]) } else { baby_type };
+                let created = call_slot_1(egg_type, birth::TYPE_SLOT_CREATE, 0);
+                if created != 0 {
+                    ZTAnimal(created).set_egg(true);
+                }
+                Self::free_found(egg_found);
+                created
+            } else {
+                call_slot_1(baby_type, birth::TYPE_SLOT_CREATE, 0)
+            };
+            if entity == 0 {
+                Self::free_found(found);
+                return false;
+            }
+            let entity_type: u32 = get_from_memory(entity + unit_offsets::ENTITY_TYPE);
+            let baby = if entity_type != 0 && type_is_animal(entity_type) { ZTAnimal(entity) } else { ZTAnimal(0) };
+            let mut placed = false;
+            let mut attempts = 0;
+            while attempts < birth::PLACEMENT_ATTEMPTS {
+                attempts += 1;
+                let tile = unsafe { ref_from_memory::<ZTHabitat>(habitat as *const u32) }.get_random_clear_tile_for_animal(baby.0, false, true);
+                if tile == 0 {
+                    continue;
+                }
+                let mut position = [0i32; 3];
+                let extent = birth::EXTENT;
+                unsafe {
+                    BFMAP_TILE_TO_WORLD.hooked()(map, position.as_mut_ptr() as *const i32, (tile + birth::TILE_GRID_POS) as *const i32, extent.as_ptr());
+                    BFENTITY_SET_WORLD_POS.original()(entity as *const u32, position.as_ptr() as *const IVec3);
+                }
+                let added = low_byte_bool(call_slot_1(world, birth::WORLD_SLOT_ADD_ENTITY, entity));
+                call_slot_1(entity, birth::SLOT_VALIDATE_POSITION, 1);
+                if baby.0 != 0 {
+                    baby.reset_adult_check();
+                }
+                if added {
+                    placed = true;
+                    break;
+                }
+            }
+            if !placed {
+                call_slot_1(entity, birth::SLOT_DESTROY, 1);
+                break;
+            }
+            if baby.0 != 0 {
+                save_to_memory(baby.0 + birth::BABY_PARENT_ID, self.read::<u32>(birth::PARENT_ID));
+                save_to_memory(baby.0 + birth::BABY_PARENT_MATE, self.read::<u32>(birth::PARENT_MATE));
+            }
+            if index == 0 {
+                first_placed = true;
+            }
+        }
+        Self::free_found(found);
+        first_placed
+    }
+
+    /// `ZTAnimal::hatchEgg` (`0x00613ca6`): forces behaviour set `bHatch` (`setBSNew`, call flag 0, force 1, clear mode 2).
+    pub fn hatch_egg(self) {
+        let name = unsafe { new_owned_name(eating::HATCH_SET) };
+        unsafe { set_bs_new(self.0, name, 0, 1, 2) };
+    }
+
+    /// `ZTAnimal::finishHatch` (`0x00613d24`): the egg byte (`+0x395`) clears and the idle animation (slot `+0x8c`, argument 0)
+    /// becomes the mixer's single link (`GXMixer::setBase` over the mixer at `+0x74`, clear flag 1). Then message `0x2852`
+    /// goes out and the animal-info panel refreshes. The link and the one-entry vector the mixer copies from live in Rust
+    /// memory; vanilla builds the vector in its pool and frees it again, which the mixer never sees.
+    pub fn finish_hatch(self) {
+        save_to_memory(self.0 + eating::BYTE_EGG, 0u8);
+        self.rebase_mixer_on_idle_anim();
+        unsafe {
+            ZTUNIT_F_ZOO_MESSAGE_NAME.original()(self.0 as *const u32, eating::MESSAGE_HATCHED, 4, 1);
+            ANIMALINFO_FORCE_UPDATE.original()(std::ptr::null());
+        }
+    }
+
+    /// `finishHatch`'s mixer step: the mixer at `+0x74` ends up with exactly one link, on the animal's idle animation.
+    pub fn rebase_mixer_on_idle_anim(self) {
+        let idle = call_slot_1(self.0, eating::SLOT_IDLE_ANIM, 0);
+        let mut link = [0u32; 3];
+        let element = [0u32; 3];
+        unsafe {
+            GXMIXERLINK_CONSTRUCTOR.original()(link.as_mut_ptr() as *const c_void, idle as i32, 0, 0);
+            GXMIXERLINK_COPY.original()(element.as_ptr() as *const c_void, link.as_ptr());
+            let begin = element.as_ptr() as u32;
+            let vector = [begin, begin + 12, begin + 12];
+            GXMIXER_SET_BASE.original()((self.0 + eating::MIXER) as *const u32, vector.as_ptr() as *const i32, 1);
+            GXMIXERLINK_DESTRUCTOR.original()(element.as_ptr() as *const c_void);
+            GXMIXERLINK_DESTRUCTOR.original()(link.as_ptr() as *const c_void);
+        }
+    }
+
+    /// `ZTAnimal::fEat` (`0x004fd951`): eats `fFoodUnitsActuallyEaten` units and answers that count. An escaped animal, none to
+    /// eat or a tile with a blocking bit runs `stopEating(0)` instead. Otherwise it forces behaviour set `bEat` unless that is
+    /// already the set (answering when that fails), clears the eat flag, starts eating (slot `+0x1d8(1, 0)` for a type with
+    /// `+0x44c`, else the eating byte), clears bit 0 of four status words, reduces the food and stores the negated per-unit
+    /// hunger cost in the hunger pending word. A type without `+0x44c` that still has food left queues `bEat` unless it is
+    /// already the queued call or the animal cannot sleep, be sick and eat. The eating log strings are dropped.
+    pub fn f_eat(self) -> u32 {
+        let units = self.f_food_units_actually_eaten() as u32;
+        let tile = (unsafe { GET_TILE.original()(self.0 as *const u32) }) as u32;
+        if self.flag(eating::BYTE_ESCAPED) || units == 0 || tile_byte(tile, eating::TILE_BLOCK_BYTE) & eating::TILE_BLOCK_BITS != 0 {
+            self.stop_eating(0);
+            return units;
+        }
+        if self.string_bytes_at(eating::SET_NAME_BEGIN) != eating::EAT_SET {
+            let name = unsafe { new_owned_name(eating::EAT_SET) };
+            if !unsafe { set_bs(self.0, name, 0, 1, 2) } {
+                return units;
+            }
+        }
+        let ty = self.read::<u32>(unit_offsets::ENTITY_TYPE);
+        if ty == 0 || !type_is_animal(ty) {
+            return units;
+        }
+        save_to_memory(self.0 + eating::BYTE_EAT_FLAG, 0u8);
+        let no_eat_anim = Self::type_field::<u8>(ty, eating::TYPE_NO_EAT_ANIM) != 0;
+        if no_eat_anim {
+            call_slot_2(self.0, eating::SLOT_START_EATING, 1, 0);
+        } else {
+            save_to_memory(self.0 + eating::BYTE_EATING, 1u8);
+        }
+        for offset in [eating::STATUS_LOW_A, eating::STATUS_LOW_B] {
+            save_to_memory(self.0 + offset, self.read::<u32>(offset) & !1);
+        }
+        for offset in [eating::STATUS_HIGH_A, eating::STATUS_HIGH_B] {
+            save_to_memory(self.0 + offset, self.read::<u32>(offset));
+        }
+        let left = self.f_reduce_food(units as i32);
+        let cost = Self::type_field::<i32>(ty, eating::TYPE_HUNGER_COST).wrapping_mul(units as i32).wrapping_neg();
+        save_to_memory(self.0 + eating::HUNGER_PENDING, cost);
+        if left < 1 || no_eat_anim {
+            return units;
+        }
+        if self.string_bytes_at(eating::QUEUED_CALL_BEGIN) == eating::EAT_SET || !self.can_sleep_be_sick_eat() {
+            return units;
+        }
+        unsafe { set_pending_bs(self.0, new_owned_name(eating::EAT_SET), 0, 1) };
+        units
+    }
+
+    /// `ZTAnimal::putDownDirt` (`0x004a8f89`): on a water tile whose habitat is a tank, lowers the tank's purity by the type's cost
+    /// and answers `true`. On a tile free of the blocking bits it creates a dirt scenery (`getDirtType`, or `getDinoDirtType` for a
+    /// dino-dirt type; mode `1`/`2` from the type's bytes) and, when the tile's habitat has its `+0x2c` flag, posts event `0x2730`
+    /// through slot `0`. Answers whether the scenery was created. A null `tile` means the animal's own tile.
+    pub fn put_down_dirt(self, tile: u32) -> bool {
+        let world = ZTAnimal::world();
+        if world == 0 {
+            return false;
+        }
+        let tile = if tile == 0 { (unsafe { GET_TILE.original()(self.0 as *const u32) }) as u32 } else { tile };
+        if tile == 0 {
+            return false;
+        }
+        let ty = self.read::<u32>(unit_offsets::ENTITY_TYPE);
+        if tile_byte(tile, dirt::TILE_WATER_BYTE) & dirt::TILE_WATER_BIT != 0 {
+            let tank = call_slot_0(self.0, dirt::SLOT_HABITAT);
+            if tank != 0 && low_byte_bool(call_slot_0(tank, dirt::SLOT_IS_TANK)) {
+                let purity = get_from_memory::<i32>(tank + dirt::TANK_PURITY).wrapping_sub(Self::type_field::<i32>(ty, dirt::TYPE_PURITY_COST));
+                unsafe { ref_from_memory::<ZTTankExhibit>(tank as *const u32) }.set_water_purity(purity);
+                return true;
+            }
+        }
+        if tile_byte(tile, dirt::TILE_BLOCK_BYTE) & dirt::TILE_BLOCK_BITS != 0 {
+            return false;
+        }
+        let dirt_type = if Self::type_field::<u8>(ty, dirt::TYPE_DINO_DIRT) != 0 {
+            unsafe { GET_DINO_DIRT_TYPE.original()() }
+        } else {
+            unsafe { GET_DIRT_TYPE.original()() }
+        };
+        let mut mode = (Self::type_field::<u8>(ty, dirt::TYPE_MODE_ONE) != 0) as i32;
+        if Self::type_field::<u8>(ty, dirt::TYPE_MODE_TWO) != 0 {
+            mode = 2;
+        }
+        let [ex, ey, ez] = dirt::EXTENT;
+        let scenery = unsafe {
+            ZTWORLDMGR_CREATE_SCENERY.original()(world as *const u32, dirt_type as *const u32, mode, tile as *const u32, IVec3::new(ex, ey, ez))
+        } as u32;
+        if scenery == 0 {
+            return false;
+        }
+        let manager = globals().zthabitatmgr_ptr() as u32;
+        let table: u32 = get_from_memory(manager + conditionals::HABITAT_MGR_TABLE);
+        let x: u32 = get_from_memory(tile + conditionals::TILE_X);
+        let y: u32 = get_from_memory(tile + conditionals::TILE_Y);
+        let column: u32 = get_from_memory(table.wrapping_add(x.wrapping_mul(conditionals::COLUMN_STRIDE)));
+        let cell: u32 = get_from_memory(column.wrapping_add(y.wrapping_mul(conditionals::CELL_STRIDE)));
+        if cell != 0 && tile_byte(cell, conditionals::HABITAT_FLAG) != 0 {
+            let send = unsafe {
+                transmute::<u32, extern "thiscall" fn(u32, u32, u32, u32, u32, u32, u32)>(get_from_memory::<u32>(get_from_memory::<u32>(self.0)))
+            };
+            send(self.0, dirt::EVENT_ID, 0, dirt::EVENT_CATEGORY, tile, 0, 1);
+        }
+        true
+    }
+
     /// `ZTAnimal::stopChase` (`0x004a5e00`): when the animal has a prey and either `force` is set or the prey is of the
     /// animal's own type id, the prey's `+0x22c` is zeroed and the animal's prey cleared. Then the chase bytes are zeroed,
     /// `stopEverything(1, 0, 1)` runs and the animal becomes visible again. (The log string is dropped.)
@@ -4442,7 +4800,7 @@ impl ZTAnimal {
     fn refresh_after_boxing_change(self) {
         call_slot_0(self.0, handling::SLOT_REFRESH_A);
         call_slot_0(self.0, handling::SLOT_REFRESH_B);
-        unsafe { transmute::<u32, extern "thiscall" fn(u32)>(lifecycle::RESET_BLOCK_8C)(self.0 + lifecycle::BLOCK_8C) };
+        unsafe { MIXER_CHAIN_DEQUE_CLEAR.original()((self.0 + lifecycle::BLOCK_8C) as *const u32) };
         call_slot_3(self.0, handling::SLOT_STOP_EVERYTHING, 1, 1, 1);
     }
 
@@ -4496,6 +4854,112 @@ impl ZTAnimal {
             BFMAP_SET_SELECTION.original()(map, x, y, flag);
         }
     }
+}
+
+/// Fields `fCheckReproduction` touches.
+mod birth {
+    /// Type fields: the birth percent (`+0x278`), the babies per birth (`+0x284`) and the egg-type byte (`+0x404`).
+    pub const TYPE_BIRTH_PERCENT: u32 = 0x278;
+    pub const TYPE_LITTER_SIZE: u32 = 0x284;
+    pub const TYPE_LAYS_EGGS: u32 = 0x404;
+    /// `DAT_0063901c` (the empty search text), as an RVA.
+    pub const EMPTY_SEARCH_RVA: u32 = 0x0023_901c;
+    /// Type slot `+0x14` answers the type's class string; slot `+0x24(0)` creates an entity of the type.
+    pub const TYPE_SLOT_CLASS_STRING: u32 = 0x14;
+    pub const TYPE_SLOT_CREATE: u32 = 0x24;
+    /// Entity slots: the destructor (`+0x18`, delete flag 1) and `validatePosition` (`+0x84`, 1); the world's `addEntity` (`+0x18`).
+    pub const SLOT_DESTROY: u32 = 0x18;
+    pub const SLOT_VALIDATE_POSITION: u32 = 0x84;
+    pub const WORLD_SLOT_ADD_ENTITY: u32 = 0x18;
+    /// Tries to find a clear tile for each baby.
+    pub const PLACEMENT_ATTEMPTS: u32 = 10;
+    /// The tile's grid position (`+0x34`, `+0x38`) and the placement extent `{0x20, 0x20, 0}`.
+    pub const TILE_GRID_POS: u32 = 0x34;
+    pub const EXTENT: [i32; 3] = [0x20, 0x20, 0];
+    /// The baby records its parent: the parent's id (`+0x124`) at `+0x2f0` and the parent's mate id (`+0x2e8`) at `+0x2ec`.
+    pub const PARENT_ID: u32 = 0x124;
+    pub const PARENT_MATE: u32 = 0x2e8;
+    pub const BABY_PARENT_ID: u32 = 0x2f0;
+    pub const BABY_PARENT_MATE: u32 = 0x2ec;
+}
+
+/// Fields `fEat`, `hatchEgg` and `finishHatch` touch.
+mod eating {
+    pub const EAT_SET: &[u8] = b"bEat";
+    pub const HATCH_SET: &[u8] = b"bHatch";
+    /// Begin of the embedded behaviour set's name (`+0x54`) and of the queued call string (`+0xdc`).
+    pub const SET_NAME_BEGIN: u32 = 0x54;
+    pub const QUEUED_CALL_BEGIN: u32 = 0xdc;
+    /// Bytes: escaped-and-not-arrived (`+0x3a3`), the eat flag cleared on entry (`+0x39e`), the eating byte (`+0x3a9`) and
+    /// the egg byte `finishHatch` clears (`+0x395`).
+    pub const BYTE_ESCAPED: u32 = 0x3a3;
+    pub const BYTE_EAT_FLAG: u32 = 0x39e;
+    pub const BYTE_EATING: u32 = 0x3a9;
+    pub const BYTE_EGG: u32 = 0x395;
+    /// Tile blocking bits (`+0x83`), type fields: the no-eat-animation byte (`+0x44c`) and the per-unit hunger cost (`+0x218`).
+    pub const TILE_BLOCK_BYTE: u32 = 0x83;
+    pub const TILE_BLOCK_BITS: u8 = 0x3;
+    pub const TYPE_NO_EAT_ANIM: u32 = 0x44c;
+    pub const TYPE_HUNGER_COST: u32 = 0x218;
+    /// Slot `+0x1d8(1, 0)` when the type has the byte set, status words cleared of bit 0, the hunger pending word.
+    pub const SLOT_START_EATING: u32 = 0x1d8;
+    pub const STATUS_LOW_A: u32 = 0x298;
+    pub const STATUS_LOW_B: u32 = 0x2a0;
+    pub const STATUS_HIGH_A: u32 = 0x29c;
+    pub const STATUS_HIGH_B: u32 = 0x2a4;
+    pub const HUNGER_PENDING: u32 = 0x2b4;
+    /// The mixer `finishHatch` rebases (`+0x74`), the idle-animation slot (`+0x8c`) and the hatch message.
+    pub const MIXER: u32 = 0x74;
+    pub const SLOT_IDLE_ANIM: u32 = 0x8c;
+    pub const MESSAGE_HATCHED: u32 = 0x2852;
+}
+
+/// Fields `consume` and `showEscapedAnimalAlert` touch.
+mod alerts {
+    /// `GLOBAL_BFUIMgr` (the object itself).
+    pub const BFUIMGR_RVA: u32 = 0x0023_8de0;
+    /// `BFApp::buildString` id of the staff-consumed message.
+    pub const STAFF_CONSUMED_MESSAGE: u32 = 0x2afa;
+    pub const MESSAGE_PRIORITY: i32 = 2;
+    /// Type byte (`+0x3d5`) that lets an animal eat a guest; the unit's `+0x108` is its name word.
+    pub const TYPE_EATS_GUESTS: u32 = 0x3d5;
+    pub const NAME_WORD: u32 = 0x108;
+    /// The unit's slot `+0xcc` (called with 0) before it is removed.
+    pub const SLOT_BEFORE_REMOVE: u32 = 0xcc;
+    /// `DAT_0063b94e` (two `u16`s), the second `u16` of `DAT_0063b942` and the animation path literal, as RVAs. The dialog
+    /// id is the `u16` at `DAT_0063b94e + 2`; the icon element is `u16(0x63b94e) + that`, the label element
+    /// `u16(0x63b944) + that`.
+    pub const DIALOG_ID_RVA: u32 = 0x0023_b950;
+    pub const ICON_OFFSET_RVA: u32 = 0x0023_b94e;
+    pub const LABEL_OFFSET_RVA: u32 = 0x0023_b944;
+    pub const EXCLAIM_ANIMATION_RVA: u32 = 0x0023_cc18;
+    pub const ESCAPED_MESSAGE: u32 = 0x2717;
+    /// The label element's slot `+0xc4(text by value, 0)` sets its caption and takes the string.
+    pub const SLOT_SET_CAPTION: u32 = 0xc4;
+}
+
+/// Fields `putDownDirt` touches.
+mod dirt {
+    /// Tile flag bytes: `+0x85` bit `0x20` marks water, `+0x83` bits `0x3` block placing dirt.
+    pub const TILE_WATER_BYTE: u32 = 0x85;
+    pub const TILE_WATER_BIT: u8 = 0x20;
+    pub const TILE_BLOCK_BYTE: u32 = 0x83;
+    pub const TILE_BLOCK_BITS: u8 = 0x3;
+    /// `ZTAnimal` vtable `+0x24c` answers the habitat (a `ZTTankExhibit` on a water tile); the habitat's `+0x20` slot
+    /// answers whether it is a tank, and `+0x1a8` is its water purity.
+    pub const SLOT_HABITAT: u32 = 0x24c;
+    pub const SLOT_IS_TANK: u32 = 0x20;
+    pub const TANK_PURITY: u32 = 0x1a8;
+    /// Animal type fields: purity cost (`+0x448`) and the three dirt-kind bytes.
+    pub const TYPE_PURITY_COST: u32 = 0x448;
+    pub const TYPE_DINO_DIRT: u32 = 0x3cf;
+    pub const TYPE_MODE_ONE: u32 = 0x3ce;
+    pub const TYPE_MODE_TWO: u32 = 0x3d0;
+    /// The scenery's world-position extent by value: `{0x20, 0x20, 0}`.
+    pub const EXTENT: [i32; 3] = [0x20, 0x20, 0];
+    /// Event posted through vtable slot `0` when the new dirt lands in a flagged habitat: id, category, tile.
+    pub const EVENT_ID: u32 = 0x2730;
+    pub const EVENT_CATEGORY: u32 = 0x4d;
 }
 
 /// Fields `addFace` and `checkPrey` touch.
@@ -4789,12 +5253,56 @@ mod movement {
     /// Tile position words (x, y).
     pub const TILE_X: u32 = 0x34;
     pub const TILE_Y: u32 = 0x38;
-    /// `BFUnit::invalidateTarget` (`0x005b241e`): plain `thiscall(this)`; `generated.rs` declares a stray `bool`.
-    pub const BFUNIT_INVALIDATE_TARGET: u32 = 0x005b_241e;
-    /// `BFTile::isClearForWalkBy` (`0x004404d9`, `RET 4`, answers `AL`; `generated.rs` declares no return value) and the
-    /// unnamed `BFTile::meth_0x427360` (`RET 0x10`: four dwords by value, answers `AL`).
-    pub const TILE_IS_CLEAR_FOR_WALK_BY: u32 = 0x0044_04d9;
-    pub const TILE_UNNAMED_427360: u32 = 0x0042_7360;
+    /// `BFTile::hasUnit(RECT)` (`0x00427360`, `bool thiscall(tile, RECT)`, `RET 0x10`: four dwords by value, answers `AL`): whether an
+    /// entity on the tile has a rectangle intersecting the argument (an empty rect asks whether the tile holds any entity). Called by
+    /// address: the `bftile::HAS_UNIT` entry declares the RECT as a single `u32` (`RET 4`).
+    pub const TILE_HAS_UNIT: u32 = 0x0042_7360;
+    /// `fencesOK` fence fields. Fence entity: strength (`+0x15c`), the open-state word (`+0x160`, zero means "not
+    /// built up") and virtual `+0x144` (a show-goal gate predicate). Fence type: `+0x190` blocks everything, `+0x191`
+    /// passes everything, `+0x193` marks a type that may be a tank wall, `+0x195`/`+0x196` are the jump/climb
+    /// permissions the animal type's `+0x3cd`/`+0x3cc` flags match, `+0x64` the height compared with the animal type's
+    /// `+0x3dc`; `+0xa4`/`+0xa8` is the type-name string.
+    pub const FENCE_STRENGTH: u32 = 0x15c;
+    pub const FENCE_OPEN_WORD: u32 = 0x160;
+    pub const SLOT_FENCE_SHOW_GATE: u32 = 0x144;
+    pub const FTYPE_BLOCKS: u32 = 0x190;
+    pub const FTYPE_PASSES: u32 = 0x191;
+    pub const FTYPE_MAY_BE_TANK_WALL: u32 = 0x193;
+    pub const FTYPE_JUMPABLE: u32 = 0x195;
+    pub const FTYPE_CLIMBABLE: u32 = 0x196;
+    pub const FTYPE_HEIGHT: u32 = 0x64;
+    pub const FTYPE_NAME_BEGIN: u32 = 0xa4;
+    pub const FTYPE_NAME_END: u32 = 0xa8;
+    /// The cast tag (`DAT_00638720`) that marks a fence type as a tank wall, and the tank-wall entity bytes `fencesOK`
+    /// reads (`+0x466` blocks, `+0x464` lets an animal that passes the type checks through).
+    pub const TANK_WALL_TAG_RVA: u32 = 0x0023_8720;
+    pub const TANK_WALL_BLOCKS: u32 = 0x466;
+    pub const TANK_WALL_OPEN: u32 = 0x464;
+    /// Animal type: `+0x3cc`/`+0x3cd` climb/jump flags, `+0x3dc` height limit; virtual `+0xcc` is the tank-wall
+    /// exemption predicate.
+    pub const ATYPE_CLIMBS: u32 = 0x3cc;
+    pub const ATYPE_JUMPS: u32 = 0x3cd;
+    pub const ATYPE_HEIGHT_LIMIT: u32 = 0x3dc;
+    pub const SLOT_ANIMAL_TYPE_TANK_EXEMPT: u32 = 0xcc;
+    /// `pickRandomDest`: the habitat's per-species escapability tree (`+0x16c`, 16-byte entries keyed by entity type),
+    /// the unit's "escape in progress" byte (`+0x395`), pending direction (`+0x37c`), the unit virtual that answers true
+    /// while a show runs (`+0x22c`), the habitat virtual `+0x20` (land-roaming predicate) and the unit virtual `+0x1f8`
+    /// every destination goes through.
+    pub const HABITAT_ESCAPE_TREE: u32 = 0x16c;
+    pub const UNIT_ESCAPE_PENDING: u32 = 0x395;
+    pub const UNIT_PENDING_DIRECTION: u32 = 0x37c;
+    pub const SLOT_IS_SHOWING: u32 = 0x22c;
+    pub const SLOT_HABITAT_LAND_ROAMER: u32 = 0x20;
+    pub const SLOT_SET_DESTINATION: u32 = 0x1f8;
+    pub const ESCAPE_ENTRY_SIZE: u32 = 0x10;
+    /// `getFeedingPath`: the unit's walk-mode word (`+0x1bc`, `3` is passed to `BFMap::validate`), its path list (`+0x154`) and the
+    /// virtual (`+0x180`) that asks for a trailing step.
+    pub const UNIT_WALK_MODE: u32 = 0x1bc;
+    pub const WALK_MODE_FLAG: i32 = 3;
+    pub const UNIT_PATH_LIST: u32 = 0x154;
+    pub const SLOT_FEEDING_TAIL: u32 = 0x180;
+    pub const SHORTCUT_PERCENT: i32 = 0x32;
+    pub const POSITION_BYTES: u32 = 12;
     /// Behaviour names `forceAnim` takes for each escape kind.
     pub const ANIM_JUMP: &str = "jump_high";
     pub const ANIM_CLIMB: &str = "climb_up";
@@ -4803,10 +5311,42 @@ mod movement {
     pub const ANIM_WALK: &str = "bWalk";
 }
 
+/// `evaluateEscape`: the AI manager's path-search object (`ZTAIMgr + 0x10`: map pointer `+8`, map height `+0xc`, tile
+/// count `+0x10`, search mode `+0x4c`, result path list `+0x70`), the unit's "searching" byte and the virtuals it calls.
+/// The unit virtual `+0x1ac` (`diagonalOK`) answers the search mode (`AL`); `+0x1a0` (`setGridDest`) takes the final
+/// destination position. The habitat virtual `+0x20` is also the land-roaming predicate `pickRandomDest` uses; here a true answer from the animal's own
+/// habitat makes the escape kind `4`, and the call on a flagged destination habitat is followed by a read of its
+/// `+0x188` word, which is added to the destination's height.
+mod escape_eval {
+    pub const PATHER: u32 = 0x10;
+    pub const PATHER_MAP: u32 = 0x8;
+    pub const PATHER_MAP_HEIGHT: u32 = 0xc;
+    pub const PATHER_MAP_AREA: u32 = 0x10;
+    pub const PATHER_MODE: u32 = 0x4c;
+    pub const PATHER_RESULT: u32 = 0x70;
+    pub const UNIT_SEARCHING: u32 = 0x391;
+    pub const SLOT_DIAGONAL_OK: u32 = 0x1ac;
+    pub const SLOT_SET_GRID_DEST: u32 = 0x1a0;
+    pub const SLOT_HABITAT_ROAMER: u32 = 0x20;
+    pub const HABITAT_WATER_LEVEL: u32 = 0x188;
+    pub const TILE_TANK_FLAG: u8 = 0x20;
+    pub const REC_STEP_IS_DESTINATION: u32 = 0x2;
+}
+
 /// A virtual call on `this` taking two arguments and returning `EAX`.
 fn call_slot_2_returning(this: u32, offset: u32, first: u32, second: u32) -> u32 {
     let function = unsafe { transmute::<u32, extern "thiscall" fn(u32, u32, u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(this) + offset)) };
     function(this, first, second)
+}
+
+/// The fence on `tile`'s edge `direction` (`0..8`), `0` when the slot is empty or holds a non-fence.
+fn fence_on_edge(tile: u32, direction: i32) -> u32 {
+    let fence: u32 = get_from_memory(tile.wrapping_add(movement::TILE_EDGES).wrapping_add(((direction / 2) as u32).wrapping_mul(4)));
+    if fence != 0 && unsafe { entity_type_matches(fence, movement::FENCE_TAG_RVA) } {
+        fence
+    } else {
+        0
+    }
 }
 
 /// A byte of a tile, or `0` for a missing tile (vanilla dereferences it).
@@ -4878,7 +5418,7 @@ impl ZTAnimal {
     /// `ZTAnimal::invalidateTarget` (`0x005b24b3`): `clearEscapeInfo`, then `BFUnit::invalidateTarget`.
     pub fn invalidate_target(self) {
         self.clear_escape_info();
-        unsafe { transmute::<u32, unsafe extern "thiscall" fn(u32)>(movement::BFUNIT_INVALIDATE_TARGET)(self.0) };
+        unsafe { BFUNIT_INVALIDATE_TARGET.original()(self.0 as *const u32) };
     }
 
     /// The edge fence of `tile` on edge `direction` when it is a `ZTFence`, broken.
@@ -5022,12 +5562,11 @@ impl ZTAnimal {
         if !mode_allows {
             return false;
         }
-        let clear_for_walk_by = unsafe { transmute::<u32, unsafe extern "thiscall" fn(u32, u32) -> u32>(movement::TILE_IS_CLEAR_FOR_WALK_BY)(tile, this) };
-        if !low_byte_bool(clear_for_walk_by) {
+        if !unsafe { BFTILE_IS_CLEAR_FOR_WALK_BY.original()(tile as *const u32, this as *const u32) } {
             return false;
         }
-        let unnamed = unsafe { transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, u32) -> u32>(movement::TILE_UNNAMED_427360)(tile, 0, 0, 0, 0) };
-        !low_byte_bool(unnamed)
+        let has_unit = unsafe { transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, u32) -> u32>(movement::TILE_HAS_UNIT)(tile, 0, 0, 0, 0) };
+        !low_byte_bool(has_unit)
     }
 
     /// Walks the unit to `destination` through a freshly stopped unit: `ZTUnit::stopEverything(1, 1, 1)`, vtable `+0x1a8`
@@ -5299,6 +5838,481 @@ impl ZTAnimal {
             return max_cost.wrapping_sub(4);
         }
         1
+    }
+
+    /// `ZTAnimal::getFeedingPath` (`0x0049f6e8`): paths to the nearest reachable tile next to `destination`. One shared-RNG
+    /// draw is always taken; with `shortcut` set and the draw's remainder modulo 100 below `0x32` the unit just paths to
+    /// `destination` (`BFUnit::getPath`). Otherwise the four cardinal neighbours of `destination`, sorted by distance from
+    /// the unit's grid position, are tried in order: the first that `BFMap::validate` accepts and `getPath` reaches ends the
+    /// search. When the unit's virtual `+0x180` asks for a tail, `destination` and then (when valid) the step
+    /// `destination + offset(direction(destination - reached))` are appended to the unit's path list (`+0x154`).
+    pub fn get_feeding_path(self, destination: u32, shortcut: bool) -> bool {
+        let this = self.0 as *const u32;
+        let world: u32 = get_from_memory(base() + globals_rva::WORLD_MGR);
+        let map = world.wrapping_add(8);
+        if map == 0 {
+            return false;
+        }
+        let roll = (next_game_random() as i32).wrapping_rem(100);
+        if shortcut && roll < movement::SHORTCUT_PERCENT {
+            return low_byte_bool(unsafe { BFUNIT_GET_PATH_TO_POSITION.hooked()(this, destination as *const i32, 0) });
+        }
+        let mut candidates = [0u32; 3];
+        unsafe { BFMAP_GET_NEIGHBORS_AROUND.original()(map as *const u32, candidates.as_mut_ptr() as *const i32, destination as *const i32, 0) };
+        let mut scratch = [0i32; 3];
+        let grid_position = unsafe { BFENTITY_GET_GRID_POS.hooked()(this, scratch.as_mut_ptr()) } as u32;
+        let own_position: [i32; 3] = [get_from_memory(grid_position), get_from_memory(grid_position + 4), get_from_memory(grid_position + 8)];
+        unsafe { BF3DSORTER_SORT_POSITIONS.original()(candidates.as_ptr() as *const i32, own_position.as_ptr() as *const u32) };
+        let walk_flag = (self.read::<i32>(movement::UNIT_WALK_MODE) == movement::WALK_MODE_FLAG) as i8;
+        let mut reached = [0i32; 3];
+        let mut found = false;
+        let mut cursor = candidates[0];
+        while cursor != candidates[1] {
+            reached = [get_from_memory(cursor), get_from_memory(cursor + 4), get_from_memory(cursor + 8)];
+            if unsafe { BFMAP_VALIDATE.hooked()(map as *const u32, destination as *const i32, reached.as_ptr(), this as *const i32, walk_flag) } != 0 {
+                found = low_byte_bool(unsafe { BFUNIT_GET_PATH_TO_POSITION.hooked()(this, reached.as_ptr(), 0) });
+            }
+            cursor += movement::POSITION_BYTES;
+            if found {
+                break;
+            }
+        }
+        if found && low_byte_bool(call_slot_0(self.0, movement::SLOT_FEEDING_TAIL)) {
+            let list = self.0 + movement::UNIT_PATH_LIST;
+            let mut iterator = 0u32;
+            unsafe { LIST_IVEC3_INSERT.hooked()(&mut iterator as *mut u32 as *const i32, get_from_memory::<u32>(list) as i32, destination as *const i32) };
+            let destination_position: [i32; 3] = [get_from_memory(destination), get_from_memory(destination + 4), get_from_memory(destination + 8)];
+            let away = glam::i32::IVec3::new(
+                destination_position[0].wrapping_sub(reached[0]),
+                destination_position[1].wrapping_sub(reached[1]),
+                destination_position[2].wrapping_sub(reached[2]),
+            );
+            let direction = unsafe { BFMAP_GET_DIRECTION_FROM_OFFSET.hooked()(&away as *const glam::i32::IVec3) };
+            let mut step = [0i32; 3];
+            unsafe { BFMAP_GET_NEIGHBOR_STEP.original()(step.as_mut_ptr(), destination as *const i32, direction as u32, 0) };
+            if unsafe { BFMAP_VALIDATE.hooked()(map as *const u32, destination as *const i32, step.as_ptr(), this as *const i32, walk_flag) } != 0 {
+                unsafe { LIST_IVEC3_INSERT.hooked()(&mut iterator as *mut u32 as *const i32, get_from_memory::<u32>(list) as i32, step.as_ptr()) };
+            }
+        }
+        if candidates[0] != 0 {
+            let bytes = (candidates[2].wrapping_sub(candidates[0]) as i32 / movement::POSITION_BYTES as i32) as u32 * movement::POSITION_BYTES;
+            unsafe { POOLALLOC_DEALLOCATE.original()(candidates[0] as *const u32, bytes) };
+        }
+        found
+    }
+
+    /// Points the AI manager's path-search object at the world map and sets the unit's "searching" byte (`+0x391`) to
+    /// `flag`, with the search mode the unit's `diagonalOK` (`+0x1ac`) answers. Answers the byte's previous value.
+    fn prime_escape_search(self, aimgr: u32, map: u32, flag: u8) -> u8 {
+        let pather = aimgr + escape_eval::PATHER;
+        let height: u32 = get_from_memory(map + movement::MAP_Y_SIZE);
+        let width: u32 = get_from_memory(map + movement::MAP_X_SIZE);
+        save_to_memory(pather + escape_eval::PATHER_MAP, map);
+        save_to_memory(pather + escape_eval::PATHER_MAP_HEIGHT, height);
+        save_to_memory(pather + escape_eval::PATHER_MAP_AREA, (width as i32).wrapping_mul(height as i32));
+        let saved: u8 = self.read(escape_eval::UNIT_SEARCHING);
+        save_to_memory(self.0 + escape_eval::UNIT_SEARCHING, flag);
+        let mode = call_slot_0(self.0, escape_eval::SLOT_DIAGONAL_OK) & 0xff;
+        save_to_memory(pather + escape_eval::PATHER_MODE, mode);
+        saved
+    }
+
+    /// Runs the path-search object's first virtual (`thiscall(from, to, unit, 0)`, `RET 0x10`, answers `AL`) and restores the
+    /// unit's "searching" byte.
+    fn run_escape_search(self, aimgr: u32, saved: u8, from: &[i32; 3], to: &[i32; 3]) -> bool {
+        let pather = aimgr + escape_eval::PATHER;
+        let search = unsafe {
+            transmute::<u32, extern "thiscall" fn(u32, *const i32, *const i32, u32, u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(pather)))
+        };
+        let found = low_byte_bool(search(pather, from.as_ptr(), to.as_ptr(), self.0, 0));
+        save_to_memory(self.0 + escape_eval::UNIT_SEARCHING, saved);
+        found
+    }
+
+    /// The `(x, y, z)` words of every node of the AI manager's result path (the list at `ZTAIMgr + 0x80`: a head pointer,
+    /// nodes `{next, prev, x, y, z}`).
+    fn escape_search_result(aimgr: u32) -> Vec<[i32; 3]> {
+        let head: u32 = get_from_memory(aimgr + escape_eval::PATHER + escape_eval::PATHER_RESULT);
+        let mut path = Vec::new();
+        let mut node: u32 = get_from_memory(head);
+        while node != head {
+            path.push([get_from_memory(node + 8), get_from_memory(node + 0xc), get_from_memory(node + 0x10)]);
+            node = get_from_memory(node);
+        }
+        path
+    }
+
+    /// Appends `position` to the unit's path list (`+0x154`).
+    fn push_path_position(self, position: &[i32; 3]) {
+        let list = self.0 + movement::UNIT_PATH_LIST;
+        let mut iterator = 0u32;
+        unsafe { LIST_IVEC3_INSERT.hooked()(&mut iterator as *mut u32 as *const i32, get_from_memory::<u32>(list) as i32, position.as_ptr()) };
+    }
+
+    /// The escape kind a fence pair gives an animal of type `animal_type`: `None` leaves the record's kind alone.
+    /// Per fence (nearest first, a fence counts only while its open word is non-zero): the type's jump flag with the
+    /// fence type's jumpable byte is kind `1`, the climb flag with the climbable byte `2`, a fence weaker than the
+    /// type's strength `3`, and a height limit at or above the fence type's height `3`. Neither fence counting is kind `0`.
+    fn escape_kind_for_fences(animal_type: u32, near: u32, far: u32) -> Option<i32> {
+        let counts = |fence: u32| fence != 0 && get_from_memory::<u32>(fence + movement::FENCE_OPEN_WORD) != 0;
+        let judge = |fence: u32| -> Option<i32> {
+            let fence_type: u32 = get_from_memory(fence + 0x128);
+            if get_from_memory::<u8>(animal_type + movement::ATYPE_JUMPS) != 0 && get_from_memory::<u8>(fence_type + movement::FTYPE_JUMPABLE) != 0 {
+                return Some(1);
+            }
+            if get_from_memory::<u8>(animal_type + movement::ATYPE_CLIMBS) != 0 && get_from_memory::<u8>(fence_type + movement::FTYPE_CLIMBABLE) != 0 {
+                return Some(2);
+            }
+            if get_from_memory::<i32>(animal_type + movement::TYPE_FENCE_STRENGTH) > get_from_memory::<i32>(fence + movement::FENCE_STRENGTH) {
+                return Some(3);
+            }
+            let limit: i32 = get_from_memory(animal_type + movement::ATYPE_HEIGHT_LIMIT);
+            if limit != 0 && limit >= get_from_memory::<i32>(fence_type + movement::FTYPE_HEIGHT) {
+                return Some(3);
+            }
+            None
+        };
+        match (counts(near), counts(far)) {
+            (false, false) => Some(0),
+            (true, false) => judge(near),
+            (false, true) => judge(far),
+            (true, true) => judge(near).or_else(|| judge(far)),
+        }
+    }
+
+    /// `ZTAnimal::evaluateEscape` (`0x0042fffa`): decides whether the animal can leave its habitat through the escape
+    /// record's destination tile (`+0x384`, `+8`) and rewrites its path list to do it. The AI manager's path search runs from
+    /// the animal's grid position to the destination tile's position (raised by the tank's water level when the tile is
+    /// flagged `0x20`) with the unit's searching byte set. A failed search, or a result of fewer than two positions, clears
+    /// the record's valid byte. Otherwise the unit's path list is replaced by the result, appended position by position;
+    /// the first step whose two tiles have a fence on the shared edge ends the walk: the record's source tile becomes the
+    /// step's earlier tile, its kind is chosen from the fences (`4`, exit tank, when the animal's habitat answers its
+    /// virtual `+0x20`), and for a non-zero kind a second search (searching byte clear) from the step to the tile across
+    /// the fence, when it is exactly two positions long, appends that tile and replaces the step as the destination. The
+    /// record's byte `+2` is set when the destination is the step itself, its destination tile becomes the tile of the
+    /// final destination, which is also handed to the unit's `setGridDest` (`+0x1a0`). An animal standing on the record's source
+    /// tile finishes with `setReachedEscapeTile`.
+    pub fn evaluate_escape(self) {
+        let this = self.0;
+        let world: u32 = get_from_memory(base() + globals_rva::WORLD_MGR);
+        let map = world.wrapping_add(8);
+        if map == 0 {
+            return;
+        }
+        let aimgr = globals().ztaimgr_ptr() as u32;
+        let saved = self.prime_escape_search(aimgr, map, 1);
+        let mut scratch = [0i32; 3];
+        let grid_position = unsafe { BFENTITY_GET_GRID_POS.hooked()(this as *const u32, scratch.as_mut_ptr()) } as u32;
+        let start: [i32; 3] = [get_from_memory(grid_position), get_from_memory(grid_position + 4), get_from_memory(grid_position + 8)];
+        let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+        let destination_tile: u32 = get_from_memory(record + movement::REC_TO_TILE);
+        let mut destination: [i32; 3] = [
+            get_from_memory(destination_tile + movement::TILE_X),
+            get_from_memory(destination_tile + movement::TILE_Y),
+            get_from_memory(destination_tile + movement::TILE_Y + 4),
+        ];
+        let own_habitat = call_slot_0(this, slots::HABITAT);
+        let destination_habitat = call_slot_1(this, movement::SLOT_HABITAT_FROM_TILE, destination_tile);
+        if get_from_memory::<u8>(destination_tile + movement::TILE_FLAGS) & escape_eval::TILE_TANK_FLAG != 0 {
+            call_slot_0(destination_habitat, escape_eval::SLOT_HABITAT_ROAMER);
+            destination[2] = destination[2].wrapping_add(get_from_memory::<i32>(destination_habitat + escape_eval::HABITAT_WATER_LEVEL));
+        }
+        let record_byte = |offset: u32, value: u8| {
+            let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+            save_to_memory(record + offset, value);
+        };
+        if !self.run_escape_search(aimgr, saved, &start, &destination) {
+            record_byte(0, 0);
+            return;
+        }
+        let path = Self::escape_search_result(aimgr);
+        if path.len() < 2 {
+            record_byte(0, 0);
+            return;
+        }
+        let width: i32 = get_from_memory(map + movement::MAP_X_SIZE);
+        let height: i32 = get_from_memory(map + movement::MAP_Y_SIZE);
+        let tiles: u32 = get_from_memory(map + movement::MAP_TILES);
+        let tile_at = |x: i32, y: i32| -> u32 {
+            if x < 0 || y < 0 || x >= width || y >= height {
+                0
+            } else {
+                tiles.wrapping_add((y.wrapping_mul(width).wrapping_add(x) as u32).wrapping_mul(movement::TILE_SIZE))
+            }
+        };
+        let edge_fence = |tile: u32, direction: i32| if tile == 0 { 0 } else { fence_on_edge(tile, direction) };
+        self.free_goal_list();
+        self.push_path_position(&path[0]);
+        let mut previous = path[0];
+        for current in &path[1..] {
+            self.push_path_position(current);
+            let previous_tile = tile_at(previous[0], previous[1]);
+            let current_tile = tile_at(current[0], current[1]);
+            let direction = unsafe { BFMAP_GET_DIRECTION.original()(previous_tile as i32, current_tile as i32) };
+            let (near, far) = if direction == -1 {
+                (0, 0)
+            } else {
+                (edge_fence(previous_tile, direction), edge_fence(current_tile, direction.wrapping_sub(4) & 7))
+            };
+            if near == 0 && far == 0 {
+                previous = *current;
+                continue;
+            }
+            let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+            save_to_memory(record + movement::REC_FROM_TILE, previous_tile);
+            let animal_type = self.animal_type().unwrap_or(0);
+            let kind = if low_byte_bool(call_slot_0(own_habitat, escape_eval::SLOT_HABITAT_ROAMER)) {
+                Some(4)
+            } else {
+                Self::escape_kind_for_fences(animal_type, near, far)
+            };
+            if let Some(kind) = kind {
+                let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+                save_to_memory(record + movement::REC_KIND, kind);
+            }
+            let mut across = [0i32; 3];
+            unsafe { BFMAP_GET_NEIGHBOR_STEP.original()(across.as_mut_ptr(), current.as_ptr(), direction as u32, 0) };
+            let mut final_position = *current;
+            let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+            if get_from_memory::<i32>(record + movement::REC_KIND) != 0 {
+                let aimgr = globals().ztaimgr_ptr() as u32;
+                let saved = self.prime_escape_search(aimgr, map, 0);
+                if self.run_escape_search(aimgr, saved, current, &across) && Self::escape_search_result(aimgr).len() == 2 {
+                    final_position = across;
+                    self.push_path_position(&across);
+                }
+            }
+            if *current == final_position {
+                record_byte(escape_eval::REC_STEP_IS_DESTINATION, 1);
+            }
+            let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+            save_to_memory(record + movement::REC_TO_TILE, tile_at(final_position[0], final_position[1]));
+            call_slot_1(this, escape_eval::SLOT_SET_GRID_DEST, final_position.as_ptr() as u32);
+            break;
+        }
+        let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+        if self.own_tile() == get_from_memory::<u32>(record + movement::REC_FROM_TILE) {
+            self.set_reached_escape_tile();
+        }
+    }
+
+    /// Copies the tile's position (three words) into `position`, hands it to the unit's virtual `+0x1f8` and answers
+    /// `true`; no tile answers `false`.
+    fn commit_destination(self, tile: u32, position: u32) -> bool {
+        if tile == 0 {
+            return false;
+        }
+        for word in 0..3u32 {
+            save_to_memory(position + word * 4, get_from_memory::<u32>(tile + movement::TILE_X + word * 4));
+        }
+        call_slot_1(self.0, movement::SLOT_SET_DESTINATION, position);
+        true
+    }
+
+    /// `ZTAnimal::pickRandomDest` (`0x0043e363`): writes a destination position for an animal in a habitat that is not an
+    /// exhibit (`+0x2c` clear) and answers whether it did. An animal not already escaping and not in a show, whose species
+    /// can escape this habitat (the tree entry's first byte), takes a copy of that 16-byte entry as its escape record
+    /// (through vanilla's allocator) and runs `evaluateEscape`; a positive evaluation marks the animal escaping, plays the
+    /// escape animation (jump `1`, climb `2`, exit tank `4`) when the record's source tile is the animal's own, and heads for
+    /// the record's destination tile. Otherwise a pending direction picks a tile in that direction; else the activity mode
+    /// picks one: `1` water, `2` clear ground ahead or land (by the habitat's `+0x20`), anything else underwater. With no
+    /// tile found the mode changes towards one that fits the animal's tile (`setTerrainMode`) and the answer is `false`.
+    pub fn pick_random_dest(self, position: u32) -> bool {
+        let this = self.0;
+        let habitat = call_slot_0(this, slots::HABITAT);
+        if habitat == 0 || get_from_memory::<u8>(habitat + 0x2c) != 0 {
+            return false;
+        }
+        let habitat_ref = unsafe { ref_from_memory::<ZTHabitat>(habitat) };
+        let mut target = 0u32;
+        let mut found = false;
+        if !self.flag(movement::UNIT_ESCAPE_PENDING) && !low_byte_bool(call_slot_0(this, movement::SLOT_IS_SHOWING)) {
+            let key: u32 = self.read(unit_offsets::ENTITY_TYPE);
+            let entry = unsafe { TREE36_OPERATOR_INDEX.original()((habitat + movement::HABITAT_ESCAPE_TREE) as *const u32, &key as *const u32) } as u32;
+            if get_from_memory::<u8>(entry) != 0 {
+                self.clear_escape_info();
+                let record = unsafe { OPERATOR_NEW.original()(movement::ESCAPE_ENTRY_SIZE) } as u32;
+                if record != 0 {
+                    let entry = unsafe { TREE36_OPERATOR_INDEX.original()((habitat + movement::HABITAT_ESCAPE_TREE) as *const u32, &key as *const u32) } as u32;
+                    for byte in 0..4u32 {
+                        save_to_memory(record + byte, get_from_memory::<u8>(entry + byte));
+                    }
+                    for word in 1..4u32 {
+                        save_to_memory(record + word * 4, get_from_memory::<u32>(entry + word * 4));
+                    }
+                }
+                save_to_memory(this + animal_offsets::ESCAPE_RECORD, record);
+                self.evaluate_escape();
+                let record: u32 = self.read(animal_offsets::ESCAPE_RECORD);
+                if get_from_memory::<u8>(record) != 0 {
+                    target = get_from_memory(record + movement::REC_TO_TILE);
+                    save_to_memory(this + animal_offsets::HAS_ESCAPE_INFO, 1u8);
+                    if get_from_memory::<u32>(record + movement::REC_FROM_TILE) == self.own_tile() {
+                        match get_from_memory::<i32>(record + movement::REC_KIND) {
+                            1 => self.force_anim(movement::ANIM_JUMP),
+                            2 => self.force_anim(movement::ANIM_CLIMB),
+                            4 => self.force_anim(movement::ANIM_EXIT_TANK),
+                            _ => {}
+                        }
+                    }
+                    found = true;
+                }
+            }
+        }
+        if !found {
+            let direction: i32 = self.read(movement::UNIT_PENDING_DIRECTION);
+            if direction != -1 {
+                target = habitat_ref.get_random_tile_in_direction(self.own_tile(), direction as u32);
+                save_to_memory(this + movement::UNIT_PENDING_DIRECTION, -1i32);
+            } else {
+                match self.read::<i32>(animal_offsets::ACTIVITY_MODE) {
+                    1 => target = habitat_ref.get_random_water_tile(),
+                    2 => {
+                        target = if low_byte_bool(call_slot_0(habitat, movement::SLOT_HABITAT_LAND_ROAMER)) {
+                            habitat_ref.get_random_clear_tile_ahead(this)
+                        } else {
+                            habitat_ref.get_random_land_tile()
+                        };
+                    }
+                    _ => {
+                        target = habitat_ref.get_random_underwater_tile();
+                        if target == 0 {
+                            let tile = self.own_tile();
+                            if low_byte_bool(call_slot_0(this, movement::SLOT_GET_SWIMS)) && tile_byte(tile, movement::TILE_TERRAIN) & 3 != 0 {
+                                self.set_terrain_mode(1, 1);
+                            } else if low_byte_bool(call_slot_0(this, movement::SLOT_GET_UNDERWATER)) && tile_byte(tile, movement::TILE_FLAGS) & 0x20 != 0 {
+                                self.set_terrain_mode(2, 1);
+                            }
+                            return false;
+                        }
+                    }
+                }
+                if target == 0 && matches!(self.read::<i32>(animal_offsets::ACTIVITY_MODE), 1 | 2) {
+                    self.set_terrain_mode(0, 1);
+                    return false;
+                }
+            }
+        }
+        self.commit_destination(target, position)
+    }
+
+    /// The habitat record under `tile`'s coordinates in the habitat manager's cell table (`0` when the column is
+    /// missing).
+    fn habitat_cell_of_tile(tile: u32) -> u32 {
+        let manager = globals().zthabitatmgr_ptr() as u32;
+        let table: u32 = get_from_memory(manager + conditionals::HABITAT_MGR_TABLE);
+        let x: i32 = get_from_memory(tile + conditionals::TILE_X);
+        let y: i32 = get_from_memory(tile + conditionals::TILE_Y);
+        let column: u32 = get_from_memory(table.wrapping_add((x as u32).wrapping_mul(conditionals::COLUMN_STRIDE)));
+        if column == 0 {
+            return 0;
+        }
+        get_from_memory(column.wrapping_add((y as u32).wrapping_mul(conditionals::CELL_STRIDE)))
+    }
+
+    /// Whether this animal may cross `fence` (an edge fence of `tile`); `tank_wall` is the fence when its type is a tank
+    /// wall type, else `0`. A type that passes everything lets it through; a blocking, gate-named or zoo-gate type
+    /// never does. Otherwise an unbuilt fence, the tank-wall exemption and a show goal on a show gate let it through;
+    /// an electrified fence or a non-escaping animal never does; an escaping animal in a non-exhibit habitat is judged
+    /// by the animal type's climb, jump, strength and height limits.
+    fn fence_passable(self, tile: u32, fence: u32, tank_wall: u32) -> bool {
+        let fence_type: u32 = get_from_memory(fence + unit_offsets::ENTITY_TYPE);
+        if tile_byte(fence_type, movement::FTYPE_PASSES) != 0 {
+            return true;
+        }
+        if tile_byte(fence_type, movement::FTYPE_BLOCKS) != 0 || low_byte_bool(unsafe { ZTSCENERYTYPE_IS_ZOO_GATE.original()(fence_type as *const u32) }) {
+            return false;
+        }
+        let name_begin: u32 = get_from_memory(fence_type + movement::FTYPE_NAME_BEGIN);
+        let name_end: u32 = get_from_memory(fence_type + movement::FTYPE_NAME_END);
+        if name_end != name_begin && get_from_memory::<u8>(name_begin) == b'g' {
+            return false;
+        }
+        if get_from_memory::<i32>(fence + movement::FENCE_OPEN_WORD) == 0 {
+            return true;
+        }
+        let escaping = self.flag(animal_offsets::HAS_ESCAPE_INFO);
+        if tank_wall != 0
+            && self.animal_type().is_some_and(|ty| low_byte_bool(call_slot_0(ty, movement::SLOT_ANIMAL_TYPE_TANK_EXEMPT)))
+            && !escaping
+            && tile_byte(tank_wall, movement::TANK_WALL_BLOCKS) != 0
+        {
+            return true;
+        }
+        if low_byte_bool(call_slot_0(fence, movement::SLOT_FENCE_SHOW_GATE)) && movement::GOAL_SHOW.contains(&self.read::<i32>(movement::UNIT_GOAL_ID)) {
+            return true;
+        }
+        if low_byte_bool(unsafe { ZTFENCE_IS_ELECTRIFIED.original()(fence as *const c_void) }) || !escaping {
+            return false;
+        }
+        let habitat = Self::habitat_cell_of_tile(tile);
+        if habitat != 0 && tile_byte(habitat, 0x2c) != 0 {
+            return false;
+        }
+        if tank_wall != 0 {
+            if tile_byte(tank_wall, movement::TANK_WALL_BLOCKS) != 0 {
+                return false;
+            }
+            if tile_byte(tank_wall, movement::TANK_WALL_OPEN) == 0 {
+                return true;
+            }
+        }
+        let own_type: u32 = self.read(unit_offsets::ENTITY_TYPE);
+        if own_type == 0 {
+            return false;
+        }
+        let height_limit = Self::type_field::<i32>(own_type, movement::ATYPE_HEIGHT_LIMIT);
+        (tile_byte(own_type, movement::ATYPE_CLIMBS) != 0 && tile_byte(fence_type, movement::FTYPE_CLIMBABLE) != 0)
+            || (tile_byte(own_type, movement::ATYPE_JUMPS) != 0 && tile_byte(fence_type, movement::FTYPE_JUMPABLE) != 0)
+            || Self::type_field::<i32>(own_type, movement::TYPE_FENCE_STRENGTH) > get_from_memory::<i32>(fence + movement::FENCE_STRENGTH)
+            || (height_limit != 0 && height_limit >= get_from_memory::<i32>(fence_type + movement::FTYPE_HEIGHT))
+    }
+
+    /// `ZTAnimal::fencesOK` (`0x00414a73`): whether the step from `tile` in `direction` crosses no fence this animal
+    /// cannot pass. Clears the bytes at `out_a` and `out_b` first. A missing tile or neighbour is `false`; direction
+    /// `-1` is `true`. The fence on the tile's edge and the fence on the neighbour's far edge (`(direction - 4) & 7`)
+    /// are judged by [`Self::fence_passable`] (the far one only when the near one passes). A non-escaping animal sets
+    /// `out_b` when the near fence, else the far one, is present, not a tank wall and not always-passable.
+    pub fn fences_ok(self, tile: u32, direction: i32, out_a: u32, out_b: u32) -> bool {
+        save_to_memory(out_a, 0u8);
+        save_to_memory(out_b, 0u8);
+        if tile == 0 {
+            return false;
+        }
+        if direction == -1 {
+            return true;
+        }
+        let world: u32 = get_from_memory(base() + globals_rva::WORLD_MGR);
+        let neighbour = unsafe { BFMAP_GET_NEIGHBOR.hooked()((world + 8) as *const u32, tile as *const u32, direction as u32) };
+        if neighbour == 0 {
+            return false;
+        }
+        let near = fence_on_edge(tile, direction);
+        let far = fence_on_edge(neighbour, direction.wrapping_sub(4) & 7);
+        if near == 0 && far == 0 {
+            return true;
+        }
+        let tank_wall = |fence: u32| {
+            if fence == 0 {
+                return 0;
+            }
+            let fence_type: u32 = get_from_memory(fence + unit_offsets::ENTITY_TYPE);
+            if tile_byte(fence_type, movement::FTYPE_MAY_BE_TANK_WALL) != 0 && Self::type_is_cast(fence_type, movement::TANK_WALL_TAG_RVA) {
+                fence
+            } else {
+                0
+            }
+        };
+        let (near_wall, far_wall) = (tank_wall(near), tank_wall(far));
+        let near_ok = near == 0 || self.fence_passable(tile, near, near_wall);
+        let far_ok = near_ok && (far == 0 || self.fence_passable(tile, far, far_wall));
+        if !self.flag(animal_offsets::HAS_ESCAPE_INFO) {
+            let plain = |fence: u32, wall: u32| fence != 0 && wall == 0 && tile_byte(get_from_memory::<u32>(fence + unit_offsets::ENTITY_TYPE), movement::FTYPE_PASSES) == 0;
+            if plain(near, near_wall) || plain(far, far_wall) {
+                save_to_memory(out_b, 1u8);
+            }
+        }
+        near_ok && far_ok
     }
 }
 
@@ -5780,6 +6794,26 @@ mod animal_detours {
         ZTAnimal(this as u32).tile_filter(tile as u32, flag)
     }
 
+    #[detour(FENCES_OK)]
+    unsafe extern "thiscall" fn fences_ok(this: *const u32, tile: *const u32, direction: u32, out_a: *const bool, out_b: *const bool) -> u32 {
+        ZTAnimal(this as u32).fences_ok(tile as u32, direction as i32, out_a as u32, out_b as u32) as u32
+    }
+
+    #[detour(EVALUATE_ESCAPE)]
+    unsafe extern "thiscall" fn evaluate_escape(this: *const c_void) {
+        ZTAnimal(this as u32).evaluate_escape()
+    }
+
+    #[detour(PICK_RANDOM_DEST)]
+    unsafe extern "thiscall" fn pick_random_dest(this: *const u32, position: *const IVec3) -> u32 {
+        ZTAnimal(this as u32).pick_random_dest(position as u32) as u32
+    }
+
+    #[detour(GET_FEEDING_PATH)]
+    unsafe extern "thiscall" fn get_feeding_path(this: *const c_void, destination: *const i32, shortcut: u8) -> u32 {
+        ZTAnimal(this as u32).get_feeding_path(destination as u32, shortcut != 0) as u32
+    }
+
     #[detour(GET_TERRAIN_COST)]
     unsafe extern "thiscall" fn get_terrain_cost(this: *const u32, tile: *const u32) -> u32 {
         ZTAnimal(this as u32).get_terrain_cost(tile as u32) as u32
@@ -5823,6 +6857,46 @@ mod animal_detours {
     #[detour(STOP_EATING)]
     unsafe extern "thiscall" fn stop_eating(this: *const u32, flag: bool) {
         ZTAnimal(this as u32).stop_eating(flag as u8);
+    }
+
+    #[detour(HATCH_EGG)]
+    unsafe extern "thiscall" fn hatch_egg(this: *const u32) {
+        ZTAnimal(this as u32).hatch_egg();
+    }
+
+    #[detour(FINISH_HATCH)]
+    unsafe extern "thiscall" fn finish_hatch(this: *const u32) {
+        ZTAnimal(this as u32).finish_hatch();
+    }
+
+    #[detour(F_EAT)]
+    unsafe extern "thiscall" fn f_eat(this: *const u32) -> *const u32 {
+        ZTAnimal(this as u32).f_eat() as *const u32
+    }
+
+    #[detour(F_CHECK_REPRODUCTION)]
+    unsafe extern "fastcall" fn f_check_reproduction(this: *const i32) -> bool {
+        ZTAnimal(this as u32).f_check_reproduction()
+    }
+
+    #[detour(CONSUME)]
+    unsafe extern "thiscall" fn consume(this: *const u32, unit: *const i32) {
+        ZTAnimal(this as u32).consume(unit as u32);
+    }
+
+    #[detour(SHOW_ESCAPED_ANIMAL_ALERT)]
+    unsafe extern "thiscall" fn show_escaped_animal_alert(this: *const u32) {
+        ZTAnimal(this as u32).show_escaped_animal_alert();
+    }
+
+    #[detour(CHASE_DONE)]
+    unsafe extern "thiscall" fn chase_done(this: *const u32, unit: *const u32) -> bool {
+        ZTAnimal(this as u32).chase_done(unit as u32)
+    }
+
+    #[detour(PUT_DOWN_DIRT)]
+    unsafe extern "thiscall" fn put_down_dirt(this: *const u32, tile: *const u32) -> bool {
+        ZTAnimal(this as u32).put_down_dirt(tile as u32)
     }
 
     #[detour(STOP_CHASE)]
@@ -6425,6 +7499,34 @@ mod animal_detours {
             unsafe { super::STOP_EATING_DETOUR.call(this as *const u32, flag != 0) }
         }
 
+        pub(crate) fn chase_done(this: u32, unit: u32) -> bool {
+            unsafe { super::CHASE_DONE_DETOUR.call(this as *const u32, unit as *const u32) }
+        }
+
+        pub(crate) fn f_check_reproduction(this: u32) -> bool {
+            unsafe { super::F_CHECK_REPRODUCTION_DETOUR.call(this as *const i32) }
+        }
+
+        pub(crate) fn consume(this: u32, unit: u32) {
+            unsafe { super::CONSUME_DETOUR.call(this as *const u32, unit as *const i32) }
+        }
+
+        pub(crate) fn show_escaped_animal_alert(this: u32) {
+            unsafe { super::SHOW_ESCAPED_ANIMAL_ALERT_DETOUR.call(this as *const u32) }
+        }
+
+        pub(crate) fn hatch_egg(this: u32) {
+            unsafe { super::HATCH_EGG_DETOUR.call(this as *const u32) }
+        }
+
+        pub(crate) fn f_eat(this: u32) -> u32 {
+            (unsafe { super::F_EAT_DETOUR.call(this as *const u32) }) as u32
+        }
+
+        pub(crate) fn put_down_dirt(this: u32, tile: u32) -> bool {
+            unsafe { super::PUT_DOWN_DIRT_DETOUR.call(this as *const u32, tile as *const u32) }
+        }
+
         pub(crate) fn stop_chase(this: u32, force: bool) {
             unsafe { super::STOP_CHASE_DETOUR.call(this as *const u32, force) }
         }
@@ -6727,6 +7829,22 @@ mod animal_detours {
 
         pub(crate) fn tile_filter(this: u32, tile: u32, flag: bool) -> bool {
             unsafe { super::TILE_FILTER_DETOUR.call(this as *const c_void, tile as *const c_void, flag) }
+        }
+
+        pub(crate) fn fences_ok(this: u32, tile: u32, direction: i32, out_a: u32, out_b: u32) -> bool {
+            unsafe { super::FENCES_OK_DETOUR.call(this as *const u32, tile as *const u32, direction as u32, out_a as *const bool, out_b as *const bool) as u8 != 0 }
+        }
+
+        pub(crate) fn evaluate_escape(this: u32) {
+            unsafe { super::EVALUATE_ESCAPE_DETOUR.call(this as *const c_void) }
+        }
+
+        pub(crate) fn pick_random_dest(this: u32, position: u32) -> bool {
+            unsafe { super::PICK_RANDOM_DEST_DETOUR.call(this as *const u32, position as *const glam::i32::IVec3) as u8 != 0 }
+        }
+
+        pub(crate) fn get_feeding_path(this: u32, destination: u32, shortcut: bool) -> bool {
+            unsafe { super::GET_FEEDING_PATH_DETOUR.call(this as *const c_void, destination as *const i32, shortcut as u8) as u8 != 0 }
         }
 
         pub(crate) fn get_terrain_cost(this: u32, tile: u32) -> i32 {

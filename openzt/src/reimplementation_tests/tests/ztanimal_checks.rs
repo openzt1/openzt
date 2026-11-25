@@ -11,7 +11,7 @@ use std::sync::{
     Mutex,
 };
 
-use openzt_detour::generated::ztanimal as generated;
+use openzt_detour::generated::{bfentity as generated_bfentity, ztanimal as generated};
 
 use super::ztanimal::{build_animal, live_animal_types, live_animals, Lcg};
 use crate::{
@@ -1889,6 +1889,594 @@ pub(crate) fn run_ztanimal_baby_to_adult_check_live_test(failure_log: &mut Optio
             );
             if failures.len() > 20 {
                 break;
+            }
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_HATCH_EAT_LIVE`: `hatchEgg` (`setBSNew` answered by a script) and `fEat`'s stop-eating exits (an escaped animal, a
+/// fixture without food, with the current set already `bEat` or not) over scripted fixtures; real, port and hooked agree. The
+/// food-eating branch and `finishHatch` (it posts a zoo message naming the fixture) are not run against vanilla; the mixer
+/// step of `finishHatch` is checked structurally: one link, on the idle animation (the reference count is not compared: there is no vanilla pole for the step alone).
+pub(crate) fn run_ztanimal_hatch_eat_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_HATCH_EAT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(4);
+    if types.is_empty() {
+        failures.push("the live world holds no animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_zap_set_bs);
+    for &ty in &types {
+        for answer in [false, true] {
+            for current in [&b""[..], b"bHatch", b"bEat"] {
+                compare_three_poles(
+                    ty,
+                    &format!("hatchEgg answer {answer} current {:?}", String::from_utf8_lossy(current)),
+                    1,
+                    &install_sleep_vtable,
+                    &|animal| {
+                        SLEEP_GATE.store(answer, Ordering::SeqCst);
+                        if !current.is_empty() {
+                            plant_set_name(animal, current);
+                        }
+                    },
+                    &|animal, pole| match pole {
+                        0 => real::hatch_egg(animal.0),
+                        1 => animal.hatch_egg(),
+                        _ => unsafe { generated::HATCH_EGG.hooked()(animal.0 as *const u32) },
+                    },
+                    &mut failures,
+                );
+            }
+        }
+        for escaped in [0u8, 1] {
+            for current in [&b""[..], b"bEat"] {
+                compare_three_poles(
+                    ty,
+                    &format!("fEat escaped {escaped} current {:?}", String::from_utf8_lossy(current)),
+                    2,
+                    &install_sleep_vtable,
+                    &|animal| {
+                        SLEEP_GATE.store(true, Ordering::SeqCst);
+                        save_to_memory(animal.0 + 0x3a3, escaped);
+                        save_to_memory(animal.0 + 0x39e, 1u8);
+                        if !current.is_empty() {
+                            plant_set_name(animal, current);
+                        }
+                    },
+                    &|animal, pole| {
+                        let _ = match pole {
+                            0 => real::f_eat(animal.0),
+                            1 => animal.f_eat(),
+                            _ => unsafe { generated::F_EAT.hooked()(animal.0 as *const u32) as u32 },
+                        };
+                    },
+                    &mut failures,
+                );
+            }
+        }
+        let animal = build_animal(ty);
+        let idle = crate::ztkeeper::call_slot_1(animal.0, 0x8c, 0);
+        animal.rebase_mixer_on_idle_anim();
+        let (begin, end): (u32, u32) = (get_from_memory(animal.0 + 0x80), get_from_memory(animal.0 + 0x84));
+        if end.wrapping_sub(begin) != 12 || get_from_memory::<u32>(begin) != idle {
+            failures.push(format!("finishHatch mixer step: link array {begin:#x}..{end:#x}, first word differs from the idle animation {idle:#x}"));
+        }
+    }
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = None;
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_CHECK_REPRODUCTION_LIVE`: `fCheckReproduction`'s exits that create nothing, over scripted fixtures: a failed roll (birth
+/// percent 0), the unhappy-reproduction gate with a type id that does not allow it, and a passed roll over a missing or flagged
+/// habitat. Real, port and hooked agree on the answer, the game RNG word and the fixture state. A passing roll with a clear habitat
+/// would spawn animals into the live zoo and is not run against vanilla.
+pub(crate) fn run_ztanimal_check_reproduction_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_CHECK_REPRODUCTION_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(4);
+    if types.is_empty() {
+        failures.push("the live world holds no animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let flagged_habitat = Box::leak(vec![0u8; 0x200].into_boxed_slice()).as_mut_ptr() as u32;
+    save_to_memory(flagged_habitat + 0x2c, 1u8);
+    let gate_address = super::ztanimal::base() + 0x0023_c2e3;
+    for &ty in &types {
+        let original_percent: i32 = get_from_memory(ty + 0x278);
+        let original_gate: u8 = get_from_memory(gate_address);
+        for percent in [0i32, 100] {
+            for gate in [0u8, 1] {
+                for habitat in [0u32, flagged_habitat] {
+                    for seed in [1u32, 0x1234_5678] {
+                        save_to_memory(ty + 0x278, percent);
+                        compare_three_poles(
+                            ty,
+                            &format!("fCheckReproduction percent {percent} gate {gate} habitat {habitat:#x} seed {seed:#x}"),
+                            seed,
+                            &install_sleep_vtable,
+                            &|animal| {
+                                HABITAT.store(habitat, Ordering::SeqCst);
+                                save_to_memory(gate_address, gate);
+                                save_to_memory(animal.0 + 0x2e8, 0u32);
+                            },
+                            &|animal, pole| {
+                                let answer = match pole {
+                                    0 => real::f_check_reproduction(animal.0),
+                                    1 => animal.f_check_reproduction(),
+                                    _ => unsafe { generated::F_CHECK_REPRODUCTION.hooked()(animal.0 as *const i32) },
+                                };
+                                CALLS.lock().unwrap().push(0xcc00_0000 | answer as u32);
+                                save_to_memory(gate_address, gate);
+                            },
+                            &mut failures,
+                        );
+                    }
+                }
+            }
+        }
+        save_to_memory(ty + 0x278, original_percent);
+        save_to_memory(gate_address, original_gate);
+    }
+    HABITAT.store(0, Ordering::SeqCst);
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Every entity pointer the live world holds, in array order.
+fn world_entities() -> Vec<u32> {
+    let world = crate::globals::globals().ztworldmgr();
+    let mut entities = Vec::new();
+    let mut slot = world.entity_array_start();
+    while slot != world.entity_array_end() {
+        entities.push(get_from_memory::<u32>(slot));
+        slot += 4;
+    }
+    entities
+}
+
+/// Removes `entity` from the live world through `BFWorldMgr::removeEntity` (slot `+0x1c`, delete flag set), the path the game takes
+/// when it removes an animal: array, id map, `removeFromMap(0)` and the destructor.
+fn remove_world_entity(entity: u32) {
+    let world = crate::globals::globals().ztworldmgr_ptr() as u32;
+    crate::ztkeeper::call_slot_2(world, 0x1c, entity, 1);
+}
+
+/// The fields a freshly born animal differs in: type, position, parent id and mate, the growth countdown, the egg byte and the hatch timer.
+fn baby_snapshot(entity: u32) -> Vec<u32> {
+    let mut words = vec![get_from_memory::<u32>(entity + 0x128)];
+    words.extend((0..3).map(|i| get_from_memory::<u32>(entity + 0x114 + 4 * i)));
+    for offset in [0x2f0u32, 0x2ec, 0x32c, 0x398] {
+        words.push(get_from_memory::<u32>(entity + offset));
+    }
+    words.push(get_from_memory::<u8>(entity + 0x395) as u32);
+    words
+}
+
+/// `ZTANIMAL_CHECK_REPRODUCTION_SPAWN_LIVE`: `fCheckReproduction` over real live animals whose habitat accepts births, with the birth
+/// percent forced to 100 and the litter to at most 2. For each pole the game RNG is re-seeded, the call's answer, the RNG word and every
+/// animal it added (found by diffing the world's entity array) are recorded, and the new animals are removed again through the world's
+/// own `removeEntity`; the entity count must return to where it started. Animals vanilla and the port create both come from the type's
+/// own `createEntity`, so each is torn down by the allocator that made it. The first (real) run is a discarded warm-up: the first cycle
+/// on a type draws one more game-RNG value than every later cycle (a vanilla cache that is built lazily and then persists; whichever
+/// implementation runs first pays it, so it is not something the call leaves behind and it cannot be undone), and the compared poles
+/// all run after it. The coin flip that picks the gendered search text uses the C runtime's `rand`, which the test does not seed. Each
+/// type also runs with its egg-laying byte (`+0x404`) forced on, so the egg branch is compared too.
+pub(crate) fn run_ztanimal_check_reproduction_spawn_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_CHECK_REPRODUCTION_SPAWN_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let rng_address = super::ztanimal::base() + 0x0023_8060;
+    let gate_address = super::ztanimal::base() + 0x0023_c2e3;
+    let mut covered_births = 0usize;
+    let mut covered_eggs = 0usize;
+    let mut seen_types: Vec<u32> = Vec::new();
+    for parent in live_animals() {
+        let animal = ZTAnimal(parent);
+        let Some(ty) = animal.animal_type() else { continue };
+        if seen_types.contains(&ty) || seen_types.len() >= 6 {
+            continue;
+        }
+        let habitat = crate::ztkeeper::call_slot_0(parent, 0x24c);
+        if habitat == 0 || get_from_memory::<u8>(habitat + 0x2c) != 0 {
+            continue;
+        }
+        seen_types.push(ty);
+        let original = (get_from_memory::<i32>(ty + 0x278), get_from_memory::<i32>(ty + 0x284), get_from_memory::<u8>(gate_address));
+        save_to_memory(ty + 0x278, 100i32);
+        save_to_memory(ty + 0x284, original.1.clamp(1, 2));
+        let original_egg: u8 = get_from_memory(ty + 0x404);
+        for force_egg in [false, true] {
+        save_to_memory(ty + 0x404, if force_egg { 1u8 } else { original_egg });
+        let mut results: Vec<(bool, u32, Vec<Vec<u32>>)> = Vec::new();
+        for pole in 0..4usize {
+            let before = world_entities();
+            save_to_memory(gate_address, 0u8);
+            save_to_memory(rng_address, 0x5eed_u32);
+            let answer = match pole {
+                0 | 1 => real::f_check_reproduction(parent),
+                2 => animal.f_check_reproduction(),
+                _ => unsafe { generated::F_CHECK_REPRODUCTION.hooked()(parent as *const i32) },
+            };
+            let rng: u32 = get_from_memory(rng_address);
+            let added: Vec<u32> = world_entities().into_iter().filter(|entity| !before.contains(entity)).collect();
+            let snapshots: Vec<Vec<u32>> = added.iter().map(|&entity| baby_snapshot(entity)).collect();
+            for &entity in added.iter().rev() {
+                remove_world_entity(entity);
+            }
+            if world_entities() != before {
+                failures.push(format!("type {ty:#x} pole {pole}: the world holds {} entities after removing the births, expected {}", world_entities().len(), before.len()));
+            }
+            results.push((answer, rng, snapshots));
+        }
+        for (pole, name) in [(2usize, "port"), (3, "hooked")] {
+            if results[1].0 != results[pole].0 || results[1].1 != results[pole].1 || results[1].2 != results[pole].2 {
+                failures.push(format!(
+                    "type {ty:#x} forced egg {force_egg}: {name} differs from real: answer {} vs {}, rng {:#x} vs {:#x}, babies {:?} vs {:?}",
+                    results[pole].0, results[1].0, results[pole].1, results[1].1, results[pole].2, results[1].2
+                ));
+            }
+        }
+        covered_births += results[1].2.len();
+        covered_eggs += results[1].2.iter().filter(|snapshot| snapshot[8] != 0).count();
+        }
+        save_to_memory(ty + 0x404, original_egg);
+        save_to_memory(ty + 0x278, original.0);
+        save_to_memory(ty + 0x284, original.1);
+        save_to_memory(gate_address, original.2);
+    }
+    if seen_types.is_empty() {
+        failures.push("the live zoo holds no animal in a habitat that accepts births".to_string());
+    } else if covered_births == 0 {
+        failures.push("no birth was placed by real vanilla in any live habitat, so nothing was compared".to_string());
+    }
+    if covered_births > 0 && covered_eggs == 0 {
+        failures.push("no egg was placed by real vanilla, so the egg branch was not compared".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_PUT_DOWN_DIRT_LIVE`: `putDownDirt` on the live zoo. Dirt: for live animals standing on a tile that is neither water nor
+/// blocked, the call's answer, the game RNG word, the scenery it adds (type, position, rotation) and the tile's flag bytes are recorded
+/// for real, port and hooked; the scenery is then removed through the world's `removeEntity` and the entity count must return. Tank:
+/// for live animals in a tank on a water tile, the answer and the tank's purity and its timer are compared and restored afterwards.
+/// The first real run is a discarded warm-up (it primes the cached dirt type and settles tile state).
+pub(crate) fn run_ztanimal_put_down_dirt_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_PUT_DOWN_DIRT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let rng_address = super::ztanimal::base() + 0x0023_8060;
+    let mut dirt_cases = 0usize;
+    let mut tank_cases = 0usize;
+    for parent in live_animals() {
+        let animal = ZTAnimal(parent);
+        if animal.animal_type().is_none() {
+            continue;
+        }
+        let tile = (unsafe { generated_bfentity::GET_TILE.original()(parent as *const u32) }) as u32;
+        if tile == 0 {
+            continue;
+        }
+        let water = get_from_memory::<u8>(tile + 0x85) & 0x20 != 0;
+        let blocked = get_from_memory::<u8>(tile + 0x83) & 3 != 0;
+        let habitat = crate::ztkeeper::call_slot_0(parent, 0x24c);
+        let tank = water && habitat != 0 && crate::util::low_byte_bool(crate::ztkeeper::call_slot_0(habitat, 0x20));
+        if tank {
+            if tank_cases >= 3 {
+                continue;
+            }
+            tank_cases += 1;
+            let original = (get_from_memory::<i32>(habitat + 0x1a8), get_from_memory::<i32>(habitat + 0x1ac));
+            let mut results: Vec<(bool, i32, i32)> = Vec::new();
+            for pole in 0..4usize {
+                let answer = match pole {
+                    0 | 1 => real::put_down_dirt(parent, tile),
+                    2 => animal.put_down_dirt(tile),
+                    _ => unsafe { generated::PUT_DOWN_DIRT.hooked()(parent as *const u32, tile as *const u32) },
+                };
+                results.push((answer, get_from_memory(habitat + 0x1a8), get_from_memory(habitat + 0x1ac)));
+                save_to_memory(habitat + 0x1a8, original.0);
+                save_to_memory(habitat + 0x1ac, original.1);
+            }
+            for (pole, name) in [(2usize, "port"), (3, "hooked")] {
+                if results[1] != results[pole] {
+                    failures.push(format!("tank animal {parent:#x}: {name} {:?} differs from real {:?}", results[pole], results[1]));
+                }
+            }
+            continue;
+        }
+        if water || blocked || dirt_cases >= 6 {
+            continue;
+        }
+        dirt_cases += 1;
+        let mut results: Vec<(bool, u32, Vec<Vec<u32>>, Vec<u8>)> = Vec::new();
+        for pole in 0..4usize {
+            let before = world_entities();
+            save_to_memory(rng_address, 0xd157_u32);
+            let answer = match pole {
+                0 | 1 => real::put_down_dirt(parent, tile),
+                2 => animal.put_down_dirt(tile),
+                _ => unsafe { generated::PUT_DOWN_DIRT.hooked()(parent as *const u32, tile as *const u32) },
+            };
+            let rng: u32 = get_from_memory(rng_address);
+            let added: Vec<u32> = world_entities().into_iter().filter(|entity| !before.contains(entity)).collect();
+            let snapshots: Vec<Vec<u32>> = added
+                .iter()
+                .map(|&entity| {
+                    let mut words = vec![get_from_memory::<u32>(entity + 0x128)];
+                    words.extend((0..3).map(|i| get_from_memory::<u32>(entity + 0x114 + 4 * i)));
+                    words.push(get_from_memory::<u32>(entity + 0x12c));
+                    words
+                })
+                .collect();
+            let tile_bytes: Vec<u8> = (0x80..0x90).map(|offset| get_from_memory::<u8>(tile + offset)).collect();
+            for &entity in added.iter().rev() {
+                remove_world_entity(entity);
+            }
+            if world_entities() != before {
+                failures.push(format!("animal {parent:#x} pole {pole}: the world holds {} entities after removing the dirt, expected {}", world_entities().len(), before.len()));
+            }
+            results.push((answer, rng, snapshots, tile_bytes));
+        }
+        for (pole, name) in [(2usize, "port"), (3, "hooked")] {
+            if results[1] != results[pole] {
+                failures.push(format!("animal {parent:#x}: {name} {:?} differs from real {:?}", results[pole], results[1]));
+            }
+        }
+    }
+    if dirt_cases == 0 {
+        failures.push("no live animal stands on a free land tile, so the dirt branch was not compared".to_string());
+    }
+    if tank_cases == 0 {
+        failures.push("no live animal is in a tank on a water tile, so the tank branch was not compared".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+extern "thiscall" fn fake_start_eating(_this: u32, a: u32, b: u32) {
+    CALLS.lock().unwrap().push(0x1d8 | a << 12 | b << 13);
+}
+
+static EAT_REACHED: AtomicU32 = AtomicU32::new(0);
+
+fn install_eat_vtable(animal: ZTAnimal) {
+    install_sleep_vtable(animal);
+    let current: u32 = get_from_memory(animal.0);
+    let mut vtable: Vec<u32> = (0..197u32).map(|slot| get_from_memory::<u32>(current + slot * 4)).collect();
+    vtable[0x1d8 / 4] = fake_start_eating as *const () as usize as u32;
+    let vtable = Box::leak(vtable.into_boxed_slice());
+    save_to_memory(animal.0, vtable.as_ptr() as u32);
+}
+
+/// The first live entity whose type casts to the food-entity class, with the tile it stands on.
+fn live_food_entity() -> Option<(u32, u32)> {
+    let tag = super::ztanimal::base() + 0x0023_86c0;
+    for entity in world_entities() {
+        if entity == 0 {
+            continue;
+        }
+        let entity_type: u32 = get_from_memory(entity + 0x128);
+        if entity_type == 0 {
+            continue;
+        }
+        let is_food = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(get_from_memory::<u32>(get_from_memory::<u32>(entity_type) + 0x1c)) };
+        if is_food(entity_type, tag) {
+            let tile = (unsafe { generated_bfentity::GET_TILE.original()(entity as *const u32) }) as u32;
+            if tile != 0 {
+                return Some((entity, tile));
+            }
+        }
+    }
+    None
+}
+
+/// `ZTANIMAL_F_EAT_LIVE`: `fEat`'s eating branch. A scripted fixture animal stands on the tile of a real live food entity and its eat
+/// context points at it, so `fFoodUnitsActuallyEaten`, `fReduceFood` (the live habitat, `setAmountFoodUnitsDelta`) and `setBS`
+/// (answered by a script) run for real. The food's units are set high so the food is never used up (that would retarget live animals)
+/// and restored after every pole. Real, port and hooked agree on the answer, the food units left, the game RNG word, the fixture's state
+/// and the slot calls, across the type's no-eat-animation byte, the set name and queued call already being `bEat`, and `setBS`'s answer.
+pub(crate) fn run_ztanimal_f_eat_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_F_EAT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(3);
+    let Some((food, tile)) = live_food_entity() else {
+        failures.push("the live zoo holds no food entity, so the eating branch was not compared".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    if types.is_empty() {
+        failures.push("the live world holds no animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    if get_from_memory::<u8>(tile + 0x83) & 3 != 0 {
+        failures.push("the live food entity stands on a blocked tile, so the eating branch is unreachable".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let habitat = live_animals().iter().map(|&animal| crate::ztkeeper::call_slot_0(animal, 0x24c)).find(|&h| h != 0).unwrap_or(0);
+    let context = Box::leak(vec![0u8; 0x40].into_boxed_slice()).as_mut_ptr() as u32;
+    save_to_memory(context + 0x10, food);
+    let position: Vec<u32> = (0..3).map(|i| get_from_memory::<u32>(food + 0x114 + 4 * i)).collect();
+    let original_units: i32 = get_from_memory(food + 0x154);
+    EAT_REACHED.store(0, Ordering::SeqCst);
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_zap_set_bs);
+    for &ty in &types {
+        let original_flag: u8 = get_from_memory(ty + 0x44c);
+        for no_eat_anim in [0u8, 1] {
+            for current in [&b""[..], b"bEat"] {
+                for queued in [&b""[..], b"bEat"] {
+                    for set_bs_answer in [false, true] {
+                        for can_sleep in [false, true] {
+                            save_to_memory(ty + 0x44c, no_eat_anim);
+                            compare_three_poles(
+                                ty,
+                                &format!("fEat no-eat-anim {no_eat_anim} current {:?} queued {:?} setBS {set_bs_answer} sleepGate {can_sleep}", String::from_utf8_lossy(current), String::from_utf8_lossy(queued)),
+                                3,
+                                &install_eat_vtable,
+                                &|animal| {
+                                    HABITAT.store(habitat, Ordering::SeqCst);
+                                    SLEEP_GATE.store(set_bs_answer, Ordering::SeqCst);
+                                    for (i, word) in position.iter().enumerate() {
+                                        save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
+                                    }
+                                    save_to_memory(animal.0 + 0x38c, context);
+                                    save_to_memory(animal.0 + 0x3a3, 0u8);
+                                    save_to_memory(animal.0 + 0x3a9, 0u8);
+                                    save_to_memory(food + 0x154, 1000i32);
+                                    if !current.is_empty() {
+                                        plant_set_name(animal, current);
+                                    }
+                                    if !queued.is_empty() {
+                                        plant_queued_call(animal, queued);
+                                    }
+                                    let _ = can_sleep;
+                                },
+                                &|animal, pole| {
+                                    let answer = match pole {
+                                        0 => real::f_eat(animal.0),
+                                        1 => animal.f_eat(),
+                                        _ => unsafe { generated::F_EAT.hooked()(animal.0 as *const u32) as u32 },
+                                    };
+                                    let left: i32 = get_from_memory(food + 0x154);
+                                    if pole == 0 && left < 1000 {
+                                        EAT_REACHED.fetch_add(1, Ordering::SeqCst);
+                                    }
+                                    CALLS.lock().unwrap().push(0xea70_0000 | (answer & 0xffff));
+                                    CALLS.lock().unwrap().push(0xea71_0000 | (left as u32 & 0xffff));
+                                    save_to_memory(food + 0x154, original_units);
+                                },
+                                &mut failures,
+                            );
+                            if failures.len() > 20 {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        save_to_memory(ty + 0x44c, original_flag);
+    }
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = None;
+    save_to_memory(food + 0x154, original_units);
+    if EAT_REACHED.load(Ordering::SeqCst) == 0 {
+        failures.push("real vanilla never reached the eating branch (the food's units never dropped), so nothing was compared".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Whether `entity`'s type casts to the class tagged at `tag_rva`.
+fn entity_casts(entity: u32, tag_rva: u32) -> bool {
+    let entity_type: u32 = get_from_memory(entity + 0x128);
+    if entity_type == 0 {
+        return false;
+    }
+    let cast = unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32, u32) -> bool>(get_from_memory::<u32>(get_from_memory::<u32>(entity_type) + 0x1c)) };
+    cast(entity_type, super::ztanimal::base() + tag_rva)
+}
+
+/// `ZTANIMAL_CONSUME_LIVE`: `consume` on live units: up to two guests, two staff and one other animal, each with the consuming animal's
+/// "eats guests" type byte (`+0x3d5`) forced off and on. The toast is captured by the display-message recorder (so nothing is shown);
+/// the unit's memory after the call (removed flags, whatever slot `+0xcc(0)` changed) is compared and then restored byte for byte.
+/// Real, port and hooked agree on the toasts and the unit's memory.
+pub(crate) fn run_ztanimal_consume_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::display_message_recorder;
+    const SNAPSHOT: u32 = 0x2e0;
+    let test_name = "ZTANIMAL_CONSUME_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let animals = live_animals();
+    let Some(&eater) = animals.first() else {
+        failures.push("the live world holds no animal".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let Some(eater_type) = ZTAnimal(eater).animal_type() else {
+        failures.push("the first live animal has no animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let (mut guests, mut staff, mut others) = (Vec::new(), Vec::new(), Vec::new());
+    for entity in world_entities() {
+        if entity == 0 || entity == eater {
+            continue;
+        }
+        if entity_casts(entity, 0x0023_8700) {
+            guests.push(entity);
+        } else if entity_casts(entity, 0x0023_8710) {
+            staff.push(entity);
+        } else if animals.contains(&entity) {
+            others.push(entity);
+        }
+    }
+    let mut units: Vec<(&str, u32)> = Vec::new();
+    units.extend(guests.iter().take(2).map(|&unit| ("guest", unit)));
+    units.extend(staff.iter().take(2).map(|&unit| ("staff", unit)));
+    units.extend(others.iter().take(1).map(|&unit| ("animal", unit)));
+    if !units.iter().any(|(kind, _)| *kind == "staff") {
+        failures.push("the live zoo holds no staff member, so the toast branch was not compared".to_string());
+    }
+    if !units.iter().any(|(kind, _)| *kind == "guest") {
+        failures.push("the live zoo holds no guest, so the guest branches were not compared".to_string());
+    }
+    let original_flag: u8 = get_from_memory(eater_type + 0x3d5);
+    for &(kind, unit) in &units {
+        for eats_guests in [0u8, 1] {
+            save_to_memory(eater_type + 0x3d5, eats_guests);
+            let saved: Vec<u8> = (0..SNAPSHOT).map(|offset| get_from_memory::<u8>(unit + offset)).collect();
+            let mut results: Vec<(Vec<(String, i32, u32, u32)>, Vec<u8>)> = Vec::new();
+            for pole in 0..3usize {
+                display_message_recorder::begin_capture();
+                match pole {
+                    0 => real::consume(eater, unit),
+                    1 => ZTAnimal(eater).consume(unit),
+                    _ => unsafe { generated::CONSUME.hooked()(eater as *const u32, unit as *const i32) },
+                }
+                let messages = display_message_recorder::end_capture();
+                let after: Vec<u8> = (0..SNAPSHOT).map(|offset| get_from_memory::<u8>(unit + offset)).collect();
+                for (offset, byte) in saved.iter().enumerate() {
+                    save_to_memory(unit + offset as u32, *byte);
+                }
+                results.push((messages, after));
+            }
+            for (pole, name) in [(1usize, "port"), (2, "hooked")] {
+                if results[0] != results[pole] {
+                    failures.push(format!("{kind} {unit:#x} eats-guests {eats_guests}: {name} differs from real (toasts {:?} vs {:?}, memory equal: {})", results[pole].0, results[0].0, results[0].1 == results[pole].1));
+                }
+            }
+        }
+    }
+    save_to_memory(eater_type + 0x3d5, original_flag);
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_ESCAPED_ALERT_LIVE`: `showEscapedAnimalAlert` on live animals with the UI calls captured by the alert recorder (two fake
+/// elements, no dialog opens). Real, port and hooked agree on the element ids looked up, the icon animation, the caption text built from
+/// the animal's name and the confirm-dialog arguments, and the record must hold the full sequence.
+pub(crate) fn run_ztanimal_escaped_alert_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::alert_recorder::{self, AlertCall};
+    let test_name = "ZTANIMAL_ESCAPED_ALERT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let animals = live_animals();
+    if animals.is_empty() {
+        failures.push("the live world holds no animal".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    for &parent in animals.iter().take(4) {
+        let mut results: Vec<Vec<AlertCall>> = Vec::new();
+        for pole in 0..3usize {
+            alert_recorder::begin_capture();
+            match pole {
+                0 => real::show_escaped_animal_alert(parent),
+                1 => ZTAnimal(parent).show_escaped_animal_alert(),
+                _ => unsafe { generated::SHOW_ESCAPED_ANIMAL_ALERT.hooked()(parent as *const u32) },
+            }
+            results.push(alert_recorder::end_capture());
+        }
+        let complete = results[0].len() == 5
+            && matches!(results[0].get(2), Some(AlertCall::SetAnimation { .. }))
+            && matches!(results[0].get(3), Some(AlertCall::Caption { .. }))
+            && matches!(results[0].get(4), Some(AlertCall::ConfirmDialog { entity, .. }) if *entity == parent);
+        if !complete {
+            failures.push(format!("animal {parent:#x}: real vanilla's UI sequence is not the expected five calls: {:?}", results[0]));
+        }
+        for (pole, name) in [(1usize, "port"), (2, "hooked")] {
+            if results[0] != results[pole] {
+                failures.push(format!("animal {parent:#x}: {name} {:?} differs from real {:?}", results[pole], results[0]));
             }
         }
     }

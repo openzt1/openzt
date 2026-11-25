@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use openzt_detour::{
     generated::{
         bfentity::{GET_TILE as BFENTITY_GET_TILE, SET_BSNEW},
-        bfmap::GET_NEIGHBORS,
+        bfmap::GET_NEIGHBORS_0 as GET_NEIGHBORS,
         bfunit::{GET_PATH_1 as GET_PATH, GO_TO_DEST_1 as GO_TO_DEST},
         msvc_std::RAND,
         msvc_std_basic_string::BASIC_STRING_RANGE,

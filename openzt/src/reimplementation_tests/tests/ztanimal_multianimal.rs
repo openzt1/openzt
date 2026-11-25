@@ -10,7 +10,7 @@ use openzt_detour::generated::{
     bfentity::GET_TILE,
     msvc_std_listuint::INSERT as LIST_UINT_INSERT,
     ztanimal::{ADD_TO_MAP, REMOVE_FROM_MAP, SET_DYING, SET_NAME},
-    ztui_multianimal::REMOVE_ENTITY as UPPER_BOUND,
+    ai_cls_0x404fd6::TREE_UPPER_BOUND_0X4FE532 as UPPER_BOUND,
 };
 
 use super::ztanimal::{base, build_animal, live_animal_types, live_animals};
@@ -58,7 +58,7 @@ fn erase(animal: ZTAnimal) {
     let (mut upper, mut lower): (u32, u32) = (0, 0);
     let key = animal.0;
     unsafe {
-        UPPER_BOUND.original()(set_object() as *const c_void, &mut upper as *mut u32 as *const i32, &key as *const u32 as *const c_void);
+        UPPER_BOUND.original()(set_object() as *const u32, &mut upper as *mut u32 as *const i32, &key as *const u32 as *const c_void);
         TREE_LOWER_BOUND_0X4FE4F5.original()(set_object() as *const u32, &mut lower as *mut u32 as *const i32, &key as *const u32);
         TREE_ERASE_RANGE_0X4FE4AF.original()(set_object() as *const u32, lower as i32, upper as i32);
     }
