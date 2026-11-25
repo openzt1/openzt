@@ -97,6 +97,29 @@ pub fn is_ztd_loaded_before(ztd_filename: &str, current_position: usize) -> bool
         .unwrap_or(false)
 }
 
+/// Get the load status of a ZTD
+///
+/// # Arguments
+/// * `ztd_filename` - The ZTD filename
+///
+/// # Returns
+/// * `Some(status)` if the ZTD is registered (enabled or disabled)
+/// * `None` if the ZTD is not registered
+pub fn get_ztd_status(ztd_filename: &str) -> Option<ZtdLoadStatus> {
+    let lowercase = ztd_filename.to_lowercase();
+    let registry = ZTD_LOAD_ORDER.lock().unwrap();
+    registry.get(&lowercase).map(|(_, status)| *status)
+}
+
+/// Get all loaded ZTD names
+///
+/// # Returns
+/// * A vector of all registered ZTD filenames (lowercase)
+pub fn get_all_ztd_names() -> Vec<String> {
+    let registry = ZTD_LOAD_ORDER.lock().unwrap();
+    registry.keys().cloned().collect()
+}
+
 #[cfg(test)]
 pub fn clear_registry() {
     ZTD_LOAD_ORDER.lock().unwrap().clear();
