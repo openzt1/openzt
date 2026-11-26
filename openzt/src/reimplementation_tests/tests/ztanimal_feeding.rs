@@ -4,8 +4,9 @@
 //! the bodies dispatch through replaced by recorders; real body, Rust port and hooked address are compared on state,
 //! result, recorded calls and the shared RNG word.
 //!
-//! Not covered, because they would run real vanilla code over a fixture: `fReduceFood` with a real food entity,
-//! `fRemoveAnimal` removing the animal, `faceTowardFood` with a context.
+//! Not covered, because they would run real vanilla code over a fixture: `fRemoveAnimal` removing the animal,
+//! `faceTowardFood` with a context. (`fReduceFood` over a real food entity is `ZTANIMAL_F_REDUCE_FOOD_LIVE`; the
+//! painting branch of `changeToDirt` is `ZTANIMAL_CHANGE_TO_DIRT_LIVE`.)
 
 use std::{
     ffi::c_void,
@@ -695,6 +696,70 @@ pub(crate) fn run_ztanimal_get_mate_live_test(failure_log: &mut Option<std::fs::
                 }
             }
         }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_CHANGE_TO_DIRT_LIVE`: `changeToDirt` over a fixture standing on a live animal's tile, so the real paint runs
+/// on the live map. The whole tile array is snapshotted first and copied back after every pole, so the next pole starts
+/// from the same map and the zoo is left as it was found. Real, port and hooked address must leave the same tile array and
+/// the same map selection; at least one tile must actually change under the real body.
+pub(crate) fn run_ztanimal_change_to_dirt_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_CHANGE_TO_DIRT_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(1);
+    let animals = live_animals();
+    let (Some(&ty), false) = (types.first(), animals.is_empty()) else {
+        failures.push("the live world holds no animal or animal type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world: u32 = get_from_memory(base() + 0x0023_8040);
+    let map = world + 8;
+    let (width, height): (i32, i32) = (get_from_memory(map + 0x2c), get_from_memory(map + 0x30));
+    let tiles: u32 = get_from_memory(map + 0x38);
+    let bytes = (width as usize) * (height as usize) * 0x8c;
+    let read_tiles = || unsafe { std::slice::from_raw_parts(tiles as *const u8, bytes) }.to_vec();
+    let restore = |saved: &[u8]| unsafe { std::ptr::copy_nonoverlapping(saved.as_ptr(), tiles as *mut u8, bytes) };
+    let selection = || {
+        let (mut x, mut y, mut flag) = (0i32, 0i32, 0u32);
+        unsafe { openzt_detour::generated::bfmap::GET_SELECTION.original()(map as *const u32, &mut x, &mut y, &mut flag) };
+        (x, y, flag)
+    };
+    let original = read_tiles();
+    let mut painted_cases = 0usize;
+    for &animal_address in animals.iter().take(8) {
+        if unsafe { openzt_detour::generated::bfentity::GET_TILE.original()(animal_address as *const u32) } == 0 {
+            continue;
+        }
+        let mut results: Vec<(Vec<u8>, (i32, i32, u32))> = Vec::new();
+        for pole in 0..3usize {
+            let animal = build_animal(ty);
+            for offset in [0x114u32, 0x118, 0x11c] {
+                save_to_memory(animal.0 + offset, get_from_memory::<u32>(animal_address + offset));
+            }
+            unsafe {
+                match pole {
+                    0 => real::change_to_dirt(animal.0),
+                    1 => animal.change_to_dirt(),
+                    _ => generated::CHANGE_TO_DIRT.hooked()(animal.0 as i32),
+                }
+            }
+            results.push((read_tiles(), selection()));
+            restore(&original);
+        }
+        painted_cases += usize::from(results[0].0 != original);
+        for (pole, name) in [(1usize, "port"), (2, "hooked")] {
+            if results[0].0 != results[pole].0 {
+                let first = results[0].0.iter().zip(&results[pole].0).position(|(a, b)| a != b);
+                failures.push(format!("animal {animal_address:#x}: tile array after {name} differs from real (first differing byte {first:?}, tile {:?})", first.map(|i| i / 0x8c)));
+            }
+            if results[0].1 != results[pole].1 {
+                failures.push(format!("animal {animal_address:#x}: map selection after {name} is {:?}, real left {:?}", results[pole].1, results[0].1));
+            }
+        }
+    }
+    if painted_cases == 0 {
+        failures.push("coverage: the real body never changed a tile (every tested tile was already dirt)".to_string());
     }
     finish_test(test_name, failures, failure_log)
 }

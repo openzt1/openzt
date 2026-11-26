@@ -74,6 +74,7 @@ fn plant(guest: ZTGuest, guest_type: u32, rng: &mut Lcg) {
     save_to_memory(guest.0 + unit_offsets::ENTITY_TYPE, guest_type);
     save_to_memory(guest.0 + 0x324, (rng.next() % 3) as i32);
     save_to_memory(guest.0 + guest_offsets::VIEWING_AREA_ID, -1i32);
+    live_support::forget_standalone_guest(guest);
     let items = leaked(0x30);
     for index in 0..5u32 {
         save_to_memory(items + index * 4, rng.next() % 4);

@@ -39,7 +39,7 @@ pub unsafe fn bfaimgr_update(this: u32, dt: u32) {
 /// `ZTAIMgr::update(dt)`: pumps the maintenance task pool and the show manager, then the base update.
 pub unsafe fn ztaimgr_update(this: u32, dt: u32) {
     let base = get_module_base("zoo.exe") as u32;
-    unsafe { ZTMAINTTASKPOOL_LISTEN.original()((base + RVA_MAINT_TASK_POOL) as *const i32) };
+    unsafe { ZTMAINTTASKPOOL_LISTEN.hooked()((base + RVA_MAINT_TASK_POOL) as *const i32) };
     let show_mgr = read_global_pointer(RVA_GLOBAL_SHOW_MGR);
     unsafe { call_entity_virtual(show_mgr, SHOW_MGR_VTABLE_UPDATE) };
     unsafe { bfaimgr_update(this, dt) };

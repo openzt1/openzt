@@ -221,6 +221,7 @@ pub unsafe fn f_move_speed_f(this: u32, call: u32, unit: u32, speed: MoveSpeed, 
     unsafe { (ops.f_move)(this, begin, seconds, unit, call + CALL_DONE_FLAG_OFFSET, name, speed_value, empty.as_ptr(), limit) }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn f_move_vanilla_speed(this: u32, first: u32, seconds: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32, limit: u32) -> bool {
     unsafe { F_MOVE.hooked()(this as *const u32, first as i32, seconds as i32, unit as *const i32, done as *const u8, name as i32, speed, empty as *const i8, 0, limit) }
 }
@@ -230,10 +231,14 @@ pub(super) const MOVE_SPEED_VANILLA: MoveSpeedOps = MoveSpeedOps { f_move: f_mov
 /// The vanilla call `fMoveF`/`fMoveWithSoundF` make, so a test can substitute a recorder.
 /// `BFAIMgr::fMove(this, first_param, a2, unit, done, name, speed, extra, reverse, limit)`; `name` and `extra`
 /// are vanilla strings.
+/// `fMove`'s ten dword parameters.
+pub type FMoveFn = unsafe fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> bool;
+
 pub struct MoveOps {
-    pub f_move: unsafe fn(u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> bool,
+    pub f_move: FMoveFn,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn f_move_vanilla_full(this: u32, first: u32, a2: u32, unit: u32, done: u32, name: u32, speed: u32, extra: u32, reverse: u32, limit: u32) -> bool {
     unsafe { F_MOVE.hooked()(this as *const u32, first as i32, a2 as i32, unit as *const i32, done as *const u8, name as i32, speed, extra as *const i8, reverse, limit) }
 }

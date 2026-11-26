@@ -14,13 +14,14 @@ use openzt_detour::generated::{
     poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
     ztanimal::PREYS_ON_MAN,
     ztguest::{
-        DO_BATHROOM_CHECK, DO_BUY_SOUVENIR_CHECK, DO_CHASE_CHECK, DO_CONDITIONALS, DO_ENERGY_CHECK, DO_ENVIRONMENT_EFFECT_CHECK, DO_HUNGER_CHECK, DO_LEAVE_ZOO_CHECK,
+        DO_AMBIENT_ANIMS, DO_BATHROOM_CHECK, DO_BUY_SOUVENIR_CHECK, DO_CHASE_CHECK, DO_CONDITIONALS, DO_ENERGY_CHECK, DO_ENVIRONMENT_EFFECT_CHECK, DO_HUNGER_CHECK, DO_LEAVE_ZOO_CHECK,
         DO_THIRSTY_CHECK, DO_TRASH_CHECK, DO_VIEWING_AREA_CHECK, FIND_ANIMAL_BY_HAPPINESS, F_CROWD_DENSITY, F_DIFFERENT_SPECIES, F_NUM_ANIMALS, F_NUM_SICK_ANIMALS,
         F_SICK_ANIMALS, FIND_PLACE_TO_SIT, FIND_TRASH_CAN, F_CROWD_DENSITY_MEGATILE, F_ESTHETIC_BONUS_MEGATILE,
         F_GUEST_THOUGHT, F_STINKY_MEGATILE, PICK_RANDOM_BUILDING_OF_TYPE, TRIGGER_GRANDSTAND_ESCAPE_1, CHECK_LEAVE_ZOO, CHECK_PREDATOR, LEAVE_OK,
         UPDATE_STATUS_VARIABLES,
     },
-    ztunit::{FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IS_ON_WATER},
+    zthabitat::GET_ALL_ANIMALS,
+    ztunit::{DO_AMBIENT_ANIMS as ZTUNIT_DO_AMBIENT_ANIMS, FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IS_ON_WATER},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -31,7 +32,10 @@ use super::{
 use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool},
-    zthabitat::next_game_random,
+    zthabitat::{
+        next_game_random,
+        viewing_area::{recalculate_characteristics as recalculate_viewing_area, recalculate_observable_area},
+    },
     ztkeeper::{call_slot_0, call_slot_1, unit_offsets},
     ztmegatilemgr::entity_type_matches,
 };
@@ -52,6 +56,36 @@ mod viewing_check {
     /// Animal the guest is looking at, remembered for the viewing thoughts.
     pub const TARGET: u32 = 0x330;
 }
+
+/// `ZTViewingArea` fields the statistics queries read; the embedded observable area starts at `+0x4`.
+mod viewing_area_fields {
+    pub const HABITAT: u32 = 0x0;
+    pub const OBSERVABLE_AREA: u32 = 0x4;
+    /// Observable-area species count (`OA+0xc`).
+    pub const DIFFERENT_SPECIES: u32 = 0x10;
+    /// Observable-area animal count (`OA+0x10`).
+    pub const ANIMAL_COUNT: u32 = 0x14;
+    /// Observable-area sick-animal count (`OA+0x18`).
+    pub const SICK_COUNT: u32 = 0x1c;
+    /// Observable area's characteristics-dirty byte (`OA+0x20`).
+    pub const OA_DIRTY: u32 = 0x24;
+    pub const CHARACTERISTICS_DIRTY: u32 = 0x4c;
+    /// Vector (begin, end) whose length `fCrowdDensity` divides by.
+    pub const CROWD_VECTOR_BEGIN: u32 = 0x40;
+    pub const CROWD_VECTOR_END: u32 = 0x44;
+    /// Count `fCrowdDensity` is a ratio of.
+    pub const CROWD_COUNT: u32 = 0x54;
+}
+
+/// `DAT_00630d5c`: the vector length for which `fCrowdDensity` defers to its fallback path.
+const CROWD_GUARD_RVA: u32 = 0x0023_0d5c;
+/// `DAT_00630d60`: `fCrowdDensity`'s scale factor.
+const CROWD_SCALE_RVA: u32 = 0x0023_0d60;
+
+/// An animal's happiness, which `findAnimalByHappiness` ranges over.
+const ANIMAL_HAPPINESS: u32 = 0x2a8;
+/// Byte set on a guest that `doAmbientAnims` turns into the `+0x339` flag.
+const AMBIENT_TRIGGER_FLAG: u32 = 0x33b;
 
 /// `ZTGuest` fields the checks use beyond the layout table.
 mod fields {
@@ -871,6 +905,149 @@ impl ZTGuest {
         unsafe { FIND_ANIMAL_BY_HAPPINESS.hooked()(self.0 as *const u32, low, high) as u32 }
     }
 
+    /// The viewing area `getViewingArea` returns, with its characteristics (and then its observable area) recalculated
+    /// when dirty, as every statistics query does first. `0` without a viewing area.
+    fn refreshed_viewing_area(self) -> u32 {
+        let area = self.viewing_area();
+        if area == 0 {
+            return 0;
+        }
+        if get_from_memory::<u8>(area + viewing_area_fields::CHARACTERISTICS_DIRTY) != 0 {
+            recalculate_viewing_area(area);
+        }
+        if get_from_memory::<u8>(area + viewing_area_fields::OA_DIRTY) != 0 {
+            recalculate_observable_area(area + viewing_area_fields::OBSERVABLE_AREA);
+        }
+        area
+    }
+
+    fn area_statistic(self, offset: u32) -> u32 {
+        match self.refreshed_viewing_area() {
+            0 => 0,
+            area => get_from_memory(area + offset),
+        }
+    }
+
+    /// `ZTGuest::fNumAnimals` (`0x0042330b`): the animals in the viewing area's observable area, `0` without one.
+    pub fn num_animals(self) -> u32 {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = super::check_overrides::NUM_ANIMALS.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return answer;
+            }
+        }
+        self.area_statistic(viewing_area_fields::ANIMAL_COUNT)
+    }
+
+    /// `ZTGuest::fSickAnimals` (`0x00425f2e`): whether the observable area holds any sick animal. Vanilla leaves the
+    /// register's upper bytes undefined; callers test the low byte.
+    pub fn sick_animals(self) -> u32 {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = super::check_overrides::SICK_ANIMALS.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return answer;
+            }
+        }
+        (self.area_statistic(viewing_area_fields::SICK_COUNT) as i32 > 0) as u32
+    }
+
+    /// `ZTGuest::fNumSickAnimals` (`0x00589693`): the number of sick animals in the observable area.
+    pub fn num_sick_animals(self) -> u32 {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = super::check_overrides::NUM_SICK_ANIMALS.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return answer;
+            }
+        }
+        self.area_statistic(viewing_area_fields::SICK_COUNT)
+    }
+
+    /// `ZTGuest::fDifferentSpecies` (`0x00426013`): the number of species in the observable area.
+    pub fn different_species(self) -> u32 {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = super::check_overrides::DIFFERENT_SPECIES.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return answer;
+            }
+        }
+        self.area_statistic(viewing_area_fields::DIFFERENT_SPECIES)
+    }
+
+    /// `ZTGuest::fCrowdDensity` (`0x00425f6a`): the viewing area's `+0x54` count over its `+0x40..+0x44` vector length,
+    /// scaled and truncated to a 64-bit result (the x87 `FISTP` truncation, so an out-of-range value is `i64::MIN`).
+    /// Callers read the low dword. The vector length is read before the dirty characteristics are recalculated, as
+    /// vanilla does. `None` when there is no viewing area or the length equals the guard constant (`DAT_00630d5c`):
+    /// vanilla then returns whatever `__ftol` and a CRT helper leave in `EDX:EAX`, which the detour leaves to the real
+    /// body.
+    pub fn crowd_density(self) -> Option<i64> {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = super::check_overrides::CROWD_DENSITY.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0)) {
+                return Some(answer);
+            }
+        }
+        let area = self.viewing_area();
+        if area == 0 {
+            return None;
+        }
+        let length = get_from_memory::<u32>(area + viewing_area_fields::CROWD_VECTOR_END).wrapping_sub(get_from_memory::<u32>(area + viewing_area_fields::CROWD_VECTOR_BEGIN));
+        let slots = (length as i32 >> 2) as f32;
+        if get_from_memory::<u8>(area + viewing_area_fields::CHARACTERISTICS_DIRTY) != 0 {
+            recalculate_viewing_area(area);
+        }
+        if slots == get_from_memory::<f32>(base() + CROWD_GUARD_RVA) {
+            return None;
+        }
+        let scaled = (get_from_memory::<i32>(area + viewing_area_fields::CROWD_COUNT) as f64 / slots as f64) * get_from_memory::<f32>(base() + CROWD_SCALE_RVA) as f64;
+        Some(if scaled.is_nan() || scaled >= -(i64::MIN as f64) || scaled < i64::MIN as f64 { i64::MIN } else { scaled as i64 })
+    }
+
+    /// `ZTGuest::findAnimalByHappiness` (`0x00426049`): an animal of the viewing area's habitat whose happiness lies in
+    /// `low..=high`, or `0`. One draw of the game RNG (only when the habitat has animals) is reduced by the animal
+    /// count; the first matching animal at an index at or past the reduced draw is returned, else the last match.
+    pub fn find_animal_by_happiness(self, low: i32, high: i32) -> u32 {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if let Some(answer) = super::check_overrides::FIND_ANIMAL.lock().ok().and_then(|hook| *hook).and_then(|hook| hook(self.0, low, high)) {
+                return answer;
+            }
+        }
+        let area = self.viewing_area();
+        if area == 0 {
+            return 0;
+        }
+        let habitat: u32 = get_from_memory(area + viewing_area_fields::HABITAT);
+        let animals = unsafe { GET_ALL_ANIMALS.hooked()(habitat as *const u32, 0) } as u32;
+        let begin: u32 = get_from_memory(animals);
+        let bytes = get_from_memory::<u32>(animals + 4).wrapping_sub(begin);
+        if (bytes & !3) as i32 <= 0 {
+            return 0;
+        }
+        let draw = next_game_random();
+        let count = bytes >> 2;
+        let mut found = 0;
+        for index in 0..count {
+            let animal: u32 = get_from_memory(begin + index * 4);
+            let happiness: i32 = get_from_memory(animal + ANIMAL_HAPPINESS);
+            if low <= happiness && happiness <= high {
+                found = animal;
+                if draw % count <= index {
+                    return animal;
+                }
+            }
+        }
+        found
+    }
+
+    /// `ZTGuest::doAmbientAnims` (`0x00422498`): a guest with `+0x33b` set also sets `+0x339`, then `ZTUnit`'s
+    /// ambient animations run with no vector.
+    pub fn do_ambient_anims(self) {
+        if self.read::<u8>(AMBIENT_TRIGGER_FLAG) != 0 {
+            self.write(guest_offsets::FLAG_0X339, 1u8);
+        }
+        unsafe { ZTUNIT_DO_AMBIENT_ANIMS.original()(self.0 as *const u32, std::ptr::null()) };
+    }
+
     /// `ZTGuest::checkLeaveZoo` (`0x004a6acc`): with an AI manager and a guest type, and outside goal `0x71` and off the
     /// water, one draw against the type's leave chance (`+0x258`) decides: on success the guest is marked as leaving
     /// (`+0x339`) and thinks `0x27fe`.
@@ -963,6 +1140,44 @@ mod detours {
         ZTGuest(this as u32).leave_ok()
     }
 
+    #[detour(F_NUM_ANIMALS)]
+    unsafe extern "fastcall" fn num_animals(this: *const c_void) -> u32 {
+        ZTGuest(this as u32).num_animals()
+    }
+
+    #[detour(F_SICK_ANIMALS)]
+    unsafe extern "fastcall" fn sick_animals(this: *const c_void) -> u32 {
+        ZTGuest(this as u32).sick_animals()
+    }
+
+    #[detour(F_NUM_SICK_ANIMALS)]
+    unsafe extern "fastcall" fn num_sick_animals(this: *const c_void) -> u32 {
+        ZTGuest(this as u32).num_sick_animals()
+    }
+
+    #[detour(F_DIFFERENT_SPECIES)]
+    unsafe extern "fastcall" fn different_species(this: *const c_void) -> u32 {
+        ZTGuest(this as u32).different_species()
+    }
+
+    #[detour(F_CROWD_DENSITY)]
+    unsafe extern "fastcall" fn crowd_density(this: *const c_void) -> i64 {
+        match ZTGuest(this as u32).crowd_density() {
+            Some(value) => value,
+            None => unsafe { F_CROWD_DENSITY_DETOUR.call(this) },
+        }
+    }
+
+    #[detour(FIND_ANIMAL_BY_HAPPINESS)]
+    unsafe extern "thiscall" fn find_animal_by_happiness(this: *const u32, low: i32, high: i32) -> i32 {
+        ZTGuest(this as u32).find_animal_by_happiness(low, high) as i32
+    }
+
+    #[detour(DO_AMBIENT_ANIMS)]
+    unsafe extern "thiscall" fn do_ambient_anims(this: *const u32, _vector: *const u32) {
+        ZTGuest(this as u32).do_ambient_anims();
+    }
+
     #[detour(CHECK_LEAVE_ZOO)]
     unsafe extern "thiscall" fn check_leave_zoo(this: *const u32) -> bool {
         ZTGuest(this as u32).check_leave_zoo()
@@ -1015,6 +1230,27 @@ mod detours {
         }
         pub(crate) fn check_leave_zoo(this: u32) -> bool {
             unsafe { super::CHECK_LEAVE_ZOO_DETOUR.call(this as *const u32) }
+        }
+        pub(crate) fn num_animals(this: u32) -> u32 {
+            unsafe { super::F_NUM_ANIMALS_DETOUR.call(this as *const std::ffi::c_void) }
+        }
+        pub(crate) fn sick_animals(this: u32) -> u32 {
+            unsafe { super::F_SICK_ANIMALS_DETOUR.call(this as *const std::ffi::c_void) }
+        }
+        pub(crate) fn num_sick_animals(this: u32) -> u32 {
+            unsafe { super::F_NUM_SICK_ANIMALS_DETOUR.call(this as *const std::ffi::c_void) }
+        }
+        pub(crate) fn different_species(this: u32) -> u32 {
+            unsafe { super::F_DIFFERENT_SPECIES_DETOUR.call(this as *const std::ffi::c_void) }
+        }
+        pub(crate) fn crowd_density(this: u32) -> i64 {
+            unsafe { super::F_CROWD_DENSITY_DETOUR.call(this as *const std::ffi::c_void) }
+        }
+        pub(crate) fn find_animal_by_happiness(this: u32, low: i32, high: i32) -> i32 {
+            unsafe { super::FIND_ANIMAL_BY_HAPPINESS_DETOUR.call(this as *const u32, low, high) }
+        }
+        pub(crate) fn do_ambient_anims(this: u32) {
+            unsafe { super::DO_AMBIENT_ANIMS_DETOUR.call(this as *const u32, std::ptr::null()) }
         }
     }
 }

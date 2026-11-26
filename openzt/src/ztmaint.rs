@@ -23,14 +23,14 @@ use openzt_detour::generated::{
     bfentity::UPDATE as BFENTITY_UPDATE,
     bfmap::GET_NEIGHBOR_0 as BFMAP_GET_NEIGHBOR,
     bfunit::IDLE as BFUNIT_IDLE,
-    standalone::OPERATOR_DELETE,
+    standalone::{OPERATOR_DELETE, OPERATOR_NEW},
     ztfence::IS_WORTH_FIXING as ZTFENCE_IS_WORTH_FIXING,
     ztguest::F_ROUTINE,
     ztmaint::{
         FIND_FENCE_TO_FIX_ON_TILE, FINISH_TASK, INIT_STATUS_VARS, IS_TARGETED, IS_TASK_AVAILABLE, LOAD, REMOVE_FROM_MAP, SAVE, SET_NEW_TASK, UPDATE,
         UPDATE_GOALS,
     },
-    ztmainttaskpool::{CLEAR, GET_EVENTS},
+    ztmainttaskpool::{CLEAR, GET_EVENTS, LISTEN},
     ztstaff::{
         INIT_STATUS_VARS as ZTSTAFF_INIT_STATUS_VARS, LOAD as ZTSTAFF_LOAD, REMOVE_FROM_MAP as ZTSTAFF_REMOVE_FROM_MAP, SAVE as ZTSTAFF_SAVE,
     },
@@ -42,8 +42,9 @@ use tracing::error;
 use crate::{
     globals::get_module_base,
     util::{get_from_memory, save_to_memory},
-    ztkeeper::{call_slot_0, call_slot_2, call_slot_3, read_field, unit_offsets, write_field},
+    ztkeeper::{call_slot_0, call_slot_1, call_slot_2, call_slot_3, read_field, unit_offsets, write_field},
     ztmegatilemgr::entity_type_matches,
+    vanilla_list,
 };
 
 /// `ZTMaintType::createEntity` allocates this many bytes.
@@ -114,6 +115,8 @@ mod slots {
     pub const COG_VALID: u32 = 0x0;
     /// `ZTMaintTaskPool::getEvents` three-argument form (pool vtable).
     pub const POOL_GET_EVENTS: u32 = 0xc;
+    /// The pool's one-argument `getEvents(out)` (pool vtable), which `listen` calls.
+    pub const POOL_EVENTS_OUT: u32 = 0x8;
 }
 
 /// `goalSet` ids.
@@ -131,8 +134,6 @@ mod globals_rva {
     pub const TASK_LIST: u32 = 0x0023_8fa4;
     /// Value is the sentinel node of the world's entity list (node `+0x0` next, `+0x8` entity).
     pub const ENTITY_LIST: u32 = 0x0023_9474;
-    /// Head of vanilla's 12-byte small-block freelist (`DAT_00638004`).
-    pub const FREELIST_12: u32 = 0x0023_8004;
     /// `BFCogGoal::setID`'s trailing argument (`DAT_00639360`).
     pub const COG_GOAL_ARG: u32 = 0x0023_9360;
     /// `CAST_ZTFence`.
@@ -337,19 +338,7 @@ impl ZTMaint {
             return self.set_current_task(task);
         }
         let sentinel: u32 = get_from_memory(base() + globals_rva::TASK_LIST);
-        let freelist = base() + globals_rva::FREELIST_12;
-        let mut node: u32 = get_from_memory(sentinel);
-        while node != sentinel {
-            let next: u32 = get_from_memory(node);
-            if get_from_memory::<u32>(node + 8) == old {
-                let previous: u32 = get_from_memory(node + 4);
-                save_to_memory(previous, next);
-                save_to_memory(next + 4, previous);
-                save_to_memory(node, get_from_memory::<u32>(freelist));
-                save_to_memory(freelist, node);
-            }
-            node = next;
-        }
+        vanilla_list::remove_matching(sentinel, old);
         unsafe { OPERATOR_DELETE.original()(old) };
         self.set_current_task(task);
     }
@@ -493,6 +482,82 @@ fn pool_get_events(pool: u32, out: u32) {
     call_slot_3(pool, slots::POOL_GET_EVENTS, out, 0, EVENT_KIND_MAINT);
 }
 
+/// Event-record layout `listen` scans: `0x1c` bytes each, the target entity id at `+0x10` and the message code (a
+/// `u16`) at `+0x16`.
+const EVENT_RECORD_BYTES: u32 = 0x1c;
+const EVENT_TARGET_OFFSET: u32 = 0x10;
+const EVENT_CODE_OFFSET: u32 = 0x16;
+/// A task node is `{kind, target entity id, worker, flag byte}`.
+const TASK_NODE_BYTES: u32 = 0x10;
+const TASK_FLAG_OFFSET: u32 = 0xc;
+
+/// `ZTMaintTaskPool::listen` (`0x00434e30`): asks the pool for its pending events (vtable `+0x8`) and turns the task
+/// messages `0x272e..=0x2734` into task nodes queued on the pool's list (`pool + 0x4`). A message sets the current
+/// kind (`0x272e` 9, `0x272f` 7, `0x2730` 0xb, `0x2731` and `0x2732` 0x10, `0x2733` and `0x2734` 0x1a); `0x2732` and
+/// `0x2734` queue at the front, the others at the back. Any other message queues another back task of the current
+/// kind once one has been set. The event vector is then freed (the small-block freelist up to `0x80` bytes,
+/// `operator_delete` above). The decompile's "call a helper and return" for `0x272e` is Ghidra's split of the shared
+/// create-node block: that case creates a kind 9 task and carries on.
+fn pool_listen(pool: u32) {
+    let mut events = [0u32; 3];
+    call_slot_1(pool, slots::POOL_EVENTS_OUT, events.as_mut_ptr() as u32);
+    let (begin, end, capacity) = (events[0], events[1], events[2]);
+    let list = get_from_memory::<u32>(pool + 4);
+    let mut kind = 0u32;
+    if begin != end {
+        let mut record = begin;
+        loop {
+            let target: u32 = get_from_memory(record + EVENT_TARGET_OFFSET);
+            let mut front = false;
+            let mut queue = true;
+            match get_from_memory::<u16>(record + EVENT_CODE_OFFSET) {
+                0x272e => kind = 9,
+                0x272f => kind = 7,
+                0x2730 => kind = 0xb,
+                0x2731 => kind = 0x10,
+                0x2732 => {
+                    kind = 0x10;
+                    front = true;
+                }
+                0x2733 => kind = 0x1a,
+                0x2734 => {
+                    kind = 0x1a;
+                    front = true;
+                }
+                _ => queue = kind != 0,
+            }
+            if queue {
+                let task = unsafe { OPERATOR_NEW.original()(TASK_NODE_BYTES) } as u32;
+                if task != 0 {
+                    save_to_memory(task, kind);
+                    save_to_memory(task + 4, target);
+                    save_to_memory(task + 8, 0u32);
+                    save_to_memory(task + TASK_FLAG_OFFSET, front as u8);
+                    if front {
+                        vanilla_list::push_front(list, task);
+                    } else {
+                        vanilla_list::push_back(list, task);
+                    }
+                }
+            }
+            record = record.wrapping_add(EVENT_RECORD_BYTES);
+            if record == end {
+                break;
+            }
+        }
+    }
+    if begin != 0 {
+        let bytes = (capacity.wrapping_sub(begin) / EVENT_RECORD_BYTES) * EVENT_RECORD_BYTES;
+        if bytes > 0x80 {
+            unsafe { OPERATOR_DELETE.original()(begin) };
+        } else if bytes != 0 {
+            let bucket = get_module_base("zoo.exe") as u32 + 0x0023_8000 + ((bytes - 1) >> 3) * 4;
+            save_to_memory(begin, get_from_memory::<u32>(bucket));
+            save_to_memory(bucket, begin);
+        }
+    }
+}
+
 /// `ZTMaintTaskPool::clear` (`0x005b11a2`): releases every queued task. A task assigned to a worker lets that worker
 /// go of it, the task is freed with `operator_delete`, then every list node goes back on vanilla's 12-byte freelist
 /// and the list is emptied.
@@ -510,16 +575,7 @@ fn pool_clear(pool: u32) {
         unsafe { OPERATOR_DELETE.original()(task) };
         node = get_from_memory(node);
     }
-    let freelist = base() + globals_rva::FREELIST_12;
-    let mut node: u32 = get_from_memory(sentinel);
-    while node != sentinel {
-        let next: u32 = get_from_memory(node);
-        save_to_memory(node, get_from_memory::<u32>(freelist));
-        save_to_memory(freelist, node);
-        node = next;
-    }
-    save_to_memory(sentinel, sentinel);
-    save_to_memory(sentinel + 4, sentinel);
+    vanilla_list::clear(sentinel);
 }
 
 #[detour_mod]
@@ -592,6 +648,11 @@ mod maint_detours {
         super::pool_get_events(this as u32, out);
     }
 
+    #[detour(LISTEN)]
+    unsafe extern "thiscall" fn pool_listen(this: *const i32) {
+        super::pool_listen(this as u32);
+    }
+
     #[detour(CLEAR)]
     unsafe extern "thiscall" fn pool_clear(this: *const c_void) {
         super::pool_clear(this as u32);
@@ -652,6 +713,10 @@ mod maint_detours {
 
         pub(crate) fn pool_get_events(pool: u32, out: u32) {
             unsafe { super::GET_EVENTS_DETOUR.call(pool as *const i32, out) }
+        }
+
+        pub(crate) fn pool_listen(pool: u32) {
+            unsafe { super::LISTEN_DETOUR.call(pool as *const i32) }
         }
 
         pub(crate) fn pool_clear(pool: u32) {

@@ -1068,13 +1068,35 @@ pub(crate) fn run_ztanimal_building_use_live_test(failure_log: &mut Option<std::
     }
     let rng_address = super::ztanimal::base() + 0x0023_8060;
     let mut rng = Lcg(0xb11d);
+    // Fixtures stand on live animals' positions and on live buildings', so the satisfier search has a chance to find one.
+    let mut sources = live.clone();
+    let mut live_building = 0u32;
+    {
+        let world = crate::globals::globals().ztworldmgr();
+        let mut slot = world.entity_array_start();
+        while slot != world.entity_array_end() && sources.len() < live.len() + 40 {
+            let entity: u32 = get_from_memory(slot);
+            slot += 4;
+            if entity != 0 && unsafe { crate::ztmegatilemgr::entity_type_matches(entity, 0x0023_8680) } {
+                sources.push(entity);
+                if live_building == 0 {
+                    live_building = entity;
+                }
+            }
+        }
+    }
+    // The nearest-satisfier search answers a live building (or nothing) from the seam, the same for every pole.
+    install_search_seams();
+    SATISFIER_SEAM_ARMED.store(live_building != 0, Ordering::SeqCst);
+    let mut found_rounds = 0usize;
     for &ty in &types {
-        for round in 0..400 {
-            let source = live[(rng.next() as usize) % live.len()];
+        for round in 0..600 {
+            let source = sources[(rng.next() as usize) % sources.len()];
             let countdown = [0i32, 0, 0, 1][(rng.next() as usize) % 4];
             let need_word = (rng.next() % 6) as i32;
             let position = [(rng.next() % 4000) as i32 - 2000, (rng.next() % 4000) as i32 - 2000, (rng.next() % 200) as i32 - 100];
             let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x9911;
+            SATISFIER_SEAM_BUILDING.store(if rng.next() % 3 == 0 { 0 } else { live_building }, Ordering::SeqCst);
             let prepare = |animal: ZTAnimal| {
                 install_building_vtable(animal);
                 save_to_memory(rng_address, seed);
@@ -1107,6 +1129,7 @@ pub(crate) fn run_ztanimal_building_use_live_test(failure_log: &mut Option<std::
                 snap.extend(get_from_memory::<u32>(rng_address).to_le_bytes());
                 snapshots.push(snap);
             }
+            found_rounds += usize::from(logs[0].iter().any(|&entry| entry & 0xffff == 0x2e4));
             let label = format!("doBuildingUseCheck round {round} countdown {countdown} need {need_word} position {position:?} seed {seed:#x}");
             if logs[0] != logs[1] || logs[0] != logs[2] {
                 failures.push(format!("{label}: slot calls real {:x?}, port {:x?}, hooked {:x?}", logs[0], logs[1], logs[2]));
@@ -1121,6 +1144,10 @@ pub(crate) fn run_ztanimal_building_use_live_test(failure_log: &mut Option<std::
                 return finish_test(test_name, failures, failure_log);
             }
         }
+    }
+    SATISFIER_SEAM_ARMED.store(false, Ordering::SeqCst);
+    if found_rounds == 0 {
+        failures.push(format!("coverage: no round reached the found-building branch (vtable +0x2e4) over {} source positions", sources.len()));
     }
     finish_test(test_name, failures, failure_log)
 }
@@ -1302,7 +1329,7 @@ fn compare_three_poles(
     prepare: &dyn Fn(ZTAnimal),
     body: &dyn Fn(ZTAnimal, usize),
     failures: &mut Vec<String>,
-) {
+) -> Vec<u32> {
     let rng_address = super::ztanimal::base() + 0x0023_8060;
     let mut logs = Vec::new();
     let mut snapshots = Vec::new();
@@ -1329,6 +1356,7 @@ fn compare_three_poles(
             failures.push(format!("{label}: state differs from real for {name} (first differing snapshot byte {first:?})"));
         }
     }
+    logs.swap_remove(0)
 }
 
 /// `ZTANIMAL_SLEEP_CHECK_LIVE`: `doSleepCheck` over awake and sleeping fixtures with the sleep gate, need, escape and
@@ -1394,6 +1422,56 @@ pub(crate) fn run_ztanimal_sleep_check_live_test(failure_log: &mut Option<std::f
 }
 
 /// Answers `setBS` for `doZapCheck`'s `setBSNew`, recording the name length and flags; `SLEEP_GATE` is the answer.
+/// Test seams over two vanilla searches whose answers depend on map content the test zoo may not have: the electric
+/// fence next to an animal (`doZapCheck`) and the nearest building satisfying a need (`doBuildingUseCheck`). Both are
+/// pass-through unless a test arms them; the real bodies reach them through the patched address and the ports through
+/// `.hooked()`, so all three poles see the same answer. Every armed call is recorded for the slot-call comparison.
+static FENCE_SEAM_ARMED: AtomicBool = AtomicBool::new(false);
+static FENCE_SEAM_DIRECTION: AtomicU32 = AtomicU32::new(0xffff_ffff);
+static SATISFIER_SEAM_ARMED: AtomicBool = AtomicBool::new(false);
+static SATISFIER_SEAM_BUILDING: AtomicU32 = AtomicU32::new(0);
+
+#[openzt_detour_macro::detour_mod]
+mod search_seams {
+    use openzt_detour::generated::{ztunit::FIND_NEAREST_SATISFIER, ztworldmgr::FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL};
+
+    use super::*;
+
+    #[detour(FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL)]
+    unsafe extern "thiscall" fn find_fence(this: *const u32, animal: *const u32, position: *const i32) -> u32 {
+        if FENCE_SEAM_ARMED.load(Ordering::SeqCst) {
+            let direction = FENCE_SEAM_DIRECTION.load(Ordering::SeqCst);
+            CALLS.lock().unwrap().push(0xfe00_0000 | (direction & 0xffff));
+            direction
+        } else {
+            unsafe { FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL_DETOUR.call(this, animal, position) }
+        }
+    }
+
+    #[detour(FIND_NEAREST_SATISFIER)]
+    unsafe extern "thiscall" fn find_nearest(this: *const u32, tile: i32, name: *const i32, out: *const u32, range: i32, flag: i32) -> bool {
+        if SATISFIER_SEAM_ARMED.load(Ordering::SeqCst) {
+            let building = SATISFIER_SEAM_BUILDING.load(Ordering::SeqCst);
+            CALLS.lock().unwrap().push(0xfd00_0000 | u32::from(building != 0));
+            if building != 0 {
+                save_to_memory(out as u32, building);
+            }
+            building != 0
+        } else {
+            unsafe { FIND_NEAREST_SATISFIER_DETOUR.call(this, tile, name, out, range, flag) }
+        }
+    }
+}
+
+fn install_search_seams() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        if let Err(e) = unsafe { search_seams::init_detours() } {
+            tracing::error!("could not install the doZapCheck/doBuildingUseCheck search seams: {e:?}");
+        }
+    });
+}
+
 fn scripted_zap_set_bs(_this: u32, begin: u32, end: u32, call_flag: i8, force: i8, mode: i32) -> Option<bool> {
     CALLS.lock().unwrap().push(0xb500_0000 | (end.wrapping_sub(begin) << 12) | (call_flag as u8 as u32) << 8 | (force as u8 as u32) << 4 | (mode as u32 & 0xf));
     Some(SLEEP_GATE.load(Ordering::SeqCst))
@@ -1431,15 +1509,26 @@ pub(crate) fn run_ztanimal_zap_check_live_test(failure_log: &mut Option<std::fs:
     }
     let mut rng = Lcg(0x2a9c);
     *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_zap_set_bs);
+    install_search_seams();
+    FENCE_SEAM_ARMED.store(true, Ordering::SeqCst);
+    let mut found_direction_rounds = 0usize;
+    let mut zap_positions_found = 0usize;
     for &ty in &types {
         let positions: Vec<[i32; 3]> = std::iter::once([0, 0, 0]).chain(find_zap_position(ty)).collect();
+        zap_positions_found += positions.len() - 1;
+        // The type's zap chance is usually 0 in the live zoo; vary it (restored after the type) so the roll can pass.
+        let chance_saved: i32 = get_from_memory(ty + 0x3e0);
         for round in 0..300 {
+            save_to_memory(ty + 0x3e0, [0i32, 50, 100][(rng.next() as usize) % 3]);
             let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
             let (egg, show, pressing, took) = (pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng));
             let armed = [0i32, 1, 5][(rng.next() as usize) % 3];
             let countdown = [0i32, 0, 1][(rng.next() as usize) % 3];
             let position = positions[(rng.next() as usize) % positions.len()];
             let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x4321;
+            // Directions are even `0..8`, or `-1` for no fence; the seam answers the same for every pole.
+            let direction = [0xffff_ffffu32, 0, 2, 4, 6][(rng.next() as usize) % 5];
+            FENCE_SEAM_DIRECTION.store(direction, Ordering::SeqCst);
             let prepare = |animal: ZTAnimal| {
                 PRESSING.store(pressing, Ordering::SeqCst);
                 DOING_SHOW.store(show, Ordering::SeqCst);
@@ -1451,9 +1540,9 @@ pub(crate) fn run_ztanimal_zap_check_live_test(failure_log: &mut Option<std::fs:
                     save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
                 }
             };
-            compare_three_poles(
+            let real_log = compare_three_poles(
                 ty,
-                &format!("doZapCheck round {round} egg {egg} show {show} pressing {pressing} armed {armed} countdown {countdown} position {position:?} took {took} seed {seed:#x}"),
+                &format!("doZapCheck round {round} direction {direction:#x} egg {egg} show {show} pressing {pressing} armed {armed} countdown {countdown} position {position:?} took {took} seed {seed:#x}"),
                 seed,
                 &install_sleep_vtable,
                 &prepare,
@@ -1468,12 +1557,19 @@ pub(crate) fn run_ztanimal_zap_check_live_test(failure_log: &mut Option<std::fs:
                 },
                 &mut failures,
             );
+            // `scripted_zap_set_bs` logs with a `0xb5` tag: `setBSNew` ran, so a fence direction was found.
+            found_direction_rounds += usize::from(real_log.iter().any(|&entry| entry >> 24 == 0xb5));
             if failures.len() > 20 {
                 break;
             }
         }
+        save_to_memory(ty + 0x3e0, chance_saved);
     }
     *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = None;
+    FENCE_SEAM_ARMED.store(false, Ordering::SeqCst);
+    if found_direction_rounds == 0 {
+        failures.push(format!("coverage: no round reached setBSNew (positions with an adjacent electric fence found: {zap_positions_found})"));
+    }
     finish_test(test_name, failures, failure_log)
 }
 
@@ -1523,6 +1619,7 @@ pub(crate) fn run_ztanimal_boxed_check_live_test(failure_log: &mut Option<std::f
     let tank_memory: &'static mut [u8] = Box::leak(vec![0u8; 0x200].into_boxed_slice());
     let tank_address = tank_memory.as_ptr() as u32;
     let mut rng = Lcg(0xb0c5);
+    let mut placed_rounds = 0usize;
     for &ty in &types {
         for round in 0..300 {
             let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
@@ -1547,7 +1644,7 @@ pub(crate) fn run_ztanimal_boxed_check_live_test(failure_log: &mut Option<std::f
                     save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
                 }
             };
-            compare_three_poles(
+            let real_log = compare_three_poles(
                 ty,
                 &format!("doBoxedCheck round {round} boxed {boxed} on_map {on_map} tank {has_tank}/{filled}/{water} gate {gate} habitat {habitat:#x}/{habitat_block} countdown {countdown} position {position:?} seed {seed:#x}"),
                 seed,
@@ -1564,10 +1661,15 @@ pub(crate) fn run_ztanimal_boxed_check_live_test(failure_log: &mut Option<std::f
                 },
                 &mut failures,
             );
+            // Slot `+0x74` (add to map) runs only after `BFMap::canAddEntity` accepted the position.
+            placed_rounds += usize::from(real_log.contains(&0x74));
             if failures.len() > 20 {
                 break;
             }
         }
+    }
+    if placed_rounds == 0 {
+        failures.push("coverage: no round had canAddEntity accept the position (slot +0x74 never ran under the real body)".to_string());
     }
     finish_test(test_name, failures, failure_log)
 }
@@ -1711,6 +1813,102 @@ pub(crate) fn run_ztanimal_reproduce_check_live_test(failure_log: &mut Option<st
                 break;
             }
         }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Whether `ty` answers `loadBSFunctions("bDie")` (type vtable `+0x38`), the first condition for `doReproduceCheck` to
+/// play the death behaviour rather than remove the animal.
+fn type_has_die_behaviour(ty: u32) -> bool {
+    let name = crate::vanilla_string::VanillaString::from_bytes(b"bDie");
+    let mut functions = [0u32; 3];
+    let load = unsafe {
+        std::mem::transmute::<u32, unsafe extern "thiscall" fn(u32, *mut [u32; 3], *const u32) -> u8>(get_from_memory::<u32>(get_from_memory::<u32>(ty) + 0x38))
+    };
+    let loaded = unsafe { load(ty, &mut functions, name.as_ptr()) } != 0;
+    unsafe { openzt_detour::generated::poolalloc::DEALLOCATE_N_4.original()(functions[0] as *const u32, (functions[2].wrapping_sub(functions[0]) as i32) >> 2) };
+    loaded
+}
+
+/// `ZTANIMAL_REPRODUCE_DYING_LIVE`: `doReproduceCheck`'s dying branch. The death timer is spent, the type's death chance is
+/// raised to 100 (restored afterwards) and the fixture stands on a live animal's land tile of a type that has a `bDie` set,
+/// so the real body takes the "play `bDie`" arm with `setBS` answered by the battery's script instead of removing the
+/// fixture (`setIsRemoved` would run real vanilla code over it). Real, port and hooked address are compared on the slot
+/// calls, the scripted `setBS` arguments, the dying byte, the timers and the RNG.
+pub(crate) fn run_ztanimal_reproduce_dying_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_REPRODUCE_DYING_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types: Vec<u32> = live_animal_types(8).into_iter().filter(|&ty| type_has_die_behaviour(ty)).collect();
+    let live = live_animals();
+    if types.is_empty() || live.is_empty() {
+        failures.push("the live world holds no animal type with a bDie behaviour set".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    // Land positions (tile flags `+0x83 & 3 == 0`) of live animals.
+    let positions: Vec<[i32; 3]> = live
+        .iter()
+        .filter(|&&animal| {
+            let tile = unsafe { generated_bfentity::GET_TILE.original()(animal as *const u32) } as u32;
+            tile != 0 && get_from_memory::<u8>(tile + 0x83) & 3 == 0
+        })
+        .map(|&animal| [get_from_memory(animal + 0x114), get_from_memory(animal + 0x118), get_from_memory(animal + 0x11c)])
+        .collect();
+    if positions.is_empty() {
+        failures.push("no live animal stands on a land tile".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_zap_set_bs);
+    let live_habitat = live.iter().map(|&animal| crate::ztkeeper::call_slot_0(animal, 0x24c)).find(|&habitat| habitat != 0).unwrap_or(0);
+    let mut rng = Lcg(0xd1e5);
+    let mut played_rounds = 0usize;
+    for &ty in &types {
+        let chance_saved: i32 = get_from_memory(ty + 0x388);
+        save_to_memory(ty + 0x388, 100i32);
+        for round in 0..120 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let (dying, show) = (pick(&mut rng), pick(&mut rng));
+            let timer = [i32::MIN / 2, 0, 1_000_000][(rng.next() as usize) % 3];
+            let position = positions[(rng.next() as usize) % positions.len()];
+            let habitat = [0, live_habitat][(rng.next() as usize) % 2];
+            let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x1dea;
+            SLEEP_GATE.store(true, Ordering::SeqCst);
+            let prepare = |animal: ZTAnimal| {
+                HABITAT.store(habitat, Ordering::SeqCst);
+                DOING_SHOW.store(show, Ordering::SeqCst);
+                save_to_memory(animal.0 + 0x328, 0i32);
+                save_to_memory(animal.0 + 0x34c, timer);
+                save_to_memory(animal.0 + 0x3a6, dying as u8);
+                save_to_memory(animal.0 + 0x2e8, 0x7ffe_0001u32);
+                save_to_memory(animal.0 + 0x330, 0i32);
+                for (i, word) in position.iter().enumerate() {
+                    save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
+                }
+            };
+            let real_log = compare_three_poles(
+                ty,
+                &format!("doReproduceCheck dying round {round} dying {dying} timer {timer} show {show} position {position:?} habitat {habitat:#x} seed {seed:#x}"),
+                seed,
+                &install_scripted_vtable,
+                &prepare,
+                &|animal, pole| unsafe {
+                    match pole {
+                        0 => real::do_reproduce_check(animal.0),
+                        1 => animal.do_reproduce_check(),
+                        _ => generated::DO_REPRODUCE_CHECK.hooked()(animal.0 as *const u32),
+                    }
+                },
+                &mut failures,
+            );
+            played_rounds += usize::from(real_log.iter().any(|&entry| entry >> 24 == 0xb5));
+            if failures.len() > 20 {
+                break;
+            }
+        }
+        save_to_memory(ty + 0x388, chance_saved);
+    }
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = None;
+    if played_rounds == 0 {
+        failures.push("coverage: no round played bDie under the real body".to_string());
     }
     finish_test(test_name, failures, failure_log)
 }
@@ -2273,7 +2471,7 @@ fn live_food_entity() -> Option<(u32, u32)> {
 /// context points at it, so `fFoodUnitsActuallyEaten`, `fReduceFood` (the live habitat, `setAmountFoodUnitsDelta`) and `setBS`
 /// (answered by a script) run for real. The food's units are set high so the food is never used up (that would retarget live animals)
 /// and restored after every pole. Real, port and hooked agree on the answer, the food units left, the game RNG word, the fixture's state
-/// and the slot calls, across the type's no-eat-animation byte, the set name and queued call already being `bEat`, and `setBS`'s answer.
+/// and the slot calls, across the type's keep-moving byte (`cKeepMoving`), the set name and queued call already being `bEat`, and `setBS`'s answer.
 pub(crate) fn run_ztanimal_f_eat_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTANIMAL_F_EAT_LIVE";
     let mut failures: Vec<String> = Vec::new();
@@ -2299,15 +2497,15 @@ pub(crate) fn run_ztanimal_f_eat_live_test(failure_log: &mut Option<std::fs::Fil
     *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_zap_set_bs);
     for &ty in &types {
         let original_flag: u8 = get_from_memory(ty + 0x44c);
-        for no_eat_anim in [0u8, 1] {
+        for keep_moving in [0u8, 1] {
             for current in [&b""[..], b"bEat"] {
                 for queued in [&b""[..], b"bEat"] {
                     for set_bs_answer in [false, true] {
                         for can_sleep in [false, true] {
-                            save_to_memory(ty + 0x44c, no_eat_anim);
+                            save_to_memory(ty + 0x44c, keep_moving);
                             compare_three_poles(
                                 ty,
-                                &format!("fEat no-eat-anim {no_eat_anim} current {:?} queued {:?} setBS {set_bs_answer} sleepGate {can_sleep}", String::from_utf8_lossy(current), String::from_utf8_lossy(queued)),
+                                &format!("fEat keep-moving {keep_moving} current {:?} queued {:?} setBS {set_bs_answer} sleepGate {can_sleep}", String::from_utf8_lossy(current), String::from_utf8_lossy(queued)),
                                 3,
                                 &install_eat_vtable,
                                 &|animal| {
@@ -2358,6 +2556,73 @@ pub(crate) fn run_ztanimal_f_eat_live_test(failure_log: &mut Option<std::fs::Fil
     save_to_memory(food + 0x154, original_units);
     if EAT_REACHED.load(Ordering::SeqCst) == 0 {
         failures.push("real vanilla never reached the eating branch (the food's units never dropped), so nothing was compared".to_string());
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_F_REDUCE_FOOD_LIVE`: `fReduceFood` on a real live food entity: the units left, the live habitat's dirty
+/// mark and the fixture's state, with the eat context present, missing and without a habitat. Reductions that would empty
+/// the food are not run: vanilla then calls `removeFoodTargetForAll`, which makes the food entity itself invisible and
+/// removed (`setVisible(0)`, `setIsRemoved(1, 0)`), and restoring its units does not undo that on a live entity. The food's
+/// units are put back after every pole through `setAmountFoodUnitsDelta`.
+pub(crate) fn run_ztanimal_f_reduce_food_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_F_REDUCE_FOOD_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(2);
+    let Some((food, _tile)) = live_food_entity() else {
+        failures.push("the live zoo holds no food entity".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let live = live_animals();
+    let live_habitat = live.iter().map(|&animal| crate::ztkeeper::call_slot_0(animal, 0x24c)).find(|&h| h != 0).unwrap_or(0);
+    if types.is_empty() || live_habitat == 0 {
+        failures.push("the live world holds no animal type or habitat".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let original_units: i32 = get_from_memory(food + 0x154);
+    let context = Box::leak(vec![0u8; 0x40].into_boxed_slice()).as_mut_ptr() as u32;
+    save_to_memory(context + 0x10, food);
+    let set_units = |units: i32| {
+        let current: i32 = get_from_memory(food + 0x154);
+        unsafe { openzt_detour::generated::ztscenery::SET_AMOUNT_FOOD_UNITS_DELTA.original()(food as *const u32, units.wrapping_sub(current)) };
+    };
+    let mut reduced_rounds = 0usize;
+    for &ty in &types {
+        for (habitat, with_context) in [(live_habitat, true), (live_habitat, false), (0, true)] {
+            for reduce in [0i32, 1, 3, 7, 39, -5] {
+                let start = 40i32;
+                let real_log = compare_three_poles(
+                    ty,
+                    &format!("fReduceFood habitat {habitat:#x} context {with_context} reduce {reduce}"),
+                    11,
+                    &install_scripted_vtable,
+                    &|animal| {
+                        HABITAT.store(habitat, Ordering::SeqCst);
+                        save_to_memory(animal.0 + 0x38c, if with_context { context } else { 0 });
+                        set_units(start);
+                    },
+                    &|animal, pole| {
+                        let left = match pole {
+                            0 => real::f_reduce_food(animal.0, reduce),
+                            1 => animal.f_reduce_food(reduce),
+                            _ => unsafe { generated::F_REDUCE_FOOD.hooked()(animal.0 as *const u32, reduce) },
+                        };
+                        CALLS.lock().unwrap().push(0xfeed_0000 | (left as u32 & 0xffff));
+                        CALLS.lock().unwrap().push(0xfeee_0000 | (get_from_memory::<i32>(food + 0x154) as u32 & 0xffff));
+                        set_units(original_units);
+                    },
+                    &mut failures,
+                );
+                reduced_rounds += usize::from(real_log.contains(&(0xfeed_0000 | ((start - reduce) as u32 & 0xffff))));
+                if failures.len() > 20 {
+                    break;
+                }
+            }
+        }
+    }
+    set_units(original_units);
+    if reduced_rounds == 0 {
+        failures.push("coverage: the real body never reduced the food".to_string());
     }
     finish_test(test_name, failures, failure_log)
 }
@@ -2479,6 +2744,166 @@ pub(crate) fn run_ztanimal_escaped_alert_live_test(failure_log: &mut Option<std:
                 failures.push(format!("animal {parent:#x}: {name} {:?} differs from real {:?}", results[pole], results[0]));
             }
         }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// Animals in the escaped-animal list (`DAT_00638fb0`), and whether `animal` is one of them.
+fn escaped_list_state(animal: u32) -> (u32, bool) {
+    let sentinel: u32 = get_from_memory(super::ztanimal::base() + 0x0023_8fb0);
+    let mut node: u32 = get_from_memory(sentinel);
+    let (mut count, mut listed) = (0u32, false);
+    while node != sentinel && count < 4096 {
+        listed |= get_from_memory::<u32>(node + 8) == animal;
+        node = get_from_memory(node);
+        count += 1;
+    }
+    (count, listed)
+}
+
+/// `ZTANIMAL_ESCAPED_INSIDE_LIVE`: `doEscapedCheck`'s alarm branch (a habitat whose `+0x2c` byte is set: `setEscaped(1)`,
+/// `setTerrainMode(0, 1)`, the first-escape alert and `ZooStatus::animalEscaped`). Fixtures stand on live animals' land
+/// tiles that are not cut off, so `setTerrainMode` only changes the mode word (no walk to a random tile, which would run
+/// real pathing). The alert's UI calls are captured by the alert recorder, the `ZooStatus` block (`+0x10` into `ZTGameMgr`) is
+/// copied back after every pole, and every pole's escaped-list entry is taken out again with the port's `setEscaped(0)`
+/// once its state is read. Real, port and hooked address agree on the slot calls, the fixture, the captured alert, the
+/// escaped list and the `ZooStatus` bytes.
+pub(crate) fn run_ztanimal_escaped_inside_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::reimplementation_tests::alert_recorder;
+    let test_name = "ZTANIMAL_ESCAPED_INSIDE_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let types = live_animal_types(3);
+    let live = live_animals();
+    // Tiles where `setTerrainMode(0, 1)` would not walk: not water (`+0x83 & 3`) and not cut off (`+0x85 & 0x20`).
+    let positions: Vec<[i32; 3]> = live
+        .iter()
+        .filter(|&&animal| {
+            let tile = unsafe { generated_bfentity::GET_TILE.original()(animal as *const u32) } as u32;
+            tile != 0 && get_from_memory::<u8>(tile + 0x83) & 3 == 0 && get_from_memory::<u8>(tile + 0x85) & 0x20 == 0
+        })
+        .map(|&animal| [get_from_memory(animal + 0x114), get_from_memory(animal + 0x118), get_from_memory(animal + 0x11c)])
+        .collect();
+    if types.is_empty() || positions.is_empty() {
+        failures.push("the live world holds no animal type or no animal on a land tile".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let rng_address = super::ztanimal::base() + 0x0023_8060;
+    let inside: u32 = {
+        let block = Box::leak(vec![0u8; 0x100].into_boxed_slice());
+        block[0x2c] = 1;
+        block.as_ptr() as u32
+    };
+    let status = crate::globals::globals().ztgamemgr_ptr() as u32 + 0x10;
+    let status_bytes = 0x1180usize;
+    let saved_status = unsafe { std::slice::from_raw_parts(status as *const u8, status_bytes) }.to_vec();
+    let restore_status = || unsafe { std::ptr::copy_nonoverlapping(saved_status.as_ptr(), status as *mut u8, status_bytes) };
+    let mut rng = Lcg(0x1b51);
+    let (mut first_escapes, mut repeat_escapes) = (0u32, 0u32);
+    for &ty in &types {
+        let threshold: i32 = get_from_memory(ty + 0x3f4);
+        for round in 0..120 {
+            let pick = |rng: &mut Lcg| rng.next() & 1 == 1;
+            let position = positions[(rng.next() as usize) % positions.len()];
+            let already_escaped = pick(&mut rng);
+            let mode = [0i32, 1, 2][(rng.next() as usize) % 3];
+            let (show, fleeing, playmate, chase_aux, stage, pressing) = (false, pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng));
+            let (find0, find1, mate) = (rng.next() & 1, rng.next() & 1, rng.next() & 1);
+            let goal = [1i32, 0x74, 0x75][(rng.next() as usize) % 3];
+            let seed = rng.next().wrapping_mul(0x9e37_79b1) ^ 0x1f1f;
+            let prepare = |animal: ZTAnimal| {
+                install_escaped_vtable(animal);
+                HABITAT.store(inside, Ordering::SeqCst);
+                DOING_SHOW.store(show, Ordering::SeqCst);
+                PRESSING.store(pressing, Ordering::SeqCst);
+                FIND0.store(find0, Ordering::SeqCst);
+                FIND1.store(find1, Ordering::SeqCst);
+                PLAYMATE.store(mate, Ordering::SeqCst);
+                save_to_memory(rng_address, seed);
+                for (i, word) in position.iter().enumerate() {
+                    save_to_memory(animal.0 + 0x114 + 4 * i as u32, *word);
+                }
+                save_to_memory(animal.0 + 0x3b0, 0u8);
+                save_to_memory(animal.0 + 0x3b1, 1u8);
+                save_to_memory(animal.0 + 0x35c, 0i32);
+                // Above the rampage threshold, so a rampage never starts.
+                save_to_memory(animal.0 + animal_offsets::HAPPINESS, threshold.wrapping_add(1));
+                save_to_memory(animal.0 + 0x304, 0i32);
+                save_to_memory(animal.0 + animal_offsets::EGG, 0u8);
+                save_to_memory(animal.0 + 0x24c, fleeing as u8);
+                save_to_memory(animal.0 + 0x3a4, playmate as u8);
+                save_to_memory(animal.0 + 0x3a5, chase_aux as u8);
+                save_to_memory(animal.0 + 0x393, stage as u8);
+                save_to_memory(animal.0 + animal_offsets::ACTIVITY_MODE, mode);
+                save_to_memory(animal.0 + 0x170, goal);
+                save_to_memory(animal.0 + 0x22c, 0xdeadu32);
+                // Escaped animals are listed; the fixture is not, so the byte alone is varied and `setEscaped(1)` lists it.
+                save_to_memory(animal.0 + 0x3a3, already_escaped as u8);
+            };
+            let mut logs = Vec::new();
+            let mut snapshots = Vec::new();
+            let mut alerts = Vec::new();
+            let mut lists = Vec::new();
+            let mut statuses = Vec::new();
+            for pole in 0..3usize {
+                let animal = build_animal(ty);
+                prepare(animal);
+                CALLS.lock().unwrap().clear();
+                alert_recorder::begin_capture();
+                match pole {
+                    0 => real::do_escaped_check(animal.0),
+                    1 => animal.do_escaped_check(),
+                    _ => unsafe { generated::DO_ESCAPED_CHECK.hooked()(animal.0 as *const u32) },
+                }
+                // The dialog names the fixture itself, which differs per pole.
+                let captured: Vec<alert_recorder::AlertCall> = alert_recorder::end_capture()
+                    .into_iter()
+                    .map(|call| match call {
+                        alert_recorder::AlertCall::ConfirmDialog { id, a, b, c, .. } => alert_recorder::AlertCall::ConfirmDialog { id, a, b, c, entity: 0 },
+                        other => other,
+                    })
+                    .collect();
+                alerts.push(captured);
+                logs.push(CALLS.lock().unwrap().clone());
+                let mut snap = snapshot(animal);
+                snap.extend(get_from_memory::<u32>(animal.0 + 0x22c).to_le_bytes());
+                snap.extend(get_from_memory::<u32>(rng_address).to_le_bytes());
+                snapshots.push(snap);
+                lists.push(escaped_list_state(animal.0));
+                statuses.push(unsafe { std::slice::from_raw_parts(status as *const u8, status_bytes) }.to_vec());
+                restore_status();
+                if lists[pole].1 {
+                    animal.set_escaped(0);
+                }
+            }
+            let label = format!(
+                "doEscapedCheck inside round {round} escaped {already_escaped} mode {mode} fleeing {fleeing} playmate {playmate} aux {chase_aux} stage {stage} pressing {pressing} find {find0}/{find1} mate {mate} goal {goal:#x} position {position:?} seed {seed:#x}"
+            );
+            if logs[0] != logs[1] || logs[0] != logs[2] {
+                failures.push(format!("{label}: slot calls real {:x?}, port {:x?}, hooked {:x?}", logs[0], logs[1], logs[2]));
+            }
+            for (pole, name) in [(1usize, "port"), (2, "hooked")] {
+                if snapshots[0] != snapshots[pole] {
+                    let first = snapshots[0].iter().zip(&snapshots[pole]).position(|(a, b)| a != b);
+                    failures.push(format!("{label}: state differs from real for {name} (first differing snapshot byte {first:?})"));
+                }
+                if alerts[0] != alerts[pole] || lists[0] != lists[pole] || statuses[0] != statuses[pole] {
+                    failures.push(format!("{label}: alert/escaped list/ZooStatus differ from real for {name} (list real {:?}, {name} {:?}; alert calls real {}, {name} {})", lists[0], lists[pole], alerts[0].len(), alerts[pole].len()));
+                }
+            }
+            // The alert shows only on the first escape; a repeat escape (byte already set) lists nothing and shows nothing.
+            if already_escaped {
+                repeat_escapes += u32::from(alerts[0].is_empty());
+            } else {
+                first_escapes += u32::from(lists[0].1 && !alerts[0].is_empty());
+            }
+            if failures.len() > 20 {
+                break;
+            }
+        }
+    }
+    restore_status();
+    if first_escapes == 0 || repeat_escapes == 0 {
+        failures.push(format!("coverage: first escapes with an alert {first_escapes}, repeat escapes {repeat_escapes}"));
     }
     finish_test(test_name, failures, failure_log)
 }

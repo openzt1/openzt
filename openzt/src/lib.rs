@@ -63,6 +63,7 @@ pub mod systemtime;
 pub mod geom;
 
 /// Vanilla MSVC std::vector layout compatibility types.
+pub mod vanilla_list;
 pub mod vanilla_rbtree;
 pub mod vanilla_vector;
 
@@ -217,6 +218,8 @@ mod util;
 /// A shared, vanilla-allocator-owned `std::string` helper for class-reimplementation modules that need
 /// to build temporary vanilla string arguments or receive one via the RVO convention.
 mod vanilla_string;
+/// pool_vec is a scope guard that returns a vanilla pool vector's buffer to `PoolAlloc`.
+mod pool_vec;
 
 /// Loads settings from the zoo.ini file and commands/functions for reading and writing settings during runtime
 mod settings;

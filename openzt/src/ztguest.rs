@@ -33,12 +33,10 @@ use openzt_detour::generated::{
         HAS_PRESSING_NEED, IS_DOING_SOMETHING, IS_RETURNING, IS_WATER_RECOVERING, IS_WATER_TRAVELING, RANDOM_DONE, SET_RETURN_BUILDING_NAME_ID, SET_SPEED,
         SET_WATER_RECOVERING, ABORT_GOAL, ADD_TO_MAP, CLEAR_GOAL, FIND_PLACE_TO_SIT, FIND_TRASH_CAN, INIT, INIT_STATUS_VARS, LOAD, REMOVE_FROM_MAP, RESET_AI, SAVE,
     },
-    poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
+    poolalloc::{DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
     msvc_std::RAND,
     msvc_std_basic_string::{ASSIGN_RANGE, ERASE_RANGE},
     ztgamemgr::{GET_DATE as GAMEMGR_GET_DATE, IS_GAME_DATE as GAMEMGR_IS_GAME_DATE, IS_REAL_WORLD_DATE as GAMEMGR_IS_REAL_WORLD_DATE},
-    ztanimaltype::GET_TYPE_FROM_ID as ZTANIMALTYPE_GET_TYPE_FROM_ID,
-    msvc_std_listuint::INSERT as LIST_UINT_INSERT,
     ztui_multiguest::{ADD_ENTITY as MULTIGUEST_ADD_ENTITY, REMOVE_ENTITY as MULTIGUEST_REMOVE_ENTITY},
     ztunit::{
         ADD_TO_MAP as ZTUNIT_ADD_TO_MAP, CLEAR_GOAL as ZTUNIT_CLEAR_GOAL, GET_RANDOM_OK as ZTUNIT_GET_RANDOM_OK, HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL,
@@ -65,7 +63,8 @@ use crate::{
     ztmapview::BFTile,
     ztmegatilemgr::{entity_type_matches, ZTMegatile},
     ztworldmgr::BFEntity,
-    vanilla_vector::push_word,
+    vanilla_list,
+    vanilla_vector::{push_word, push_words},
 };
 
 /// Overrides the live tests install on the viewing-area check's collaborators.
@@ -75,9 +74,20 @@ pub(crate) mod check_overrides {
 
     pub type FindViewingArea = fn(this: u32) -> Option<bool>;
     pub type AnimalHappy = fn(this: u32) -> Option<i32>;
+    /// One of the viewing-area statistics queries (`fNumAnimals`, `fSickAnimals`, `fNumSickAnimals`,
+    /// `fDifferentSpecies`).
+    pub type AreaQuery = fn(this: u32) -> Option<u32>;
+    pub type FindAnimal = fn(this: u32, low: i32, high: i32) -> Option<u32>;
+    pub type CrowdDensity = fn(this: u32) -> Option<i64>;
 
     pub static FIND_VIEWING_AREA: Mutex<Option<FindViewingArea>> = Mutex::new(None);
     pub static ANIMAL_HAPPY: Mutex<Option<AnimalHappy>> = Mutex::new(None);
+    pub static NUM_ANIMALS: Mutex<Option<AreaQuery>> = Mutex::new(None);
+    pub static SICK_ANIMALS: Mutex<Option<AreaQuery>> = Mutex::new(None);
+    pub static NUM_SICK_ANIMALS: Mutex<Option<AreaQuery>> = Mutex::new(None);
+    pub static DIFFERENT_SPECIES: Mutex<Option<AreaQuery>> = Mutex::new(None);
+    pub static FIND_ANIMAL: Mutex<Option<FindAnimal>> = Mutex::new(None);
+    pub static CROWD_DENSITY: Mutex<Option<CrowdDensity>> = Mutex::new(None);
 }
 
 /// `ZTGuestType::createEntity` allocates this many bytes.
@@ -521,7 +531,8 @@ mod lifecycle_globals {
     pub const WORLD_MGR: u32 = 0x0023_8040;
     /// `DAT_006393ec`, a dword copied into `+0x230`.
     pub const DEFAULT_0X230: u32 = 0x0023_93ec;
-    /// `DAT_00639118`: pointer to the sentinel of the `list<uint>` of guests the multi-guest panel tracks.
+    /// `DAT_00639118`: the `list<uint>` of guests the multi-guest panel tracks. The global itself holds the list's sentinel
+    /// node pointer (vanilla reads it once, `MOV ECX, [DAT_00639118]`).
     pub const MULTIGUEST_LIST: u32 = 0x0023_9118;
     /// `DAT_0063c518` and `DAT_0063c508`: the need names `abortGoal` resolves with `getNeedIndex`.
     pub const NEED_NAME_A: u32 = 0x0023_c518;
@@ -596,7 +607,7 @@ impl ZTGuest {
     }
 
     fn multiguest_list(self) -> u32 {
-        get_from_memory(get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + lifecycle_globals::MULTIGUEST_LIST))
+        get_from_memory(get_module_base("zoo.exe") as u32 + lifecycle_globals::MULTIGUEST_LIST)
     }
 
     fn tracked_by_multiguest(self) -> bool {
@@ -608,9 +619,7 @@ impl ZTGuest {
     pub fn add_to_map(self) -> bool {
         let added = low_byte_bool(unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) });
         if added && self.tracked_by_multiguest() {
-            let sentinel = self.multiguest_list();
-            let mut result: u32 = 0;
-            unsafe { LIST_UINT_INSERT.original()(&mut result as *mut u32 as *const i32, sentinel as i32, &self.0 as *const u32 as *const i32) };
+            vanilla_list::push_back(self.multiguest_list(), self.0);
             unsafe { MULTIGUEST_ADD_ENTITY.original()(self.0 as *const u32) };
         }
         added
@@ -623,18 +632,7 @@ impl ZTGuest {
     pub fn remove_from_map(self, param: bool) {
         if self.tracked_by_multiguest() {
             unsafe { MULTIGUEST_REMOVE_ENTITY.original()(self.0 as *const u32, false) };
-            let sentinel = self.multiguest_list();
-            let mut node: u32 = get_from_memory(sentinel);
-            while node != sentinel {
-                let next: u32 = get_from_memory(node);
-                if get_from_memory::<u32>(node + 8) == self.0 {
-                    let previous: u32 = get_from_memory(node + 4);
-                    save_to_memory(previous, next);
-                    save_to_memory(next + 4, previous);
-                    ZTGuide::free_node(node);
-                }
-                node = next;
-            }
+            vanilla_list::remove_matching(self.multiguest_list(), self.0);
             globals().ztthoughtmgr().remove_thoughts_by_thinker(self.0);
         }
         let guide = self.guide();
@@ -825,33 +823,11 @@ impl ZTGuest {
     /// double the element count (one for an empty vector) is taken from `PoolAlloc`, the old records are copied, and the
     /// old buffer (if any) is handed back.
     fn push_site(vector: u32, first: u32, second: u32, third: u32) {
-        let begin: u32 = get_from_memory(vector);
-        let end: u32 = get_from_memory(vector + 4);
-        let cap: u32 = get_from_memory(vector + 8);
-        if end != cap {
-            save_to_memory(end, first);
-            save_to_memory(end + 4, second);
-            save_to_memory(end + 8, third);
-            save_to_memory(vector + 4, end + 12);
-            return;
-        }
-        let count = end.wrapping_sub(begin) / 12;
-        let new_count = count + count.max(1);
-        let buffer = unsafe { POOLALLOC_ALLOCATE.original()(new_count * 12) } as u32;
-        if buffer != 0 {
-            for word in 0..count * 3 {
-                save_to_memory(buffer + word * 4, get_from_memory::<u32>(begin + word * 4));
+        push_words(vector, [first, second, third], |begin, byte_capacity| {
+            if begin != 0 {
+                unsafe { POOLALLOC_DEALLOCATE.original()(begin as *const u32, (byte_capacity / 12) * 12) };
             }
-            save_to_memory(buffer + count * 12, first);
-            save_to_memory(buffer + count * 12 + 4, second);
-            save_to_memory(buffer + count * 12 + 8, third);
-        }
-        if begin != 0 {
-            unsafe { POOLALLOC_DEALLOCATE.original()(begin as *const u32, (cap.wrapping_sub(begin) / 12) * 12) };
-        }
-        save_to_memory(vector, buffer);
-        save_to_memory(vector + 4, buffer + (count + 1) * 12);
-        save_to_memory(vector + 8, buffer + new_count * 12);
+        });
     }
 
     fn vector_len(vector: u32, element: u32) -> u32 {
@@ -1089,7 +1065,7 @@ impl ZTGuest {
             if !ok {
                 return false;
             }
-            if unsafe { ZTANIMALTYPE_GET_TYPE_FROM_ID.original()(self.read::<u8>(0x31c)) } == 0 {
+            if unsafe { openzt_detour::generated::ztanimaltype::GET_TYPE_FROM_ID.original()(self.read::<u32>(0x31c) as i32) } == 0 {
                 self.write(0x31c, unsafe { mem::transmute::<u32, extern "cdecl" fn() -> u32>(RANDOM_ANIMAL_TYPE)() });
             }
         }
@@ -1810,14 +1786,39 @@ pub(crate) mod live_support {
         None
     }
 
-    /// A zeroed guest built by the real vanilla constructor (not detoured) over `guest_type`. The fixture is leaked:
-    /// `~ZTGuest` frees pool containers through helpers `generated.rs` does not expose, so tests drop the memory.
+    /// Guests built by [`build_standalone_guest`] and neither destroyed nor forgotten.
+    static LIVE_FIXTURES: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+    /// A zeroed guest built by the real vanilla constructor (not detoured) over `guest_type`. It is torn down through
+    /// the real scalar-deleting destructor by [`destroy_standalone_guest`], or by [`teardown_standalone_guests`] when the
+    /// test finishes. A test that points a field of the guest at memory it owns must put the original value back first,
+    /// or call [`forget_standalone_guest`] to leak the fixture: the destructor frees whatever the fields hold.
     pub fn build_standalone_guest(guest_type: u32) -> ZTGuest {
         use openzt_detour::generated::{standalone::OPERATOR_NEW, ztguest::CONSTRUCTOR};
         let memory = unsafe { OPERATOR_NEW.original()(GUEST_SIZE) } as u32;
         unsafe { std::ptr::write_bytes(memory as *mut u8, 0, GUEST_SIZE as usize) };
         unsafe { CONSTRUCTOR.original()(memory as *const u32, guest_type) };
+        LIVE_FIXTURES.lock().unwrap().push(memory);
         ZTGuest(memory)
+    }
+
+    /// Stops tracking `guest`, leaving its memory allocated.
+    pub fn forget_standalone_guest(guest: ZTGuest) {
+        LIVE_FIXTURES.lock().unwrap().retain(|&fixture| fixture != guest.0);
+    }
+
+    /// Tears a guest down through the real scalar-deleting destructor (not detoured).
+    pub fn destroy_standalone_guest(guest: ZTGuest) {
+        LIVE_FIXTURES.lock().unwrap().retain(|&fixture| fixture != guest.0);
+        unsafe { openzt_detour::generated::ztguest::DESTRUCTOR_1.original()(guest.0 as *const u32, 1) };
+    }
+
+    /// Destroys every guest still tracked from [`build_standalone_guest`].
+    pub fn teardown_standalone_guests() {
+        let fixtures = std::mem::take(&mut *LIVE_FIXTURES.lock().unwrap());
+        for fixture in fixtures {
+            unsafe { openzt_detour::generated::ztguest::DESTRUCTOR_1.original()(fixture as *const u32, 1) };
+        }
     }
 
     pub(crate) use super::detours::test_real as real;

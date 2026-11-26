@@ -16,64 +16,50 @@ use openzt_detour::generated::poolalloc::ALLOCATE as POOLALLOC_ALLOCATE;
 /// Works on a raw header address, never a `&mut`, because the header lives inside live game structs that
 /// vanilla can re-enter. Only valid for headers whose buffer vanilla's `PoolAlloc` produced (cross-allocator rule).
 pub fn push_word(vector_ptr: u32, value: u32, free_old_buffer: impl FnOnce(u32, u32)) {
-    let begin = get_from_memory::<u32>(vector_ptr);
-    let end = get_from_memory::<u32>(vector_ptr + 4);
-    let cap_end = get_from_memory::<u32>(vector_ptr + 8);
-
-    if end == cap_end {
-        let old_len = (end - begin) / 4;
-        let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
-        let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 4) } as u32;
-
-        for i in 0..old_len {
-            let v: u32 = get_from_memory(begin + i * 4);
-            if new_buf != 0 {
-                save_to_memory(new_buf + i * 4, v);
-            }
-        }
-        if new_buf != 0 {
-            save_to_memory(new_buf + old_len * 4, value);
-        }
-        free_old_buffer(begin, cap_end - begin);
-
-        save_to_memory(vector_ptr, new_buf);
-        save_to_memory(vector_ptr + 4, new_buf + (old_len + 1) * 4);
-        save_to_memory(vector_ptr + 8, new_buf + new_cap * 4);
-    } else {
-        save_to_memory(end, value);
-        save_to_memory(vector_ptr + 4, end + 4);
-    }
+    push_words(vector_ptr, [value], free_old_buffer);
 }
 
 /// [`push_word`] for an 8-byte element (two words), the shape of vanilla's `vector<pair<int, T*>>` growth
 /// (`cls_0x43f6a9::meth_0x43f6a9`, `0x0043f6a9`): same doubling, same `PoolAlloc` buffer, same
 /// caller-supplied teardown of the old buffer.
 pub fn push_pair(vector_ptr: u32, first: u32, second: u32, free_old_buffer: impl FnOnce(u32, u32)) {
+    push_words(vector_ptr, [first, second], free_old_buffer);
+}
+
+/// [`push_word`] for an `N`-word element: the growth every vanilla `vector<T>` push over a pool buffer shares. When
+/// full, a buffer of double the element count (one element for an empty vector) comes from `PoolAlloc::allocate`, the
+/// old elements are copied, the new one is stored after them, the old buffer goes to `free_old_buffer(begin,
+/// byte_capacity)` (called even for an empty vector, where `begin` is `0`) and the three header words are rewritten.
+/// A null buffer from the allocator leaves every store skipped, as vanilla's unchecked code would fault there.
+pub fn push_words<const N: usize>(vector_ptr: u32, words: [u32; N], free_old_buffer: impl FnOnce(u32, u32)) {
+    let element_bytes = (N * 4) as u32;
     let begin = get_from_memory::<u32>(vector_ptr);
     let end = get_from_memory::<u32>(vector_ptr + 4);
     let cap_end = get_from_memory::<u32>(vector_ptr + 8);
 
     if end == cap_end {
-        let old_len = (end - begin) / 8;
+        let old_len = (end - begin) / element_bytes;
         let new_cap = if old_len == 0 { 1 } else { old_len * 2 };
-        let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * 8) } as u32;
+        let new_buf = unsafe { POOLALLOC_ALLOCATE.original()(new_cap * element_bytes) } as u32;
 
         if new_buf != 0 {
-            for word in 0..old_len * 2 {
+            for word in 0..old_len * N as u32 {
                 save_to_memory(new_buf + word * 4, get_from_memory::<u32>(begin + word * 4));
             }
-            save_to_memory(new_buf + old_len * 8, first);
-            save_to_memory(new_buf + old_len * 8 + 4, second);
+            for (index, word) in words.iter().enumerate() {
+                save_to_memory(new_buf + old_len * element_bytes + index as u32 * 4, *word);
+            }
         }
         free_old_buffer(begin, cap_end - begin);
 
         save_to_memory(vector_ptr, new_buf);
-        save_to_memory(vector_ptr + 4, new_buf + (old_len + 1) * 8);
-        save_to_memory(vector_ptr + 8, new_buf + new_cap * 8);
+        save_to_memory(vector_ptr + 4, new_buf + (old_len + 1) * element_bytes);
+        save_to_memory(vector_ptr + 8, new_buf + new_cap * element_bytes);
     } else {
-        save_to_memory(end, first);
-        save_to_memory(end + 4, second);
-        save_to_memory(vector_ptr + 4, end + 8);
+        for (index, word) in words.iter().enumerate() {
+            save_to_memory(end + index as u32 * 4, *word);
+        }
+        save_to_memory(vector_ptr + 4, end + element_bytes);
     }
 }
 

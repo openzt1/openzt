@@ -1052,7 +1052,7 @@ pub mod bftile {
     pub const IS_IN_ZOO: FunctionDef<unsafe extern "thiscall" fn(*const u32, i8) -> u32> = FunctionDef{address: 0x0040fb8d, function_type: PhantomData};
     pub const ADD_UNIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef{address: 0x00410b0f, function_type: PhantomData};
     pub const IS_GENTLY_SLOPED: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00416504, function_type: PhantomData};
-    pub const HAS_UNIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, u32) -> bool> = FunctionDef{address: 0x00427360, function_type: PhantomData};
+    pub const HAS_UNIT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32, i32, i32) -> bool> = FunctionDef{address: 0x00427360, function_type: PhantomData};
     pub const IS_CLEAR_FOR_WALK_BY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> bool> = FunctionDef{address: 0x004404d9, function_type: PhantomData};
     pub const VALIDATE_POSITIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, bool)> = FunctionDef{address: 0x0044a0bf, function_type: PhantomData};
     pub const ADD_EDGE: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, u32) -> u32> = FunctionDef{address: 0x0044cd6d, function_type: PhantomData};
@@ -2504,7 +2504,7 @@ pub mod ztanimaltype {
     pub const GET_IDLE_ANIM_SYMBOL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00405c1a, function_type: PhantomData};
     pub const GET_ANIM_ROOT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x0040cbce, function_type: PhantomData};
     pub const GET_SLOW_ANIM_SYMBOL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x00411929, function_type: PhantomData};
-    pub const GET_TYPE_FROM_ID: FunctionDef<unsafe extern "cdecl" fn(u8) -> u32> = FunctionDef{address: 0x00413e89, function_type: PhantomData};
+    pub const GET_TYPE_FROM_ID: FunctionDef<unsafe extern "cdecl" fn(i32) -> u32> = FunctionDef{address: 0x00413e89, function_type: PhantomData};
     pub const LOAD_BSFUNCTIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32, *const u32) -> bool> = FunctionDef{address: 0x0043cd37, function_type: PhantomData};
     pub const GET_CATEGORY_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x00446c46, function_type: PhantomData};
     pub const GET_SPECIES_ID: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x00446c8c, function_type: PhantomData};
@@ -6723,6 +6723,7 @@ pub mod standalone {
     pub const GET_DXVERSION: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x00536bce, function_type: PhantomData};
     pub const LOCALTIME: FunctionDef<unsafe extern "cdecl" fn(*const i32) -> *const i32> = FunctionDef{address: 0x0053833a, function_type: PhantomData};
     pub const CREATE_BFFONT_CACHE: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x005389b9, function_type: PhantomData};
+    pub const INIT_TANKWALL_CLASS_NAME: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00575dc5, function_type: PhantomData};
     pub const SINIT_ZT_CPP_0: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x005784d3, function_type: PhantomData};
     pub const SINIT_ZT_CPP_1: FunctionDef<unsafe extern "stdcall" fn()> = FunctionDef{address: 0x00579322, function_type: PhantomData};
     pub const LOAD_INI_DEBUG_SETTINGS: FunctionDef<unsafe extern "stdcall" fn() -> u32> = FunctionDef{address: 0x00579f4c, function_type: PhantomData};

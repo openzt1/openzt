@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use openzt_detour::generated::{
     msvc_std_listuint::INSERT as LIST_UINT_INSERT,
-    ztguide::{CLEAR_GOAL, INIT_STATUS_VARS, LOAD, RELEASE_GUESTS, REMOVE_FROM_MAP, REMOVE_GUEST, SAVE},
+    ztguide::{ADD_GUEST, CLEAR_GOAL, INIT_STATUS_VARS, LOAD, RELEASE_GUESTS, REMOVE_FROM_MAP, REMOVE_GUEST, SAVE},
 };
 
 use super::ztguide::{base, compare_memory, pin_rng, rng};
@@ -25,8 +25,7 @@ use crate::{
     ztkeeper::unit_offsets,
 };
 
-/// `DAT_00638004`: head of vanilla's 12-byte small-block freelist.
-const FREELIST_12_RVA: u32 = 0x0023_8004;
+use crate::vanilla_list::FREELIST_12_RVA;
 /// `GLOBAL_ZTWorldMgr`.
 const WORLD_MGR_RVA: u32 = 0x0023_8040;
 const WORLD_ENTITY_BEGIN: u32 = 0x80;
@@ -91,6 +90,22 @@ fn three_poles(
     port_body: &dyn Fn(ZTGuide),
     hooked_body: &dyn Fn(ZTGuide),
 ) -> Vec<u32> {
+    three_poles_with(guide_type, true, label, failures, prepare, real_body, port_body, hooked_body)
+}
+
+/// `three_poles`, with the freelist-push comparison optional: a body that pops nodes (an insert) moves the head away
+/// from its starting node, so counting pushes since then means nothing.
+#[allow(clippy::too_many_arguments)]
+fn three_poles_with(
+    guide_type: u32,
+    check_freelist: bool,
+    label: &str,
+    failures: &mut Vec<String>,
+    prepare: &dyn Fn(ZTGuide),
+    real_body: &dyn Fn(ZTGuide),
+    port_body: &dyn Fn(ZTGuide),
+    hooked_body: &dyn Fn(ZTGuide),
+) -> Vec<u32> {
     let fixtures: Vec<ZTGuide> = (0..3).map(|_| live_support::build_standalone_guide(guide_type)).collect();
     for guide in &fixtures {
         prepare(*guide);
@@ -102,7 +117,7 @@ fn three_poles(
         body(*guide);
         pushed.push(freelist_pushed(before));
     }
-    if pushed[0] != pushed[1] || pushed[0] != pushed[2] {
+    if check_freelist && (pushed[0] != pushed[1] || pushed[0] != pushed[2]) {
         failures.push(format!("{label}: freelist pushes real {}, port {}, hooked {}", pushed[0], pushed[1], pushed[2]));
     }
     let real_ids = follower_ids(fixtures[0], failures, &format!("{label} real"));
@@ -141,6 +156,38 @@ pub(crate) fn run_ztguide_remove_guest_live_test(failure_log: &mut Option<std::f
     }
     if remaining.len() < 3 {
         failures.push(format!("only {remaining:?} remaining lengths occurred"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTGUIDE_ADD_GUEST_LIVE`: `addGuest` onto an empty list, a new id, a repeated first/middle/last id and a repeat
+/// of the just-added id: the lists, links and whole-guide memory match the real body and the hooked address.
+pub(crate) fn run_ztguide_add_guest_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTGUIDE_ADD_GUEST_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some(guide_type) = live_support::find_guide_type() else {
+        failures.push("the live world holds no guide type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let mut lengths = std::collections::BTreeSet::new();
+    for (initial, target) in [(&[][..], 7i32), (&[1, 2, 3][..], 9), (&[1, 2, 3][..], 1), (&[1, 2, 3][..], 2), (&[1, 2, 3][..], 3)] {
+        let ids = three_poles_with(
+            guide_type,
+            false,
+            &format!("add {target} to {initial:?}"),
+            &mut failures,
+            &|guide| set_followers(guide, initial),
+            &|guide| real::add_guest(guide.0, target),
+            &|guide| guide.add_guest(target),
+            &|guide| unsafe { ADD_GUEST.hooked()(guide.0 as *const u32, target) },
+        );
+        if ids.iter().filter(|id| **id == target as u32).count() != 1 {
+            failures.push(format!("add {target} to {initial:?}: ids {ids:?} do not hold the target exactly once"));
+        }
+        lengths.insert(ids.len());
+    }
+    if lengths.len() < 3 {
+        failures.push(format!("only {lengths:?} resulting lengths occurred"));
     }
     finish_test(test_name, failures, failure_log)
 }

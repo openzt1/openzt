@@ -735,7 +735,7 @@ pub(crate) fn run_ztanimal_fences_ok_live_test(failure_log: &mut Option<std::fs:
     }
 
     let mut rng = Lcg(0xfe7c);
-    let (mut blocked, mut passed) = (0, 0);
+    let (mut blocked, mut passed, mut plain_fence_marked) = (0, 0, 0);
     for &ty in &types {
         for round in 0..400 {
             let source = live[(rng.next() as usize) % live.len()];
@@ -782,11 +782,14 @@ pub(crate) fn run_ztanimal_fences_ok_live_test(failure_log: &mut Option<std::fs:
             );
             let probe = build_animal(ty);
             prepare(probe);
-            if run_poles(probe, 0, copy_address, direction) & 1 == 0 {
+            let probe_result = run_poles(probe, 0, copy_address, direction);
+            if probe_result & 1 == 0 {
                 blocked += 1;
             } else {
                 passed += 1;
             }
+            // `out_b` starts at 0xaa; the plain-fence marker is the byte written to 1.
+            plain_fence_marked += usize::from((probe_result >> 16) & 0xff == 1);
             save_to_memory(ty + 0x3cc, saved_flags[0]);
             save_to_memory(ty + 0x3cd, saved_flags[1]);
             save_to_memory(ty + 0x3b4, strength_saved);
@@ -800,6 +803,9 @@ pub(crate) fn run_ztanimal_fences_ok_live_test(failure_log: &mut Option<std::fs:
     }
     if blocked == 0 || passed == 0 {
         failures.push(format!("the random fence cases only reached one answer (blocked {blocked}, passed {passed})"));
+    }
+    if plain_fence_marked == 0 {
+        failures.push("coverage: no random fence case made the real body mark out_b (the plain-fence case)".to_string());
     }
     finish_test(test_name, failures, failure_log)
 }
@@ -1172,4 +1178,244 @@ pub(crate) fn run_ztanimal_evaluate_escape_live_test(failure_log: &mut Option<st
         failures.push(format!("the comparison cases did not cover the fence branches (ran {ran}, fence cases {handed_off}, with a kind {with_kind}, second searches {second_search})"));
     }
     finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_PICK_RANDOM_DEST_ESCAPE_LIVE`: `pickRandomDest`'s escape branch. The habitat's escape tree entry for the fixture's
+/// type (found or created through vanilla's own `operator[]`, its 16 bytes restored after every round) is set to "can escape"
+/// with a fenced edge of the live map as source and destination, so the real body copies the entry into a record allocated
+/// through vanilla's `operator_new` and runs `evaluateEscape` over the scripted AI-manager search (as
+/// `ZTANIMAL_EVALUATE_ESCAPE_LIVE` does). The record copy, the escape animation, the destination hand-off, the path list and the
+/// fixture agree between real, port and the hooked address.
+pub(crate) fn run_ztanimal_pick_random_dest_escape_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTANIMAL_PICK_RANDOM_DEST_ESCAPE_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some((types, live)) = fixture_inputs(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world: u32 = get_from_memory(base() + 0x0023_8040);
+    let map = world + 8;
+    let (width, height): (i32, i32) = (get_from_memory(map + 0x2c), get_from_memory(map + 0x30));
+    let tiles: u32 = get_from_memory(map + 0x38);
+    let aimgr: u32 = get_from_memory(base() + 0x0023_8098);
+    let tile_position = |tile: u32| -> [i32; 3] { [get_from_memory(tile + 0x34), get_from_memory(tile + 0x38), get_from_memory(tile + 0x3c)] };
+    let neighbour = |tile: u32, direction: u32| unsafe { BFMAP_GET_NEIGHBOR.original()(map as *const u32, tile as *const u32, direction) };
+    let mut fenced: Vec<(u32, u32)> = Vec::new();
+    for index in 0..(width * height) as u32 {
+        let tile = tiles + index * 0x8c;
+        for direction in (0..8u32).step_by(2) {
+            if get_from_memory::<u32>(tile + 0x14 + direction / 2 * 4) != 0 {
+                let across = neighbour(tile, direction);
+                if across != 0 {
+                    fenced.push((tile, across));
+                }
+            }
+        }
+    }
+    // Habitats that take part: not exhibits (`+0x2c` clear), as the real body requires.
+    let habitats: Vec<u32> = live
+        .iter()
+        .map(|&source| unsafe { std::mem::transmute::<u32, extern "thiscall" fn(u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(source) + 0x24c))(source) })
+        .filter(|&habitat| habitat != 0 && get_from_memory::<u8>(habitat + 0x2c) == 0)
+        .collect();
+    if fenced.is_empty() || habitats.is_empty() {
+        failures.push(format!("the live map holds no usable fenced edge or non-exhibit habitat (fenced {}, habitats {})", fenced.len(), habitats.len()));
+        return finish_test(test_name, failures, failure_log);
+    }
+    let search = ScriptedSearch::install(aimgr);
+    let rng_address = base() + 0x0023_8060;
+    let mut rng = Lcg(0x91c7);
+    let (mut ran, mut destinations, mut animations) = (0u32, 0u32, 0u32);
+    for &ty in &types {
+        for round in 0..60 {
+            let habitat = habitats[(rng.next() as usize) % habitats.len()];
+            let (from, across) = fenced[(rng.next() as usize) % fenced.len()];
+            let stand = [tile_position(from)[0] * 64 + 32, tile_position(from)[1] * 64 + 32, tile_position(from)[2]];
+            let kind = [0i32, 1, 2, 3, 4][(rng.next() as usize) % 5];
+            let first_found = rng.next() % 6 != 0;
+            let first = vec![tile_position(from), tile_position(across)];
+            let second: (bool, Vec<[i32; 3]>) = match rng.next() % 3 {
+                0 => (false, Vec::new()),
+                1 => (true, vec![tile_position(from), tile_position(across)]),
+                _ => (true, vec![tile_position(across), tile_position(from)]),
+            };
+            let seed = rng.next();
+            let key = ty;
+            let entry = unsafe { openzt_detour::generated::msvc_std_tree36::OPERATOR_INDEX.original()((habitat + 0x16c) as *const u32, &key as *const u32) } as u32;
+            let saved: [u32; 4] = [get_from_memory(entry), get_from_memory(entry + 4), get_from_memory(entry + 8), get_from_memory(entry + 12)];
+            save_to_memory(entry, 1u32);
+            save_to_memory(entry + 4, from);
+            save_to_memory(entry + 8, across);
+            save_to_memory(entry + 12, kind);
+            let prepare = |animal: ZTAnimal| {
+                HABITAT.store(habitat, Ordering::SeqCst);
+                SWIMS.store(false, Ordering::SeqCst);
+                UNDERWATER.store(false, Ordering::SeqCst);
+                for (offset, word) in [0x114u32, 0x118, 0x11c].into_iter().zip(stand) {
+                    save_to_memory(animal.0 + offset, word);
+                }
+                save_to_memory(animal.0 + 0x395, 0u8);
+                save_to_memory(animal.0 + animal_offsets::HAS_ESCAPE_INFO, 0u8);
+                save_to_memory(animal.0 + animal_offsets::ESCAPE_RECORD, 0u32);
+                *SEARCH_SCRIPT.lock().unwrap() = vec![(first_found, first.clone()), second.clone()];
+                SEARCH_NEXT.store(0, Ordering::SeqCst);
+                save_to_memory(rng_address, seed);
+            };
+            poles(
+                ty,
+                &format!("pickRandomDest escape round {round} from {from:#x} across {across:#x} kind {kind} first found {first_found} seed {seed:#x}"),
+                &prepare,
+                &|animal, pole| {
+                    let mut position = [0xaau32; 3];
+                    let address = position.as_mut_ptr() as u32;
+                    let result = match pole {
+                        0 => real::pick_random_dest(animal.0, address),
+                        1 => animal.pick_random_dest(address),
+                        _ => unsafe { generated::PICK_RANDOM_DEST.hooked()(animal.0 as *const u32, address as *const glam::i32::IVec3) & 0xff != 0 },
+                    };
+                    let path = path_list(animal.0);
+                    let record: u32 = get_from_memory(animal.0 + animal_offsets::ESCAPE_RECORD);
+                    let mut hash = path.iter().flatten().fold(path.len() as u32, |hash, word| (hash ^ *word as u32).wrapping_mul(0x0100_0193));
+                    if record != 0 {
+                        for offset in 0..0x10u32 {
+                            hash = (hash ^ get_from_memory::<u8>(record + offset) as u32).wrapping_mul(0x0100_0193);
+                        }
+                    }
+                    hash ^= position[0] ^ position[1].rotate_left(7) ^ position[2].rotate_left(14) ^ get_from_memory::<u32>(rng_address).rotate_left(21);
+                    result as i64 | (hash as i64) << 1
+                },
+                &mut failures,
+            );
+            for (i, word) in saved.iter().enumerate() {
+                save_to_memory(entry + 4 * i as u32, *word);
+            }
+            ran += 1;
+            let calls = CALLS.lock().unwrap().clone();
+            destinations += calls.iter().any(|(slot, _)| *slot == 0x1f8) as u32;
+            animations += calls.iter().any(|(slot, _)| *slot == 0x104) as u32;
+            if failures.len() > 10 {
+                break;
+            }
+        }
+    }
+    drop(search);
+    if destinations == 0 || animations == 0 {
+        failures.push(format!("coverage: the escape branch did not run to its destination and animation (ran {ran}, destinations {destinations}, animations {animations})"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTANIMAL_PERF_COMPARE_LIVE`: per-call cost of the pathfinder callbacks `getTerrainCost`, `fencesOK` and `tileFilter`,
+/// vanilla (through the detour's call-through) against the Rust port called directly and the hooked address the game itself
+/// calls, in the release battery only (skipped in debug builds). A plain fixture animal (the vanilla constructor's own
+/// vtable, no recorders) stands on a live animal's position; each function runs over the interior `62x62` tiles of the live
+/// map's top-left block (every neighbour exists), the pathfinder's access pattern, for the two activity modes the
+/// callbacks branch on. The timings are logged on the pass line; the test fails only when the hooked address is more
+/// than `PERF_FAIL_RATIO` times vanilla. Run with page heap off.
+pub(crate) fn run_ztanimal_perf_compare_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::hint::black_box;
+
+    use super::ztkeeper::{median_ns_per_call, PoleTimes, PERF_FAIL_RATIO};
+    use crate::reimplementation_tests::harness::write_success_line;
+
+    let test_name = "ZTANIMAL_PERF_COMPARE_LIVE";
+    if cfg!(debug_assertions) {
+        write_success_line(failure_log, &format!("{test_name} (skipped: debug build)"));
+        return false;
+    }
+    let mut failures: Vec<String> = Vec::new();
+    let Some((types, live)) = fixture_inputs(&mut failures) else {
+        return finish_test(test_name, failures, failure_log);
+    };
+    let animal = build_animal(types[0]);
+    stand_on(animal, live[0]);
+    let world: u32 = get_from_memory(base() + 0x0023_8040);
+    let map = world + 8;
+    let (width, height): (i32, i32) = (get_from_memory(map + 0x2c), get_from_memory(map + 0x30));
+    let tiles_base: u32 = get_from_memory(map + 0x38);
+    let limit = 63.min(width).min(height);
+    let tiles: Vec<u32> = (1..limit).flat_map(|y| (1..limit).map(move |x| tiles_base + ((y * width + x) as u32) * 0x8c)).collect();
+    let saved_flags: Vec<u8> = tiles.iter().map(|&tile| get_from_memory(tile + 0x85)).collect();
+    let mut results: Vec<PoleTimes> = Vec::new();
+
+    for mode in [0i32, 2] {
+        save_to_memory(animal.0 + animal_offsets::ACTIVITY_MODE, mode);
+        let calls = tiles.len();
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(real::get_terrain_cost(animal.0, black_box(tile)));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(animal.get_terrain_cost(black_box(tile)));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { generated::GET_TERRAIN_COST.hooked()(animal.0 as *const u32, black_box(tile) as *const u32) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("getTerrainCost mode {mode} ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+        for (&tile, &flags) in tiles.iter().zip(&saved_flags) {
+            save_to_memory(tile + 0x85, flags);
+        }
+    }
+
+    let pairs: Vec<(u32, u32)> = tiles.iter().flat_map(|&tile| (0u32..8).map(move |direction| (tile, direction))).collect();
+    let calls = pairs.len();
+    let (mut out_a, mut out_b) = (0u8, 0u8);
+    let (a, b) = (&mut out_a as *mut u8 as u32, &mut out_b as *mut u8 as u32);
+    let mut vanilla = || {
+        for &(tile, direction) in &pairs {
+            black_box(real::fences_ok(animal.0, black_box(tile), direction as i32, a, b));
+        }
+    };
+    let mut port = || {
+        for &(tile, direction) in &pairs {
+            black_box(animal.fences_ok(black_box(tile), direction as i32, a, b));
+        }
+    };
+    let mut hooked = || {
+        for &(tile, direction) in &pairs {
+            black_box(unsafe { generated::FENCES_OK.hooked()(animal.0 as *const u32, black_box(tile) as *const u32, direction, a as *const bool, b as *const bool) });
+        }
+    };
+    let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+    results.push(PoleTimes { label: format!("fencesOK ({calls} tile/direction pairs)"), vanilla: times[0], port: times[1], hooked: times[2] });
+
+    for mode in [0i32, 2] {
+        save_to_memory(animal.0 + animal_offsets::ACTIVITY_MODE, mode);
+        let calls = tiles.len();
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(real::tile_filter(animal.0, black_box(tile), false));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(animal.tile_filter(black_box(tile), false));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { generated::TILE_FILTER.hooked()(animal.0 as *const c_void, black_box(tile) as *const c_void, false) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("tileFilter mode {mode} ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    }
+
+    for result in &results {
+        if result.hooked / result.vanilla > PERF_FAIL_RATIO {
+            failures.push(format!("hooked is more than {PERF_FAIL_RATIO}x vanilla: {}", result.summary()));
+        }
+    }
+    if failures.is_empty() {
+        let summary = results.iter().map(PoleTimes::summary).collect::<Vec<_>>().join("; ");
+        write_success_line(failure_log, &format!("{test_name} ({summary})"));
+        false
+    } else {
+        finish_test(test_name, failures, failure_log)
+    }
 }

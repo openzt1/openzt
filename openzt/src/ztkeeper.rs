@@ -457,7 +457,7 @@ impl ZTKeeper {
     /// `ZTKeeper::doConditionals` (`0x00423d84`): re-validates the assigned habitats, then the `ZTStaff` conditionals.
     pub fn do_conditionals(self) {
         self.check_assigned_habitats();
-        unsafe { ZTSTAFF_DO_CONDITIONALS.original()(self.0 as *const u32) };
+        unsafe { ZTSTAFF_DO_CONDITIONALS.hooked()(self.0 as *const u32) };
     }
 
     /// `ZTKeeper::cleansUp` (`0x0042404e`): whether `entity`'s type is one this keeper's type cleans up after.
@@ -576,7 +576,7 @@ impl ZTKeeper {
         if keep_gate & 0xff == 0 {
             let gate: u32 = get_from_memory(self.0 + unit_offsets::GATE);
             if gate != 0 {
-                unsafe { ZTFENCE_CLOSE_GATE.original()(gate as *const c_void) };
+                unsafe { ZTFENCE_CLOSE_GATE.hooked()(gate as *const c_void) };
                 save_to_memory(self.0 + unit_offsets::GATE, 0u32);
             }
         }
@@ -591,7 +591,7 @@ impl ZTKeeper {
             let entity_type: u32 = get_from_memory(self.0 + unit_offsets::ENTITY_TYPE);
             let type_id = call_slot_0(entity_type, slots::TYPE_GET_ID);
             show_info_remove_unit(show_info, type_id, id);
-            unsafe { ZTSHOW_ABORT_SHOW.original()((show_info + 0x4) as *const u32) };
+            unsafe { ZTSHOW_ABORT_SHOW.hooked()((show_info + 0x4) as *const u32) };
         }
         if get_from_memory::<u8>(self.0 + unit_offsets::MBR_0X142) == 0 {
             self.notify_habitat_not_coming(param as u32);

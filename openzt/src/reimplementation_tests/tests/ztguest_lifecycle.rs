@@ -32,10 +32,9 @@ use crate::{
     ztkeeper::unit_offsets,
 };
 
-/// `DAT_00639118`: pointer to the sentinel of the multi-guest panel's list.
+/// `DAT_00639118`: holds the sentinel pointer of the multi-guest panel's list.
 const MULTIGUEST_LIST_RVA: u32 = 0x0023_9118;
-/// `DAT_00638004`: head of vanilla's 12-byte freelist.
-const FREELIST_12_RVA: u32 = 0x0023_8004;
+use crate::vanilla_list::FREELIST_12_RVA;
 
 fn leak_words(words: &[u32]) -> u32 {
     Box::leak(words.to_vec().into_boxed_slice()).as_ptr() as u32
@@ -48,6 +47,8 @@ fn leak_bytes(bytes: &[u8]) -> u32 {
 /// Fills the saved scalar fields with pseudo-random values, then points the four containers at leaked buffers of the
 /// requested sizes (`items`/`ids` dword counts, `sites` 12-byte records, `string` bytes).
 fn plant_save_state(guest: ZTGuest, seed: u32, items: usize, ids: usize, sites: usize, string: usize) {
+    // The containers point at Rust memory, which the vanilla destructor must not free.
+    live_support::forget_standalone_guest(guest);
     let mut rng = Lcg(seed);
     for offset in [
         0x284u32, 0x298, 0x29c, 0x2a0, 0x2a4, 0x2a8, 0x2b0, 0x2b8, 0x2c0, 0x2c8, 0x2d0, 0x2d4, 0x2d8, 0x2dc, 0x2e0, 0x2e4, 0x2e8, 0x2ec, 0x2f0, 0x2f4, 0x2f8,
@@ -216,6 +217,7 @@ pub(crate) fn run_ztguest_clear_goal_live_test(failure_log: &mut Option<std::fs:
                     save_to_memory(guest.0 + guest_offsets::GUIDE_ID, guide_id);
                     save_to_memory(guest.0 + unit_offsets::ENTITY_ID, 0x4242u32);
                     if scratch {
+                        live_support::forget_standalone_guest(guest);
                         let buffer = leak_bytes(&[7, 8, 9, 0]);
                         save_to_memory(guest.0 + 0x1c8, buffer);
                         save_to_memory(guest.0 + 0x1cc, buffer + 3);
@@ -356,7 +358,7 @@ fn on_freelist(nodes: &[u32]) -> usize {
 }
 
 fn guest_nodes(guest: u32) -> Vec<u32> {
-    let sentinel: u32 = get_from_memory(get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA));
+    let sentinel: u32 = get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA);
     let mut node: u32 = get_from_memory(sentinel);
     let mut nodes = Vec::new();
     while node != sentinel && nodes.len() < 100_000 {
@@ -369,7 +371,7 @@ fn guest_nodes(guest: u32) -> Vec<u32> {
 }
 
 fn multiguest_nodes_for(guest: u32) -> usize {
-    let sentinel: u32 = get_from_memory(get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA));
+    let sentinel: u32 = get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA);
     let mut node: u32 = get_from_memory(sentinel);
     let mut count = 0;
     while node != sentinel && count < 100_000 {
@@ -397,7 +399,7 @@ pub(crate) fn run_ztguest_remove_from_map_live_test(failure_log: &mut Option<std
             for pole in [1usize, 2, 0] {
                 let guest = live_support::build_standalone_guest(guest_type);
                 save_to_memory(guest.0 + 0x142, excluded as u8);
-                let sentinel: u32 = get_from_memory(get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA));
+                let sentinel: u32 = get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA);
                 for _ in 0..2 {
                     let mut result: u32 = 0;
                     unsafe { LIST_UINT_INSERT.original()(&mut result as *mut u32 as *const i32, sentinel as i32, &guest.0 as *const u32 as *const i32) };
@@ -413,7 +415,7 @@ pub(crate) fn run_ztguest_remove_from_map_live_test(failure_log: &mut Option<std
                 outcomes[pole] = (multiguest_nodes_for(guest.0), on_freelist(&listed));
                 // Leave no stale node behind for the next pole when the guest was excluded.
                 if excluded {
-                    let sentinel: u32 = get_from_memory(get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA));
+                    let sentinel: u32 = get_from_memory::<u32>(base() + MULTIGUEST_LIST_RVA);
                     let mut node: u32 = get_from_memory(sentinel);
                     while node != sentinel {
                         let next: u32 = get_from_memory(node);
@@ -433,6 +435,96 @@ pub(crate) fn run_ztguest_remove_from_map_live_test(failure_log: &mut Option<std
                 failures.push(format!("{label}: {} nodes left, {} own nodes freed (expected 0 and at least 1)", outcomes[0].0, outcomes[0].1));
             }
         }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// The values of a `list<uint>`-shaped list (sentinel pointer at `list`), in order.
+fn list_values(sentinel: u32) -> Vec<u32> {
+    let mut node: u32 = get_from_memory(sentinel);
+    let mut values = Vec::new();
+    while node != sentinel && values.len() < 100_000 {
+        values.push(get_from_memory(node + 8));
+        node = get_from_memory(node);
+    }
+    values
+}
+
+const WORLD_MGR_RVA: u32 = 0x0023_8040;
+const WORLD_ENTITY_BEGIN: u32 = 0x80;
+const WORLD_ENTITY_END: u32 = 0x84;
+
+/// The world's entity pointer vector, copied.
+fn world_entities() -> Vec<u32> {
+    let manager: u32 = get_from_memory(base() + WORLD_MGR_RVA);
+    let (begin, end): (u32, u32) = (get_from_memory(manager + WORLD_ENTITY_BEGIN), get_from_memory(manager + WORLD_ENTITY_END));
+    (begin..end).step_by(4).map(get_from_memory::<u32>).collect()
+}
+
+/// `ZTGUEST_ADD_TO_MAP_LIVE`: a fixture guest is put on the live map by the real body, the port and the hooked address,
+/// on several tiles, with and without the `+0x142` exclusion. The result and where the guest then appears (its tile's
+/// entity list, the multi-guest panel's list, the world's entity vector) must agree. Each placement is undone with
+/// `removeFromMap`, after which those three lists must equal their snapshots, so the live zoo is left as it was found.
+pub(crate) fn run_ztguest_add_to_map_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::ztguest::ADD_TO_MAP;
+
+    let test_name = "ZTGUEST_ADD_TO_MAP_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some(guest_type) = live_support::find_guest_type() else {
+        failures.push("the live world holds no guest type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world = crate::globals::globals().ztworldmgr();
+    let tiles = [(5u32, 5u32), (world.map_x_size / 2, world.map_y_size / 2), (20, 30), (1, 1)];
+    let multiguest = || list_values(get_from_memory(base() + MULTIGUEST_LIST_RVA));
+    let (mut added, mut panel_added) = (0, 0);
+    for &(x, y) in &tiles {
+        let tile = world.get_tile_ptr(x, y) as u32;
+        let on_tile = || list_values(get_from_memory(tile));
+        for excluded in [false, true] {
+            let mut outcomes = vec![(false, false, false, false); 3];
+            for pole in [1usize, 2, 0] {
+                let guest = live_support::build_standalone_guest(guest_type);
+                save_to_memory(guest.0 + 0x114, x * 64 + 32);
+                save_to_memory(guest.0 + 0x118, y * 64 + 32);
+                save_to_memory(guest.0 + 0x11c, 0u32);
+                save_to_memory(guest.0 + 0x142, excluded as u8);
+                let (entities_before, tile_before, panel_before) = (world_entities(), on_tile(), multiguest());
+                let result = match pole {
+                    0 => real::add_to_map(guest.0),
+                    1 => guest.add_to_map(),
+                    _ => unsafe { ADD_TO_MAP.hooked()(guest.0 as *const u32) },
+                };
+                let outcome = (result, on_tile().contains(&guest.0), multiguest().contains(&guest.0), world_entities().contains(&guest.0));
+                if result {
+                    guest.remove_from_map(false);
+                }
+                let label = format!("addToMap ({x},{y}) excluded {excluded} pole {pole}");
+                let (entities_after, tile_after, panel_after) = (world_entities(), on_tile(), multiguest());
+                if entities_after != entities_before || tile_after != tile_before || panel_after != panel_before {
+                    failures.push(format!(
+                        "{label}: the zoo was not restored by removeFromMap (outcome {outcome:?}; world {}->{}, tile {}->{}, panel {}->{})",
+                        entities_before.len(),
+                        entities_after.len(),
+                        tile_before.len(),
+                        tile_after.len(),
+                        panel_before.len(),
+                        panel_after.len()
+                    ));
+                    let extra: Vec<u32> = panel_after.iter().copied().filter(|value| !panel_before.contains(value)).collect();
+                    failures.push(format!("{label}: guest {:#x}, panel values not there before: {extra:x?}, tail {:x?}", guest.0, &panel_after[panel_after.len().saturating_sub(3)..]));
+                }
+                outcomes[pole] = outcome;
+            }
+            added += outcomes[0].0 as u32;
+            panel_added += outcomes[0].2 as u32;
+            if outcomes[0] != outcomes[1] || outcomes[0] != outcomes[2] {
+                failures.push(format!("addToMap ({x},{y}) excluded {excluded}: (result, on tile, in panel, in world) real {:?}, port {:?}, hooked {:?}", outcomes[0], outcomes[1], outcomes[2]));
+            }
+        }
+    }
+    if added == 0 || panel_added == 0 {
+        failures.push(format!("coverage too thin: {added} placements succeeded, {panel_added} reached the panel list"));
     }
     finish_test(test_name, failures, failure_log)
 }

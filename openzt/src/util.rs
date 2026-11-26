@@ -130,7 +130,7 @@ pub fn low_byte_bool(value: u32) -> bool {
 /// NaN to `0`), so the two disagree for any value outside the `i32` range.
 pub fn ftol_low32(value: f32) -> i32 {
     let truncated = value.trunc();
-    if !(-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&truncated) {
+    if !(i64::MIN as f32..-(i64::MIN as f32)).contains(&truncated) {
         return 0;
     }
     (truncated as i64) as i32

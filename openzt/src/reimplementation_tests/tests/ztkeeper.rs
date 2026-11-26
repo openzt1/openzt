@@ -21,6 +21,8 @@ use crate::{
     },
 };
 
+use openzt_detour::generated::{ztfence::CLOSE_GATE as ARMS_CLOSE_GATE, ztshow::ABORT_SHOW as ARMS_ABORT_SHOW, ztstaff::DO_CONDITIONALS as ARMS_STAFF_DO_CONDITIONALS};
+
 const SPEED_CHEAT_FLAG_RVA: u32 = 0x0023_c2e4;
 const VTABLE_SLOTS: u32 = 204;
 /// The game's `rand` state (`DAT_00638060`), advanced by `ZTUnit::resetAI`.
@@ -1053,8 +1055,15 @@ static LISTEN_EVENTS: std::sync::Mutex<Vec<(u32, u16, u16)>> = std::sync::Mutex:
 /// five, which is over the pool's small-block limit so the caller's release goes through `operator_delete`.
 extern "thiscall" fn fake_list_events(_this: u32, out: u32) {
     let events = LISTEN_EVENTS.lock().unwrap().clone();
-    let begin = unsafe { openzt_detour::generated::standalone::OPERATOR_NEW.original()(0x8c) } as u32;
-    unsafe { std::ptr::write_bytes(begin as *mut u8, 0, 0x8c) };
+    let small = LISTEN_SMALL_VECTOR.load(Ordering::Relaxed) != 0;
+    let (size, capacity_bytes) = if small { (LISTEN_SMALL_BYTES, LISTEN_SMALL_BYTES) } else { (0x8c, 0x8c) };
+    let begin = if small {
+        unsafe { openzt_detour::generated::poolalloc::ALLOCATE.original()(size) as u32 }
+    } else {
+        unsafe { openzt_detour::generated::standalone::OPERATOR_NEW.original()(size) as u32 }
+    };
+    LISTEN_LAST_BLOCK.store(begin, Ordering::Relaxed);
+    unsafe { std::ptr::write_bytes(begin as *mut u8, 0, size as usize) };
     for (i, (show, index, kind)) in events.iter().enumerate() {
         let record = begin + i as u32 * 0x1c;
         save_to_memory(record + 0x8, *show);
@@ -1063,7 +1072,17 @@ extern "thiscall" fn fake_list_events(_this: u32, out: u32) {
     }
     save_to_memory(out, begin);
     save_to_memory(out + 4, begin + events.len() as u32 * 0x1c);
-    save_to_memory(out + 8, begin + 0x8c);
+    save_to_memory(out + 8, begin + capacity_bytes);
+}
+
+/// When non-zero, `fake_list_events` allocates its vector from vanilla's pool with `LISTEN_SMALL_BYTES` (four records,
+/// at the pool's small-block limit) so `listen`'s release takes the freelist branch of `PoolAlloc::deallocate`.
+static LISTEN_SMALL_VECTOR: AtomicU32 = AtomicU32::new(0);
+const LISTEN_SMALL_BYTES: u32 = 4 * 0x1c;
+static LISTEN_LAST_BLOCK: AtomicU32 = AtomicU32::new(0);
+/// Freelist head of the pool bucket covering `LISTEN_SMALL_BYTES`: `DAT_00638000 + ((bytes - 1) >> 3) * 4`.
+fn small_bucket_head() -> u32 {
+    get_from_memory(get_module_base("zoo.exe") as u32 + 0x0023_8000 + ((LISTEN_SMALL_BYTES - 1) >> 3) * 4)
 }
 
 fn listen_name(keeper: ZTKeeper) -> Vec<u8> {
@@ -1171,6 +1190,31 @@ pub(crate) fn run_ztkeeper_listen_live_test(failure_log: &mut Option<std::fs::Fi
             live_support::destroy_standalone_keeper(keeper);
         }
     }
+
+    // A vector small enough for the pool freelist: the block goes back onto its bucket, never to `operator_delete`.
+    LISTEN_SMALL_VECTOR.store(1, Ordering::Relaxed);
+    for pole in ["real", "port", "hooked"] {
+        *LISTEN_EVENTS.lock().unwrap() = vec![(show, 0, 0x271f)];
+        let keeper = if pole == "port" { live_support::build_standalone_keeper_port(keeper_type) } else { live_support::build_standalone_keeper(keeper_type) };
+        save_to_memory(keeper.0 + unit_offsets::SHOW_INFO_ID, LISTEN_SHOW_ID);
+        save_to_memory(keeper.0 + unit_offsets::COG_GOAL_STATE, 0x13u32);
+        save_to_memory(keeper.0, fake_vtable.as_ptr() as u32);
+        match pole {
+            "real" => real::listen(keeper.0),
+            "port" => keeper.listen(),
+            _ => unsafe { openzt_detour::generated::ztkeeper::LISTEN.hooked()(keeper.0 as *const std::ffi::c_void) },
+        }
+        save_to_memory(keeper.0, real_vtable_address);
+        let block = LISTEN_LAST_BLOCK.load(Ordering::Relaxed);
+        if small_bucket_head() != block {
+            failures.push(format!("small vector ({pole}): freelist head {:#x}, expected the released block {block:#x}", small_bucket_head()));
+        }
+        if listen_name(keeper) != b"bSoundB" {
+            failures.push(format!("small vector ({pole}): behavior set {:?}", String::from_utf8_lossy(&listen_name(keeper))));
+        }
+        live_support::destroy_standalone_keeper(keeper);
+    }
+    LISTEN_SMALL_VECTOR.store(0, Ordering::Relaxed);
 
     lock_show_store().registered_shows.remove(&LISTEN_SHOW_ID);
     unregister_script_by_id(script_id);
@@ -1604,4 +1648,259 @@ pub(crate) fn run_ztkeeper_perf_compare_live_test(failure_log: &mut Option<std::
     } else {
         finish_test(test_name, failures, failure_log)
     }
+}
+
+/// While set, the three vanilla calls `ZTKeeper`'s conditionals/removal paths end in (`ZTStaff::doConditionals`,
+/// `ZTFence::closeGate`, `ZTShow::abortShow`) are recorded instead of run: each reaches live-game state a bare fixture
+/// does not have.
+static ARMS_INTERCEPT: AtomicU32 = AtomicU32::new(0);
+static ARMS_LOG: std::sync::Mutex<Vec<(&'static str, u32)>> = std::sync::Mutex::new(Vec::new());
+
+#[openzt_detour_macro::detour_mod]
+mod arms_hooks {
+    use super::*;
+
+    #[detour(ARMS_STAFF_DO_CONDITIONALS)]
+    unsafe extern "thiscall" fn staff_do_conditionals(this: *const u32) {
+        if ARMS_INTERCEPT.load(Ordering::SeqCst) != 0 {
+            ARMS_LOG.lock().unwrap().push(("staff", 0));
+        } else {
+            unsafe { ARMS_STAFF_DO_CONDITIONALS_DETOUR.call(this) }
+        }
+    }
+
+    #[detour(ARMS_CLOSE_GATE)]
+    unsafe extern "thiscall" fn close_gate(this: *const std::ffi::c_void) {
+        if ARMS_INTERCEPT.load(Ordering::SeqCst) != 0 {
+            ARMS_LOG.lock().unwrap().push(("close_gate", this as u32));
+        } else {
+            unsafe { ARMS_CLOSE_GATE_DETOUR.call(this) }
+        }
+    }
+
+    #[detour(ARMS_ABORT_SHOW)]
+    unsafe extern "thiscall" fn abort_show(this: *const u32) -> bool {
+        if ARMS_INTERCEPT.load(Ordering::SeqCst) != 0 {
+            ARMS_LOG.lock().unwrap().push(("abort_show", this as u32));
+            true
+        } else {
+            unsafe { ARMS_ABORT_SHOW_DETOUR.call(this) }
+        }
+    }
+}
+
+fn install_arms_hooks() -> Result<(), String> {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    let mut result = Ok(());
+    INSTALLED.call_once(|| {
+        if let Err(e) = unsafe { arms_hooks::init_detours() } {
+            result = Err(format!("could not install the keeper conditionals/removal hooks: {e:?}"));
+        }
+    });
+    result
+}
+
+/// A zeroed habitat whose owned-tile list is empty, so `ZTHabitat::blockService` returns `1` (fewer than two tiles)
+/// for any keeper. Leaked: the only reader is `blockService` and vanilla's `removeAssignedHabitat` never dereferences
+/// the payload.
+fn blocking_habitat() -> u32 {
+    let sentinel: &'static mut [u32; 3] = Box::leak(Box::new([0u32; 3]));
+    let sentinel_address = sentinel.as_ptr() as u32;
+    sentinel[0] = sentinel_address;
+    sentinel[1] = sentinel_address;
+    let habitat: &'static mut [u32; 0x80] = Box::leak(Box::new([0u32; 0x80]));
+    habitat[0x40 / 4] = sentinel_address;
+    habitat.as_ptr() as u32
+}
+
+/// `ZTKEEPER_DO_CONDITIONALS_LIVE`: `doConditionals` and `checkAssignedHabitats` over assigned lists whose nodes come
+/// from vanilla's allocator (`list<uint>::insert`), mixing blocking fake habitats (`blockService == 1`) with a live
+/// habitat, so the removal arm and its restart-from-the-head walk run. Real, port and hooked address all end with the
+/// same assigned list, the same `ZTStaff::doConditionals` call (recorded, run once), and the same keeper memory.
+pub(crate) fn run_ztkeeper_do_conditionals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    let test_name = "ZTKEEPER_DO_CONDITIONALS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    if let Err(message) = install_arms_hooks() {
+        failures.push(message);
+        return finish_test(test_name, failures, failure_log);
+    }
+    let Some(keeper_type) = live_support::find_keeper_type() else {
+        failures.push("the live world holds no keeper type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world = globals().ztworldmgr();
+    let probe = live_support::build_standalone_keeper(keeper_type);
+    let (habitat_tile, _) = habitat_and_plain_tiles(probe);
+    let live_habitat = habitat_tile.map(|tile| call_vtable_slot_1(probe.0, 0x248, world.get_tile_ptr(tile.0, tile.1)));
+    live_support::destroy_standalone_keeper(probe);
+    let Some(live_habitat) = live_habitat.filter(|&h| h != 0) else {
+        failures.push("the zoo has no habitat tile".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+
+    let (b1, b2, b3) = (blocking_habitat(), blocking_habitat(), blocking_habitat());
+    let cases: Vec<(&str, Vec<u32>)> = vec![
+        ("empty", vec![]),
+        ("one blocking", vec![b1]),
+        ("three blocking", vec![b1, b2, b3]),
+        ("live then blocking", vec![live_habitat, b1]),
+        ("blocking, live, blocking", vec![b1, live_habitat, b2]),
+    ];
+    let shared = vec![keeper_type, live_habitat, b1, b2, b3];
+    ARMS_INTERCEPT.store(1, Ordering::SeqCst);
+    for (label, habitats) in &cases {
+        for method in ["doConditionals", "checkAssignedHabitats"] {
+            let fixtures = [live_support::build_standalone_keeper(keeper_type), live_support::build_standalone_keeper_port(keeper_type), live_support::build_standalone_keeper(keeper_type)];
+            let mut outcomes = Vec::new();
+            for (pole, keeper) in fixtures.iter().enumerate() {
+                let sentinel: u32 = get_from_memory(keeper.0 + unit_offsets::ASSIGNED_HABITATS);
+                for &habitat in habitats {
+                    crate::vanilla_list::push_back(sentinel, habitat);
+                }
+                ARMS_LOG.lock().unwrap().clear();
+                match (method, pole) {
+                    ("doConditionals", 0) => real::do_conditionals(keeper.0),
+                    ("doConditionals", 1) => keeper.do_conditionals(),
+                    ("doConditionals", _) => unsafe { openzt_detour::generated::ztkeeper::DO_CONDITIONALS.hooked()(keeper.0 as *const u32) },
+                    (_, 0) => real::check_assigned_habitats(keeper.0),
+                    (_, 1) => keeper.check_assigned_habitats(),
+                    _ => unsafe { openzt_detour::generated::ztkeeper::CHECK_ASSIGNED_HABITATS.hooked()(keeper.0 as *const u32) },
+                }
+                outcomes.push((assigned_payloads(keeper.0), std::mem::take(&mut *ARMS_LOG.lock().unwrap())));
+            }
+            let case = format!("{method}, {label}");
+            let expected_staff = usize::from(method == "doConditionals");
+            if outcomes[0].1.len() != expected_staff {
+                failures.push(format!("{case}: real ran ZTStaff::doConditionals {} time(s), expected {expected_staff}", outcomes[0].1.len()));
+            }
+            if outcomes[0] != outcomes[1] || outcomes[0] != outcomes[2] {
+                failures.push(format!("{case}: real {:x?}, port {:x?}, hooked {:x?}", outcomes[0], outcomes[1], outcomes[2]));
+            }
+            if outcomes[0].0.iter().any(|&h| h == b1 || h == b2 || h == b3) {
+                failures.push(format!("{case}: a blocking habitat survived: {:x?}", outcomes[0].0));
+            }
+            compare_memory(&case, fixtures[0], fixtures[1], &shared, &mut failures);
+            compare_memory(&format!("{case} (hooked)"), fixtures[0], fixtures[2], &shared, &mut failures);
+            for keeper in fixtures {
+                live_support::destroy_standalone_keeper(keeper);
+            }
+        }
+    }
+    ARMS_INTERCEPT.store(0, Ordering::SeqCst);
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTKEEPER_REMOVE_ARMS_LIVE`: the gate-closing arm of `notifyHabitatNotComing` and the show arm of `removeFromMap`.
+/// A fake gate pointer is closed through a recording `ZTFence::closeGate` hook (cleared afterwards, kept when the
+/// keep-gate flag's low byte is set); the show arm runs against a standalone `ZTShowInfo` registered in the show store,
+/// with the keeper's id seeded in the show's unit list and `ZTShow::abortShow` recorded. Real, port and hooked
+/// addresses must agree on both logs, the list contents left behind and the keeper memory.
+pub(crate) fn run_ztkeeper_remove_arms_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::ztshow::{find_or_insert_pending_script_node, get_num_units, live_support as ztshow_live_support};
+    let test_name = "ZTKEEPER_REMOVE_ARMS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    if let Err(message) = install_arms_hooks() {
+        failures.push(message);
+        return finish_test(test_name, failures, failure_log);
+    }
+    let Some(keeper_type) = live_support::find_keeper_type() else {
+        failures.push("the live world holds no keeper type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    const GATE: u32 = 0x1000;
+    const SHOW_ID: u16 = 0x7e02;
+    const KEEPER_ID: u32 = 0x7777;
+    ARMS_INTERCEPT.store(1, Ordering::SeqCst);
+    let shared = vec![keeper_type];
+    let build = |pole: usize| if pole == 1 { live_support::build_standalone_keeper_port(keeper_type) } else { live_support::build_standalone_keeper(keeper_type) };
+
+    // Gate arm of notifyHabitatNotComing, with the target tile left null (no habitat counter to touch).
+    for keep_gate in [0u32, 1, 0x100, 0xff] {
+        let mut outcomes = Vec::new();
+        let fixtures: Vec<ZTKeeper> = (0..3).map(build).collect();
+        for (pole, keeper) in fixtures.iter().enumerate() {
+            save_to_memory(keeper.0 + unit_offsets::GATE, GATE);
+            ARMS_LOG.lock().unwrap().clear();
+            match pole {
+                0 => real::notify_habitat_not_coming(keeper.0, keep_gate),
+                1 => keeper.notify_habitat_not_coming(keep_gate),
+                _ => unsafe { openzt_detour::generated::ztkeeper::NOTIFY_HABITAT_NOT_COMING.hooked()(keeper.0 as *const u32, keep_gate) },
+            }
+            outcomes.push((get_from_memory::<u32>(keeper.0 + unit_offsets::GATE), std::mem::take(&mut *ARMS_LOG.lock().unwrap())));
+        }
+        let expect_closed = keep_gate & 0xff == 0;
+        let expected = if expect_closed { (0, vec![("close_gate", GATE)]) } else { (GATE, vec![]) };
+        for (pole, outcome) in outcomes.iter().enumerate() {
+            if *outcome != expected {
+                failures.push(format!("gate arm, keep_gate {keep_gate:#x}, pole {pole}: {outcome:x?}, expected {expected:x?}"));
+            }
+        }
+        compare_memory(&format!("gate arm {keep_gate:#x}"), fixtures[0], fixtures[1], &shared, &mut failures);
+        for keeper in fixtures {
+            live_support::destroy_standalone_keeper(keeper);
+        }
+    }
+
+    // Show arm of removeFromMap.
+    let probe = build(0);
+    let entity_type: u32 = get_from_memory(probe.0 + unit_offsets::ENTITY_TYPE);
+    let type_id = call_vtable_slot_0(entity_type, 0x20);
+    live_support::destroy_standalone_keeper(probe);
+    for param in [false, true] {
+        for mark_142 in [0u8, 1] {
+            let fixtures: Vec<ZTKeeper> = (0..3).map(build).collect();
+            let mut outcomes = Vec::new();
+            for (pole, keeper) in fixtures.iter().enumerate() {
+                let show_info = ztshow_live_support::build_standalone_show_info();
+                crate::ztshow::mgr::ztshowmgr::lock_show_store().registered_shows.insert(SHOW_ID, show_info);
+                let (node, _) = find_or_insert_pending_script_node(show_info, type_id);
+                let sentinel: u32 = get_from_memory(node + 0x18);
+                let entry = unsafe { openzt_detour::generated::standalone::OPERATOR_NEW.original()(0xc) } as u32;
+                let prev: u32 = get_from_memory(sentinel + 4);
+                save_to_memory(entry, sentinel);
+                save_to_memory(entry + 4, prev);
+                save_to_memory(entry + 8, KEEPER_ID);
+                save_to_memory(prev, entry);
+                save_to_memory(sentinel + 4, entry);
+
+                save_to_memory(keeper.0 + unit_offsets::SHOW_INFO_ID, SHOW_ID);
+                save_to_memory(keeper.0 + unit_offsets::ENTITY_ID, KEEPER_ID);
+                save_to_memory(keeper.0 + 0x142, mark_142);
+                save_to_memory(keeper.0 + unit_offsets::GATE, GATE);
+                ARMS_LOG.lock().unwrap().clear();
+                match pole {
+                    0 => real::remove_from_map(keeper.0, param),
+                    1 => keeper.remove_from_map(param),
+                    _ => unsafe { REMOVE_FROM_MAP.hooked()(keeper.0 as *const u32, param) },
+                }
+                let log: Vec<(&'static str, u32)> = std::mem::take(&mut *ARMS_LOG.lock().unwrap())
+                    .into_iter()
+                    .map(|(kind, argument)| (kind, if kind == "abort_show" { argument - show_info } else { argument }))
+                    .collect();
+                outcomes.push((log, get_num_units(show_info, type_id)));
+                crate::ztshow::mgr::ztshowmgr::lock_show_store().registered_shows.remove(&SHOW_ID);
+            }
+            let case = format!("removeFromMap(param {param}, +0x142 {mark_142})");
+            let units_left = if param { 1 } else { 0 };
+            let mut expected_log: Vec<(&'static str, u32)> = Vec::new();
+            if !param {
+                expected_log.push(("abort_show", 4));
+            }
+            if mark_142 == 0 && !param {
+                expected_log.push(("close_gate", GATE));
+            }
+            for (pole, outcome) in outcomes.iter().enumerate() {
+                if outcome.0 != expected_log || outcome.1 != units_left {
+                    failures.push(format!("{case}, pole {pole}: {outcome:x?}, expected log {expected_log:x?}, {units_left} unit(s) left"));
+                }
+            }
+            compare_memory(&case, fixtures[0], fixtures[1], &shared, &mut failures);
+            compare_memory(&format!("{case} (hooked)"), fixtures[0], fixtures[2], &shared, &mut failures);
+            for keeper in fixtures {
+                live_support::destroy_standalone_keeper(keeper);
+            }
+        }
+    }
+    ARMS_INTERCEPT.store(0, Ordering::SeqCst);
+    finish_test(test_name, failures, failure_log)
 }

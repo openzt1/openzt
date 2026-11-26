@@ -4,7 +4,9 @@
 //! cases (`followGuide`, `viewNearbyExhibit`, `doBuilding`, `setVisible`, `runScreaming`) are in `ztguest_checks.rs`.
 
 use openzt_detour::generated::{
-    ztguest::{CHECK_VIEWING_AREA, FIND_VIEWING_AREA, START_PUKING},
+    ztguest::{
+        CHECK_VIEWING_AREA, FIND_ANIMAL_BY_HAPPINESS, FIND_VIEWING_AREA, F_CROWD_DENSITY, F_DIFFERENT_SPECIES, F_NUM_ANIMALS, F_NUM_SICK_ANIMALS, F_SICK_ANIMALS, START_PUKING,
+    },
     ztunit::GET_HABITAT_FROM_TILE,
 };
 
@@ -60,6 +62,14 @@ fn fake_viewing_area(has_oa: bool) -> u32 {
     save_to_memory(area + 0x4, oa);
     save_to_memory(area + 0x8, if has_oa { oa + 4 } else { oa });
     area
+}
+
+/// Gives `area` a crowd-density vector of `slots` entries and a count of `count`, the two inputs `fCrowdDensity` divides.
+fn plant_crowd(area: u32, slots: u32, count: i32) {
+    let buffer = Box::leak(vec![0u8; 4 * slots.max(1) as usize].into_boxed_slice()).as_ptr() as u32;
+    save_to_memory(area + 0x40, buffer);
+    save_to_memory(area + 0x44, buffer + slots * 4);
+    save_to_memory(area + 0x54, count);
 }
 
 static HABITAT_ANSWER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -184,6 +194,179 @@ pub(crate) fn run_ztguest_viewing_area_live_test(failure_log: &mut Option<std::f
     finish_test(test_name, failures, failure_log)
 }
 
+/// `ZTGUEST_VIEWING_STATS_LIVE`: `fNumAnimals`, `fSickAnimals`, `fNumSickAnimals`, `fDifferentSpecies` and
+/// `findAnimalByHappiness` (pinned RNG seeds, several happiness ranges) against the real body and the hooked address,
+/// for a guest standing on live habitat tiles and looking in every direction. The queries refresh the live viewing
+/// area's characteristics when dirty, so the same calls on the same area must agree whichever pole runs first.
+pub(crate) fn run_ztguest_viewing_stats_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::ztguest::live_support::checks_real;
+
+    let test_name = "ZTGUEST_VIEWING_STATS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some(guest_type) = live_support::find_guest_type() else {
+        failures.push("the live world holds no guest type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let saved_rng = rng();
+    let world = globals().ztworldmgr();
+    let manager: u32 = get_from_memory(super::ztguide::base() + HABITAT_MGR_RVA);
+    if manager == 0 {
+        failures.push("the live world has no habitat manager".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    // The live zoo holds no viewing areas, so plant fakes with known statistics. Their habitat is a live habitat (so
+    // `findAnimalByHappiness` walks real animals) or, last, a bare one with none.
+    let (habitats_begin, habitats_end): (u32, u32) = (get_from_memory(manager + 0x1c), get_from_memory(manager + 0x20));
+    let mut habitats: Vec<u32> = (habitats_begin..habitats_end).step_by(4).map(get_from_memory::<u32>).filter(|habitat| *habitat != 0).take(4).collect();
+    habitats.push(leaked_habitat(0));
+    let mut fakes = Vec::new();
+    for (index, &(animals, sick, species)) in [(0u32, 0u32, 0u32), (3, 0, 2), (5, 2, 4), (1, 1, 1)].iter().enumerate() {
+        let area = fake_viewing_area(true);
+        save_to_memory(area, habitats[index % habitats.len()]);
+        save_to_memory(area + 0x10, species);
+        save_to_memory(area + 0x14, animals);
+        save_to_memory(area + 0x1c, sick);
+        plant_crowd(area, [0u32, 3, 2, 8][index], [5i32, 7, 1_000_000, -4][index]);
+        fakes.push(area);
+    }
+    for &habitat in &habitats {
+        let area = fake_viewing_area(true);
+        save_to_memory(area, habitat);
+        save_to_memory(area + 0x14, 2u32);
+        plant_crowd(area, 4, 9);
+        fakes.push(area);
+    }
+    let columns: u32 = get_from_memory(manager + 0x28);
+    let mut tiles = vec![(0, 0), (world.map_x_size / 2, world.map_y_size / 2), (world.map_x_size - 1, world.map_y_size - 1)];
+    tiles.extend(habitat_tiles().into_iter().step_by(40).take(10));
+    let mut planted = Vec::new();
+    let mut sites: Vec<(u32, u32, u32)> = Vec::new();
+    for &(x, y) in &tiles {
+        let row: u32 = get_from_memory(columns + x * 12);
+        for direction in 0..8u32 {
+            let slot = row + 4 + (direction + y * 10) * 4;
+            planted.push((slot, get_from_memory::<u32>(slot)));
+            save_to_memory(slot, fakes[(x + y + direction) as usize % fakes.len()]);
+            sites.push((x, y, direction));
+        }
+    }
+    let live_sites = sites.len();
+    let exhibit = leaked_habitat(1);
+    let guest = guest_with_habitat_slot(guest_type);
+    HABITAT_ANSWER.store(exhibit, std::sync::atomic::Ordering::SeqCst);
+    let ranges = [(-100, 100), (0x51, 100), (0x3d, 0x50), (0, 0x3c), (-0x3d, -1), (-0x50, -0x3d), (-100, -0x51)];
+    let (mut mismatches, mut with_area, mut with_animals, mut with_sick, mut found) = (0, 0u32, 0u32, 0u32, 0u32);
+    let mut crowd_ported = 0u32;
+    let mut crowd_values = std::collections::BTreeSet::new();
+    let this = guest.0 as *const std::ffi::c_void;
+    {
+        for &(x, y, direction) in &sites {
+            place_guest(guest, (x, y));
+            save_to_memory(guest.0 + VIEWING_AREA_DIRECTION, direction);
+            for _pass in 0..2 {
+                // The first pass may refresh a dirty area (real runs first); the second sees it clean.
+                let queries: [(&str, u32, u32, u32); 4] = [
+                    ("fNumAnimals", checks_real::num_animals(guest.0), guest.num_animals(), unsafe { F_NUM_ANIMALS.hooked()(this) }),
+                    ("fSickAnimals", checks_real::sick_animals(guest.0) & 0xff, guest.sick_animals() & 0xff, unsafe { F_SICK_ANIMALS.hooked()(this) } & 0xff),
+                    ("fNumSickAnimals", checks_real::num_sick_animals(guest.0), guest.num_sick_animals(), unsafe { F_NUM_SICK_ANIMALS.hooked()(this) }),
+                    ("fDifferentSpecies", checks_real::different_species(guest.0), guest.different_species(), unsafe { F_DIFFERENT_SPECIES.hooked()(this) }),
+                ];
+                for (label, real_value, port_value, hooked_value) in queries {
+                    if real_value != port_value || real_value != hooked_value {
+                        mismatches += 1;
+                        if mismatches <= 10 {
+                            failures.push(format!("{label} ({x},{y}) direction {direction}: real {real_value}, port {port_value}, hooked {hooked_value}"));
+                        }
+                    }
+                }
+                let (real_crowd, port_crowd, hooked_crowd) = (checks_real::crowd_density(guest.0), guest.crowd_density(), unsafe { F_CROWD_DENSITY.hooked()(this) });
+                // The fallback path leaves whatever vanilla leaves in the upper dword; callers read the low one.
+                let port_low = port_crowd.map_or(real_crowd as i32, |value| value as i32);
+                let full_match = port_crowd.is_none_or(|value| value == real_crowd);
+                if real_crowd as i32 != port_low || real_crowd as i32 != hooked_crowd as i32 || !full_match {
+                    mismatches += 1;
+                    if mismatches <= 10 {
+                        failures.push(format!("fCrowdDensity ({x},{y}) direction {direction}: real {real_crowd:#x}, port {port_crowd:x?}, hooked {hooked_crowd:#x}"));
+                    }
+                }
+                crowd_ported += port_crowd.is_some() as u32;
+                crowd_values.insert(real_crowd as i32);
+                with_animals += (queries[0].1 > 0) as u32;
+                with_sick += (queries[2].1 > 0) as u32;
+            }
+            with_area += (get_from_memory::<u32>(guest.0 + VIEWING_AREA) != 0 && get_from_memory::<u32>(guest.0 + VIEWING_AREA) != SENTINEL) as u32;
+            for &(low, high) in &ranges {
+                for seed in [1u32, 0xdead_beef] {
+                    let mut poles = Vec::new();
+                    for pole in 0..3 {
+                        pin_rng(seed);
+                        let animal = match pole {
+                            0 => checks_real::find_animal_by_happiness(guest.0, low, high) as u32,
+                            1 => guest.find_animal_by_happiness(low, high),
+                            _ => unsafe { FIND_ANIMAL_BY_HAPPINESS.hooked()(guest.0 as *const u32, low, high) as u32 },
+                        };
+                        poles.push((animal, rng()));
+                    }
+                    found += (poles[0].0 != 0) as u32;
+                    if poles[0] != poles[1] || poles[0] != poles[2] {
+                        mismatches += 1;
+                        if mismatches <= 10 {
+                            failures.push(format!("findAnimalByHappiness ({x},{y}) direction {direction} {low}..{high} seed {seed:#x}: real {:x?}, port {:x?}, hooked {:x?}", poles[0], poles[1], poles[2]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (slot, original) in planted.into_iter().rev() {
+        save_to_memory(slot, original);
+    }
+    pin_rng(saved_rng);
+    if mismatches > 10 {
+        failures.push(format!("{mismatches} mismatches in all"));
+    }
+    if crowd_ported == 0 || crowd_values.len() < 3 {
+        failures.push(format!("fCrowdDensity coverage too thin: {crowd_ported} ported-path calls, values {crowd_values:?}"));
+    }
+    if with_area == 0 || with_animals == 0 || found == 0 {
+        failures.push(format!("coverage too thin: {with_area} areas, {with_animals} with animals, {with_sick} with sick animals, {found} animals found over {live_sites} planted viewing-area slots"));
+    }
+    tracing::info!("{test_name}: {with_area} viewing areas, {with_animals} with animals, {with_sick} with sick animals, {found} finds over {live_sites} planted viewing-area slots");
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTGUEST_DO_AMBIENT_ANIMS_LIVE`: twin guests with the `+0x33b` byte clear and set run the real body, the port and the
+/// hooked address; the whole guest (including the `+0x339` flag the set byte raises) must match.
+pub(crate) fn run_ztguest_do_ambient_anims_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::ztguest::DO_AMBIENT_ANIMS;
+
+    use crate::ztguest::live_support::checks_real;
+
+    let test_name = "ZTGUEST_DO_AMBIENT_ANIMS_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let Some(guest_type) = live_support::find_guest_type() else {
+        failures.push("the live world holds no guest type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    for trigger in [0u8, 1, 0xff] {
+        let guests: Vec<ZTGuest> = (0..3).map(|_| live_support::build_standalone_guest(guest_type)).collect();
+        for guest in &guests {
+            save_to_memory(guest.0 + 0x33b, trigger);
+        }
+        checks_real::do_ambient_anims(guests[0].0);
+        guests[1].do_ambient_anims();
+        unsafe { DO_AMBIENT_ANIMS.hooked()(guests[2].0 as *const u32, std::ptr::null()) };
+        let shared = [guest_type];
+        compare_guests(&format!("trigger {trigger:#x} port"), guests[0], guests[1], &shared, &mut failures);
+        compare_guests(&format!("trigger {trigger:#x} hooked"), guests[0], guests[2], &shared, &mut failures);
+        let raised = get_from_memory::<u8>(guests[0].0 + 0x339) != 0;
+        if raised != (trigger != 0) {
+            failures.push(format!("trigger {trigger:#x}: real body left +0x339 {raised}"));
+        }
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
 fn leaked_habitat(exhibit_flag: u8) -> u32 {
     let habitat = Box::leak(vec![0u8; 0x100].into_boxed_slice()).as_ptr() as u32;
     save_to_memory(habitat + 0x2c, exhibit_flag);
@@ -203,6 +386,7 @@ fn record_set_bs(_this: u32, name: &[u8], call_flag: i8, force: i8, clear_mode: 
 
 fn guest_playing(guest_type: u32, name: &[u8]) -> ZTGuest {
     let guest = live_support::build_standalone_guest(guest_type);
+    live_support::forget_standalone_guest(guest);
     let text = Box::leak(name.to_vec().into_boxed_slice());
     save_to_memory(guest.0 + ANIMATION_BEGIN, text.as_ptr() as u32);
     save_to_memory(guest.0 + ANIMATION_END, text.as_ptr() as u32 + name.len() as u32);

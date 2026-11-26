@@ -617,7 +617,7 @@ impl ZTGuest {
         unsafe { REMOVE_FROM_MEMBER_LISTS.hooked()(world as *const u32, self.0 as i32) };
         call_slot_1(self.0, movement_slots::SET_RETURN_BUILDING_NAME_ID, 0);
         let mut empty = [0u32; 3];
-        let start = b"\0".as_ptr();
+        let start = c"".as_ptr();
         unsafe {
             BASIC_STRING_RANGE.hooked()(empty.as_mut_ptr() as *const c_void, start as *const u32, start as i32);
             call_slot_1(self.0, movement_slots::SET_RETURN_BUILDING_STRING, empty.as_ptr() as u32);

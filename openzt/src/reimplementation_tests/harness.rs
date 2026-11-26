@@ -61,6 +61,8 @@ pub(crate) fn write_success_line(failure_log: &mut Option<std::fs::File>, test_n
 /// each message via `error!` and writes one joined `Test Failed` line, matching every hand-written
 /// copy of this tail across `tests/*.rs`. Returns the same "did it fail" bool those copies do.
 pub(crate) fn finish_test(test_name: &str, failures: Vec<String>, failure_log: &mut Option<std::fs::File>) -> bool {
+    crate::ztguide::live_support::teardown_standalone_guides();
+    crate::ztguest::live_support::teardown_standalone_guests();
     if failures.is_empty() {
         write_success_line(failure_log, test_name);
         false

@@ -24,7 +24,7 @@ use openzt_detour::generated::{
     zoostatus::ANIMAL_ESCAPED as ZOOSTATUS_ANIMAL_ESCAPED,
     bfmap::{GET_NEIGHBOR_0 as BFMAP_GET_NEIGHBOR, GET_SELECTION as BFMAP_GET_SELECTION, PAINT_CELL as BFMAP_PAINT_CELL, SET_SELECTION as BFMAP_SET_SELECTION},
     bfunit::{CHECK_DONE as BFUNIT_CHECK_DONE, GET_MOVE_ANIM_1 as BFUNIT_GET_MOVE_ANIM},
-    poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
+    poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
     standalone::{OPERATOR_DELETE, OPERATOR_NEW},
     ai_cls_0x404fd6::{
         TREE_ERASE_RANGE_0X4FE4AF as TREE_ERASE_RANGE, TREE_INSERT_UNIQUE_0X453BCC as TREE_INSERT_UNIQUE, TREE_LOWER_BOUND_0X4FE4F5 as TREE_LOWER_BOUND,
@@ -76,7 +76,9 @@ use openzt_detour::generated::{
         F_IS_THERE_KEEPER_FOOD, GET_AMBIENT_KEY, GET_HABITAT_RATING, GET_HAPPY_PCT, GET_HEALTH_PCT, GET_HUNGER_PCT, GET_KEEP_MOVING, CLEAR_PREY,
         DIAGONAL_OK, IS_EGG, ABORT_GOAL, SAVE, LOAD, INIT_STATUS_VARS, ADD_TO_MAP, REMOVE_FROM_MAP, SET_DYING, SET_NAME, CLEAR_ESCAPE_INFO, CLEAR_GOAL, CLEAR_STATE_VARIABLES, FIND_PLACE_TO_REST, SET_DEATH_CHECK, SET_EGG, SET_ESCAPED, TARGET_BUILDING, IS_HUNGRY, IS_HUNGRY_AND_FOODLESS, IS_IN_PREY_LIST, IS_PREATTACK, IS_SELECTABLE, IS_SICKLY, IS_UNHAPPY_FOR_REPRODUCTION,
         IS_UNHAPPY_WITH_HABITAT, IS_VERY_UNHAPPY_WITH_HABITAT, IS_WALKABLE, NEEDS_BREATH, NO_SHADOW_PART, PREYS_ON_MAN, WITHIN_PREATTACK_RANGE,
+        DROP, SET_VISIBLE,
     },
+    ztui_animalinfo::SET_ANIMAL_VISIBLE as ANIMALINFO_SET_ANIMAL_VISIBLE,
     ztui_animalinfo::FORCE_UPDATE as ANIMALINFO_FORCE_UPDATE,
     ztunit::{ADD_TO_MAP as ZTUNIT_ADD_TO_MAP, REMOVE_FROM_MAP as ZTUNIT_REMOVE_FROM_MAP, INIT_STATUS_VARS as ZTUNIT_INIT_STATUS_VARS, LOAD as ZTUNIT_LOAD, CLEAR_GOAL as ZTUNIT_CLEAR_GOAL, CLEAR_STATE_VARIABLES as ZTUNIT_CLEAR_STATE_VARIABLES, SAVE as ZTUNIT_SAVE, HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL},
     ztworldmgr::GET_NEED_INDEX,
@@ -109,8 +111,8 @@ use crate::{
     globals::{get_module_base, globals},
     util::{ftol_low32, get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
     zthabitat::{next_game_random, ZTHabitat, ZTTankExhibit},
+    pool_vec::PoolVec,
     vanilla_string::VanillaString,
-    ztguide::ZTGuide,
     ztkeeper::{read_field, call_slot_0, call_slot_1, call_slot_2, call_slot_3, unit_offsets, write_field},
     ztmegatilemgr::entity_type_matches,
 };
@@ -172,6 +174,95 @@ pub mod animal_offsets {
     /// Cleared for animals the player can select (`isSelectable`).
     pub const NOT_SELECTABLE: u32 = 0x3a6;
 }
+
+/// The vanilla memory layout of a `ZTAnimal` (`ZTUnit` prefix, then the animal's own fields up to [`ANIMAL_SIZE`]). Ports
+/// read and write animals through the [`ZTAnimal`] address handle with volatile accesses, so this struct is never
+/// instantiated or dereferenced: it exists so the compiler checks the layout. Each offset in [`animal_offsets`] that
+/// names a whole field is asserted against `offset_of!` below, together with the total size; fields not yet given a
+/// role stay in the arrays (`countdowns`, `flag_bytes`) the save order treats as opaque. `_live` marks the struct
+/// `!Freeze` like every other vanilla-layout struct.
+#[repr(C)]
+#[allow(dead_code)]
+pub struct ZTAnimalLayout {
+    /// `ZTUnit` and its bases (`0x000`-`0x25f`).
+    unit: [u8; 0x260],
+    /// `(face byte, age)` entries of `addFace`/`update`: `{begin, end, capacity}` of a vanilla pool vector.
+    faces: [u32; 3],
+    /// The two strings (`{begin, end, capacity}` of vanilla pool `vector<byte>`s).
+    first_string: [u32; 3],
+    second_string: [u32; 3],
+    word_284: u32,
+    stamp_288: [u32; 2],
+    stamp_290: [u32; 2],
+    /// Low flag words, critical flag words (`+0x298`, `+0x29c`, `+0x2a0`, `+0x2a4`).
+    status_flags: [u32; 4],
+    happiness: i32,
+    happiness_pending: i32,
+    hunger: i32,
+    hunger_pending: i32,
+    health: i32,
+    health_pending: i32,
+    need_c0: i32,
+    need_c0_pending: i32,
+    need_c8: i32,
+    need_c8_pending: i32,
+    words_2d0: [i32; 5],
+    prey_id: u32,
+    mate_id: u32,
+    /// Per-check countdowns and counters (`+0x2ec`-`+0x373`); `+0x34c` is the death countdown, `+0x360` the breath value.
+    countdowns: [i32; 34],
+    word_374: i32,
+    word_378: i32,
+    word_37c: i32,
+    activity_mode: i32,
+    escape_record: u32,
+    cached_habitat: u32,
+    eat_context: u32,
+    byte_390: u8,
+    has_escape_info: u8,
+    byte_392: u8,
+    capture_stage: u8,
+    boxed: u8,
+    egg: u8,
+    pad_396: [u8; 2],
+    egg_timer: i32,
+    /// `+0x39c`-`+0x3b3`: the state bytes (`escaped` at `+0x3a3`, `sick` `+0x3a7`, `angry` `+0x3aa`, ...).
+    flag_bytes: [u8; 0x18],
+    home_gate_tile: u32,
+    pub _live: crate::util::LiveMemory,
+}
+
+const _: () = {
+    use std::mem::{offset_of, size_of};
+    assert!(size_of::<ZTAnimalLayout>() == ANIMAL_SIZE as usize);
+    assert!(offset_of!(ZTAnimalLayout, faces) == lifecycle::VEC_BEGIN as usize);
+    assert!(offset_of!(ZTAnimalLayout, status_flags) == animal_offsets::STATUS_FLAGS as usize);
+    assert!(offset_of!(ZTAnimalLayout, status_flags) + 8 == animal_offsets::STATUS_FLAGS_CRITICAL as usize);
+    assert!(offset_of!(ZTAnimalLayout, status_flags) + 12 == animal_offsets::STATUS_FLAGS_UI as usize);
+    assert!(offset_of!(ZTAnimalLayout, happiness) == animal_offsets::HAPPINESS as usize);
+    assert!(offset_of!(ZTAnimalLayout, happiness_pending) == animal_offsets::HAPPINESS_PENDING as usize);
+    assert!(offset_of!(ZTAnimalLayout, hunger) == animal_offsets::HUNGER as usize);
+    assert!(offset_of!(ZTAnimalLayout, health) == animal_offsets::HEALTH as usize);
+    assert!(offset_of!(ZTAnimalLayout, health_pending) == animal_offsets::HEALTH_PENDING as usize);
+    assert!(offset_of!(ZTAnimalLayout, prey_id) == animal_offsets::PREY_ID as usize);
+    assert!(offset_of!(ZTAnimalLayout, mate_id) == animal_offsets::MATE_ID as usize);
+    assert!(offset_of!(ZTAnimalLayout, countdowns) == 0x2ec);
+    assert!(offset_of!(ZTAnimalLayout, countdowns) + 4 * 24 == lifecycle::DEATH_CHECK as usize);
+    assert!(offset_of!(ZTAnimalLayout, countdowns) + 4 * 29 == animal_offsets::BREATH as usize);
+    assert!(offset_of!(ZTAnimalLayout, activity_mode) == animal_offsets::ACTIVITY_MODE as usize);
+    assert!(offset_of!(ZTAnimalLayout, escape_record) == animal_offsets::ESCAPE_RECORD as usize);
+    assert!(offset_of!(ZTAnimalLayout, cached_habitat) == animal_offsets::CACHED_HABITAT as usize);
+    assert!(offset_of!(ZTAnimalLayout, eat_context) == animal_offsets::EAT_CONTEXT as usize);
+    assert!(offset_of!(ZTAnimalLayout, has_escape_info) == animal_offsets::HAS_ESCAPE_INFO as usize);
+    assert!(offset_of!(ZTAnimalLayout, capture_stage) == animal_offsets::CAPTURE_STAGE as usize);
+    assert!(offset_of!(ZTAnimalLayout, boxed) == animal_offsets::BOXED as usize);
+    assert!(offset_of!(ZTAnimalLayout, egg) == animal_offsets::EGG as usize);
+    assert!(offset_of!(ZTAnimalLayout, egg_timer) == lifecycle::EGG_TIMER as usize);
+    assert!(offset_of!(ZTAnimalLayout, flag_bytes) == 0x39c);
+    assert!(offset_of!(ZTAnimalLayout, flag_bytes) + (animal_offsets::CAPTURE_FLAG - 0x39c) as usize == lifecycle::ESCAPED as usize);
+    assert!(offset_of!(ZTAnimalLayout, flag_bytes) + (animal_offsets::SICK - 0x39c) as usize == animal_offsets::FLAG_0X3A7 as usize);
+    assert!(offset_of!(ZTAnimalLayout, home_gate_tile) == animal_offsets::HOME_GATE_TILE as usize);
+};
 
 /// Fields and addresses the lifecycle methods touch.
 mod lifecycle {
@@ -610,6 +701,13 @@ mod building_use {
     pub const BUILDING_X: u32 = 0x114;
     pub const BUILDING_Y: u32 = 0x118;
     pub const BUILDING_Z: u32 = 0x11c;
+
+    /// A world position reduced to the position inside its tile: `x` and `y` as C remainders by `64` (negative stays
+    /// negative), `z` as the remainder by `16` with `16` added when `z` is negative.
+    pub fn position_in_tile(x: i32, y: i32, z: i32) -> [i32; 3] {
+        let z_in_tile = if z < 0 { z.wrapping_rem(16).wrapping_add(16) } else { z.wrapping_rem(16) };
+        [x.wrapping_rem(64), y.wrapping_rem(64), z_in_tile]
+    }
 }
 
 /// Fields `doEscapedCheck` touches.
@@ -799,7 +897,8 @@ fn percent(value: i32, low: i32, high: i32) -> i32 {
     value.wrapping_sub(low).wrapping_mul(100).wrapping_div(range)
 }
 
-/// An animal in vanilla memory. All reads and writes are volatile through the raw address.
+/// An animal in vanilla memory, addressed by its raw pointer. All reads and writes are volatile through the address;
+/// [`ZTAnimalLayout`] holds the compile-time-checked layout those offsets refer to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZTAnimal(pub u32);
 
@@ -1623,12 +1722,12 @@ impl ZTAnimal {
     /// `ZTAnimal::getUndesirableSceneryInHabitat`: writes into the `std::vector<void*>` at `out` a pool-allocated copy of
     /// the scenery the habitat reports as undesirable for this animal.
     pub fn get_undesirable_scenery_in_habitat(self, out: u32, flag: u32) -> u32 {
-        let mut local: [u32; 3] = [0; 3];
+        let mut local = PoolVec::sized(4);
         let habitat = call_slot_0(self.0, slots::HABITAT);
         if habitat != 0 && get_from_memory::<u8>(habitat + 0x2c) == 0 {
-            unsafe { ref_from_memory::<ZTHabitat>(habitat) }.get_undesirable_scenery(self.0, local.as_mut_ptr() as u32, flag != 0);
+            unsafe { ref_from_memory::<ZTHabitat>(habitat) }.get_undesirable_scenery(self.0, local.out_pointer() as u32, flag != 0);
         }
-        let (begin, end, capacity) = (local[0], local[1], local[2]);
+        let (begin, end) = (local.begin(), local.end());
         let count = (end.wrapping_sub(begin) as i32) >> 2;
         let storage = if count == 0 { 0 } else { (unsafe { POOLALLOC_ALLOCATE.original()((count as u32) * 4) }) as u32 };
         let mut cursor = storage;
@@ -1643,10 +1742,8 @@ impl ZTAnimal {
         save_to_memory(out, storage);
         save_to_memory(out + 4, cursor);
         save_to_memory(out + 8, storage.wrapping_add((count as u32).wrapping_mul(4)));
-        if begin != 0 {
-            let bytes = (((capacity.wrapping_sub(begin)) as i32 >> 2) as u32) << 2;
-            unsafe { POOLALLOC_DEALLOCATE.original()(begin as *const u32, bytes) };
-        }
+        // `local`'s buffer goes back to the pool here.
+        drop(local);
         out
     }
 
@@ -1760,7 +1857,7 @@ impl ZTAnimal {
                         let previous: u32 = get_from_memory(node + 4);
                         save_to_memory(previous, next);
                         save_to_memory(next + 4, previous);
-                        ZTGuide::free_node(node);
+                        crate::vanilla_list::free_node(node);
                     }
                     node = next;
                 }
@@ -2299,7 +2396,7 @@ impl ZTAnimal {
                     let previous: u32 = get_from_memory(node + 4);
                     save_to_memory(previous, next);
                     save_to_memory(next + 4, previous);
-                    ZTGuide::free_node(node);
+                    crate::vanilla_list::free_node(node);
                 }
                 node = next;
             }
@@ -2948,7 +3045,7 @@ impl ZTAnimal {
         if chance <= roll {
             return;
         }
-        let direction = unsafe { ZTWORLDMGR_FIND_FENCE.original()(world as *const u32, self.0 as *const u32, (self.0 + zap::POSITION) as *const i32) };
+        let direction = unsafe { ZTWORLDMGR_FIND_FENCE.hooked()(world as *const u32, self.0 as *const u32, (self.0 + zap::POSITION) as *const i32) };
         if direction == zap::NO_DIRECTION {
             return;
         }
@@ -3354,10 +3451,10 @@ impl ZTAnimal {
                 get_from_memory::<u32>(world) + baby::WORLD_VTABLE_FIND_TYPES,
             ))
         };
-        let mut found = [0u32; 3];
-        unsafe { find_types(world, &mut found, search_class.as_ptr(), search_name.as_ptr(), search_gender.as_ptr()) };
-        if found[0] != found[1] {
-            let adult: u32 = get_from_memory(found[0]);
+        let mut found = PoolVec::four_byte_elements();
+        unsafe { find_types(world, found.out_pointer(), search_class.as_ptr(), search_name.as_ptr(), search_gender.as_ptr()) };
+        if !found.is_empty() {
+            let adult: u32 = get_from_memory(found.begin());
             save_to_memory(self.0 + baby::ENTITY_TYPE, adult);
             call_slot_0(adult, baby::TYPE_SLOT_ADOPT);
             call_slot_2(self.0, baby::SLOT_UNKNOWN_110, 0, 0);
@@ -3366,7 +3463,7 @@ impl ZTAnimal {
                 save_to_memory(self.0 + baby::FIELD_3AC, Self::type_field::<u32>(adult, baby::TYPE_FIELD_3E0));
             }
         }
-        unsafe { POOLALLOC_DEALLOCATE_N_4.original()(found[0] as *const u32, (found[2].wrapping_sub(found[0]) as i32) >> 2) };
+        drop(found);
     }
 }
 
@@ -3511,13 +3608,13 @@ impl ZTAnimal {
         use reproduce_check as repro;
         save_to_memory(self.0 + repro::BYTE_DYING, 1u8);
         let name = VanillaString::from_bytes(repro::DIE_SET);
-        let mut functions = [0u32; 3];
+        let mut functions = PoolVec::four_byte_elements();
         let load = unsafe {
             transmute::<u32, unsafe extern "thiscall" fn(u32, *mut [u32; 3], *const u32) -> u8>(get_from_memory::<u32>(
                 get_from_memory::<u32>(ty) + repro::SLOT_LOAD_BS_FUNCTIONS,
             ))
         };
-        let loaded = unsafe { load(ty, &mut functions, name.as_ptr()) } != 0;
+        let loaded = unsafe { load(ty, functions.out_pointer(), name.as_ptr()) } != 0;
         let tile = unsafe { GET_TILE.original()(self.0 as *const u32) } as u32;
         let mut played = false;
         if loaded && tile != 0 && get_from_memory::<u8>(tile + repro::TILE_FLAGS) & 3 == 0 {
@@ -3533,7 +3630,7 @@ impl ZTAnimal {
             }
         }
         drop(name);
-        unsafe { POOLALLOC_DEALLOCATE_N_4.original()(functions[0] as *const u32, (functions[2].wrapping_sub(functions[0]) as i32) >> 2) };
+        drop(functions);
     }
 }
 
@@ -4028,7 +4125,7 @@ impl ZTAnimal {
         let mut building: u32 = 0;
         let own_tile = unsafe { GET_TILE.original()(this) };
         let found = unsafe {
-            FIND_NEAREST_SATISFIER.original()(
+            FIND_NEAREST_SATISFIER.hooked()(
                 this,
                 own_tile,
                 need_name as *const i32,
@@ -4049,10 +4146,10 @@ impl ZTAnimal {
         let x: i32 = get_from_memory(building + building_use::BUILDING_X);
         let y: i32 = get_from_memory(building + building_use::BUILDING_Y);
         let z: i32 = get_from_memory(building + building_use::BUILDING_Z);
-        let z_in_tile = if z < 0 { z.wrapping_rem(16).wrapping_add(16) } else { z.wrapping_rem(16) };
-        save_to_memory(self.0 + building_use::UNIT_POSITION, x.wrapping_rem(64));
-        save_to_memory(self.0 + building_use::UNIT_POSITION + 4, y.wrapping_rem(64));
-        save_to_memory(self.0 + building_use::UNIT_POSITION + 8, z_in_tile);
+        let [tile_x, tile_y, tile_z] = building_use::position_in_tile(x, y, z);
+        save_to_memory(self.0 + building_use::UNIT_POSITION, tile_x);
+        save_to_memory(self.0 + building_use::UNIT_POSITION + 4, tile_y);
+        save_to_memory(self.0 + building_use::UNIT_POSITION + 8, tile_z);
     }
 }
 
@@ -4487,23 +4584,17 @@ impl ZTAnimal {
     }
 
     /// `findTypes` (world vtable `+0x14`) over three search strings; the result vector is vanilla's (`[begin, end, cap]`).
-    fn find_types_by(world: u32, class: *const u32, name: *const u32, subtype: *const u32) -> [u32; 3] {
+    fn find_types_by(world: u32, class: *const u32, name: *const u32, subtype: *const u32) -> PoolVec {
         let find_types = unsafe {
             transmute::<u32, unsafe extern "thiscall" fn(u32, *mut [u32; 3], *const u32, *const u32, *const u32) -> *const [u32; 3]>(get_from_memory::<u32>(
                 get_from_memory::<u32>(world) + baby_to_adult::WORLD_VTABLE_FIND_TYPES,
             ))
         };
-        let mut found = [0u32; 3];
-        unsafe { find_types(world, &mut found, class, name, subtype) };
+        let mut found = PoolVec::four_byte_elements();
+        unsafe { find_types(world, found.out_pointer(), class, name, subtype) };
         found
     }
 
-    /// Releases a `findTypes` result vector to vanilla's pool (nothing for a null buffer).
-    fn free_found(found: [u32; 3]) {
-        if found[0] != 0 {
-            unsafe { POOLALLOC_DEALLOCATE_N_4.original()(found[0] as *const u32, (found[2].wrapping_sub(found[0]) as i32) >> 2) };
-        }
-    }
 
     /// `ZTAnimal::resetAdultCheck` (the tail of the baby loop): the baby's growth countdown restarts from its type's period.
     fn reset_adult_check(self) {
@@ -4547,27 +4638,24 @@ impl ZTAnimal {
         let search_name = VanillaString::from_bytes(&range_bytes(get_from_memory(text), get_from_memory(text + 4)));
         let search_empty = VanillaString::from_bytes(&Self::c_string_bytes(base() + birth::EMPTY_SEARCH_RVA));
         let mut found = Self::find_types_by(world, search_class.as_ptr(), search_name.as_ptr(), search_empty.as_ptr());
-        if found[0] == found[1] {
+        if found.is_empty() {
             let gendered = if unsafe { MSVC_RAND.hooked()() } & 1 == 0 { baby_to_adult::FEMALE_RVA } else { baby_to_adult::MALE_RVA };
             let search_gendered = VanillaString::from_bytes(&Self::c_string_bytes(base() + gendered));
             let second = Self::find_types_by(world, search_class.as_ptr(), search_name.as_ptr(), search_gendered.as_ptr());
-            Self::free_found(found);
+            // Assigning drops (and frees) the first, empty result.
             found = second;
         }
-        if found[0] == found[1] {
-            Self::free_found(found);
+        if found.is_empty() {
             return false;
         }
         let habitat = call_slot_0(self.0, reproduce_check::SLOT_HABITAT);
         if habitat == 0 || get_from_memory::<u8>(habitat + 0x2c) != 0 {
-            Self::free_found(found);
             return false;
         }
-        let first_type: u32 = get_from_memory(found[0]);
+        let first_type: u32 = get_from_memory(found.begin());
         let baby_type = if first_type != 0 && type_is_animal(first_type) { first_type } else { 0 };
         let litter = Self::type_field::<i32>(ty, birth::TYPE_LITTER_SIZE);
         if baby_type == 0 || litter <= 0 {
-            Self::free_found(found);
             return false;
         }
         let map = (world + 8) as *const u32;
@@ -4577,18 +4665,17 @@ impl ZTAnimal {
                 let class_string = call_slot_0(baby_type, birth::TYPE_SLOT_CLASS_STRING);
                 let subtype = VanillaString::from_bytes(&Self::c_string_bytes(base() + birth::EMPTY_SEARCH_RVA));
                 let egg_found = Self::find_types_by(world, class_string as *const u32, (baby_type + baby_to_adult::TYPE_TEXT) as *const u32, subtype.as_ptr());
-                let egg_type = if egg_found[0] != egg_found[1] { get_from_memory::<u32>(egg_found[0]) } else { baby_type };
+                let egg_type = if !egg_found.is_empty() { get_from_memory::<u32>(egg_found.begin()) } else { baby_type };
                 let created = call_slot_1(egg_type, birth::TYPE_SLOT_CREATE, 0);
                 if created != 0 {
                     ZTAnimal(created).set_egg(true);
                 }
-                Self::free_found(egg_found);
+                drop(egg_found);
                 created
             } else {
                 call_slot_1(baby_type, birth::TYPE_SLOT_CREATE, 0)
             };
             if entity == 0 {
-                Self::free_found(found);
                 return false;
             }
             let entity_type: u32 = get_from_memory(entity + unit_offsets::ENTITY_TYPE);
@@ -4629,7 +4716,6 @@ impl ZTAnimal {
                 first_placed = true;
             }
         }
-        Self::free_found(found);
         first_placed
     }
 
@@ -4692,8 +4778,8 @@ impl ZTAnimal {
             return units;
         }
         save_to_memory(self.0 + eating::BYTE_EAT_FLAG, 0u8);
-        let no_eat_anim = Self::type_field::<u8>(ty, eating::TYPE_NO_EAT_ANIM) != 0;
-        if no_eat_anim {
+        let keep_moving = Self::type_field::<u8>(ty, type_offsets::KEEP_MOVING) != 0;
+        if keep_moving {
             call_slot_2(self.0, eating::SLOT_START_EATING, 1, 0);
         } else {
             save_to_memory(self.0 + eating::BYTE_EATING, 1u8);
@@ -4707,7 +4793,7 @@ impl ZTAnimal {
         let left = self.f_reduce_food(units as i32);
         let cost = Self::type_field::<i32>(ty, eating::TYPE_HUNGER_COST).wrapping_mul(units as i32).wrapping_neg();
         save_to_memory(self.0 + eating::HUNGER_PENDING, cost);
-        if left < 1 || no_eat_anim {
+        if left < 1 || keep_moving {
             return units;
         }
         if self.string_bytes_at(eating::QUEUED_CALL_BEGIN) == eating::EAT_SET || !self.can_sleep_be_sick_eat() {
@@ -4896,10 +4982,9 @@ mod eating {
     pub const BYTE_EAT_FLAG: u32 = 0x39e;
     pub const BYTE_EATING: u32 = 0x3a9;
     pub const BYTE_EGG: u32 = 0x395;
-    /// Tile blocking bits (`+0x83`), type fields: the no-eat-animation byte (`+0x44c`) and the per-unit hunger cost (`+0x218`).
+    /// Tile blocking bits (`+0x83`), type fields: the keep-moving byte (`type_offsets::KEEP_MOVING`, `cKeepMoving`) and the per-unit hunger cost (`+0x218`).
     pub const TILE_BLOCK_BYTE: u32 = 0x83;
     pub const TILE_BLOCK_BITS: u8 = 0x3;
-    pub const TYPE_NO_EAT_ANIM: u32 = 0x44c;
     pub const TYPE_HUNGER_COST: u32 = 0x218;
     /// Slot `+0x1d8(1, 0)` when the type has the byte set, status words cleared of bit 0, the hunger pending word.
     pub const SLOT_START_EATING: u32 = 0x1d8;
@@ -5024,10 +5109,8 @@ impl ZTAnimal {
             save_to_memory(destination, smile as u8);
             save_to_memory(destination + 4, 0u32);
         }
-        if begin != 0 {
-            let bytes = (((capacity.wrapping_sub(begin)) as i32 >> 3) as u32) << 3;
-            unsafe { POOLALLOC_DEALLOCATE.original()(begin as *const u32, bytes) };
-        }
+        // The old buffer goes back to the pool once its entries are copied.
+        drop(PoolVec::adopt_sized([begin, end, capacity], faces_prey::ENTRY_SIZE));
         save_to_memory(self.0 + faces_prey::VEC_END, destination.wrapping_add(faces_prey::ENTRY_SIZE));
         save_to_memory(self.0 + faces_prey::VEC_BEGIN, storage);
         save_to_memory(self.0 + faces_prey::VEC_CAP, storage.wrapping_add(new_len.wrapping_mul(faces_prey::ENTRY_SIZE)));
@@ -5149,13 +5232,13 @@ impl ZTAnimal {
         let species = if own_type != 0 && Self::type_is_cast(own_type, ANIMAL_TAG) { Self::type_field::<i32>(own_type, type_offsets::SPECIES) } else { 0 };
         let gender_begin = target_gender.as_ptr() as u32;
         let gender_header = [gender_begin, gender_begin + target_gender.len() as u32, gender_begin + target_gender.len() as u32 + 1];
-        let mut adults = [0u32; 3];
-        unsafe { ref_from_memory::<ZTHabitat>(habitat) }.get_adult_gender_species_animals(gender_header.as_ptr() as u32, species, adults.as_mut_ptr() as u32);
+        let mut adults = PoolVec::four_byte_elements();
+        unsafe { ref_from_memory::<ZTHabitat>(habitat) }.get_adult_gender_species_animals(gender_header.as_ptr() as u32, species, adults.out_pointer() as u32);
         let own_id: u32 = self.read(faces_prey::ENTITY_ID);
         let own_avoid = [self.read::<u32>(mating::AVOID_ID_B), self.read::<u32>(mating::AVOID_ID_A)];
         let mut candidates: Vec<u32> = Vec::new();
-        let mut cursor = adults[0];
-        while cursor != adults[1] {
+        let mut cursor = adults.begin();
+        while cursor != adults.end() {
             let animal: u32 = get_from_memory(cursor);
             cursor += 4;
             if get_from_memory::<u32>(animal + animal_offsets::MATE_ID) != 0 {
@@ -5186,7 +5269,7 @@ impl ZTAnimal {
                 }
             }
         }
-        unsafe { POOLALLOC_DEALLOCATE_N_4.original()(adults[0] as *const u32, (adults[2].wrapping_sub(adults[0]) as i32) >> 2) };
+        drop(adults);
         result
     }
 }
@@ -5857,17 +5940,17 @@ impl ZTAnimal {
         if shortcut && roll < movement::SHORTCUT_PERCENT {
             return low_byte_bool(unsafe { BFUNIT_GET_PATH_TO_POSITION.hooked()(this, destination as *const i32, 0) });
         }
-        let mut candidates = [0u32; 3];
-        unsafe { BFMAP_GET_NEIGHBORS_AROUND.original()(map as *const u32, candidates.as_mut_ptr() as *const i32, destination as *const i32, 0) };
+        let mut candidates = PoolVec::sized(movement::POSITION_BYTES);
+        unsafe { BFMAP_GET_NEIGHBORS_AROUND.original()(map as *const u32, candidates.out_pointer() as *const i32, destination as *const i32, 0) };
         let mut scratch = [0i32; 3];
         let grid_position = unsafe { BFENTITY_GET_GRID_POS.hooked()(this, scratch.as_mut_ptr()) } as u32;
         let own_position: [i32; 3] = [get_from_memory(grid_position), get_from_memory(grid_position + 4), get_from_memory(grid_position + 8)];
-        unsafe { BF3DSORTER_SORT_POSITIONS.original()(candidates.as_ptr() as *const i32, own_position.as_ptr() as *const u32) };
+        unsafe { BF3DSORTER_SORT_POSITIONS.original()(candidates.out_pointer() as *const i32, own_position.as_ptr() as *const u32) };
         let walk_flag = (self.read::<i32>(movement::UNIT_WALK_MODE) == movement::WALK_MODE_FLAG) as i8;
         let mut reached = [0i32; 3];
         let mut found = false;
-        let mut cursor = candidates[0];
-        while cursor != candidates[1] {
+        let mut cursor = candidates.begin();
+        while cursor != candidates.end() {
             reached = [get_from_memory(cursor), get_from_memory(cursor + 4), get_from_memory(cursor + 8)];
             if unsafe { BFMAP_VALIDATE.hooked()(map as *const u32, destination as *const i32, reached.as_ptr(), this as *const i32, walk_flag) } != 0 {
                 found = low_byte_bool(unsafe { BFUNIT_GET_PATH_TO_POSITION.hooked()(this, reached.as_ptr(), 0) });
@@ -5894,10 +5977,7 @@ impl ZTAnimal {
                 unsafe { LIST_IVEC3_INSERT.hooked()(&mut iterator as *mut u32 as *const i32, get_from_memory::<u32>(list) as i32, step.as_ptr()) };
             }
         }
-        if candidates[0] != 0 {
-            let bytes = (candidates[2].wrapping_sub(candidates[0]) as i32 / movement::POSITION_BYTES as i32) as u32 * movement::POSITION_BYTES;
-            unsafe { POOLALLOC_DEALLOCATE.original()(candidates[0] as *const u32, bytes) };
-        }
+        drop(candidates);
         found
     }
 
@@ -6740,6 +6820,57 @@ impl ZTAnimal {
     }
 }
 
+/// Slots and fields `drop` and `setVisible` use.
+mod drop_visible {
+    /// Animal vtable: the habitat (`+0x24c`), predator search (`+0x2fc`), prey search (`+0x2f8`), each taking `0`.
+    pub const SLOT_HABITAT: u32 = 0x24c;
+    pub const SLOT_FIND_PREDATOR: u32 = 0x2fc;
+    pub const SLOT_FIND_PREY: u32 = 0x2f8;
+    /// Habitat vtable `+0x20` answers (in `AL`) whether the habitat is a tank-style exhibit.
+    pub const HABITAT_SLOT_QUERY: u32 = 0x20;
+    /// `BFWorldMgr::getUnit(id)`.
+    pub const WORLD_GET_UNIT: u32 = 0x2c;
+    /// The unit's own slot invoked once the unit is found (`+0x2c4`, no arguments).
+    pub const UNIT_SLOT_RELEASE: u32 = 0x2c4;
+    /// The entity's visible byte.
+    pub const VISIBLE: u32 = 0x13f;
+}
+
+impl ZTAnimal {
+    /// `ZTAnimal::drop` (vtable `+0xc8`). Needs a habitat answering the habitat-slot query. The first non-zero id out of
+    /// the predator search then the prey search names a unit; when that unit's type is a `ZTUnit` type the unit's
+    /// slot `+0x2c4` runs. Both id tests are full-register (`TEST EAX, EAX`).
+    pub fn drop_target(self) {
+        let habitat = call_slot_0(self.0, drop_visible::SLOT_HABITAT);
+        if habitat == 0 || !low_byte_bool(call_slot_0(habitat, drop_visible::HABITAT_SLOT_QUERY)) {
+            return;
+        }
+        let mut id = call_slot_1(self.0, drop_visible::SLOT_FIND_PREDATOR, 0);
+        if id == 0 {
+            id = call_slot_1(self.0, drop_visible::SLOT_FIND_PREY, 0);
+            if id == 0 {
+                return;
+            }
+        }
+        let world = Self::world();
+        let unit = call_slot_1(world, drop_visible::WORLD_GET_UNIT, id);
+        if unit == 0 || !Self::entity_is(unit, tags::UNIT) {
+            return;
+        }
+        call_slot_0(unit, drop_visible::UNIT_SLOT_RELEASE);
+    }
+
+    /// `ZTAnimal::setVisible`: stores the byte and refreshes the animal panel.
+    pub fn set_visible(self, visible: bool) {
+        self.write_visible(visible);
+        unsafe { ANIMALINFO_SET_ANIMAL_VISIBLE.original()(self.0 as *const u32, visible as i8) };
+    }
+
+    fn write_visible(self, visible: bool) {
+        save_to_memory(self.0 + drop_visible::VISIBLE, u8::from(visible));
+    }
+}
+
 #[detour_mod]
 mod animal_detours {
     use super::*;
@@ -7401,6 +7532,16 @@ mod animal_detours {
         ZTAnimal(this as u32).check_done()
     }
 
+    #[detour(DROP)]
+    unsafe extern "thiscall" fn drop_target(this: *const u32) {
+        ZTAnimal(this as u32).drop_target();
+    }
+
+    #[detour(SET_VISIBLE)]
+    unsafe extern "thiscall" fn set_visible(this: *const u32, visible: bool) {
+        ZTAnimal(this as u32).set_visible(visible);
+    }
+
     #[detour(CAN_CAPTURE)]
     unsafe extern "thiscall" fn can_capture(this: *const c_void, other: i32) -> bool {
         ZTAnimal(this as u32).can_capture(other as u32)
@@ -7979,6 +8120,14 @@ mod animal_detours {
             unsafe { super::CHECK_DONE_DETOUR.call(this as *const u32) }
         }
 
+        pub(crate) fn drop_target(this: u32) {
+            unsafe { super::DROP_DETOUR.call(this as *const u32) }
+        }
+
+        pub(crate) fn set_visible(this: u32, visible: bool) {
+            unsafe { super::SET_VISIBLE_DETOUR.call(this as *const u32, visible) }
+        }
+
         pub(crate) fn can_capture(this: u32, other: u32) -> u32 {
             (unsafe { super::CAN_CAPTURE_DETOUR.call(this as *const c_void, other as i32) }) as u32
         }
@@ -8052,4 +8201,21 @@ pub(crate) mod live_support {
     }
 
     pub(crate) use super::animal_detours::test_real as real;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::building_use::position_in_tile;
+
+    #[test]
+    fn position_in_tile_follows_c_remainders() {
+        assert_eq!(position_in_tile(0, 0, 0), [0, 0, 0]);
+        assert_eq!(position_in_tile(130, 64, 33), [2, 0, 1]);
+        assert_eq!(position_in_tile(-130, -1, 16), [-2, -1, 0]);
+        // A negative height gets the tile height added to its (negative) remainder: -1 % 16 = -1, +16 = 15.
+        assert_eq!(position_in_tile(5, 5, -1), [5, 5, 15]);
+        assert_eq!(position_in_tile(5, 5, -16), [5, 5, 16]);
+        assert_eq!(position_in_tile(5, 5, -17), [5, 5, 15]);
+        assert_eq!(position_in_tile(i32::MIN, i32::MAX, i32::MIN), [0, 63, 16]);
+    }
 }

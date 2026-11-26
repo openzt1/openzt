@@ -118,10 +118,8 @@ pub(crate) unsafe fn destroy_entity(this: u32) {
         write(this, VTABLE_BFENTITY);
 
         string_release((this + NAME_VECTOR) as StringSlot);
-        for (begin_offset, capacity_offset) in [(0xfcu32, 0x104)] {
-            let begin = read(this + begin_offset);
-            BASIC_STRING_1.original()(begin as *const u32, read(this + capacity_offset).wrapping_sub(begin));
-        }
+        let begin = read(this + 0xfc);
+        BASIC_STRING_1.original()(begin as *const u32, read(this + 0x104).wrapping_sub(begin));
 
         string_release((this + BS_CALL) as StringSlot);
 

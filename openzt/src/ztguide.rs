@@ -8,7 +8,7 @@
 //! goes through that freelist and never through Rust's allocator.
 //!
 //! This module holds `fRoutine`, `fVARoutine`, `getTerrainCost`, `fencesOK`, `isSpeaking`, `doConditionals`, the
-//! follower-list methods (`removeGuest`, `releaseGuests`, `clearGoal`, `removeFromMap`, `initStatusVars`) and
+//! follower-list methods (`addGuest`, `removeGuest`, `releaseGuests`, `clearGoal`, `removeFromMap`, `initStatusVars`) and
 //! `save`/`load`. The constructor and destructor stay vanilla: the constructor allocates the list sentinel from the
 //! 12-byte freelist, and the destructor frees it through helpers `generated.rs` does not expose.
 //! The `"Doing VA Duties"` debug string `fVARoutine` builds and frees has no observable effect and is not
@@ -21,9 +21,8 @@ use openzt_detour::generated::{
     bftile::IS_IN_ZOO as BFTILE_IS_IN_ZOO,
     bfunit::{IDLE as BFUNIT_IDLE, IS_MAX_COST_FOR_ALL, IS_NON_PATH_STEEP, IS_SAME_TILE},
     msvc_std::RAND,
-    msvc_std_listuint::INSERT as LIST_UINT_INSERT,
     ztguide::{
-        CLEAR_GOAL, DO_CONDITIONALS, FENCES_OK, F_ROUTINE, F_VAROUTINE, GET_HAB_FROM_VA, GET_NEEDIEST_VA, GET_RANDOM_ASSIGNED_HABITAT, GET_TERRAIN_COST,
+        ADD_GUEST, CLEAR_GOAL, DO_CONDITIONALS, FENCES_OK, F_ROUTINE, F_VAROUTINE, GET_HAB_FROM_VA, GET_NEEDIEST_VA, GET_RANDOM_ASSIGNED_HABITAT, GET_TERRAIN_COST,
         INIT_STATUS_VARS, IS_SPEAKING, LOAD, RELEASE_GUESTS, REMOVE_FROM_MAP, REMOVE_GUEST, SAVE, TILE_FILTER, TRIGGER_NEARBY_GUESTS, UPDATE_GOALS,
     },
     ztguest::FOLLOW_GUIDE,
@@ -43,6 +42,7 @@ use crate::{
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, read_field, unit_offsets, write_field},
     ztguest::guest_offsets,
     ztmegatilemgr::entity_type_matches,
+    vanilla_list,
 };
 
 /// `ZTGuideType::createEntity` allocates this many bytes.
@@ -172,8 +172,6 @@ const HABITAT_ARRAY_END_OFFSET: u32 = 0x20;
 mod globals_rva {
     /// `GLOBAL_ZTWorldMgr`; the `BFMap` is embedded at `+0x8`.
     pub const WORLD_MGR: u32 = 0x0023_8040;
-    /// Head of vanilla's 12-byte small-block freelist (`DAT_00638004`).
-    pub const FREELIST_12: u32 = 0x0023_8004;
     /// `CAST_ZTGuest`.
     pub const GUEST_TAG: u32 = 0x0023_8700;
     /// `GLOBAL_ZTHabitatMgr`.
@@ -221,26 +219,9 @@ impl ZTGuide {
         get_from_memory(self.0 + FOLLOWERS_OFFSET)
     }
 
-    /// Pushes `node` on vanilla's 12-byte freelist, as every vanilla list erase does.
-    pub(crate) fn free_node(node: u32) {
-        if node != 0 {
-            let head = base() + globals_rva::FREELIST_12;
-            save_to_memory(node, get_from_memory::<u32>(head));
-            save_to_memory(head, node);
-        }
-    }
-
     /// Frees every follower node onto the freelist and leaves the list empty and self-linked.
     fn empty_followers(self) {
-        let sentinel = self.followers();
-        let mut node: u32 = get_from_memory(sentinel);
-        while node != sentinel {
-            let next: u32 = get_from_memory(node);
-            Self::free_node(node);
-            node = next;
-        }
-        save_to_memory(sentinel, sentinel);
-        save_to_memory(sentinel + 4, sentinel);
+        vanilla_list::clear(self.followers());
     }
 
     /// `ZTGuide::triggerNearbyGuests` (`0x0058d349`): when the guide has fewer followers than its type's `cMaxGroupSize`,
@@ -302,6 +283,16 @@ impl ZTGuide {
         }
     }
 
+    /// `ZTGuide::addGuest` (`0x0058dad9`): appends `guest_id` to the follower list unless it is already there, through
+    /// vanilla's `list<uint>::insert` at the end position so the node comes from the 12-byte freelist.
+    pub fn add_guest(self, guest_id: i32) {
+        let sentinel = self.followers();
+        if vanilla_list::nodes(sentinel).any(|node| vanilla_list::value(node) == guest_id as u32) {
+            return;
+        }
+        vanilla_list::push_back(sentinel, guest_id as u32);
+    }
+
     /// Number of followers.
     pub fn follower_count(self) -> i32 {
         let sentinel = self.followers();
@@ -316,18 +307,7 @@ impl ZTGuide {
 
     /// `ZTGuide::removeGuest` (`0x0058aab4`): unlinks and frees every follower node whose id is `guest_id`.
     pub fn remove_guest(self, guest_id: i32) {
-        let sentinel = self.followers();
-        let mut node: u32 = get_from_memory(sentinel);
-        while node != sentinel {
-            let next: u32 = get_from_memory(node);
-            if get_from_memory::<i32>(node + 8) == guest_id {
-                let previous: u32 = get_from_memory(node + 4);
-                save_to_memory(previous, next);
-                save_to_memory(next + 4, previous);
-                Self::free_node(node);
-            }
-            node = next;
-        }
+        vanilla_list::remove_matching(self.followers(), guest_id as u32);
     }
 
     /// `ZTGuide::releaseGuests` (`0x0058b362`): every guest in the world that follows this guide is, with a
@@ -454,8 +434,7 @@ impl ZTGuide {
                 let mut id: u32 = 0;
                 for _ in 0..count.max(0) {
                     ok &= read_field(&mut id as *mut u32 as u32, 4, file);
-                    let mut result: u32 = 0;
-                    unsafe { LIST_UINT_INSERT.original()(&mut result as *mut u32 as *const i32, self.followers() as i32, &id as *const u32 as *const i32) };
+                    vanilla_list::push_back(self.followers(), id);
                 }
                 if version >= save_version::INFORMED_BYTE {
                     ok &= read_field(self.0 + VIEWING_AREA_INFORMED_OFFSET, 1, file);
@@ -813,6 +792,18 @@ mod guide_detours {
         ZTGuide(this as u32).update_goals();
     }
 
+    #[detour(ADD_GUEST)]
+    unsafe extern "thiscall" fn add_guest(this: *const u32, guest_id: i32) {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            let hook = crate::ztguest::live_support::viewing_overrides::ADD_GUEST.lock().ok().and_then(|hook| *hook);
+            if hook.is_some_and(|hook| hook(this as u32, guest_id)) {
+                return;
+            }
+        }
+        ZTGuide(this as u32).add_guest(guest_id)
+    }
+
     #[detour(REMOVE_GUEST)]
     unsafe extern "thiscall" fn remove_guest(this: *const u32, guest_id: i32) {
         ZTGuide(this as u32).remove_guest(guest_id);
@@ -919,6 +910,10 @@ mod guide_detours {
             unsafe { super::GET_NEEDIEST_VA_DETOUR.call(this as *const u32, out) }
         }
 
+        pub(crate) fn add_guest(this: u32, guest_id: i32) {
+            unsafe { super::ADD_GUEST_DETOUR.call(this as *const u32, guest_id) }
+        }
+
         pub(crate) fn remove_guest(this: u32, guest_id: i32) {
             unsafe { super::REMOVE_GUEST_DETOUR.call(this as *const u32, guest_id) }
         }
@@ -959,7 +954,7 @@ pub fn init() {
 
 #[cfg(feature = "reimplementation-tests")]
 pub(crate) mod live_support {
-    use openzt_detour::generated::{standalone::OPERATOR_NEW, ztguide::CONSTRUCTOR};
+    use openzt_detour::generated::{standalone::OPERATOR_NEW, ztguide::{CONSTRUCTOR, DESTRUCTOR}};
 
     use super::{ZTGuide, GUIDE_SIZE, GUIDE_TYPE_TAG_RVA};
     use crate::{
@@ -991,13 +986,33 @@ pub(crate) mod live_support {
         None
     }
 
-    /// A zeroed guide built by the real vanilla constructor over `guide_type` (not detoured). The fixture is leaked:
-    /// `~ZTGuide` frees the follower list through helpers `generated.rs` does not expose, so tests drop the memory.
+    /// Guides built by [`build_standalone_guide`] and not yet destroyed.
+    static LIVE_FIXTURES: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+    /// A zeroed guide built by the real vanilla constructor over `guide_type` (not detoured). It is torn down through
+    /// the real scalar-deleting destructor by [`destroy_standalone_guide`], or by [`teardown_standalone_guides`] when the
+    /// test finishes. A test that points a field of the guide at memory it owns must put the original value back first:
+    /// the destructor frees whatever the fields hold.
     pub fn build_standalone_guide(guide_type: u32) -> ZTGuide {
         let memory = unsafe { OPERATOR_NEW.original()(GUIDE_SIZE) } as u32;
         unsafe { std::ptr::write_bytes(memory as *mut u8, 0, GUIDE_SIZE as usize) };
         unsafe { CONSTRUCTOR.original()(memory as *const u32, guide_type as *const u32) };
+        LIVE_FIXTURES.lock().unwrap().push(memory);
         ZTGuide(memory)
+    }
+
+    /// Tears a guide down through the real scalar-deleting destructor (not detoured).
+    pub fn destroy_standalone_guide(guide: ZTGuide) {
+        LIVE_FIXTURES.lock().unwrap().retain(|&fixture| fixture != guide.0);
+        unsafe { DESTRUCTOR.original()(guide.0 as *const u32, 1) };
+    }
+
+    /// Destroys every guide still alive from [`build_standalone_guide`].
+    pub fn teardown_standalone_guides() {
+        let fixtures = std::mem::take(&mut *LIVE_FIXTURES.lock().unwrap());
+        for fixture in fixtures {
+            unsafe { DESTRUCTOR.original()(fixture as *const u32, 1) };
+        }
     }
 
     pub(crate) use super::guide_detours::test_real as real;

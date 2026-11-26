@@ -49,7 +49,7 @@ pub struct FPlaySpecialOps {
     pub acquire_first: unsafe fn(u32) -> u32,
     pub release_first: unsafe fn(u32),
     /// `(this, unit, first handle, anim, reverse, sound, ping_pong, seconds, count)`.
-    pub play_links: unsafe fn(u32, u32, u32, u32, bool, u32, bool, u32, i32) -> Option<bool>,
+    pub play_links: PlayLinksFn,
 }
 
 pub(super) fn string_is_empty(string: u32) -> bool {
@@ -225,6 +225,9 @@ pub(super) const CALL_RESULT_FLAG: u32 = 0x18;
 /// (`first_anim`, flag 0, sound 0) and returns a handle that owns it and the second vector; `add_anim` appends
 /// `(anim, reverse, 0)` (and, for ping-pong, `(anim, 1, 0)`) to the second vector; `play` runs `fPlay(this,
 /// second, first, unit, scratch, with_base)` and returns `None` when either vector is empty.
+/// `(this, unit, first handle, anim, reverse, sound, ping_pong, seconds, count)`.
+pub type PlayLinksFn = unsafe fn(u32, u32, u32, u32, bool, u32, bool, u32, i32) -> Option<bool>;
+
 pub struct PlayOps {
     pub find_anim: unsafe fn(u32, u32) -> u32,
     pub mixer_anim: unsafe fn(u32) -> u32,
@@ -257,6 +260,7 @@ pub(super) unsafe fn play_not_stopped(call: u32, unit: u32, ops: &PlayOps) -> Op
 
 /// Resolves every parameter from `from` on with `findAnim`, adding each hit to the second vector. The cursor
 /// field in the manager follows the walk, as in vanilla.
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn add_param_anims(this: u32, call: u32, unit: u32, handle: u32, from: u32, reverse: bool, ping_pong: bool, ops: &PlayOps) {
     let end = unsafe { call_params_end(call) };
     save_to_memory(this + AI_PARAM_CURSOR, from);

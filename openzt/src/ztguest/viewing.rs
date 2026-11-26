@@ -12,10 +12,10 @@ use openzt_detour::{
         msvc_std::RAND,
         msvc_std_basic_string::BASIC_STRING_RANGE,
         poolalloc::DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4,
+        ztguide::ADD_GUEST as GUIDE_ADD_GUEST,
         ztguest::{CHECK_VIEWING_AREA, DO_BUILDING, FIND_VIEWING_AREA, FOLLOW_GUIDE, RUN_SCREAMING, SET_VISIBLE, START_PUKING, VIEW_NEARBY_EXHIBIT},
         standalone::HABITAT_FACING,
         zthabitat::GET_ALL_ANIMALS,
-        ztguide::ADD_GUEST as GUIDE_ADD_GUEST,
         ztui_guestinfo::SET_GUEST_VISIBLE,
         ztunit::{DO_BUILDING as ZTUNIT_DO_BUILDING, IS_FUN_SATISFIER},
         ztviewingarea::HAS_OA,
@@ -101,6 +101,11 @@ pub(crate) mod overrides {
     /// Replaces `startPuking`'s `setBSNew` call: gets the guest, the behaviour-set name and the three flags.
     pub type SetBs = fn(this: u32, name: &[u8], call_flag: i8, force: i8, clear_mode: i32);
 
+    /// Replaces the guide's `addGuest` detour body (reached from the real and the ported `followGuide`); answers `true`
+    /// once it has handled the call.
+    pub type AddGuest = fn(guide: u32, guest_id: i32) -> bool;
+
+    pub static ADD_GUEST: Mutex<Option<AddGuest>> = Mutex::new(None);
     pub static FOLLOW: Mutex<Option<Follow>> = Mutex::new(None);
     pub static SET_BS: Mutex<Option<SetBs>> = Mutex::new(None);
 }

@@ -37,8 +37,7 @@ const RNG_STATE_RVA: u32 = 0x0023_8060;
 const TASK_LIST_RVA: u32 = 0x0023_8fa4;
 /// `DAT_00639474`: the world's entity list sentinel.
 const ENTITY_LIST_RVA: u32 = 0x0023_9474;
-/// `DAT_00638004`: head of vanilla's 12-byte small-block freelist.
-const FREELIST_12_RVA: u32 = 0x0023_8004;
+use crate::vanilla_list::FREELIST_12_RVA;
 
 fn base() -> u32 {
     get_module_base("zoo.exe") as u32
@@ -552,6 +551,133 @@ fn swap_task_list(payloads: &[u32]) -> (u32, u32) {
     (sentinel, original)
 }
 
+/// The events the fake pool's `getEvents(out)` hands `listen`: `(message code, target id)` pairs.
+static LISTEN_EVENTS: Mutex<Vec<(u16, u32)>> = Mutex::new(Vec::new());
+
+/// Fills `out` with a `0x1c`-byte-record vector from vanilla's allocator, as the real `getEvents` does.
+extern "thiscall" fn fake_pool_listen_events(_this: u32, out: u32) {
+    use openzt_detour::generated::poolalloc::ALLOCATE;
+
+    let events = LISTEN_EVENTS.lock().unwrap().clone();
+    if events.is_empty() {
+        for word in 0..3 {
+            save_to_memory(out + word * 4, 0u32);
+        }
+        return;
+    }
+    let bytes = events.len() as u32 * 0x1c;
+    let buffer = unsafe { ALLOCATE.original()(bytes) } as u32;
+    for (index, (code, target)) in events.iter().enumerate() {
+        let record = buffer + index as u32 * 0x1c;
+        for offset in (0..0x1c).step_by(4) {
+            save_to_memory(record + offset, 0u32);
+        }
+        save_to_memory(record + 0x10, *target);
+        save_to_memory(record + 0x16, *code);
+    }
+    save_to_memory(out, buffer);
+    save_to_memory(out + 4, buffer + bytes);
+    save_to_memory(out + 8, buffer + bytes);
+}
+
+/// `ZTMAINT_POOL_LISTEN_LIVE`: `ZTMaintTaskPool::listen` against the real body over random message sequences (every
+/// task code `0x272e..=0x2734`, other codes before and after a kind is set, empty and long sequences that reach both
+/// event-vector free paths). A fake pool serves the events and holds a fresh list; the queued tasks (kind, target,
+/// worker, flag, in list order) must match.
+pub(crate) fn run_ztmaint_pool_listen_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::{standalone::OPERATOR_NEW, ztmainttaskpool::LISTEN};
+
+    let test_name = "ZTMAINT_POOL_LISTEN_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let mut vtable = vec![0u32; 8];
+    vtable[2] = fake_pool_listen_events as *const () as usize as u32;
+    let vtable = Box::leak(vtable.into_boxed_slice()).as_ptr() as u32;
+    let codes = [0x272eu16, 0x272f, 0x2730, 0x2731, 0x2732, 0x2733, 0x2734, 0x2800, 0x2801];
+    let mut state = 0x1234_5678u32;
+    let mut next = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        state >> 8
+    };
+    let mut queued_total = 0usize;
+    for case in 0..120u32 {
+        let length = if case < 40 { (case % 8) as usize } else { (next() % 12) as usize };
+        let events: Vec<(u16, u32)> = (0..length).map(|_| (codes[next() as usize % codes.len()], 0x100 + next() % 50)).collect();
+        let mut outcomes = Vec::new();
+        for pole in 0..2 {
+            *LISTEN_EVENTS.lock().unwrap() = events.clone();
+            let sentinel = unsafe { OPERATOR_NEW.original()(12) } as u32;
+            save_to_memory(sentinel, sentinel);
+            save_to_memory(sentinel + 4, sentinel);
+            let pool = Box::leak(vec![vtable, sentinel, 0, 0].into_boxed_slice()).as_ptr() as u32;
+            if pole == 0 {
+                real::pool_listen(pool);
+            } else {
+                unsafe { LISTEN.hooked()(pool as *const i32) };
+            }
+            let tasks: Vec<(u32, u32, u32, u8)> = list_payloads(sentinel)
+                .into_iter()
+                .map(|task| (get_from_memory(task), get_from_memory(task + 4), get_from_memory(task + 8), get_from_memory(task + 0xc)))
+                .collect();
+            outcomes.push(tasks);
+        }
+        queued_total += outcomes[0].len();
+        if outcomes[0] != outcomes[1] {
+            failures.push(format!("events {events:x?}: real {:?}, hooked {:?}", outcomes[0], outcomes[1]));
+        }
+    }
+    if queued_total < 100 {
+        failures.push(format!("only {queued_total} tasks were queued over all cases"));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTMAINT_TASKS_LIVE_POOL`: `setNewTask(0)` against the live task pool's own list, with a task from vanilla's
+/// allocator queued twice through vanilla's `list<uint>::insert`. Real and port must leave the pool as they found it,
+/// return both list nodes to the freelist and clear the worker's task; the task itself is freed through
+/// `operator_delete`, which only matches vanilla's allocator because nothing here uses Rust's.
+pub(crate) fn run_ztmaint_tasks_live_pool_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use openzt_detour::generated::standalone::OPERATOR_NEW;
+
+    let test_name = "ZTMAINT_TASKS_LIVE_POOL";
+    let mut failures: Vec<String> = Vec::new();
+    let Some(maint_type) = live_support::find_maint_type() else {
+        failures.push("the live world holds no maintenance-worker type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let sentinel: u32 = get_from_memory(base() + TASK_LIST_RVA);
+    if sentinel == 0 {
+        failures.push("the live task pool has no list".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+    let baseline = list_payloads(sentinel);
+    let mut outcomes = Vec::new();
+    for pole in 0..2 {
+        let worker = live_support::build_standalone_maint(maint_type);
+        let task = unsafe { OPERATOR_NEW.original()(0x10) } as u32;
+        save_to_memory(task + task_offsets::WORKER, worker.0);
+        worker.set_current_task(task);
+        crate::vanilla_list::push_back(sentinel, task);
+        crate::vanilla_list::push_back(sentinel, task);
+        let queued = list_payloads(sentinel).iter().filter(|payload| **payload == task).count();
+        let before: u32 = get_from_memory(base() + FREELIST_12_RVA);
+        if pole == 0 {
+            real::set_new_task(worker.0, 0);
+        } else {
+            worker.set_new_task(0);
+        }
+        let pushed = freelist_pushed(before);
+        outcomes.push((queued, list_payloads(sentinel) == baseline, worker.current_task(), pushed));
+        live_support::destroy_standalone_maint(worker);
+    }
+    if outcomes[0] != outcomes[1] {
+        failures.push(format!("(queued, pool restored, task, nodes freed) real {:?}, port {:?}", outcomes[0], outcomes[1]));
+    }
+    if outcomes[1] != (2, true, 0, 2) {
+        failures.push(format!("port outcome {:?}, expected (2, true, 0, 2)", outcomes[1]));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
 /// `ZTMAINT_TASKS_LIVE`: `setNewTask` (no current task; a current task held by zero, one and two pool nodes among
 /// others) and `finishTask` (through the hooked fastcall address), real against port. The pool list is a fake swapped
 /// into the global; compared: the surviving payloads, the worker's task and how many nodes went on the freelist. Then
@@ -736,8 +862,9 @@ fn run_load(worker: ZTMaint, bytes: Vec<u8>, version: u32, real_body: bool) -> (
 /// are `+0x2a0`, `+0x298`, `+0x294`, the 16-bit count, the bit count, one byte per bit, then the `ZTStaff` data); `load` is
 /// compared over the version boundaries (`0x22`, `0x23`, `0x5b`, `0x5c`, `0x5d`) with streams that hold exactly the
 /// worker's data (so the `ZTStaff` read finds nothing left), one byte short, and with 3 / 4 stored task bits
-/// against the worker's 4-bit vector (a longer stream would leave bytes for `ZTStaff::load`, which is not exercised), comparing result, bytes consumed and the whole worker. A last round trip loads
-/// a real save.
+/// against the worker's 4-bit vector and with 6 / 9 stored bits (the bits past the vector's length are left in the stream
+/// for `ZTStaff::load`, which reads and fails identically on both sides), comparing result, bytes consumed and the
+/// whole worker. A last round trip loads a real save.
 pub(crate) fn run_ztmaint_save_load_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTMAINT_SAVE_LOAD_LIVE";
     let mut failures: Vec<String> = Vec::new();
@@ -780,7 +907,7 @@ pub(crate) fn run_ztmaint_save_load_live_test(failure_log: &mut Option<std::fs::
     live_support::destroy_standalone_maint(port_worker);
 
     for version in [0x22_u32, 0x23, 0x5b, 0x5c, 0x5d] {
-        for stored in [3usize, 4] {
+        for stored in [3usize, 4, 6, 9] {
             if version <= 0x5b && stored != 4 {
                 continue;
             }
@@ -939,4 +1066,278 @@ pub(crate) fn run_ztmaint_task_pool_live_test(failure_log: &mut Option<std::fs::
         failures.push(format!("clear: real {:?}, port {:?}, expected (true, 3, 0, 0, 0)", observed[0], observed[1]));
     }
     finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTMAINT_FIND_FENCE_LOWERED_LIVE`: `findFenceToFixOnTile` with live fences made worth fixing. Up to six distinct
+/// fences have their wear dwords (`+0x15c`, `+0x160`) set low and are kept only if the real `isWorthFixing` agrees (the
+/// fence type must be a repairable one). Each fence's own tile and its eight neighbours are then compared real, port
+/// and hooked address, so a shared edge is seen from both sides; the fence's own tile must find a fence with that
+/// wear. The dwords are restored afterwards.
+pub(crate) fn run_ztmaint_find_fence_lowered_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use crate::{util::get_from_memory as read, ztmegatilemgr::entity_type_matches};
+    const FENCE_TAG_RVA: u32 = 0x0023_8660;
+    const EDGE_SLOTS: u32 = 0x14;
+    const WEAR_DWORDS: [u32; 2] = [0x15c, 0x160];
+    let test_name = "ZTMAINT_FIND_FENCE_LOWERED_LIVE";
+    let mut failures: Vec<String> = Vec::new();
+    let world = globals().ztworldmgr();
+
+    let mut fences: Vec<(u32, (u32, u32))> = Vec::new();
+    'search: for y in 2..world.map_y_size.min(200) - 2 {
+        for x in 2..world.map_x_size.min(200) - 2 {
+            let tile = world.get_tile_ptr(x, y);
+            for slot in 0..4 {
+                let fence: u32 = read(tile + EDGE_SLOTS + slot * 4);
+                if fence != 0 && unsafe { entity_type_matches(fence, FENCE_TAG_RVA) } && !fences.iter().any(|&(f, _)| f == fence) {
+                    // Keep the chosen fences apart so their neighbourhoods do not overlap.
+                    if fences.iter().all(|&(_, (fx, fy))| fx.abs_diff(x) > 3 || fy.abs_diff(y) > 3) {
+                        fences.push((fence, (x, y)));
+                    }
+                    if fences.len() >= 6 {
+                        break 'search;
+                    }
+                }
+            }
+        }
+    }
+    if fences.is_empty() {
+        failures.push("the live zoo holds no fence".to_string());
+        return finish_test(test_name, failures, failure_log);
+    }
+
+    let mut lowered = 0;
+    for (index, &(fence, (fx, fy))) in fences.iter().enumerate() {
+        let saved: Vec<i32> = WEAR_DWORDS.iter().map(|&offset| read::<i32>(fence + offset)).collect();
+        let wear = -1000 - index as i32;
+        for &offset in &WEAR_DWORDS {
+            save_to_memory(fence + offset, wear);
+        }
+        let worth = unsafe { openzt_detour::generated::ztfence::IS_WORTH_FIXING.original()(fence as *const u32) } & 0xff != 0;
+        if worth {
+            lowered += 1;
+            let mut own_tile_found = false;
+            for dy in [-1i32, 0, 1] {
+                for dx in [-1i32, 0, 1] {
+                    let (x, y) = ((fx as i32 + dx) as u32, (fy as i32 + dy) as u32);
+                    let tile = world.get_tile_ptr(x, y);
+                    let (mut real_wear, mut port_wear, mut hooked_wear) = (0xabcdi32, 0xabcdi32, 0xabcdi32);
+                    let real_direction = real::find_fence_to_fix_on_tile(tile, &mut real_wear as *mut i32 as u32);
+                    let port_direction = crate::ztmaint::find_fence_to_fix_on_tile(tile, &mut port_wear as *mut i32 as u32);
+                    let hooked = unsafe { FIND_FENCE_TO_FIX_ON_TILE.hooked()(tile as *const u32, &mut hooked_wear as *mut i32 as *const i32) };
+                    if real_direction != port_direction || real_wear != port_wear || hooked != real_direction || hooked_wear != real_wear {
+                        failures.push(format!(
+                            "fence {fence:#x} tile ({x},{y}): real {real_direction:#x}/{real_wear}, port {port_direction:#x}/{port_wear}, hooked {hooked:#x}/{hooked_wear}"
+                        ));
+                    }
+                    if (dx, dy) == (0, 0) && real_direction != 0xffff_ffff && real_wear <= wear {
+                        own_tile_found = true;
+                    }
+                }
+            }
+            if !own_tile_found {
+                failures.push(format!("fence {fence:#x} at ({fx},{fy}) lowered to {wear} was not found from its own tile"));
+            }
+        }
+        for (&offset, &value) in WEAR_DWORDS.iter().zip(&saved) {
+            save_to_memory(fence + offset, value);
+        }
+    }
+    if lowered == 0 {
+        failures.push(format!("none of {} live fences was worth fixing once its wear was lowered", fences.len()));
+    }
+    finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTMAINT_PERF_COMPARE_LIVE`: per-call cost of the maintenance worker's per-tick and pathfinder functions, vanilla
+/// against the Rust port: `update` (the timer path, with `BFEntity::update` recorded by the test hook), `isTaskAvailable`
+/// over the type's bit vector and `findFenceToFixOnTile` over every interior live tile. Release battery only (skipped in
+/// debug builds, where `.original()` looks the address up in a registry on each call).
+pub(crate) fn run_ztmaint_perf_compare_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::hint::black_box;
+
+    use super::ztkeeper::{median_ns_per_call, PoleTimes, PERF_FAIL_RATIO};
+
+    let test_name = "ZTMAINT_PERF_COMPARE_LIVE";
+    if cfg!(debug_assertions) {
+        write_success_line(failure_log, &format!("{test_name} (skipped: debug build)"));
+        return false;
+    }
+    let mut failures: Vec<String> = Vec::new();
+    let Some(maint_type) = live_support::find_maint_type() else {
+        failures.push("the live world holds no maintenance-worker type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    if let Err(message) = install_entity_update_hook() {
+        failures.push(message);
+        return finish_test(test_name, failures, failure_log);
+    }
+    let world = globals().ztworldmgr();
+    let mut results: Vec<PoleTimes> = Vec::new();
+
+    {
+        let worker = live_support::build_standalone_maint(maint_type);
+        let saved = [0x270u32, 0x274, 0x27c, 0x280].map(|offset| get_from_memory::<u32>(worker.0 + offset));
+        let (first, second) = (vec![0x11u32; 8], vec![0x22u32; 8]);
+        save_to_memory(worker.0 + 0x270, first.as_ptr() as u32);
+        save_to_memory(worker.0 + 0x274, first.as_ptr() as u32 + 16);
+        save_to_memory(worker.0 + 0x27c, second.as_ptr() as u32);
+        save_to_memory(worker.0 + 0x280, second.as_ptr() as u32 + 8);
+        UPDATE_INTERCEPT.store(1, Ordering::SeqCst);
+        const CALLS: usize = 20_000;
+        let mut vanilla = || {
+            worker.set_timer(i32::MAX / 2);
+            UPDATE_LOG.lock().unwrap().clear();
+            for _ in 0..CALLS {
+                real::update(worker.0, black_box(1));
+            }
+        };
+        let mut port = || {
+            worker.set_timer(i32::MAX / 2);
+            UPDATE_LOG.lock().unwrap().clear();
+            for _ in 0..CALLS {
+                worker.update(black_box(1));
+            }
+        };
+        let mut hooked = || {
+            worker.set_timer(i32::MAX / 2);
+            UPDATE_LOG.lock().unwrap().clear();
+            for _ in 0..CALLS {
+                unsafe { openzt_detour::generated::ztmaint::UPDATE.hooked()(worker.0 as *const i32, black_box(1)) };
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, CALLS);
+        results.push(PoleTimes { label: "update (timer path)".to_string(), vanilla: times[0], port: times[1], hooked: times[2] });
+        UPDATE_INTERCEPT.store(0, Ordering::SeqCst);
+        UPDATE_LOG.lock().unwrap().clear();
+        for (offset, value) in [0x270u32, 0x274, 0x27c, 0x280].into_iter().zip(saved) {
+            save_to_memory(worker.0 + offset, value);
+        }
+        live_support::destroy_standalone_maint(worker);
+        drop((first, second));
+    }
+
+    {
+        let worker = live_support::build_standalone_maint(maint_type);
+        const CALLS: usize = 40;
+        let mut vanilla = || {
+            for _ in 0..1000 {
+                for index in 0..CALLS as u32 {
+                    black_box(real::is_task_available(worker.0, black_box(index)) & 0xff);
+                }
+            }
+        };
+        let mut port = || {
+            for _ in 0..1000 {
+                for index in 0..CALLS as u32 {
+                    black_box(worker.is_task_available(black_box(index)));
+                }
+            }
+        };
+        let mut hooked = || {
+            for _ in 0..1000 {
+                for index in 0..CALLS as u32 {
+                    black_box(unsafe { IS_TASK_AVAILABLE.hooked()(worker.0 as *const i32, black_box(index)) } & 0xff);
+                }
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, 1000 * CALLS);
+        results.push(PoleTimes { label: "isTaskAvailable".to_string(), vanilla: times[0], port: times[1], hooked: times[2] });
+        live_support::destroy_standalone_maint(worker);
+    }
+
+    {
+        let mut tiles: Vec<u32> = Vec::new();
+        for y in 1..world.map_y_size.min(200) - 1 {
+            for x in 1..world.map_x_size.min(200) - 1 {
+                tiles.push(world.get_tile_ptr(x, y));
+            }
+        }
+        let calls = tiles.len();
+        let mut wear = 0i32;
+        let wear_pointer = &mut wear as *mut i32;
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(real::find_fence_to_fix_on_tile(black_box(tile), wear_pointer as u32));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(crate::ztmaint::find_fence_to_fix_on_tile(black_box(tile), wear_pointer as u32));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { FIND_FENCE_TO_FIX_ON_TILE.hooked()(black_box(tile) as *const u32, wear_pointer as *const i32) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("findFenceToFixOnTile ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    }
+
+    {
+        // `updateGoals` with the virtual calls and `ZTUnit::updateGoals` going to the recording fakes the correctness test
+        // uses, so the numbers include the same small recording cost in every pole.
+        if let Err(message) = install_goals_hook() {
+            failures.push(message);
+        }
+        GOALS_INTERCEPT.store(1, Ordering::SeqCst);
+        let worker = live_support::build_standalone_maint(maint_type);
+        let real_vtable_address = base() + MAINT_VTABLE_RVA;
+        let mut fake_vtable: Vec<u32> = (0..VTABLE_SLOTS).map(|i| get_from_memory::<u32>(real_vtable_address + i * 4)).collect();
+        fake_vtable[0x2fc / 4] = goals_find_predator as *const () as usize as u32;
+        fake_vtable[0x1d8 / 4] = goals_goal_set as *const () as usize as u32;
+        save_to_memory(worker.0, fake_vtable.as_ptr() as u32);
+        let original_cog_vtable: u32 = get_from_memory(worker.0 + unit_offsets::COG_GOAL);
+        let mut cog_vtable: Vec<u32> = (0..16).map(|i| get_from_memory::<u32>(original_cog_vtable + i * 4)).collect();
+        cog_vtable[0] = fake_valid as *const () as usize as u32;
+        save_to_memory(worker.0 + unit_offsets::COG_GOAL, cog_vtable.as_ptr() as u32);
+        const CALLS: usize = 20_000;
+        for (label, pending, goal, predator, valid) in [("updateGoals (valid cog goal)", 0u8, 0x6eu32, 0u32, 1u32), ("updateGoals (predator branch)", 1, 0x75, 0x1234, 1)] {
+            GOALS_PREDATOR.store(predator, Ordering::SeqCst);
+            VALID_ANSWER.store(valid, Ordering::SeqCst);
+            save_to_memory(worker.0 + unit_offsets::PREDATOR_CHECK_PENDING, pending);
+            save_to_memory(worker.0 + unit_offsets::COG_GOAL + 0x14, goal);
+            let mut vanilla = || {
+                GOALS_LOG.lock().unwrap().clear();
+                for _ in 0..CALLS {
+                    real::update_goals(worker.0);
+                    save_to_memory(worker.0 + unit_offsets::PREDATOR_CHECK_PENDING, pending);
+                }
+            };
+            let mut port = || {
+                GOALS_LOG.lock().unwrap().clear();
+                for _ in 0..CALLS {
+                    worker.update_goals();
+                    save_to_memory(worker.0 + unit_offsets::PREDATOR_CHECK_PENDING, pending);
+                }
+            };
+            let mut hooked = || {
+                GOALS_LOG.lock().unwrap().clear();
+                for _ in 0..CALLS {
+                    unsafe { openzt_detour::generated::ztmaint::UPDATE_GOALS.hooked()(worker.0 as *const i32) };
+                    save_to_memory(worker.0 + unit_offsets::PREDATOR_CHECK_PENDING, pending);
+                }
+            };
+            let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, CALLS);
+            results.push(PoleTimes { label: label.to_string(), vanilla: times[0], port: times[1], hooked: times[2] });
+        }
+        GOALS_LOG.lock().unwrap().clear();
+        GOALS_INTERCEPT.store(0, Ordering::SeqCst);
+        save_to_memory(worker.0, real_vtable_address);
+        save_to_memory(worker.0 + unit_offsets::COG_GOAL, original_cog_vtable);
+        live_support::destroy_standalone_maint(worker);
+    }
+
+    for result in &results {
+        if result.hooked / result.vanilla > PERF_FAIL_RATIO {
+            failures.push(format!("hooked is more than {PERF_FAIL_RATIO}x vanilla: {}", result.summary()));
+        }
+    }
+    if failures.is_empty() {
+        let summary = results.iter().map(PoleTimes::summary).collect::<Vec<_>>().join("; ");
+        write_success_line(failure_log, &format!("{test_name} ({summary})"));
+        false
+    } else {
+        finish_test(test_name, failures, failure_log)
+    }
 }

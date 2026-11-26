@@ -26,11 +26,10 @@ use openzt_detour::{
         PICK_RANDOM_BUILDING_OF_TYPE, THROW_TRASH, UPDATE_STATUS_VARIABLES,
     },
     zthabitat::GET_ALL_ANIMALS,
-    ztguide::ADD_GUEST as GUIDE_ADD_GUEST,
     ztui_guestinfo::SET_GUEST_VISIBLE,
     ztunit::{
         DO_BUILDING as ZTUNIT_DO_BUILDING, FIND_ANY_SATISFIER, FIND_NEAREST_SATISFIER, IS_FUN_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IS_ON_WATER,
-        UPDATE_BUILDING_TILES,
+        UPDATE_BUILDING_TILES, FIND_PREDATOR,
     },
     ztworldmgr::{GET_NEED_INDEX, REMOVE_FROM_MEMBER_LISTS},
     },
@@ -68,6 +67,13 @@ static SEARCH_UNDER_TEST: AtomicBool = AtomicBool::new(false);
 
 /// Set while `fGuestThought` itself runs, so the thought override stands aside and the real thought manager is reached.
 static THOUGHT_UNDER_TEST: AtomicBool = AtomicBool::new(false);
+
+/// Set by the cloned-guest tick test: the world-mutating collaborators (`throwTrash`, `removeFromMemberLists`) log
+/// into [`SANDBOX_LOG`] and do nothing, and everything else runs for real.
+/// While set, `BFUnit::getPath` and `goToDest` succeed without touching the (fake) guest, so `followGuide` runs to the end.
+pub(super) static FOLLOW_SANDBOX: AtomicBool = AtomicBool::new(false);
+pub(super) static SANDBOX: AtomicBool = AtomicBool::new(false);
+pub(super) static SANDBOX_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 static SCRIPT: Mutex<Script> = Mutex::new(Script { on: false, state: 0, log: Vec::new(), fixtures: Vec::new() });
 
@@ -329,10 +335,24 @@ mod check_hooks {
         }
     }
 
+    /// `ZTUnit::findPredator` reads the unit's tile, which a clone that is not on the map does not have.
+    #[detour(FIND_PREDATOR)]
+    unsafe extern "thiscall" fn find_predator(this: *const u32, flag: bool) -> i32 {
+        if SANDBOX.load(Ordering::SeqCst) {
+            SANDBOX_LOG.lock().unwrap().push(format!("findPredator {flag}"));
+            0
+        } else {
+            unsafe { FIND_PREDATOR_DETOUR.call(this, flag) }
+        }
+    }
+
     #[detour(THROW_TRASH)]
     unsafe extern "thiscall" fn throw_trash(this: *const u32, arg: *const std::ffi::c_void) -> u32 {
         if scripted() {
             record(format!("throwTrash {}", arg as u32));
+            1
+        } else if SANDBOX.load(Ordering::SeqCst) {
+            SANDBOX_LOG.lock().unwrap().push(format!("throwTrash {}", arg as u32));
             1
         } else {
             unsafe { THROW_TRASH_DETOUR.call(this, arg) }
@@ -343,6 +363,8 @@ mod check_hooks {
     unsafe extern "thiscall" fn remove_from_member_lists(this: *const u32, guest: i32) {
         if scripted() {
             record("removeFromMemberLists".to_string());
+        } else if SANDBOX.load(Ordering::SeqCst) {
+            SANDBOX_LOG.lock().unwrap().push("removeFromMemberLists".to_string());
         } else {
             unsafe { REMOVE_FROM_MEMBER_LISTS_DETOUR.call(this, guest) }
         }
@@ -354,6 +376,8 @@ mod check_hooks {
             let answer = roll(3) == 0;
             record(format!("getPath {} {flag} {answer}", tile as u32 != 0));
             answer
+        } else if FOLLOW_SANDBOX.load(Ordering::SeqCst) {
+            true
         } else {
             unsafe { GET_PATH_DETOUR.call(this, tile, flag) }
         }
@@ -365,17 +389,10 @@ mod check_hooks {
             let answer = roll(3) != 0;
             record(format!("goToDest {} {arg} {answer}", name as u32));
             answer
+        } else if FOLLOW_SANDBOX.load(Ordering::SeqCst) {
+            true
         } else {
             unsafe { GO_TO_DEST_DETOUR.call(this, name, arg) }
-        }
-    }
-
-    #[detour(GUIDE_ADD_GUEST)]
-    unsafe extern "thiscall" fn guide_add_guest(this: *const u32, id: i32) {
-        if scripted() {
-            record(format!("addGuest {:#x}", id as u32));
-        } else {
-            unsafe { GUIDE_ADD_GUEST_DETOUR.call(this, id) }
         }
     }
 
@@ -484,6 +501,14 @@ mod check_hooks {
 
 /// The movement port's override slots: while a check runs scripted, `findPlaceToSit`, `findTrashCan` and
 /// `triggerGrandstandEscape` answer from the script instead of searching the zoo.
+fn scripted_add_guest(_guide: u32, id: i32) -> bool {
+    if !scripted() {
+        return false;
+    }
+    record(format!("addGuest {:#x}", id as u32));
+    true
+}
+
 fn scripted_find_place(_this: u32, arg: u32) -> Option<bool> {
     if !scripted() || SEARCH_UNDER_TEST.load(Ordering::SeqCst) {
         return None;
@@ -527,10 +552,11 @@ fn scripted_escape(_this: u32, arg: i32) -> bool {
     true
 }
 
-fn install_hooks() -> Result<(), String> {
+pub(super) fn install_hooks() -> Result<(), String> {
     static INSTALLED: Once = Once::new();
     let mut result = Ok(());
     INSTALLED.call_once(|| {
+        *live_support::viewing_overrides::ADD_GUEST.lock().unwrap() = Some(scripted_add_guest);
         *live_support::movement_overrides::FIND_PLACE.lock().unwrap() = Some(scripted_find_place);
         *live_support::movement_overrides::FIND_TRASH.lock().unwrap() = Some(scripted_find_trash);
         *live_support::movement_overrides::ESCAPE.lock().unwrap() = Some(scripted_escape);
@@ -539,6 +565,12 @@ fn install_hooks() -> Result<(), String> {
         *live_support::check_overrides::FIND_VIEWING_AREA.lock().unwrap() = Some(scripted_find_viewing_area);
         *live_support::sites_overrides::NUM_SITES.lock().unwrap() = Some(scripted_num_sites);
         *live_support::check_overrides::ANIMAL_HAPPY.lock().unwrap() = Some(scripted_animal_happy);
+        *live_support::check_overrides::NUM_ANIMALS.lock().unwrap() = Some(scripted_num_animals);
+        *live_support::check_overrides::SICK_ANIMALS.lock().unwrap() = Some(scripted_sick_animals);
+        *live_support::check_overrides::NUM_SICK_ANIMALS.lock().unwrap() = Some(scripted_num_sick_animals);
+        *live_support::check_overrides::DIFFERENT_SPECIES.lock().unwrap() = Some(scripted_different_species);
+        *live_support::check_overrides::FIND_ANIMAL.lock().unwrap() = Some(scripted_find_animal);
+        *live_support::check_overrides::CROWD_DENSITY.lock().unwrap() = Some(scripted_crowd_density);
         if let Err(e) = unsafe { check_hooks::init_detours() } {
             result = Err(format!("could not install the check hooks: {e:?}"));
         }
@@ -759,6 +791,7 @@ fn compare_check<R: PartialEq + Debug>(
             let mut rng = Lcg(seed);
             let type_clone = cloned_type(guest_type, &mut rng);
             let guest = live_support::build_standalone_guest(guest_type);
+            live_support::forget_standalone_guest(guest);
             plant_state(guest, type_clone, &mut rng);
             plant_shared(&mut rng);
             let outcome = match pole {
@@ -1109,6 +1142,7 @@ fn fake_list_head(non_empty: bool) -> u32 {
 const LADDER_GOALS: [u32; 17] = [0x64, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x71, 0x75, 0x79, 0x7f, 0x84, 0, 1, 0x69];
 
 fn plant_goals(guest: ZTGuest, guest_type: u32, rng: &mut Lcg) {
+    live_support::forget_standalone_guest(guest);
     save_to_memory(guest.0 + unit_offsets::GOAL_ID, LADDER_GOALS[rng.next() as usize % LADDER_GOALS.len()]);
     for offset in [0x1a8u32, 0x20e, 0x336, 0x339, 0x33e, 0x33f, 0x24c, 0x25c] {
         save_to_memory(guest.0 + offset, (rng.next() % 6 == 0) as u8);
@@ -1129,7 +1163,6 @@ mod goal_hooks {
 
     use openzt_detour::generated::{
         bfcoggoal::{SET as BFCOGGOAL_SET, SET_ID as BFCOGGOAL_SET_ID},
-        ztguest::{FIND_ANIMAL_BY_HAPPINESS, F_CROWD_DENSITY, F_DIFFERENT_SPECIES, F_NUM_ANIMALS, F_NUM_SICK_ANIMALS, F_SICK_ANIMALS},
         ztthoughtmgr::ADD_THOUGHT,
         ztunit::{IN_FRIENDLY_CHASE, INIT_AFTER_LOAD as ZTUNIT_INIT_AFTER_LOAD, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
         ztworldmgr::{FIND_NEAREST_UNSEEN_STARTING_SHOW, GET_ATTRACTIONS as GET_ATTRACTIONS_WORLD, GET_GAWK_SCENERY as GET_GAWK_SCENERY_WORLD, SATISFIES as SATISFIES_WORLD},
@@ -1166,76 +1199,12 @@ mod goal_hooks {
         }
     }
 
-    #[detour(F_NUM_ANIMALS)]
-    unsafe extern "fastcall" fn num_animals(this: *const c_void) -> u32 {
-        if scripted() {
-            let answer = roll(4);
-            record(format!("fNumAnimals {answer}"));
-            answer
-        } else {
-            unsafe { F_NUM_ANIMALS_DETOUR.call(this) }
-        }
-    }
-
-    #[detour(F_SICK_ANIMALS)]
-    unsafe extern "fastcall" fn sick_animals(this: *const c_void) -> u32 {
-        if scripted() {
-            let answer = (roll(3) == 0) as u32;
-            record(format!("fSickAnimals {answer}"));
-            answer
-        } else {
-            unsafe { F_SICK_ANIMALS_DETOUR.call(this) }
-        }
-    }
-
-    #[detour(F_NUM_SICK_ANIMALS)]
-    unsafe extern "fastcall" fn num_sick_animals(this: *const c_void) -> u32 {
-        if scripted() {
-            let answer = roll(4);
-            record(format!("fNumSickAnimals {answer}"));
-            answer
-        } else {
-            unsafe { F_NUM_SICK_ANIMALS_DETOUR.call(this) }
-        }
-    }
-
-    #[detour(F_DIFFERENT_SPECIES)]
-    unsafe extern "fastcall" fn different_species(this: *const c_void) -> u32 {
-        if scripted() {
-            let answer = roll(5);
-            record(format!("fDifferentSpecies {answer}"));
-            answer
-        } else {
-            unsafe { F_DIFFERENT_SPECIES_DETOUR.call(this) }
-        }
-    }
-
-    #[detour(F_CROWD_DENSITY)]
-    unsafe extern "fastcall" fn crowd_density(this: *const c_void) -> i64 {
-        if scripted() {
-            let answer = roll(60) as i64;
-            record(format!("fCrowdDensity {answer}"));
-            answer
-        } else {
-            unsafe { F_CROWD_DENSITY_DETOUR.call(this) }
-        }
-    }
-
-    #[detour(FIND_ANIMAL_BY_HAPPINESS)]
-    unsafe extern "thiscall" fn find_animal(this: *const u32, low: i32, high: i32) -> i32 {
-        if scripted() {
-            let animal = if roll(3) == 0 { 0 } else { fake_building() };
-            record(format!("findAnimalByHappiness {low} {high} {}", animal != 0));
-            animal as i32
-        } else {
-            unsafe { FIND_ANIMAL_BY_HAPPINESS_DETOUR.call(this, low, high) }
-        }
-    }
-
     #[detour(ZTUNIT_UPDATE_GOALS)]
     unsafe extern "thiscall" fn unit_update_goals(this: *const u32) {
         if scripted() {
             record("ZTUnit updateGoals".to_string());
+        } else if SANDBOX.load(Ordering::SeqCst) {
+            SANDBOX_LOG.lock().unwrap().push("ZTUnit updateGoals".to_string());
         } else {
             unsafe { ZTUNIT_UPDATE_GOALS_DETOUR.call(this) }
         }
@@ -1457,7 +1426,13 @@ pub(crate) fn run_ztguest_update_live_test(failure_log: &mut Option<std::fs::Fil
         return finish_test(test_name, failures, failure_log);
     }
     let saved_rng = rng();
-    let neighbours: Vec<u32> = (0..3).map(|_| live_support::build_standalone_guest(guest_type).0).collect();
+    let neighbours: Vec<u32> = (0..3)
+        .map(|_| {
+            let neighbour = live_support::build_standalone_guest(guest_type);
+            live_support::forget_standalone_guest(neighbour);
+            neighbour.0
+        })
+        .collect();
     let non_guest = {
         let unit = leaked(0x400);
         let vtable = leaked(0x100);
@@ -1484,6 +1459,7 @@ pub(crate) fn run_ztguest_update_live_test(failure_log: &mut Option<std::fs::Fil
             let mut rng = Lcg(seed);
             let type_clone = cloned_type(guest_type, &mut rng);
             let guest = live_support::build_standalone_guest(guest_type);
+            live_support::forget_standalone_guest(guest);
             plant_state(guest, type_clone, &mut rng);
             plant_shared(&mut rng);
             let mut neighbour_rng = Lcg(seed ^ 0x77);
@@ -1590,6 +1566,7 @@ fn scripted_set_bs(_this: u32, begin: u32, end: u32, call_flag: i8, force: i8, m
 }
 
 fn plant_listen(guest: ZTGuest, rng: &mut Lcg) {
+    live_support::forget_standalone_guest(guest);
     let ids = [0x2715u16, 0x2717, 0x272a, 0x272b, 0x272c, 0x272d, 0x2716, 0x2700, 0x2730];
     let times = [0u32, 5, 10, 11, 19, 20, 25, 29, 30, 31, 100];
     let count = (rng.next() % 7) as usize;
@@ -1696,6 +1673,54 @@ fn scripted_find_viewing_area(_this: u32) -> Option<bool> {
     let found = roll(4) != 0;
     record(format!("findViewingArea {found}"));
     Some(found)
+}
+
+fn scripted_num_animals(_this: u32) -> Option<u32> {
+    scripted().then(|| {
+        let answer = roll(4);
+        record(format!("fNumAnimals {answer}"));
+        answer
+    })
+}
+
+fn scripted_sick_animals(_this: u32) -> Option<u32> {
+    scripted().then(|| {
+        let answer = (roll(3) == 0) as u32;
+        record(format!("fSickAnimals {answer}"));
+        answer
+    })
+}
+
+fn scripted_num_sick_animals(_this: u32) -> Option<u32> {
+    scripted().then(|| {
+        let answer = roll(4);
+        record(format!("fNumSickAnimals {answer}"));
+        answer
+    })
+}
+
+fn scripted_different_species(_this: u32) -> Option<u32> {
+    scripted().then(|| {
+        let answer = roll(5);
+        record(format!("fDifferentSpecies {answer}"));
+        answer
+    })
+}
+
+fn scripted_crowd_density(_this: u32) -> Option<i64> {
+    scripted().then(|| {
+        let answer = roll(60) as i64;
+        record(format!("fCrowdDensity {answer}"));
+        answer
+    })
+}
+
+fn scripted_find_animal(_this: u32, low: i32, high: i32) -> Option<u32> {
+    scripted().then(|| {
+        let animal = if roll(3) == 0 { 0 } else { fake_building() };
+        record(format!("findAnimalByHappiness {low} {high} {}", animal != 0));
+        animal
+    })
 }
 
 fn scripted_animal_happy(_this: u32) -> Option<i32> {
@@ -1858,6 +1883,7 @@ fn habitat_tiles() -> Vec<(i32, i32)> {
 
 fn plant_sites(guest: ZTGuest, rng: &mut Lcg) {
     let tiles = habitat_tiles();
+    live_support::forget_standalone_guest(guest);
     let count = (rng.next() % 4) as usize;
     let begin = leaked(12 * 6);
     for index in 0..count {
@@ -2041,6 +2067,7 @@ fn fake_item_record() -> u32 {
 }
 
 fn plant_items(guest: ZTGuest, rng: &mut Lcg) {
+    live_support::forget_standalone_guest(guest);
     let grid = fake_item_grid();
     for index in 0..4u32 {
         save_to_memory(grid + 4 + index * 4, if rng.next() % 3 == 0 { 0 } else { fake_item_building() });

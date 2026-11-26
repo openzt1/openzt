@@ -346,6 +346,7 @@ pub(crate) fn run_ztguide_is_speaking_live_test(failure_log: &mut Option<std::fs
         let begin = text.as_ptr() as u32;
         for goal in [0x76u32, 0x77] {
             let guide = live_support::build_standalone_guide(guide_type);
+            let own_string: [u32; 2] = [get_from_memory(guide.0 + 0x54), get_from_memory(guide.0 + 0x58)];
             save_to_memory(guide.0 + 0x54, begin);
             save_to_memory(guide.0 + 0x58, begin + text.len() as u32);
             save_to_memory(guide.0 + unit_offsets::GOAL_ID, goal);
@@ -359,6 +360,8 @@ pub(crate) fn run_ztguide_is_speaking_live_test(failure_log: &mut Option<std::fs
                     String::from_utf8_lossy(string)
                 ));
             }
+            save_to_memory(guide.0 + 0x54, own_string[0]);
+            save_to_memory(guide.0 + 0x58, own_string[1]);
         }
     }
     if seen.len() < 2 {
@@ -566,4 +569,110 @@ pub(crate) fn run_ztguide_tile_filter_live_test(failure_log: &mut Option<std::fs
         failures.push(format!("only {seen:?} occurred, so one outcome was never covered"));
     }
     finish_test(test_name, failures, failure_log)
+}
+
+/// `ZTGUIDE_PERF_COMPARE_LIVE`: per-call cost of the three pathfinder callbacks the guide supplies, vanilla against the
+/// Rust port, over every live tile (up to 200x200) from the middle of the map, the access pattern a path search has.
+/// Release battery only (skipped in debug builds, where `.original()` looks the address up in a registry on each call).
+pub(crate) fn run_ztguide_perf_compare_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
+    use std::hint::black_box;
+
+    use super::ztkeeper::{median_ns_per_call, PoleTimes, PERF_FAIL_RATIO};
+    use crate::reimplementation_tests::harness::write_success_line;
+
+    let test_name = "ZTGUIDE_PERF_COMPARE_LIVE";
+    if cfg!(debug_assertions) {
+        write_success_line(failure_log, &format!("{test_name} (skipped: debug build)"));
+        return false;
+    }
+    let mut failures: Vec<String> = Vec::new();
+    let Some(guide_type) = live_support::find_guide_type() else {
+        failures.push("the live world holds no guide type".to_string());
+        return finish_test(test_name, failures, failure_log);
+    };
+    let world = globals().ztworldmgr();
+    let guide = live_support::build_standalone_guide(guide_type);
+    place_at_tile(guide, (world.map_x_size / 2, world.map_y_size / 2));
+    let mut tiles: Vec<u32> = Vec::new();
+    for y in 0..world.map_y_size.min(200) {
+        for x in 0..world.map_x_size.min(200) {
+            tiles.push(world.get_tile_ptr(x, y));
+        }
+    }
+    let calls = tiles.len();
+    let mut results: Vec<PoleTimes> = Vec::new();
+
+    {
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(real::get_terrain_cost(guide.0, black_box(tile)));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(guide.get_terrain_cost(black_box(tile)));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { GET_TERRAIN_COST.hooked()(guide.0 as *const u32, black_box(tile) as *const u32) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("getTerrainCost ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    }
+    {
+        let mut out = 0u8;
+        let out_pointer = &mut out as *mut u8;
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(real::fences_ok(guide.0, black_box(tile), 2, out_pointer as *const bool));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(guide.fences_ok(black_box(tile), 2, out_pointer as u32));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { FENCES_OK.hooked()(guide.0 as *const u32, black_box(tile) as *const u32, 2, out_pointer as *const bool, std::ptr::null()) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("fencesOK ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    }
+    {
+        let mut vanilla = || {
+            for &tile in &tiles {
+                black_box(crate::ztguide::live_support::real::tile_filter(guide.0, black_box(tile), false));
+            }
+        };
+        let mut port = || {
+            for &tile in &tiles {
+                black_box(guide.tile_filter(black_box(tile), false));
+            }
+        };
+        let mut hooked = || {
+            for &tile in &tiles {
+                black_box(unsafe { TILE_FILTER.hooked()(guide.0 as *const u32, black_box(tile) as *const u32, false) });
+            }
+        };
+        let times = median_ns_per_call(&mut [&mut vanilla, &mut port, &mut hooked], 9, calls);
+        results.push(PoleTimes { label: format!("tileFilter ({calls} tiles)"), vanilla: times[0], port: times[1], hooked: times[2] });
+    }
+    live_support::destroy_standalone_guide(guide);
+
+    for result in &results {
+        if result.hooked / result.vanilla > PERF_FAIL_RATIO {
+            failures.push(format!("hooked is more than {PERF_FAIL_RATIO}x vanilla: {}", result.summary()));
+        }
+    }
+    if failures.is_empty() {
+        let summary = results.iter().map(PoleTimes::summary).collect::<Vec<_>>().join("; ");
+        write_success_line(failure_log, &format!("{test_name} ({summary})"));
+        false
+    } else {
+        finish_test(test_name, failures, failure_log)
+    }
 }
