@@ -128,6 +128,7 @@ pub(super) mod detour_zoo_main {
         tests.extend([RegisteredTest { name: "MENUMUSICHANDLER_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_original_routes_to_trampoline_test }]);
         tests.push(RegisteredTest { name: "AMBIENTS_DETOURS_ENABLED", run: tests::ambients::run_ambients_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTSTAFF_DETOURS_ENABLED", run: tests::ztstaff::run_ztstaff_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTKEEPER_DETOURS_ENABLED", run: tests::ztkeeper::run_ztkeeper_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTMAINT_DETOURS_ENABLED", run: tests::ztmaint::run_ztmaint_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTANIMAL_DETOURS_ENABLED", run: tests::ztanimal::run_ztanimal_detours_enabled_test });
@@ -1167,6 +1168,19 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSOUNDSCAPE_INIT", run: tests::ztsoundscape::run_ztsoundscape_init_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE", run: tests::ztsoundscape::run_ztsoundscape_update_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE", run: tests::ztsoundscape::run_ztsoundscape_update_attempt_failure_test },
+            RegisteredTest { name: "ZTSTAFF_FIXTURE_LAYOUT_LIVE", run: tests::ztstaff::run_ztstaff_fixture_layout_live_test },
+            RegisteredTest { name: "ZTSTAFF_ASSIGNED_HABITATS_LIVE", run: tests::ztstaff::run_ztstaff_assigned_habitats_live_test },
+            RegisteredTest { name: "ZTSTAFF_LEAF_LIVE", run: tests::ztstaff::run_ztstaff_leaf_live_test },
+            RegisteredTest { name: "ZTSTAFF_LIFECYCLE_LIVE", run: tests::ztstaff::run_ztstaff_lifecycle_live_test },
+            RegisteredTest { name: "ZTSTAFF_INIT_STATUS_VARS_LIVE", run: tests::ztstaff::run_ztstaff_init_status_vars_live_test },
+            RegisteredTest { name: "ZTSTAFF_SAVE_LOAD_LIVE", run: tests::ztstaff::run_ztstaff_save_load_live_test },
+            RegisteredTest { name: "ZTSTAFF_ADD_REMOVE_LIVE", run: tests::ztstaff::run_ztstaff_add_remove_live_test },
+            RegisteredTest { name: "ZTSTAFF_TERRAIN_COST_LIVE", run: tests::ztstaff::run_ztstaff_terrain_cost_live_test },
+            RegisteredTest { name: "ZTSTAFF_DO_CONDITIONALS_LIVE", run: tests::ztstaff::run_ztstaff_do_conditionals_live_test },
+            RegisteredTest { name: "ZTSTAFF_SET_TARGET_TILE_LIVE", run: tests::ztstaff::run_ztstaff_set_target_tile_live_test },
+            RegisteredTest { name: "ZTSTAFF_PICK_RANDOM_DEST_LIVE", run: tests::ztstaff::run_ztstaff_pick_random_dest_live_test },
+            RegisteredTest { name: "ZTSTAFF_FENCES_OK_LIVE", run: tests::ztstaff::run_ztstaff_fences_ok_live_test },
+            RegisteredTest { name: "ZTSTAFF_FOUND_ESCAPED_ANIMAL_LIVE", run: tests::ztstaff::run_ztstaff_found_escaped_animal_live_test },
             RegisteredTest { name: "ZTKEEPER_FIXTURE_LAYOUT_LIVE", run: tests::ztkeeper::run_ztkeeper_fixture_layout_live_test },
             RegisteredTest { name: "ZTKEEPER_LIFECYCLE_LIVE", run: tests::ztkeeper::run_ztkeeper_lifecycle_live_test },
             RegisteredTest { name: "ZTKEEPER_SET_SPEED_LIVE", run: tests::ztkeeper::run_ztkeeper_set_speed_live_test },

@@ -2354,7 +2354,7 @@ impl ZTAnimal {
         if self.flag(0x395) && self.flag(animal_offsets::NOT_SELECTABLE) {
             return false;
         }
-        let added = low_byte_bool(unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) });
+        let added = unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) };
         if !added {
             return false;
         }
@@ -7373,8 +7373,8 @@ mod animal_detours {
     }
 
     #[detour(ADD_TO_MAP)]
-    unsafe extern "thiscall" fn add_to_map(this: *const u32) -> u32 {
-        ZTAnimal(this as u32).add_to_map() as u32
+    unsafe extern "thiscall" fn add_to_map(this: *const u32) -> bool {
+        ZTAnimal(this as u32).add_to_map()
     }
 
     #[detour(REMOVE_FROM_MAP)]
@@ -7892,7 +7892,7 @@ mod animal_detours {
             unsafe { super::SAVE_DETOUR.call(this as *const u32, file) }
         }
 
-        pub(crate) fn add_to_map(this: u32) -> u32 {
+        pub(crate) fn add_to_map(this: u32) -> bool {
             unsafe { super::ADD_TO_MAP_DETOUR.call(this as *const u32) }
         }
 

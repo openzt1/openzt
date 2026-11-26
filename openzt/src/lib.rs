@@ -177,6 +177,8 @@ mod ztguest;
 mod ztguide;
 /// ztkeeper module reimplements the vanilla ZTKeeper staff entity in place over vanilla memory.
 mod ztkeeper;
+/// ztstaff module reimplements the vanilla ZTStaff base class (assigned-habitat list, leaf getters) in place over vanilla memory.
+mod ztstaff;
 /// ztmaint module reimplements the vanilla ZTMaint staff entity (and the ZTMaintTaskPool helpers) in place over vanilla memory.
 mod ztmaint;
 
@@ -323,6 +325,7 @@ mod zoo_init {
             ztguest::init();
             ambients::init();
             ztsoundscape::init();
+            ztstaff::init();
             ztkeeper::init();
             ztmaint::init();
             ztguide::init();

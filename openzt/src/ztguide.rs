@@ -26,10 +26,6 @@ use openzt_detour::generated::{
         INIT_STATUS_VARS, IS_SPEAKING, LOAD, RELEASE_GUESTS, REMOVE_FROM_MAP, REMOVE_GUEST, SAVE, TILE_FILTER, TRIGGER_NEARBY_GUESTS, UPDATE_GOALS,
     },
     ztguest::FOLLOW_GUIDE,
-    ztstaff::{
-        DO_CONDITIONALS as ZTSTAFF_DO_CONDITIONALS, INIT_STATUS_VARS as ZTSTAFF_INIT_STATUS_VARS, IS_HABITAT_ASSIGNED as ZTSTAFF_IS_HABITAT_ASSIGNED,
-        LOAD as ZTSTAFF_LOAD, REMOVE_FROM_MAP as ZTSTAFF_REMOVE_FROM_MAP, SAVE as ZTSTAFF_SAVE,
-    },
     ztunit::{CLEAR_GOAL as ZTUNIT_CLEAR_GOAL, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
 };
 use openzt_detour_macro::detour_mod;
@@ -41,6 +37,7 @@ use crate::{
     zthabitat::{next_game_random, viewing_area::has_oa, ZTHabitat, MAX_PATH_COST_RVA},
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, read_field, unit_offsets, write_field},
     ztguest::guest_offsets,
+    ztstaff::ZTStaff,
     ztmegatilemgr::entity_type_matches,
     vanilla_list,
 };
@@ -355,7 +352,7 @@ impl ZTGuide {
             self.release_guests(100);
         }
         save_to_memory(self.0 + VIEWING_AREA_INFORMED_OFFSET, 0u8);
-        unsafe { ZTSTAFF_REMOVE_FROM_MAP.original()(self.0 as *const u32, param) };
+        ZTStaff(self.0).remove_from_map(param);
     }
 
     /// `ZTGuide::initStatusVars` (`0x0059b2cf`): the `ZTStaff` reset; then, for a guide type, `+0x298` is zeroed, the
@@ -364,7 +361,7 @@ impl ZTGuide {
     /// when the type's `+0x84` is clear). Returns `true` for a guide type, `false` for another type, and the
     /// `ZTStaff` result when the unit has no type.
     pub fn init_status_vars(self) -> bool {
-        let staff_result = unsafe { ZTSTAFF_INIT_STATUS_VARS.original()(self.0 as *const u32) };
+        let staff_result = ZTStaff(self.0).init_status_vars();
         let entity_type: u32 = get_from_memory(self.0 + unit_offsets::ENTITY_TYPE);
         if entity_type == 0 {
             return low_byte_bool(staff_result);
@@ -399,7 +396,7 @@ impl ZTGuide {
             ok &= write_field(&id as *const u32 as u32, 4, file);
         }
         ok &= write_field(self.0 + VIEWING_AREA_INFORMED_OFFSET, 1, file);
-        let staff_ok = unsafe { ZTSTAFF_SAVE.original()(self.0 as *const u32, file) };
+        let staff_ok = ZTStaff(self.0).save(file);
         staff_ok && ok
     }
 
@@ -448,19 +445,12 @@ impl ZTGuide {
         if !ok {
             return false;
         }
-        unsafe { ZTSTAFF_LOAD.original()(self.0 as *const u32, file, version) }
+        ZTStaff(self.0).load(file, version)
     }
 
     /// The habitats the guide is assigned to, in list order (`ZTStaff`'s list at `+0x260`).
     fn assigned_habitats(self) -> Vec<u32> {
-        let sentinel: u32 = get_from_memory(self.0 + unit_offsets::ASSIGNED_HABITATS);
-        let mut habitats = Vec::new();
-        let mut node: u32 = get_from_memory(sentinel);
-        while node != sentinel {
-            habitats.push(get_from_memory(node + 8));
-            node = get_from_memory(node);
-        }
-        habitats
+        ZTStaff(self.0).assigned_habitats()
     }
 
     /// `ZTGuide::getHabFromVA` (`0x0061b68a`): a habitat whose viewing area on `tile` can be observed. Starts at one of
@@ -485,7 +475,7 @@ impl ZTGuide {
                 continue;
             }
             let habitat: u32 = get_from_memory(viewing_area);
-            if self.assigned_habitats().is_empty() || low_byte_bool(unsafe { ZTSTAFF_IS_HABITAT_ASSIGNED.original()(self.0 as *const u32, habitat as *const u32) }) {
+            if self.assigned_habitats().is_empty() || ZTStaff(self.0).is_habitat_assigned(habitat) {
                 return habitat;
             }
         }
@@ -665,7 +655,7 @@ impl ZTGuide {
                 self.trigger_nearby_guests();
             }
         }
-        unsafe { ZTSTAFF_DO_CONDITIONALS.hooked()(self.0 as *const u32) };
+        ZTStaff(self.0).do_conditionals();
     }
 
     /// Number of habitats the habitat manager holds, `0` without a manager. Read live, as vanilla does.

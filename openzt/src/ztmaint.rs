@@ -31,9 +31,6 @@ use openzt_detour::generated::{
         UPDATE_GOALS,
     },
     ztmainttaskpool::{CLEAR, GET_EVENTS, LISTEN},
-    ztstaff::{
-        INIT_STATUS_VARS as ZTSTAFF_INIT_STATUS_VARS, LOAD as ZTSTAFF_LOAD, REMOVE_FROM_MAP as ZTSTAFF_REMOVE_FROM_MAP, SAVE as ZTSTAFF_SAVE,
-    },
     ztunit::UPDATE_GOALS as ZTUNIT_UPDATE_GOALS,
 };
 use openzt_detour_macro::detour_mod;
@@ -45,6 +42,7 @@ use crate::{
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, call_slot_3, read_field, unit_offsets, write_field},
     ztmegatilemgr::entity_type_matches,
     vanilla_list,
+    ztstaff::ZTStaff,
 };
 
 /// `ZTMaintType::createEntity` allocates this many bytes.
@@ -101,10 +99,12 @@ mod type_offsets {
 
 /// Staff fields `update` and `ZTMaint::updateFenceList` treat as two `{begin, end}` pointer pairs.
 mod staff_vectors {
-    pub const FIRST_BEGIN: u32 = 0x270;
-    pub const FIRST_END: u32 = 0x274;
-    pub const SECOND_BEGIN: u32 = 0x27c;
-    pub const SECOND_END: u32 = 0x280;
+    use crate::ztstaff::staff_offsets;
+
+    pub const FIRST_BEGIN: u32 = staff_offsets::SKIP_ENTITIES_BEGIN;
+    pub const FIRST_END: u32 = staff_offsets::SKIP_ENTITIES_END;
+    pub const SECOND_BEGIN: u32 = staff_offsets::SKIP_TILES_BEGIN;
+    pub const SECOND_END: u32 = staff_offsets::SKIP_TILES_END;
 }
 
 /// Vtable slots (byte offsets) dispatched through so subclass overrides are honoured.
@@ -301,7 +301,7 @@ impl ZTMaint {
     /// cleared, `+0x64` links to the unit itself, `+0x68` to the type's `+0x80` block (null when the type's `+0x84`
     /// is clear), and the timer reloads from the type.
     pub fn init_status_vars(self) {
-        unsafe { ZTSTAFF_INIT_STATUS_VARS.original()(self.0 as *const u32) };
+        ZTStaff(self.0).init_status_vars();
         let entity_type: u32 = get_from_memory(self.0 + unit_offsets::ENTITY_TYPE);
         if entity_type == 0 {
             return;
@@ -379,7 +379,7 @@ impl ZTMaint {
                 self.set_current_task(0);
             }
         }
-        unsafe { ZTSTAFF_REMOVE_FROM_MAP.original()(self.0 as *const u32, param) };
+        ZTStaff(self.0).remove_from_map(param);
     }
 
     /// `ZTMaint::save` (`0x004794be`): `+0x2a0`, `+0x298`, `+0x294`, the 16-bit task count, the bit count, one byte
@@ -397,7 +397,7 @@ impl ZTMaint {
             let byte = bits.get(index) as u32;
             ok &= write_field(&byte as *const u32 as u32, 1, file);
         }
-        let staff_ok = unsafe { ZTSTAFF_SAVE.original()(self.0 as *const u32, file) };
+        let staff_ok = ZTStaff(self.0).save(file);
         staff_ok && ok
     }
 
@@ -433,7 +433,7 @@ impl ZTMaint {
         if !ok {
             return false;
         }
-        unsafe { ZTSTAFF_LOAD.original()(self.0 as *const u32, file, version) }
+        ZTStaff(self.0).load(file, version)
     }
 }
 

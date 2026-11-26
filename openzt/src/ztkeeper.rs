@@ -2,7 +2,7 @@
 //!
 //! Vanilla-layout-compatible (style 1): keepers are heap entities that un-ported `ZTStaff`/`ZTUnit`/`BFEntity`
 //! code, `ZTHabitat`, the goal classes and `ZTAIMgr` all read by raw offset, so the object stays vanilla memory
-//! and this module reads and writes it in place. A keeper is `0x2ac` bytes: the `ZTStaff` prefix (`0x000`-`0x287`)
+//! and this module reads and writes it in place. A keeper is `0x2ac` bytes: the `ZTStaff` prefix (`0x000`-`0x293`)
 //! followed by the fields below. Nothing here owns an allocation. Entities are created through
 //! `ZTKeeperType::createEntity` and freed through the scalar-deleting destructor, both vanilla allocator paths.
 //!
@@ -25,13 +25,6 @@ use openzt_detour::generated::{
     },
     ztfence::CLOSE_GATE as ZTFENCE_CLOSE_GATE,
     ztshow::ABORT_SHOW as ZTSHOW_ABORT_SHOW,
-    ztstaff::{
-        CONSTRUCTOR as ZTSTAFF_CONSTRUCTOR, DESTRUCTOR_0 as ZTSTAFF_DESTRUCTOR_0, DO_CONDITIONALS as ZTSTAFF_DO_CONDITIONALS, DROP as ZTSTAFF_DROP,
-        INIT_AFTER_LOAD as ZTSTAFF_INIT_AFTER_LOAD, INIT_STATUS_VARS as ZTSTAFF_INIT_STATUS_VARS, LOAD as ZTSTAFF_LOAD,
-        REMOVE_ASSIGNED_HABITAT as ZTSTAFF_REMOVE_ASSIGNED_HABITAT, REMOVE_FROM_MAP as ZTSTAFF_REMOVE_FROM_MAP,
-        SAVE as ZTSTAFF_SAVE,
-        SET_TARGET_TILE as ZTSTAFF_SET_TARGET_TILE,
-    },
     ztunit::{RESET_AI as ZTUNIT_RESET_AI, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
 };
 use openzt_detour_macro::detour_mod;
@@ -43,6 +36,7 @@ use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
     zthabitat::{next_game_random, ZTHabitat, MAX_PATH_COST_RVA},
+    ztstaff::ZTStaff,
     ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG},
     vanilla_string::VanillaString,
     ztshow::{remove_unit as show_info_remove_unit, script::mgr::{get_item as show_script_get_item, get_script as show_script_get}},
@@ -100,15 +94,11 @@ pub mod unit_offsets {
     pub const COG_GOAL_FLAG: u32 = 0x1a8;
     /// The byte every `fRoutine` copies into its `done` flag: set while the unit is not moving.
     pub const STOPPED: u32 = 0xf9;
-    /// `ZTStaff`'s assigned-habitat list: a pointer to the sentinel node of a doubly linked list whose nodes hold
-    /// the next link at `+0x0` and the habitat pointer at `+0x8`.
-    pub const ASSIGNED_HABITATS: u32 = 0x260;
+    pub use crate::ztstaff::staff_offsets::{ASSIGNED_HABITATS, ESCAPED_ANIMAL};
     /// A byte `updateGoals` consumes: set when something wants a predator check on the next goal update.
     pub const PREDATOR_CHECK_PENDING: u32 = 0x24c;
     /// The predator `updateGoals` records when it switches to the predator goal.
     pub const PREDATOR: u32 = 0x22c;
-    /// The animal id the escaped-animal goal is set against (a `ZTStaff` dword).
-    pub const ESCAPED_ANIMAL: u32 = 0x290;
     /// The fence gate the unit is queued at; `notifyHabitatNotComing` closes it.
     pub const GATE: u32 = 0x248;
     /// The id of the `ZTShowInfo` the unit performs in (`u16`).
@@ -372,7 +362,7 @@ impl ZTKeeper {
         if tile != current {
             self.notify_habitat_not_coming(0);
         }
-        unsafe { ZTSTAFF_SET_TARGET_TILE.original()(self.0 as *const u32, tile as *const u32, flag) };
+        ZTStaff(self.0).set_target_tile(tile, flag);
     }
 
     /// `ZTKeeper::resetAI` (`0x005ae772`): the `ZTUnit` reset, then back to habitat duties.
@@ -389,8 +379,7 @@ impl ZTKeeper {
         if habitat != 0 && get_from_memory::<u32>(self.0 + unit_offsets::COG_GOAL_STATE) == GOAL_STATE_SHOW {
             unsafe { ref_from_memory::<ZTHabitat>(habitat) }.add_show_unit(self.0);
         }
-        let staff_init_after_load = unsafe { transmute::<u32, unsafe extern "thiscall" fn(*const u32, u32) -> u32>(ZTSTAFF_INIT_AFTER_LOAD.address) };
-        low_byte_bool(unsafe { staff_init_after_load(self.0 as *const u32, param) })
+        ZTStaff(self.0).init_after_load(param)
     }
 
     /// `ZTKeeper::getEvents` (vtable `+0x8`, `0x00423cee`): this keeper's events, through the three-argument
@@ -421,14 +410,7 @@ impl ZTKeeper {
 
     /// The habitats this keeper is assigned to, in list order.
     fn assigned_habitats(self) -> Vec<u32> {
-        let sentinel: u32 = get_from_memory(self.0 + unit_offsets::ASSIGNED_HABITATS);
-        let mut habitats = Vec::new();
-        let mut node: u32 = get_from_memory(sentinel);
-        while node != sentinel {
-            habitats.push(get_from_memory(node + 8));
-            node = get_from_memory(node);
-        }
-        habitats
+        ZTStaff(self.0).assigned_habitats()
     }
 
     /// `ZTKeeper::checkAssignedHabitats` (`0x00423d95`): drops every assigned habitat that now blocks this keeper's
@@ -443,7 +425,7 @@ impl ZTKeeper {
             loop {
                 let habitat: u32 = get_from_memory(node + 8);
                 if unsafe { ref_from_memory::<ZTHabitat>(habitat) }.block_service(self.0, false, true) == 1 {
-                    unsafe { ZTSTAFF_REMOVE_ASSIGNED_HABITAT.original()(self.0 as *const u32, habitat as *const u32) };
+                    ZTStaff(self.0).remove_assigned_habitat(habitat);
                     continue 'restart;
                 }
                 node = get_from_memory(node);
@@ -457,7 +439,7 @@ impl ZTKeeper {
     /// `ZTKeeper::doConditionals` (`0x00423d84`): re-validates the assigned habitats, then the `ZTStaff` conditionals.
     pub fn do_conditionals(self) {
         self.check_assigned_habitats();
-        unsafe { ZTSTAFF_DO_CONDITIONALS.hooked()(self.0 as *const u32) };
+        ZTStaff(self.0).do_conditionals();
     }
 
     /// `ZTKeeper::cleansUp` (`0x0042404e`): whether `entity`'s type is one this keeper's type cleans up after.
@@ -493,7 +475,7 @@ impl ZTKeeper {
                 call_slot_2(self.0, slots::GOAL_SET, GOAL_HABITAT_DUTIES, 0);
             }
         }
-        unsafe { ZTSTAFF_DROP.original()(self.0 as *const u32) };
+        ZTStaff(self.0).drop_staff();
     }
 
     /// `ZTKeeper::getRandomAssignedHabitat` (`0x0049db62`): a random habitat from the assigned list, or - with no
@@ -596,14 +578,14 @@ impl ZTKeeper {
         if get_from_memory::<u8>(self.0 + unit_offsets::MBR_0X142) == 0 {
             self.notify_habitat_not_coming(param as u32);
         }
-        unsafe { ZTSTAFF_REMOVE_FROM_MAP.original()(self.0 as *const u32, param) };
+        ZTStaff(self.0).remove_from_map(param);
     }
 
     /// `ZTKeeper::initStatusVars` (`0x00457b70`): the `ZTStaff` reset, the five own dwords cleared, then the unit
     /// links itself at `+0x64` and to its type's `+0x80` block at `+0x68` (null when the type's `+0x84` is clear).
     /// Returns `1`, vanilla's `AL`.
     pub fn init_status_vars(self) -> u32 {
-        unsafe { ZTSTAFF_INIT_STATUS_VARS.original()(self.0 as *const u32) };
+        ZTStaff(self.0).init_status_vars();
         for offset in OWN_DWORD_OFFSETS {
             save_to_memory(self.0 + offset, 0u32);
         }
@@ -818,7 +800,7 @@ impl ZTKeeper {
             ok &= write_field(self.0 + offset, 4, file);
         }
         ok &= write_field(self.0 + PATHING_TO_HABITAT_GATE_OFFSET, 1, file);
-        let staff_ok = unsafe { ZTSTAFF_SAVE.original()(self.0 as *const u32, file) };
+        let staff_ok = ZTStaff(self.0).save(file);
         staff_ok && ok
     }
 
@@ -850,12 +832,12 @@ impl ZTKeeper {
         if !ok {
             return false;
         }
-        unsafe { ZTSTAFF_LOAD.original()(self.0 as *const u32, file, version) }
+        ZTStaff(self.0).load(file, version)
     }
 
     /// `ZTKeeper::ZTKeeper` (`0x00457b2e`): the `ZTStaff` constructor, a clear `+0x2a8` byte and the keeper vtable.
     pub fn construct(self, keeper_type: u32) {
-        unsafe { ZTSTAFF_CONSTRUCTOR.original()(self.0 as *const u32, keeper_type) };
+        ZTStaff(self.0).construct(keeper_type);
         self.set_pathing_to_habitat_gate(0);
         save_to_memory(self.0, get_module_base("zoo.exe") as u32 + KEEPER_VTABLE_RVA);
     }
@@ -864,7 +846,7 @@ impl ZTKeeper {
     /// destructor. Returns what that destructor returns.
     pub fn destruct(self) -> *const u32 {
         save_to_memory(self.0, get_module_base("zoo.exe") as u32 + KEEPER_VTABLE_RVA);
-        unsafe { ZTSTAFF_DESTRUCTOR_0.original()(self.0 as *const u32) }
+        ZTStaff(self.0).destruct()
     }
 }
 

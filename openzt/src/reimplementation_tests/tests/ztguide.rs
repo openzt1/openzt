@@ -2,14 +2,10 @@
 //! body, one for the Rust port), runs the real body on one and the port on the other, and compares return values and
 //! the guides' whole memory (heap pointers may differ, shared pointers may not).
 
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Mutex, Once,
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use openzt_detour::generated::{
     ztguide::{DO_CONDITIONALS, FENCES_OK, F_ROUTINE, F_VAROUTINE, GET_TERRAIN_COST, IS_SPEAKING, TILE_FILTER},
-    ztstaff::DO_CONDITIONALS as ZTSTAFF_DO_CONDITIONALS,
 };
 
 use super::ztguide_trigger::{cloned_guide_type, fake_guest, install_follow_hook, plant, set_follow_intercept, take_follow_log, unplant, GUIDE_ID};
@@ -370,46 +366,16 @@ pub(crate) fn run_ztguide_is_speaking_live_test(failure_log: &mut Option<std::fs
     finish_test(test_name, failures, failure_log)
 }
 
-/// While set, `ZTStaff::doConditionals` is recorded instead of run: the real one runs the whole staff conditional
-/// pass, which a bare fixture cannot take.
-static COND_INTERCEPT: AtomicU32 = AtomicU32::new(0);
-static COND_LOG: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
-
-#[openzt_detour_macro::detour_mod]
-mod conditionals_hooks {
-    use super::*;
-
-    #[detour(ZTSTAFF_DO_CONDITIONALS)]
-    unsafe extern "thiscall" fn staff_do_conditionals(this: *const u32) {
-        if COND_INTERCEPT.load(Ordering::SeqCst) != 0 {
-            COND_LOG.lock().unwrap().push("staff");
-        } else {
-            unsafe { ZTSTAFF_DO_CONDITIONALS_DETOUR.call(this) }
-        }
-    }
-}
-
-fn install_conditionals_hooks() -> Result<(), String> {
-    static INSTALLED: Once = Once::new();
-    let mut result = Ok(());
-    INSTALLED.call_once(|| {
-        if let Err(e) = unsafe { conditionals_hooks::init_detours() } {
-            result = Err(format!("could not install the conditionals hooks: {e:?}"));
-        }
-    });
-    result
-}
-
 /// `ZTGUIDE_DO_CONDITIONALS_LIVE`: `doConditionals` over the countdown (`0`, `1`, `5`, `-1`), goal (`0x76`, `0x77`,
 /// other), the `+0x20c` byte and a cloned guide type's `cCrowdCheck` (`0` and `7`); real against port and the hooked
-/// address. `ZTStaff::doConditionals` goes to a recording hook, and `triggerNearbyGuests` is observed through its
+/// address. `ZTStaff::doConditionals` is counted by `ztstaff::live_support::conditionals_probe` instead of run, and `triggerNearbyGuests` is observed through its
 /// effect: a fake guest planted on the guide's tile (follow chance 100, radius 0) reaches the `followGuide` recording
 /// hook exactly when it runs. Compared: both logs, the countdown, the follower list and the whole guide. Fails if
 /// fewer than four distinct outcomes occurred.
 pub(crate) fn run_ztguide_do_conditionals_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTGUIDE_DO_CONDITIONALS_LIVE";
     let mut failures: Vec<String> = Vec::new();
-    if let Err(message) = install_conditionals_hooks().and_then(|()| install_follow_hook()) {
+    if let Err(message) = install_follow_hook() {
         failures.push(message);
         return finish_test(test_name, failures, failure_log);
     }
@@ -423,7 +389,7 @@ pub(crate) fn run_ztguide_do_conditionals_live_test(failure_log: &mut Option<std
     let guest = fake_guest(0x4001, true, 0, 1, 0);
     plant(tile, guest);
     let mut seen = std::collections::BTreeSet::new();
-    COND_INTERCEPT.store(1, Ordering::SeqCst);
+    crate::ztstaff::live_support::conditionals_probe::set_active(true);
     set_follow_intercept(true);
     for period in [0i32, 7] {
         let guide_type = cloned_guide_type(real_type, b"x", period, 0, 100, 5);
@@ -441,14 +407,14 @@ pub(crate) fn run_ztguide_do_conditionals_live_test(failure_log: &mut Option<std
                     let label = format!("period {period}, countdown {countdown}, goal {goal:#x}, armed {armed}");
                     let mut logs = Vec::new();
                     for (pole, guide) in fixtures.iter().enumerate() {
-                        COND_LOG.lock().unwrap().clear();
+                        crate::ztstaff::live_support::conditionals_probe::reset();
                         take_follow_log();
                         match pole {
                             0 => real::do_conditionals(guide.0),
                             1 => guide.do_conditionals(),
                             _ => unsafe { DO_CONDITIONALS.hooked()(guide.0 as *const u32) },
                         }
-                        let staff_log = std::mem::take(&mut *COND_LOG.lock().unwrap());
+                        let staff_log: Vec<&'static str> = (0..crate::ztstaff::live_support::conditionals_probe::calls()).map(|_| "staff").collect();
                         let followers = follower_ids(*guide, &mut failures, &format!("{label} pole {pole}"));
                         logs.push((staff_log, take_follow_log(), followers));
                     }
@@ -463,7 +429,7 @@ pub(crate) fn run_ztguide_do_conditionals_live_test(failure_log: &mut Option<std
         }
     }
     set_follow_intercept(false);
-    COND_INTERCEPT.store(0, Ordering::SeqCst);
+    crate::ztstaff::live_support::conditionals_probe::set_active(false);
     unplant(tile, guest);
     if seen.len() < 4 {
         failures.push(format!("only {} distinct outcomes occurred: {seen:?}", seen.len()));

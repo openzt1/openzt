@@ -24,7 +24,6 @@ use openzt_detour::generated::{
         },
         ztapp::GET_WORLD_MGR as ZTAPP_GET_WORLD_MGR,
         ztspecies::IS_SPECIAL_DUMMY_SPECIES,
-        ztstaff::IS_HABITAT_ASSIGNED as ZTSTAFF_IS_HABITAT_ASSIGNED,
         ztworldmgr::GET_STAFF_LIST as ZTWORLDMGR_GET_STAFF_LIST,
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
@@ -4156,7 +4155,7 @@ impl ZTHabitat {
         for addr in (staff_begin..staff_end).step_by(4) {
             let staff_ptr: u32 = get_from_memory(addr);
             let is_keeper = staff_ptr != 0 && unsafe { entity_type_matches(staff_ptr, RVA_KEEPER_TYPE_CHECK_ARG) };
-            if is_keeper && low_byte_bool(unsafe { ZTSTAFF_IS_HABITAT_ASSIGNED.original()(staff_ptr as *const u32, self_addr as *const u32) }) {
+            if is_keeper && crate::ztstaff::ZTStaff(staff_ptr).is_habitat_assigned(self_addr) {
                 write_live!(self, has_keeper_assigned_raw, 1u8);
                 break;
             }

@@ -21,7 +21,6 @@ use openzt_detour::generated::{
         },
         zthabitatmgr::NAME_HABITAT,
         ztmapview::{ADD_UNDO_ACTION, REMOVE_ENTITY as ZTMAPVIEW_REMOVE_ENTITY, SET_SELECTED_ENTITY_0 as ZTMAPVIEW_SET_SELECTED_ENTITY_0},
-        ztstaff::REMOVE_ASSIGNED_HABITAT as ZTSTAFF_REMOVE_ASSIGNED_HABITAT,
         zttankwall::SET_IS_COMBINED_CONNECTOR,
         ztui_buyh::REFRESH as ZTUI_BUYH_REFRESH,
         ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
@@ -3672,8 +3671,8 @@ impl ZTHabitatMgr {
     /// [`Self::replace_gate_with_fence`]/[`ZTHabitat::highlight`]. Walks the live `GLOBAL_ZTWorldMgr`'s
     /// own [`ZTWorldMgr::entity_array`], and for every non-null entry that is a `ZTStaff`
     /// ([`RVA_STAFF_TYPE_CHECK_ARG`] `isCastClass` check), calls
-    /// `ZTStaff::removeAssignedHabitat(staff, habitat_ptr)` ([`ZTSTAFF_REMOVE_ASSIGNED_HABITAT`],
-    /// undetoured `.original()` call-through) to drop `habitat_ptr` from that staff member's
+    /// `ZTStaff::removeAssignedHabitat(staff, habitat_ptr)` ([`crate::ztstaff::ZTStaff::remove_assigned_habitat`],
+    /// the Rust port) to drop `habitat_ptr` from that staff member's
     /// assigned-habitat list. Real caller: `ZTHabitatMgr::removeHabitat`, passing the habitat being
     /// removed.
     ///
@@ -3683,7 +3682,7 @@ impl ZTHabitatMgr {
         let world = globals().ztworldmgr();
         for entity_ptr in world.entity_array() {
             if entity_ptr != 0 && unsafe { entity_type_matches(entity_ptr, RVA_STAFF_TYPE_CHECK_ARG) } {
-                unsafe { ZTSTAFF_REMOVE_ASSIGNED_HABITAT.original()(entity_ptr as *const u32, habitat_ptr as *const u32) };
+                crate::ztstaff::ZTStaff(entity_ptr).remove_assigned_habitat(habitat_ptr);
             }
         }
     }

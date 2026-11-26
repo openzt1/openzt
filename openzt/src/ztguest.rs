@@ -617,7 +617,7 @@ impl ZTGuest {
     /// `ZTGuest::addToMap` (`0x00412ba7`): `ZTUnit::addToMap`; on success a guest not excluded by `+0x142`/`+0x143` is
     /// appended to the multi-guest panel's list and handed to `ZTUI::multiguest::addEntity`. Returns `ZTUnit`'s result.
     pub fn add_to_map(self) -> bool {
-        let added = low_byte_bool(unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) });
+        let added = unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) };
         if added && self.tracked_by_multiguest() {
             vanilla_list::push_back(self.multiguest_list(), self.0);
             unsafe { MULTIGUEST_ADD_ENTITY.original()(self.0 as *const u32) };

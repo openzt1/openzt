@@ -21,7 +21,7 @@ use crate::{
     },
 };
 
-use openzt_detour::generated::{ztfence::CLOSE_GATE as ARMS_CLOSE_GATE, ztshow::ABORT_SHOW as ARMS_ABORT_SHOW, ztstaff::DO_CONDITIONALS as ARMS_STAFF_DO_CONDITIONALS};
+use openzt_detour::generated::{ztfence::CLOSE_GATE as ARMS_CLOSE_GATE, ztshow::ABORT_SHOW as ARMS_ABORT_SHOW};
 
 const SPEED_CHEAT_FLAG_RVA: u32 = 0x0023_c2e4;
 const VTABLE_SLOTS: u32 = 204;
@@ -1650,24 +1650,15 @@ pub(crate) fn run_ztkeeper_perf_compare_live_test(failure_log: &mut Option<std::
     }
 }
 
-/// While set, the three vanilla calls `ZTKeeper`'s conditionals/removal paths end in (`ZTStaff::doConditionals`,
-/// `ZTFence::closeGate`, `ZTShow::abortShow`) are recorded instead of run: each reaches live-game state a bare fixture
-/// does not have.
+/// While set, the three calls `ZTKeeper`'s conditionals/removal paths end in (`ZTStaff::doConditionals`, through
+/// `ztstaff::live_support::conditionals_probe`, `ZTFence::closeGate`, `ZTShow::abortShow`) are recorded instead of run:
+/// each reaches live-game state a bare fixture does not have.
 static ARMS_INTERCEPT: AtomicU32 = AtomicU32::new(0);
 static ARMS_LOG: std::sync::Mutex<Vec<(&'static str, u32)>> = std::sync::Mutex::new(Vec::new());
 
 #[openzt_detour_macro::detour_mod]
 mod arms_hooks {
     use super::*;
-
-    #[detour(ARMS_STAFF_DO_CONDITIONALS)]
-    unsafe extern "thiscall" fn staff_do_conditionals(this: *const u32) {
-        if ARMS_INTERCEPT.load(Ordering::SeqCst) != 0 {
-            ARMS_LOG.lock().unwrap().push(("staff", 0));
-        } else {
-            unsafe { ARMS_STAFF_DO_CONDITIONALS_DETOUR.call(this) }
-        }
-    }
 
     #[detour(ARMS_CLOSE_GATE)]
     unsafe extern "thiscall" fn close_gate(this: *const std::ffi::c_void) {
@@ -1748,6 +1739,7 @@ pub(crate) fn run_ztkeeper_do_conditionals_live_test(failure_log: &mut Option<st
     ];
     let shared = vec![keeper_type, live_habitat, b1, b2, b3];
     ARMS_INTERCEPT.store(1, Ordering::SeqCst);
+    crate::ztstaff::live_support::conditionals_probe::set_active(true);
     for (label, habitats) in &cases {
         for method in ["doConditionals", "checkAssignedHabitats"] {
             let fixtures = [live_support::build_standalone_keeper(keeper_type), live_support::build_standalone_keeper_port(keeper_type), live_support::build_standalone_keeper(keeper_type)];
@@ -1758,6 +1750,7 @@ pub(crate) fn run_ztkeeper_do_conditionals_live_test(failure_log: &mut Option<st
                     crate::vanilla_list::push_back(sentinel, habitat);
                 }
                 ARMS_LOG.lock().unwrap().clear();
+                crate::ztstaff::live_support::conditionals_probe::reset();
                 match (method, pole) {
                     ("doConditionals", 0) => real::do_conditionals(keeper.0),
                     ("doConditionals", 1) => keeper.do_conditionals(),
@@ -1766,7 +1759,9 @@ pub(crate) fn run_ztkeeper_do_conditionals_live_test(failure_log: &mut Option<st
                     (_, 1) => keeper.check_assigned_habitats(),
                     _ => unsafe { openzt_detour::generated::ztkeeper::CHECK_ASSIGNED_HABITATS.hooked()(keeper.0 as *const u32) },
                 }
-                outcomes.push((assigned_payloads(keeper.0), std::mem::take(&mut *ARMS_LOG.lock().unwrap())));
+                let mut log = std::mem::take(&mut *ARMS_LOG.lock().unwrap());
+                log.extend((0..crate::ztstaff::live_support::conditionals_probe::calls()).map(|_| ("staff", 0)));
+                outcomes.push((assigned_payloads(keeper.0), log));
             }
             let case = format!("{method}, {label}");
             let expected_staff = usize::from(method == "doConditionals");
@@ -1787,6 +1782,7 @@ pub(crate) fn run_ztkeeper_do_conditionals_live_test(failure_log: &mut Option<st
         }
     }
     ARMS_INTERCEPT.store(0, Ordering::SeqCst);
+    crate::ztstaff::live_support::conditionals_probe::set_active(false);
     finish_test(test_name, failures, failure_log)
 }
 
@@ -1811,6 +1807,7 @@ pub(crate) fn run_ztkeeper_remove_arms_live_test(failure_log: &mut Option<std::f
     const SHOW_ID: u16 = 0x7e02;
     const KEEPER_ID: u32 = 0x7777;
     ARMS_INTERCEPT.store(1, Ordering::SeqCst);
+    crate::ztstaff::live_support::conditionals_probe::set_active(true);
     let shared = vec![keeper_type];
     let build = |pole: usize| if pole == 1 { live_support::build_standalone_keeper_port(keeper_type) } else { live_support::build_standalone_keeper(keeper_type) };
 
@@ -1902,5 +1899,6 @@ pub(crate) fn run_ztkeeper_remove_arms_live_test(failure_log: &mut Option<std::f
         }
     }
     ARMS_INTERCEPT.store(0, Ordering::SeqCst);
+    crate::ztstaff::live_support::conditionals_probe::set_active(false);
     finish_test(test_name, failures, failure_log)
 }
