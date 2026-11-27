@@ -23,7 +23,6 @@ use openzt_detour::generated::{
     poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
     standalone::{OPERATOR_DELETE, OPERATOR_NEW},
     ztanimal as generated,
-    ztunit::{HAS_BUILDING_USE_GOAL, UPDATE_BUILDING_TILES},
 };
 
 use super::{
@@ -320,28 +319,6 @@ mod goal_seams {
         }
     }
 
-    #[detour(UPDATE_BUILDING_TILES)]
-    unsafe extern "thiscall" fn update_building_tiles(this: *const u32, flag: bool) -> bool {
-        if scripted() {
-            let answer = roll(2) == 0;
-            record(format!("updateBuildingTiles {flag} {answer}"));
-            answer
-        } else {
-            unsafe { UPDATE_BUILDING_TILES_DETOUR.call(this, flag) }
-        }
-    }
-
-    #[detour(HAS_BUILDING_USE_GOAL)]
-    unsafe extern "thiscall" fn has_building_use_goal(this: *const u32) -> bool {
-        if scripted() {
-            let answer = roll(2) == 0;
-            record(format!("hasBuildingUseGoal {answer}"));
-            answer
-        } else {
-            unsafe { HAS_BUILDING_USE_GOAL_DETOUR.call(this) }
-        }
-    }
-
     #[detour(GET_TILE)]
     unsafe extern "thiscall" fn get_tile(this: *const u32) -> i32 {
         if scripted() && SCRIPT.lock().unwrap().fixtures.contains(&(this as u32)) {
@@ -382,6 +359,24 @@ fn scripted_is_need_or_fun_satisfier(_this: u32, need: u32, position: *const i32
     Some(answer)
 }
 
+fn scripted_update_building_tiles(_this: u32, flag: bool) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(2) == 0;
+    record(format!("updateBuildingTiles {flag} {answer}"));
+    Some(answer)
+}
+
+fn scripted_has_building_use_goal(_this: u32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(2) == 0;
+    record(format!("hasBuildingUseGoal {answer}"));
+    Some(answer)
+}
+
 fn install_seams() -> Result<(), String> {
     static INSTALLED: Once = Once::new();
     let mut result = Ok(());
@@ -391,6 +386,8 @@ fn install_seams() -> Result<(), String> {
         }
     });
     *crate::ztunit::live_support::intercept::INTO_NEW_TILE.lock().unwrap() = Some(unit_into_new_tile_hook);
+    *crate::ztunit::live_support::intercept::UPDATE_BUILDING_TILES.lock().unwrap() = Some(scripted_update_building_tiles);
+    *crate::ztunit::live_support::intercept::HAS_BUILDING_USE_GOAL.lock().unwrap() = Some(scripted_has_building_use_goal);
     *crate::ztunit::live_support::intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap() = Some(scripted_is_need_or_fun_satisfier);
     result.and_then(|()| install_goals_hook())
 }

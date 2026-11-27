@@ -12,7 +12,7 @@ use openzt_detour::generated::{
         GET_PATH_0 as BFUNIT_GET_PATH, GO_TO_DEST_1 as BFUNIT_GO_TO_DEST, VALIDATE_POSITION as BFUNIT_VALIDATE_POSITION,
     },
     ztunit::{
-        CAN_IGNORE_BLOCKING, CHECK_ELEVATION, CLIFFS_OK, DO_RANDOM_WALK, FACE_TOWARD_TARGET, FACE_TOWARD_TARGET_UNIT, GET_NON_PATH_COST, GET_PATH_TO_TARGET, PICK_RANDOM_DEST, PICK_ZDEST,
+        CAN_IGNORE_BLOCKING, CHECK_ELEVATION, CLIFFS_OK, DO_RANDOM_WALK, FACE_TOWARD_TARGET, FACE_TOWARD_TARGET_UNIT, GET_NON_PATH_COST, GET_PATH_TO_TARGET, GET_PATH_AWAY_FROM_TARGET, PICK_RANDOM_DEST, PICK_ZDEST,
         SET_TARGET_GRID_POS, SET_TARGET_POS, SET_TARGET_TILE, VALIDATE_POSITION,
     },
 };
@@ -21,11 +21,13 @@ use tracing::error;
 
 use super::{
     base, call_slot_2_returning, default_position, game_rand, goal_slots, map_tile, tile_offsets, unit_offsets, unit_slots, ZTUnit, APP_LOADING_FLAG, APP_RVA, BUILDING_TAG_RVA, TANK_LADDER_A, TANK_LADDER_B, UNIT_TYPE_TAG_RVA,
-    WORLD_MAP_X, WORLD_MAP_Y, WORLD_MGR_RVA, WORLD_TILE_ARRAY, TILE_SIZE,
+    WORLD_MGR_RVA,
 };
 use crate::{
-    util::{get_from_memory, low_byte_bool},
+    util::{get_from_memory, low_byte_bool, world_to_tile},
+    vanilla_string::range_bytes,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2},
+    vanilla_list::NodeList,
     ztmegatilemgr::entity_type_matches,
 };
 
@@ -44,14 +46,6 @@ mod slots {
     /// The slot `doRandomWalk` calls with `0` when the walk could not start.
     pub const ABORT_WALK: u32 = 0x178;
 }
-/// `BFTile` byte whose bit `0x20` marks a ramp tile, and the byte holding the per-direction cliff bits.
-const TILE_FLAGS_85: u32 = 0x85;
-const TILE_RAMP: u8 = 0x20;
-const TILE_CLIFF_BITS: u32 = 0x82;
-/// `BFEntity` word holding the unit's list of path steps (a `std::list` sentinel; nodes are `{next, prev, x, y, z}`).
-const PATH_STEPS: u32 = 0x154;
-/// The id of the unit being chased (`BFUnit` `+0x178`).
-const TARGET_UNIT_ID: u32 = 0x178;
 /// `DAT_00639528`: how many path steps ahead a unit aims at, and `DAT_00635820`: the distance a unit keeps (`f64`).
 const PATH_LOOK_AHEAD_RVA: u32 = 0x0023_9528;
 const PATH_STANDOFF_RVA: u32 = 0x0023_5820;
@@ -61,32 +55,22 @@ const AIMGR_WIDTH_SLOT: u32 = 0x20;
 const AIMGR_HEIGHT_SLOT: u32 = 0x24;
 const AIMGR_MIN_X: u32 = 0xd4;
 const AIMGR_MIN_Y: u32 = 0xd8;
-/// Unit slots: `canWalkTo(tile, flag)` and `setStopAtEnd(position)`; the tile byte (`+0x83`) bit `8` marks walkable.
+/// Unit slots: `canWalkTo(tile, flag)` and `setStopAtEnd(position)`.
 const CAN_WALK_TO_SLOT: u32 = 0x168;
 const SET_DESTINATION_SLOT: u32 = 0x1f8;
-const TILE_WALKABLE: u32 = 0x83;
 /// `GLOBAL_ZTAIMgr` as an RVA.
 const AIMGR_RVA: u32 = 0x0023_8098;
 /// Goal id and argument `doRandomWalk` sets before it asks the AI manager for a destination.
 const RANDOM_WALK_GOAL: u32 = 1;
 const RANDOM_WALK_GOAL_ARGUMENT: u32 = 4;
 
-/// `pickZDest`: the depth mode's byte range on the unit, the tank's water level (`ZTTankExhibit::getWaterLevel`) and the
-/// unit type's minimum depth.
-const DEPTH_MODE_BEGIN: u32 = 0x1ec;
-const DEPTH_MODE_END: u32 = 0x1f0;
+/// `pickZDest`: the tank's water level (`ZTTankExhibit::getWaterLevel`) and the unit type's minimum depth.
 const TANK_WATER_LEVEL: u32 = 0x188;
 const TYPE_MINIMUM_DEPTH: u32 = 0x68;
 
-/// `getPathAwayFromTarget`: the extra ring radius a unit type adds (`DAT_006394f4`) and vanilla's 20-byte small-block
-/// freelist head (`DAT_00638008`) the unit's path-step nodes return to.
+/// `getPathAwayFromTarget`: the extra ring radius a unit type adds (`DAT_006394f4`).
 const FLEE_RADIUS_RVA: u32 = 0x0023_94f4;
-const FREELIST_20_RVA: u32 = 0x0023_8008;
 
-/// `BFUnit` byte `canIgnoreBlocking` answers when no blocking building is involved.
-const IGNORES_BLOCKING: u32 = 0x210;
-/// A `BFTile`'s entity slot: the entity standing on it (`+0x10`).
-const TILE_ENTITY: u32 = 0x10;
 
 impl ZTUnit {
     /// `ZTUnit::validatePosition` (`0x004102b3`): revalidates the tank mode first when asked to, unless a save is loading.
@@ -138,16 +122,7 @@ impl ZTUnit {
         let tile = if position.iter().zip(default).all(|(a, b)| *a as u32 == b) {
             0
         } else {
-            let tile_x = (position[0] + ((position[0] >> 31) & 0x3f)) >> 6;
-            let tile_y = (position[1] + ((position[1] >> 31) & 0x3f)) >> 6;
-            let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
-            let (width, height): (i32, i32) = (get_from_memory(world + WORLD_MAP_X), get_from_memory(world + WORLD_MAP_Y));
-            if tile_x < 0 || tile_y < 0 || tile_x >= width || tile_y >= height {
-                0
-            } else {
-                let array: u32 = get_from_memory(world + WORLD_TILE_ARRAY);
-                array.wrapping_add((width.wrapping_mul(tile_y).wrapping_add(tile_x) as u32).wrapping_mul(TILE_SIZE))
-            }
+            map_tile(world_to_tile(position[0]), world_to_tile(position[1]))
         };
         call_slot_2(self.0, slots::SET_TARGET_TILE, tile, 0);
     }
@@ -178,16 +153,16 @@ impl ZTUnit {
     /// may, unless `target` holds a building other than the one the unit works at.
     pub fn can_ignore_blocking(self, target: u32) -> bool {
         let tile = self.tile();
-        let occupant: u32 = get_from_memory(tile + TILE_ENTITY);
+        let occupant: u32 = get_from_memory(tile + tile_offsets::ENTITY_PTR);
         if occupant != 0 && unsafe { entity_type_matches(occupant, BUILDING_TAG_RVA) } && target != 0 && target == tile {
             return true;
         }
-        let mut allowed = self.read::<u8>(IGNORES_BLOCKING) != 0;
+        let mut allowed = self.read::<u8>(unit_offsets::IGNORES_BLOCKING) != 0;
         if allowed && target != 0 {
             let mut scratch = [0u8; 4];
             let working_at = call_slot_2_returning(self.0, slots::VALIDATE_BUILDING, scratch.as_mut_ptr() as u32, 0);
             if working_at != 0 {
-                let on_target: u32 = get_from_memory(target + TILE_ENTITY);
+                let on_target: u32 = get_from_memory(target + tile_offsets::ENTITY_PTR);
                 if on_target == 0 || !unsafe { entity_type_matches(on_target, BUILDING_TAG_RVA) } || on_target == working_at {
                     allowed = true;
                 } else {
@@ -231,7 +206,7 @@ impl ZTUnit {
     /// the ladder level; every other case is `BFUnit`'s.
     pub fn check_elevation(self, from: u32, from_height: i32, to: u32, height: i32) -> bool {
         let fallback = || unsafe { BFUNIT_CHECK_ELEVATION.hooked()(self.0 as *const u32, from as *const u32, from_height, to as *const u32, height) };
-        if get_from_memory::<u8>(to + TILE_FLAGS_85) & TILE_RAMP == 0 {
+        if get_from_memory::<u8>(to + tile_offsets::HABITAT_FLAGS) & tile_offsets::TANK_BIT == 0 {
             return fallback();
         }
         let from_habitat = self.habitat_for_tile(from);
@@ -259,10 +234,10 @@ impl ZTUnit {
         let map = (world + 8) as *const u32;
         let neighbour = unsafe { BFMAP_GET_NEIGHBOR.hooked()(map, tile as *const u32, direction) };
         let fallback = || unsafe { BFUNIT_CLIFFS_OK.hooked()(self.0 as *const u32, tile as *const u32, direction) };
-        let is_ramp = |tile: u32| tile != 0 && get_from_memory::<u8>(tile + TILE_FLAGS_85) & TILE_RAMP != 0;
+        let is_ramp = |tile: u32| tile != 0 && get_from_memory::<u8>(tile + tile_offsets::HABITAT_FLAGS) & tile_offsets::TANK_BIT != 0;
         let (tile_ramp, neighbour_ramp) = (is_ramp(tile), is_ramp(neighbour));
         if neighbour == 0 || (!tile_ramp && !neighbour_ramp) {
-            let cliff: u8 = get_from_memory(tile + TILE_CLIFF_BITS);
+            let cliff: u8 = get_from_memory(tile + tile_offsets::CLIFF_BITS);
             let shifted = if direction & 0x1f >= 8 { 0 } else { cliff >> (direction & 0x1f) };
             return shifted & 3 <= 1;
         }
@@ -342,8 +317,7 @@ impl ZTUnit {
 
     /// Whether the depth mode, the byte range `[+0x1ec, +0x1f0)`, holds exactly `text`.
     fn depth_mode_is(self, text: &[u8]) -> bool {
-        let (begin, end): (u32, u32) = (self.read(DEPTH_MODE_BEGIN), self.read(DEPTH_MODE_END));
-        end.wrapping_sub(begin) == text.len() as u32 && text.iter().enumerate().all(|(index, byte)| get_from_memory::<u8>(begin + index as u32) == *byte)
+        range_bytes(self.read(unit_offsets::DEPTH_MODE_BEGIN), self.read(unit_offsets::DEPTH_MODE_END)) == text
     }
 
     /// The grid position of an entity.
@@ -357,7 +331,7 @@ impl ZTUnit {
     /// `ZTUnit::getPathToTarget` (`0x004a5b4d`): paths to the target, or to one of the steps ahead on the target's own path
     /// when that is nearer than the target and within the look-ahead.
     pub fn get_path_to_target(self, flag: bool) -> u32 {
-        let target_id: u32 = self.read(TARGET_UNIT_ID);
+        let target_id: u32 = self.read(unit_offsets::TARGET_UNIT_ID);
         if target_id == 0 {
             return 0;
         }
@@ -369,15 +343,8 @@ impl ZTUnit {
         let own = Self::grid_pos(self.0);
         let at = Self::grid_pos(target);
         let target_unit = if unsafe { entity_type_matches(target, UNIT_TYPE_TAG_RVA) } { target } else { 0 };
-        let steps: u32 = if target_unit == 0 { 0 } else { get_from_memory(target_unit + PATH_STEPS) };
-        let mut step_count = 0i32;
-        if steps != 0 {
-            let mut node: u32 = get_from_memory(steps);
-            while node != steps {
-                step_count += 1;
-                node = get_from_memory(node);
-            }
-        }
+        let steps: u32 = if target_unit == 0 { 0 } else { get_from_memory(target_unit + unit_offsets::PATH_LIST) };
+        let step_count = if steps == 0 { 0 } else { NodeList::path_steps(steps).len() as i32 };
         let mut destination = at;
         if target_unit != 0 && step_count >= 1 {
             let mut reach: i32 = if self.unit_type() != 0 { get_from_memory(base() + PATH_LOOK_AHEAD_RVA) } else { 1 };
@@ -388,15 +355,11 @@ impl ZTUnit {
             let distance = squared(at, own);
             if reach.wrapping_mul(reach) > distance {
                 let standoff: f64 = get_from_memory(base() + PATH_STANDOFF_RVA);
-                let remaining = ((f64::from(distance)).sqrt() - standoff) as i64 as i32;
+                let remaining = crate::util::ftol_low32_f64((f64::from(distance)).sqrt() - standoff);
                 reach = remaining.max(0);
             }
-            let mut pick = game_rand().checked_rem(reach + 1).unwrap_or(0);
-            let mut node: u32 = get_from_memory(steps);
-            while pick > 0 {
-                node = get_from_memory(node);
-                pick -= 1;
-            }
+            let pick = game_rand().checked_rem(reach + 1).unwrap_or(0);
+            let node = NodeList::path_steps(steps).nth(pick.max(0) as usize);
             let step: [i32; 3] = [get_from_memory(node + 8), get_from_memory(node + 12), get_from_memory(node + 16)];
             if distance >= squared(step, own) {
                 destination = step;
@@ -421,25 +384,17 @@ impl ZTUnit {
             }
             let reach_x = game_rand() % width + 1 + get_from_memory::<i32>(aimgr + AIMGR_MIN_X);
             let reach_y = game_rand() % height + 1 + get_from_memory::<i32>(aimgr + AIMGR_MIN_Y);
-            let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
             let mut candidates: Vec<u32> = Vec::new();
             for dx in -reach_x..=reach_x {
                 for dy in -reach_y..=reach_y {
                     if !(dx == reach_x || dx == -reach_x || dy == reach_y || dy == -reach_y) {
                         continue;
                     }
-                    let (x, y) = (cx.wrapping_add(dx), cy.wrapping_add(dy));
-                    let (columns, rows): (i32, i32) = (get_from_memory(world + WORLD_MAP_X), get_from_memory(world + WORLD_MAP_Y));
                     // Vanilla keeps the last border tile it looked at in the same stack slot as the result (`0` for a tile
                     // off the map), so with no walkable candidate that tile is the answer.
-                    if x < 0 || y < 0 || x >= columns || y >= rows {
-                        chosen = 0;
-                        continue;
-                    }
-                    let array: u32 = get_from_memory(world + WORLD_TILE_ARRAY);
-                    let candidate = array.wrapping_add(((y.wrapping_mul(columns).wrapping_add(x)) as u32).wrapping_mul(TILE_SIZE));
+                    let candidate = map_tile(cx.wrapping_add(dx), cy.wrapping_add(dy));
                     chosen = candidate;
-                    if get_from_memory::<u8>(candidate + TILE_WALKABLE) & 8 != 0 && low_byte_bool(call_slot_2_returning(self.0, CAN_WALK_TO_SLOT, candidate, 0)) {
+                    if candidate != 0 && get_from_memory::<u8>(candidate + tile_offsets::TERRAIN_FLAGS) & tile_offsets::WALKABLE_BIT != 0 && low_byte_bool(call_slot_2_returning(self.0, CAN_WALK_TO_SLOT, candidate, 0)) {
                         candidates.push(candidate);
                     }
                 }
@@ -465,11 +420,8 @@ impl ZTUnit {
     /// facing-away ones first (those whose direction differs from the direction away from the target by at most one step,
     /// or by seven), the rest after. With no path at any radius the unit's path steps are dropped and it random-walks.
     /// Returns whether a path was started (or the random walk did); without a target or an AI manager, `false`.
-    ///
-    /// Not detoured: `ZTGoalAvoid::decide` tests `AL` after the virtual call (slot `0x30c`) but `generated.rs` types the
-    /// entry `void`, and a void detour leaves `AL` undefined. Detour it once the entry carries a `bool` return.
     pub fn get_path_away_from_target(self) -> bool {
-        let target_id: u32 = self.read(TARGET_UNIT_ID);
+        let target_id: u32 = self.read(unit_offsets::TARGET_UNIT_ID);
         let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
         let target = if target_id == 0 { 0 } else { call_slot_2_returning(world, 0x24, target_id, 1) };
         let aimgr: u32 = get_from_memory(base() + AIMGR_RVA);
@@ -519,21 +471,7 @@ impl ZTUnit {
 
     /// Empties the unit's path-step list (`+0x154`), returning each node to vanilla's 20-byte freelist.
     fn drop_path_steps(self) {
-        let sentinel: u32 = self.read(PATH_STEPS);
-        let freelist = base() + FREELIST_20_RVA;
-        let mut head: u32 = get_from_memory(freelist);
-        let mut node: u32 = get_from_memory(sentinel);
-        while node != sentinel {
-            let next: u32 = get_from_memory(node);
-            if node != 0 {
-                crate::util::save_to_memory(node, head);
-                head = node;
-                crate::util::save_to_memory(freelist, head);
-            }
-            node = next;
-        }
-        crate::util::save_to_memory(sentinel, sentinel);
-        crate::util::save_to_memory(sentinel + 4, sentinel);
+        NodeList::path_steps(self.read(unit_offsets::PATH_LIST)).clear();
     }
 
     /// `ZTUnit::doRandomWalk` (`0x0049dafe`): starts a random walk through the AI manager and the unit's path-follower.
@@ -633,6 +571,11 @@ mod movement_detours {
         ZTUnit(this as u32).pick_z_dest(position as *mut [i32; 3]);
     }
 
+    #[detour(GET_PATH_AWAY_FROM_TARGET)]
+    unsafe extern "thiscall" fn get_path_away_from_target(this: *const u32) -> bool {
+        ZTUnit(this as u32).get_path_away_from_target()
+    }
+
     #[detour(CAN_IGNORE_BLOCKING)]
     unsafe extern "thiscall" fn can_ignore_blocking(this: *const u32, target: u32) -> i8 {
         i8::from(ZTUnit(this as u32).can_ignore_blocking(target))
@@ -685,11 +628,8 @@ mod movement_detours {
             unsafe { super::GET_PATH_TO_TARGET_DETOUR.call(this as *const u32, flag) }
         }
 
-        /// The vanilla body, called through its address: the port is not detoured (see `ZTUnit::get_path_away_from_target`),
-        /// and `generated.rs` types the entry `void` although `AL` carries the answer.
         pub(crate) fn get_path_away_from_target(this: u32) -> bool {
-            const VANILLA: openzt_detour::FunctionDef<unsafe extern "thiscall" fn(u32) -> u8> = openzt_detour::FunctionDef::new(0x004a_639e);
-            unsafe { VANILLA.original()(this) != 0 }
+            unsafe { super::GET_PATH_AWAY_FROM_TARGET_DETOUR.call(this as *const u32) }
         }
 
         pub(crate) fn pick_z_dest(this: u32, position: *mut [i32; 3]) {

@@ -246,7 +246,7 @@ fn script_more(unit: ZTUnit) {
 }
 
 /// Twins with every slot these tests dispatch through scripted. `Twins::destroy` restores the real vtables.
-fn scripted_twins(unit_type: u32) -> Twins {
+pub(super) fn scripted_twins(unit_type: u32) -> Twins {
     let twins = Twins::new(unit_type, true);
     for unit in twins.both() {
         script_more(unit);
@@ -274,17 +274,17 @@ fn set_habitats(pairs: &[(u32, u32)]) {
     *HABITAT_OF.lock().unwrap() = Some(pairs.iter().copied().collect());
 }
 
-fn live_entities(tag_rva: u32) -> Vec<u32> {
+pub(super) fn live_entities(tag_rva: u32) -> Vec<u32> {
     let manager: u32 = get_from_memory(get_module_base("zoo.exe") as u32 + WORLD_MGR_RVA);
     let (begin, end): (u32, u32) = (get_from_memory(manager + 0x80), get_from_memory(manager + 0x84));
     (begin..end).step_by(4).map(get_from_memory::<u32>).filter(|entity| *entity != 0 && unsafe { entity_type_matches(*entity, tag_rva) }).collect()
 }
 
-fn entity_id(entity: u32) -> u32 {
+pub(super) fn entity_id(entity: u32) -> u32 {
     get_from_memory(entity + unit_offsets::ENTITY_ID)
 }
 
-fn no_units(test_name: &str, failure_log: &mut Option<std::fs::File>) -> bool {
+pub(super) fn no_units(test_name: &str, failure_log: &mut Option<std::fs::File>) -> bool {
     finish_test(test_name, vec!["the live world holds no animal type".to_string()], failure_log)
 }
 
@@ -605,7 +605,7 @@ pub(crate) fn run_ztunit_satisfiers_live_test(failure_log: &mut Option<std::fs::
     if let Err(e) = install_target_stubs() {
         return finish_test(test_name, vec![e], failure_log);
     }
-    let types = live_animal_types(3);
+    let types = super::live_unit_types(3);
     if types.is_empty() {
         return no_units(test_name, failure_log);
     }
@@ -614,6 +614,7 @@ pub(crate) fn run_ztunit_satisfiers_live_test(failure_log: &mut Option<std::fs::
     let units = live_entities(UNIT_TAG_RVA);
     let buildings = live_entities(BUILDING_TAG_RVA);
     start_stubbing();
+    let (mut staff_twins, mut staff_hits, mut animal_releases) = (0u32, 0u32, 0u32);
     for (type_index, &unit_type) in types.iter().enumerate() {
         let twins = scripted_twins(unit_type);
         let label = format!("type {type_index}");
@@ -637,6 +638,56 @@ pub(crate) fn run_ztunit_satisfiers_live_test(failure_log: &mut Option<std::fs::
                         twins.port.check_predator(candidate, chasing),
                     );
                 }
+            }
+        }
+
+        // checkPredator's staff branch: for a staff unit, candidates are made to hunt its type (a prey list holding the unit
+        // type's id, and the any-type flag) and the unit is given a world habitat, so the branch decides by the habitat's
+        // world flag and the candidate's exemption byte. Everything patched is restored.
+        if unsafe { entity_type_matches(twins.port.0, STAFF_TAG_RVA) } {
+            staff_twins += 1;
+            let own_type: u32 = get_from_memory(twins.port.0 + unit_offsets::ENTITY_TYPE);
+            let own_type_id = crate::ztkeeper::call_slot_0(own_type, 0x20);
+            let prey_list = leaked_words(vec![own_type_id]);
+            let world_flag_off = leaked_words(vec![0; 0x20]);
+            let world_flag_on = leaked_words(vec![0; 0x20]);
+            save_to_memory(world_flag_on + 0x2c, 1u8);
+            let saved_slots: Vec<u32> = twins.both().iter().map(|unit| get_from_memory::<u32>(get_from_memory::<u32>(unit.0) + 0x24c)).collect();
+            for unit in twins.both() {
+                save_to_memory(get_from_memory::<u32>(unit.0) + 0x24c, fake_world_habitat as *const () as u32);
+            }
+            for &candidate in animals.iter().take(4) {
+                let candidate_type: u32 = get_from_memory(candidate + unit_offsets::ENTITY_TYPE);
+                let saved = [
+                    get_from_memory::<u32>(candidate_type + 0x2e4),
+                    get_from_memory::<u32>(candidate_type + 0x2e8),
+                    u32::from(get_from_memory::<u8>(candidate_type + 0x3d4)),
+                    u32::from(get_from_memory::<u8>(candidate + 0x393)),
+                ];
+                save_to_memory(candidate_type + 0x2e4, prey_list);
+                save_to_memory(candidate_type + 0x2e8, prey_list + 4);
+                save_to_memory(candidate_type + 0x3d4, 1u8);
+                // Vanilla dereferences a null habitat here (the port answers false), so that case is checked on the port alone.
+                FAKE_WORLD_HABITAT.store(0, Ordering::SeqCst);
+                check(&mut failures, &format!("{label} staff checkPredator({candidate:#x}, no habitat)"), false, twins.port.check_predator(candidate, false));
+                for habitat in [world_flag_off, world_flag_on] {
+                    FAKE_WORLD_HABITAT.store(habitat, Ordering::SeqCst);
+                    for exempt in [0u8, 1] {
+                        save_to_memory(candidate + 0x393, exempt);
+                        let real_answer = real_satisfiers::check_predator(twins.real.0, candidate, false);
+                        let port_answer = twins.port.check_predator(candidate, false);
+                        check(&mut failures, &format!("{label} staff checkPredator({candidate:#x}, habitat {habitat:#x}, exempt {exempt})"), real_answer, port_answer);
+                        staff_hits += u32::from(port_answer);
+                    }
+                }
+                save_to_memory(candidate_type + 0x2e4, saved[0]);
+                save_to_memory(candidate_type + 0x2e8, saved[1]);
+                save_to_memory(candidate_type + 0x3d4, saved[2] as u8);
+                save_to_memory(candidate + 0x393, saved[3] as u8);
+            }
+            FAKE_WORLD_HABITAT.store(0, Ordering::SeqCst);
+            for (unit, slot) in twins.both().iter().zip(saved_slots) {
+                save_to_memory(get_from_memory::<u32>(unit.0) + 0x24c, slot);
             }
         }
 
@@ -736,7 +787,8 @@ pub(crate) fn run_ztunit_satisfiers_live_test(failure_log: &mut Option<std::fs::
         let real_value = real_satisfiers::find_nearby_need_satisfier(twins.real.0, &mut real_need, &mut real_building);
         let port_value = ZTUnit::find_nearby_need_satisfier(&mut port_need, &mut port_building);
         check(&mut failures, &format!("{label} findNearbyNeedSatisfier outputs"), (real_need, real_building), (port_need, port_building));
-        check(&mut failures, &format!("{label} findNearbyNeedSatisfier value"), real_value & 0xffff_ff00, port_value & 0xffff_ff00);
+        // Each answer is its own out-pointer with the low byte cleared, whatever the stack layout puts it at.
+        check(&mut failures, &format!("{label} findNearbyNeedSatisfier value"), (real_value, port_value), (&real_building as *const u32 as u32 & 0xffff_ff00, &port_building as *const u32 as u32 & 0xffff_ff00));
 
         // releasePredator with no predator and with an unknown id leaves the same unit memory.
         for id in [0u32, 0x7fff_fff0] {
@@ -760,10 +812,52 @@ pub(crate) fn run_ztunit_satisfiers_live_test(failure_log: &mut Option<std::fs::
             twins.port.release_predator();
             compare_memory(&format!("{label} releasePredator(non-animal unit)"), twins.real, twins.port, &mut failures);
         }
+        // With a live animal as the predator both bodies make it visible, clear its caught flags and clear its goal. The animal's
+        // vtable is swapped for a copy whose `setVisible` and `clearGoal` only log, so the live animal is left alone.
+        if let Some(&animal) = animals.first() {
+            let real_vtable: u32 = get_from_memory(animal);
+            let copy = leaked_words((0..0x100u32).map(|index| get_from_memory::<u32>(real_vtable + index * 4)).collect());
+            save_to_memory(copy + 0xcc, fake_set_visible as *const () as u32);
+            save_to_memory(copy + 0x174, fake_clear_goal as *const () as u32);
+            save_to_memory(animal, copy);
+            let saved_flags = [get_from_memory::<u8>(animal + 0x3a5), get_from_memory::<u8>(animal + 0x20d)];
+            let mut outcomes = Vec::new();
+            for unit in twins.both() {
+                save_to_memory(unit.0 + unit_offsets::PREDATOR, entity_id(animal));
+            }
+            for poles in 0..2 {
+                save_to_memory(animal + 0x3a5, 1u8);
+                save_to_memory(animal + 0x20d, 1u8);
+                take_log();
+                if poles == 0 {
+                    real_satisfiers::release_predator(twins.real.0);
+                } else {
+                    twins.port.release_predator();
+                }
+                let calls = take_log();
+                outcomes.push((calls, get_from_memory::<u8>(animal + 0x3a5), get_from_memory::<u8>(animal + 0x20d)));
+            }
+            save_to_memory(animal, real_vtable);
+            save_to_memory(animal + 0x3a5, saved_flags[0]);
+            save_to_memory(animal + 0x20d, saved_flags[1]);
+            check(&mut failures, &format!("{label} releasePredator(animal)"), &outcomes[0], &outcomes[1]);
+            compare_memory(&format!("{label} releasePredator(animal)"), twins.real, twins.port, &mut failures);
+            animal_releases += u32::from(outcomes[1].0.len() == 2 && outcomes[1].1 == 0 && outcomes[1].2 == 0);
+        }
         twins.destroy();
     }
     stop_stubbing();
+    if staff_twins == 0 || staff_hits == 0 {
+        failures.push(format!("checkPredator's staff branch never answered true (staff units {staff_twins}, hits {staff_hits})"));
+    }
+    if animal_releases == 0 {
+        failures.push("releasePredator's animal branch was never exercised".to_string());
+    }
     finish_test(test_name, failures, failure_log)
+}
+
+extern "thiscall" fn fake_clear_goal(_this: u32) {
+    log("clearGoal".to_string());
 }
 
 /// `ZTUNIT_PATHS_LIVE`: `getPathToTarget` and `pickRandomDest` against the real bodies with the game RNG pinned,
@@ -1086,6 +1180,9 @@ extern "thiscall" fn fake_check_predator(_this: u32, candidate: u32, flag: u32) 
     let mode = FAKE_PREDATOR_MODE.load(Ordering::SeqCst);
     u32::from(candidate != 0 && (mode == 4 || (mode < 3 && (candidate >> 4) % 3 == mode)))
 }
+
+/// `isCastClass` tag for `ZTStaff` (`DAT_00638710`).
+const STAFF_TAG_RVA: u32 = 0x0023_8710;
 
 extern "thiscall" fn fake_world_habitat(_this: u32) -> u32 {
     FAKE_WORLD_HABITAT.load(Ordering::SeqCst)

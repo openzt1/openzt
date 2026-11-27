@@ -31,7 +31,6 @@ use openzt_detour::generated::{
         UPDATE_GOALS,
     },
     ztmainttaskpool::{CLEAR, GET_EVENTS, LISTEN},
-    ztunit::UPDATE_GOALS as ZTUNIT_UPDATE_GOALS,
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -270,7 +269,7 @@ impl ZTMaint {
     }
 
     fn finish_update_goals(self) {
-        unsafe { ZTUNIT_UPDATE_GOALS.hooked()(self.0 as *const u32) };
+        crate::ztunit::ZTUnit(self.0).update_goals();
     }
 
     /// `ZTMaint::updateGoals` (`0x00439c33`), from the `.asm`: a pending predator check (`+0x24c`) off the predator

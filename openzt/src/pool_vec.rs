@@ -86,6 +86,10 @@ impl Drop for PoolVec {
             Release::FourByteElements => unsafe { DEALLOCATE_N_4.original()(begin as *const u32, capacity_bytes >> 2) },
             Release::Bytes { element_size } => {
                 let bytes = ((capacity_bytes / element_size as i32) as u32).wrapping_mul(element_size);
+                if bytes == 0 {
+                    // `PoolAlloc::deallocate(_, 0)` indexes the freelist table with `(0 - 1) >> 3`.
+                    return;
+                }
                 unsafe { DEALLOCATE.original()(begin as *const u32, bytes) }
             }
         }

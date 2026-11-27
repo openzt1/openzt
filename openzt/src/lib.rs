@@ -62,7 +62,9 @@ pub mod systemtime;
 /// Basic 2D and 3D geometry types and directions.
 pub mod geom;
 
-/// Vanilla MSVC std::vector layout compatibility types.
+/// Vanilla MSVC container layouts: `std::deque` iterators, `std::list` nodes and freelists, the red-black tree behind
+/// `std::map`/`std::set`, and the 3-word `std::vector` header.
+pub mod msvc_deque;
 pub mod vanilla_list;
 pub mod vanilla_rbtree;
 pub mod vanilla_vector;
@@ -179,7 +181,8 @@ mod ztguide;
 mod ztkeeper;
 /// ztstaff module reimplements the vanilla ZTStaff base class (assigned-habitat list, leaf getters) in place over vanilla memory.
 mod ztstaff;
-/// ztunit module reimplements the vanilla ZTUnit base class (leaf getters, animation getters) in place over vanilla memory.
+/// ztunit module reimplements the vanilla ZTUnit base class (getters, animation, lifecycle, goals, movement, satisfiers,
+/// buildings, shows and messages) in place over vanilla memory.
 mod ztunit;
 /// ztmaint module reimplements the vanilla ZTMaint staff entity (and the ZTMaintTaskPool helpers) in place over vanilla memory.
 mod ztmaint;

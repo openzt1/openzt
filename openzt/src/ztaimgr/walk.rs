@@ -67,12 +67,11 @@ pub unsafe fn f_random_walk(this: u32, unit: u32, ops: &RandomWalkOps) -> Option
     }
     save_to_memory(unit + UNIT_WALKING_GUARD, 1u8);
 
-    let div64 = |v: i32| v.wrapping_add((v >> 31) & 0x3f) >> 6;
     let mut height = get_from_memory::<i32>(unit + UNIT_POS_Z);
     if height < 0 {
         height = height.wrapping_sub(15);
     }
-    let start = [div64(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_X)), div64(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_Y)), height.wrapping_add((height >> 31) & 0xf) >> 4];
+    let start = [crate::util::world_to_tile(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_X)), crate::util::world_to_tile(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_Y)), height.wrapping_add((height >> 31) & 0xf) >> 4];
     let start_tile = map_tile(map, start[0], start[1]);
 
     let mut goal = unsafe { (ops.no_destination)() };

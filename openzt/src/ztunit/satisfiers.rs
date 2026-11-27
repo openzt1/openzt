@@ -1,29 +1,28 @@
 //! `ZTUnit` target, predator and satisfier methods (group E of `plans/ztunit-scoping-plan.md`).
 
-use std::ffi::c_void;
-
 use openzt_detour::generated::{
     bfcoggoal::SET_ID as BFCOGGOAL_SET_ID,
     bfentity::{GET_GRID_POS, GET_TILE as BFENTITY_GET_TILE, SET_BS, SET_DIRECTION as BFENTITY_SET_DIRECTION},
-    msvc_std_listuint::LIST_UINT_CTOR,
-    msvc_std_vectorint::INSERT_N as VECTOR_INT_INSERT_N,
+    poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
     ztbuilding::HAS_OPEN_SLOT,
     ztunit::{
         AVOID_DONE, CAUGHT_DONE, CHASE_DONE, CHECK_PREDATOR, FIND_NEARBY_NEED_SATISFIER, F_WAS_CAUGHT, FIND_ANY_SATISFIER, FIND_NEAREST_SATISFIER, FIND_PREDATOR, GET_PREDATOR_UNIT, GET_TARGET_UNIT, IN_FRIENDLY_CHASE, IS_FUN_SATISFIER, IS_NEED_OR_FUN_SATISFIER,
         RELEASE_PREDATOR,
     },
-    ztworldmgr::{GET_BUILDING_LIST, SATISFIES},
+    ztworldmgr::SATISFIES,
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
 
-use super::{base, call_slot_2_returning, game_rand, globals, goal_slots, map_tile, GOAL_SET_DATA_RVA, tile_offsets, unit_offsets, unit_slots, ZTUnit, ANIMAL_TAG_RVA, BUILDING_TAG_RVA, BUILDING_NEED_NAME_RVA, UNIT_TYPE_TAG_RVA, WORLD_MGR_RVA};
+use super::{building_list::BuildingList, base, call_slot_2_returning, game_rand, globals, goal_slots, map_tile, GOAL_SET_DATA_RVA, tile_offsets, unit_offsets, unit_slots, ZTUnit, ANIMAL_TAG_RVA, BUILDING_TAG_RVA, BUILDING_NEED_NAME_RVA, UNIT_TYPE_TAG_RVA, WORLD_MGR_RVA};
 use crate::{
     util::{get_from_memory, low_byte_bool, save_to_memory},
     bfentity::new_owned_name,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2},
     ztanimal::ZTAnimal,
     ztmegatilemgr::entity_type_matches,
+    vanilla_string::{object_bytes, range_bytes},
+    vanilla_vector,
 };
 
 /// Vtable slots on the unit and on its entity type these methods dispatch through.
@@ -40,8 +39,6 @@ mod slots {
     pub const TYPE_ID: u32 = 0x20;
 }
 
-/// `BFUnit` word holding the id of the unit this one is chasing or fleeing.
-const TARGET_UNIT_ID: u32 = 0x178;
 /// The two `BFEntity` bytes that mark an entity as removed or locked; such units never count as targets.
 const REMOVED: u32 = 0x142;
 const REMOVED_B: u32 = 0x143;
@@ -53,7 +50,6 @@ const AIMGR_TICK: u32 = 0xec;
 const THREAT_MEMORY_RVA: u32 = 0x0023_9524;
 /// `ZTAnimal` fields `releasePredator` clears.
 const ANIMAL_CAUGHT_FLAG: u32 = 0x3a5;
-const ANIMAL_BYTE_20D: u32 = 0x20d;
 /// `ZTWorldMgr::satisfies` needs: the need name `isFunSatisfier` tests first, then the building need (`BUILDING_NEED_NAME_RVA`).
 const FUN_NEED_NAME_RVA: u32 = 0x0023_af90;
 /// `ZTAnimal` bytes `checkPredator` reads: two flags that rule an animal out, the one the staff check consults, and the
@@ -95,8 +91,6 @@ const CAUGHT_BY_LION_FEMALE: &[u8] = b"bCaughtBylionf";
 const CAUGHT_BY_LION_MALE: &[u8] = b"bCaughtBylionm";
 /// `BFBSCall` arguments `fWasCaught` passes `setBS`: call flag, force and clear mode.
 const CAUGHT_BS_FLAGS: (i8, i8, i32) = (0, 1, 2);
-/// `BFTile` word holding the sentinel of the list of entities standing on it.
-const TILE_ENTITIES: u32 = 0;
 /// `ZTHabitat` byte `checkPredator` tests for a staff member standing in a habitat.
 const HABITAT_BYTE_2C: u32 = 0x2c;
 /// The two behaviour names a caught unit plays, which `caughtDone` waits out.
@@ -133,23 +127,20 @@ fn tile_distance_squared(from: u32, to: u32) -> i32 {
     dx.wrapping_mul(dx).wrapping_add(dy.wrapping_mul(dy))
 }
 
-/// Appends `building` to the `{begin, end, cap}` word vector at `vector`, growing through vanilla's `insert_n`.
+/// Appends `building` to the `{begin, end, cap}` word vector at `vector`, growing as vanilla's `vector<int>::insert_n`
+/// does (the old buffer is returned to the pool only when there is one).
 fn push_candidate(vector: u32, building: u32) {
-    let end: u32 = get_from_memory(vector + 4);
-    let cap: u32 = get_from_memory(vector + 8);
-    if end == cap {
-        let value = building;
-        unsafe { VECTOR_INT_INSERT_N.hooked()(vector as *const i32, end as *const u32, &value as *const u32, 1) };
-    } else {
-        save_to_memory(end, building);
-        save_to_memory(vector + 4, end + 4);
-    }
+    vanilla_vector::push_word(vector, building, |begin, bytes| {
+        if begin != 0 {
+            unsafe { POOLALLOC_DEALLOCATE.original()(begin as *const u32, bytes) };
+        }
+    });
 }
 
 impl ZTUnit {
     /// `ZTUnit::getTargetUnit` (`0x004a4b53`): the unit being chased or fled from, when it is still live.
     pub fn get_target_unit(self) -> u32 {
-        live_unit_by_id(self.read(TARGET_UNIT_ID))
+        live_unit_by_id(self.read(unit_offsets::TARGET_UNIT_ID))
     }
 
     /// `ZTUnit::getPredatorUnit` (`0x00412259`): the recorded predator, when it is still live.
@@ -165,7 +156,7 @@ impl ZTUnit {
             call_slot_1(predator, goal_slots::SET_VISIBLE, 1);
             if unsafe { entity_type_matches(predator, ANIMAL_TAG_RVA) } {
                 save_to_memory(predator + ANIMAL_CAUGHT_FLAG, 0u8);
-                save_to_memory(predator + ANIMAL_BYTE_20D, 0u8);
+                save_to_memory(predator + unit_offsets::BYTE_20D, 0u8);
                 call_slot_0(predator, goal_slots::CLEAR_GOAL);
             }
         }
@@ -264,8 +255,7 @@ impl ZTUnit {
     /// `ZTUnit::caughtDone` (`0x004a60b9`): `1` unless the unit's current behaviour name holds `bCaughtBy` or `bDefense`.
     /// Vanilla copies the name into a `0x80`-byte stack buffer first; the port searches it in place.
     pub fn caught_done(self) -> u8 {
-        let (begin, end): (u32, u32) = (self.read(0x54), self.read(0x58));
-        let mut name: Vec<u8> = if begin == 0 || end <= begin { Vec::new() } else { (begin..end).map(get_from_memory::<u8>).collect() };
+        let mut name = range_bytes(self.read(0x54), self.read(0x58));
         if let Some(nul) = name.iter().position(|&byte| byte == 0) {
             name.truncate(nul);
         }
@@ -325,23 +315,13 @@ impl ZTUnit {
         if let Some(answer) = super::live_support::intercept::find_nearest_satisfier(self.0, tile, name, out_building, range, filter) {
             return answer;
         }
-        let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
-        let allocator_dummy: u8 = 0;
-        let mut list: u32 = 0;
-        unsafe {
-            LIST_UINT_CTOR.hooked()(&mut list as *mut u32 as *const c_void, &allocator_dummy as *const u8 as u32);
-            GET_BUILDING_LIST.hooked()(world as *const u32, name as *const i32, &mut list as *mut u32 as *const i32);
-        }
+        let buildings = BuildingList::named(name as *const i32);
         let candidates = base() + CANDIDATE_VECTOR_RVA;
         save_to_memory(candidates + 4, get_from_memory::<u32>(candidates));
         let game_manager = globals().ztgamemgr() as *const _ as u32;
         let mut best = range.wrapping_mul(range);
         let mut found = false;
-        let head = list;
-        let mut node: u32 = get_from_memory(head);
-        while node != head {
-            let building: u32 = get_from_memory(node + 8);
-            node = get_from_memory(node);
+        for building in buildings.buildings() {
             if building == 0 {
                 continue;
             }
@@ -371,8 +351,7 @@ impl ZTUnit {
                     Some(high)
                 };
                 if let Some(threshold) = threshold {
-                    let scaled = (f64::from(distance).sqrt() * threshold).trunc();
-                    let scaled = if scaled.is_finite() && scaled.abs() < 9.2e18 { scaled as i64 as i32 } else { 0 };
+                    let scaled = crate::util::ftol_low32_f64(f64::from(distance).sqrt() * threshold);
                     distance = scaled.wrapping_mul(scaled);
                 }
             }
@@ -391,15 +370,6 @@ impl ZTUnit {
             let pick: u32 = get_from_memory(begin + (game_rand().wrapping_rem(count) as u32).wrapping_mul(4));
             save_to_memory(out_building, pick);
         }
-        let mut node: u32 = get_from_memory(head);
-        while node != head {
-            let next: u32 = get_from_memory(node);
-            crate::vanilla_list::free_node(node);
-            node = next;
-        }
-        save_to_memory(head, head);
-        save_to_memory(head + 4, head);
-        crate::vanilla_list::free_node(head);
         found
     }
 
@@ -413,22 +383,12 @@ impl ZTUnit {
         if let Some(answer) = super::live_support::intercept::find_any_satisfier(self.0, tile, name, out_building, range, filter) {
             return answer;
         }
-        let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
-        let allocator_dummy: u8 = 0;
-        let mut list: u32 = 0;
-        unsafe {
-            LIST_UINT_CTOR.hooked()(&mut list as *mut u32 as *const c_void, &allocator_dummy as *const u8 as u32);
-            GET_BUILDING_LIST.hooked()(world as *const u32, name as *const i32, &mut list as *mut u32 as *const i32);
-        }
+        let buildings = BuildingList::named(name as *const i32);
         let candidates = base() + CANDIDATE_VECTOR_RVA;
         save_to_memory(candidates + 4, get_from_memory::<u32>(candidates));
         let limit = range.wrapping_mul(range);
         let mut found = false;
-        let head = list;
-        let mut node: u32 = get_from_memory(head);
-        while node != head {
-            let building: u32 = get_from_memory(node + 8);
-            node = get_from_memory(node);
+        for building in buildings.buildings() {
             if building == 0 {
                 continue;
             }
@@ -458,15 +418,6 @@ impl ZTUnit {
             let pick: u32 = get_from_memory(begin + (game_rand().wrapping_rem(count) as u32).wrapping_mul(4));
             save_to_memory(out_building, pick);
         }
-        let mut node: u32 = get_from_memory(head);
-        while node != head {
-            let next: u32 = get_from_memory(node);
-            crate::vanilla_list::free_node(node);
-            node = next;
-        }
-        save_to_memory(head, head);
-        save_to_memory(head + 4, head);
-        crate::vanilla_list::free_node(head);
         found
     }
 
@@ -491,10 +442,7 @@ impl ZTUnit {
         }
         unsafe { BFENTITY_SET_DIRECTION.hooked()(self.0 as *const u32, get_from_memory(predator + FACING)) };
         let predator_type: u32 = get_from_memory(predator + unit_offsets::ENTITY_TYPE);
-        let text_at = |offset: u32| -> Vec<u8> {
-            let (begin, end): (u32, u32) = (get_from_memory(predator_type + offset), get_from_memory(predator_type + offset + 4));
-            if begin == 0 || end <= begin { Vec::new() } else { (begin..end).map(get_from_memory::<u8>).collect() }
-        };
+        let text_at = |offset: u32| object_bytes(predator_type + offset);
         let mut name = CAUGHT_BY_PREFIX.to_vec();
         name.extend(text_at(ANIMAL_TYPE_FIRST_NAME));
         name.extend(text_at(ANIMAL_TYPE_SECOND_NAME));
@@ -585,7 +533,7 @@ impl ZTUnit {
                 if candidate_tile == 0 || call_slot_1(self.0, unit_slots::GET_HABITAT_FROM_TILE, candidate_tile) != habitat {
                     continue;
                 }
-                let sentinel: u32 = get_from_memory(candidate_tile + TILE_ENTITIES);
+                let sentinel: u32 = get_from_memory(candidate_tile + tile_offsets::ENTITY_LIST);
                 let mut node: u32 = get_from_memory(sentinel);
                 while node != sentinel {
                     let entity: u32 = get_from_memory(node + 8);
@@ -593,7 +541,9 @@ impl ZTUnit {
                     if low_byte_bool(call_slot_2_returning(self.0, CHECK_PREDATOR_SLOT, unit, u32::from(flag))) {
                         let nearness = distance(candidate_tile);
                         if nearness < best {
-                            found = get_from_memory(unit + unit_offsets::ENTITY_ID);
+                            if unit != 0 {
+                                found = get_from_memory(unit + unit_offsets::ENTITY_ID);
+                            }
                             best = nearness;
                         }
                         break;

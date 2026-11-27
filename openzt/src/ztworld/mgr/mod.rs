@@ -11,7 +11,7 @@ use crate::globals::globals;
 use crate::lua_fn;
 use crate::util::{get_from_memory, ref_from_memory};
 use crate::ztmapview::BFTile;
-use crate::ztworld::entity::{read_zt_entity_from_memory, BFEntity, ZTAnimal, ZTEntityClass, ZTEntityWithPtr, ZTEntityTypeWithPtr, ZTUnit};
+use crate::ztworld::entity::{read_zt_entity_from_memory, BFEntity, ZTAnimal, ZTEntityClass, ZTEntityWithPtr, ZTEntityTypeWithPtr, ZTUnitData};
 
 pub mod ztworldmgr;
 pub use ztworldmgr::*;
@@ -25,7 +25,7 @@ pub mod hooks_ztunit {
 
     #[detour(GET_FOOTPRINT)]
     unsafe extern "thiscall" fn ztunit_get_footprint(_this: *const u32, param_1: *const u32, use_map_footprint: bool) -> *const u32 {
-        let entity = unsafe { ref_from_memory::<ZTUnit>(_this) };
+        let entity = unsafe { ref_from_memory::<ZTUnitData>(_this) };
         let footprint: IVec3 = entity.get_footprint(use_map_footprint);
 
         save_to_memory(param_1 as u32, footprint.x);

@@ -17,7 +17,6 @@ use openzt_detour::{
         standalone::HABITAT_FACING,
         zthabitat::GET_ALL_ANIMALS,
         ztui_guestinfo::SET_GUEST_VISIBLE,
-        ztunit::{DO_BUILDING as ZTUNIT_DO_BUILDING, IS_FUN_SATISFIER},
         ztviewingarea::HAS_OA,
     },
 };
@@ -272,10 +271,10 @@ impl ZTGuest {
             self.read(guest_fields::POSITION_RECORD + 4),
             self.read(guest_fields::POSITION_RECORD + 8),
         ];
-        if low_byte_bool(unsafe { IS_FUN_SATISFIER.hooked()(building as i32, record.as_ptr()) }) && building != 0 {
+        if crate::ztunit::ZTUnit::is_fun_satisfier(building, record.as_ptr() as *const i32) && building != 0 {
             self.add_visited_site(get_from_memory(building + 0x34), get_from_memory(building + 0x38), get_from_memory(building + 0x3c));
         }
-        unsafe { ZTUNIT_DO_BUILDING.hooked()(self.0 as *const u32) };
+        crate::ztunit::ZTUnit(self.0).do_building();
     }
 
     /// `ZTGuest::setVisible` (`0x0042aa0a`): stores the flag (`+0x13f`) and tells the guest info panel.

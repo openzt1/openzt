@@ -24,7 +24,6 @@ use openzt_detour::generated::{
         IN_GRANDSTAND, IS_NEED_SATISFIER, IS_PRESSING_NEED_SATISFIER, PICK_RANDOM_DEST, THROW_TRASH, TILE_FILTER, TRIGGER_GRANDSTAND_ESCAPE_0, TRIGGER_GRANDSTAND_ESCAPE_1,
     },
     zthabitat::GET_GATE_TILE_PASS_OUT,
-    ztunit::{FIND_ANY_SATISFIER, FIND_NEAREST_SATISFIER, PICK_RANDOM_DEST as ZTUNIT_PICK_RANDOM_DEST, UPDATE_BUILDING_TILES},
     ztworldmgr::{GET_BUILDING_LIST, REMOVE_FROM_MEMBER_LISTS, SATISFIES},
 };
 use openzt_detour_macro::detour_mod;
@@ -33,7 +32,7 @@ use tracing::error;
 use super::{checks::need_names, ZTGuest};
 use crate::{
     globals::get_module_base,
-    util::{get_from_memory, low_byte_bool, save_to_memory},
+    util::{get_from_memory, low_byte_bool, position_in_tile_xy, position_in_tile_z, save_to_memory},
     zthabitat::MAX_PATH_COST_RVA,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, vtable_slot},
     ztmegatilemgr::entity_type_matches,
@@ -137,19 +136,6 @@ const SATISFIED_NAMES: [u32; 8] = [
 
 /// The needs `isPressingNeedSatisfier` reports, in the order vanilla tests them.
 const PRESSING_NAMES: [u32; 4] = [need_names::THIRST, need_names::HUNGER_A, need_names::BATHROOM, need_names::ENERGY];
-
-fn position_xy(value: i32) -> i32 {
-    value.wrapping_rem(64)
-}
-
-fn position_z(value: i32) -> i32 {
-    let remainder = value.wrapping_rem(16);
-    if value < 0 {
-        remainder + 16
-    } else {
-        remainder
-    }
-}
 
 /// A virtual call on `this` taking two arguments and returning `EAX`.
 fn call_slot_2_returning(this: u32, offset: u32, first: u32, second: u32) -> u32 {
@@ -262,11 +248,9 @@ impl ZTGuest {
         let tile = self.own_tile() as i32;
         let name = (base() + name_rva) as *const i32;
         let found = if nearest {
-            unsafe {
-                FIND_NEAREST_SATISFIER.hooked()(self.0 as *const u32, tile, name, &mut target as *mut u32 as *const u32, Self::search_global(), SEARCH_UNBOUNDED)
-            }
+            crate::ztunit::ZTUnit(self.0).find_nearest_satisfier(tile as u32, name as u32, &mut target as *mut u32 as u32, Self::search_global(), SEARCH_UNBOUNDED)
         } else {
-            unsafe { FIND_ANY_SATISFIER.hooked()(self.0 as *const u32, tile, name, &mut target as *mut u32 as *const i32, Self::search_global(), SEARCH_UNBOUNDED) }
+            crate::ztunit::ZTUnit(self.0).find_any_satisfier(tile as u32, name as u32, &mut target as *mut u32 as u32, Self::search_global(), SEARCH_UNBOUNDED)
         };
         (found, target)
     }
@@ -276,7 +260,7 @@ impl ZTGuest {
         let tile = unsafe { BFENTITY_GET_TILE.hooked()(building as *const u32) } as u32;
         call_slot_1(self.0, movement_slots::GO_TO_TILE, tile);
         self.take_building_position(building);
-        unsafe { UPDATE_BUILDING_TILES.hooked()(self.0 as *const u32, flag) }
+        crate::ztunit::ZTUnit(self.0).update_building_tiles(flag)
     }
 
     fn throw_trash(self) {
@@ -430,7 +414,7 @@ impl ZTGuest {
     pub fn pick_random_dest(self, position: *const IVec3) -> bool {
         let habitat = call_slot_0(self.0, movement_slots::GET_HABITAT);
         if habitat == 0 || get_from_memory::<u8>(habitat + 0x2c) != 0 {
-            return low_byte_bool(unsafe { ZTUNIT_PICK_RANDOM_DEST.hooked()(self.0 as *const u32, position) });
+            return crate::ztunit::ZTUnit(self.0).pick_random_dest(position as *mut [i32; 3]);
         }
         let gate = unsafe { GET_GATE_TILE_PASS_OUT.hooked()(habitat as *const u32, self.0 as *const u32) } as u32;
         if gate == 0 {
@@ -704,9 +688,9 @@ impl ZTGuest {
         }
         let distance = tile_distance_squared(tile, building_tile);
         let position = [
-            position_xy(get_from_memory(building + 0x114)),
-            position_xy(get_from_memory(building + 0x118)),
-            position_z(get_from_memory(building + 0x11c)),
+            position_in_tile_xy(get_from_memory(building + 0x114)),
+            position_in_tile_xy(get_from_memory(building + 0x118)),
+            position_in_tile_z(get_from_memory(building + 0x11c)),
         ];
         let building_tile = unsafe { BFENTITY_GET_TILE.hooked()(building as *const u32) } as u32;
         if !low_byte_bool(call_slot_3_returning(self.0, movement_slots::IS_PRESSING_NEED_SATISFIER, out_need, building_tile, position.as_ptr() as u32)) {

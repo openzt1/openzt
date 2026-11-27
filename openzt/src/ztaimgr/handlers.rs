@@ -189,7 +189,7 @@ pub unsafe fn f_die(unit: u32, done: *const bool) -> bool {
         if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
             ZTUnit(unit).set_is_removed(1);
             let tile = unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) };
-            unsafe { F_ZOO_MESSAGE_TILE_0.original()(unit as *const u32, DEATH_MESSAGE_ID, DEATH_MESSAGE_KIND, tile as u32, 0, 1) };
+            ZTUnit(unit).f_zoo_message_tile(DEATH_MESSAGE_ID, DEATH_MESSAGE_KIND as i32, tile as u32, 0, 1);
             removed = true;
         }
         let habitat = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_GET_HABITAT) };

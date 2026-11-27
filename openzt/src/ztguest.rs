@@ -39,7 +39,6 @@ use openzt_detour::generated::{
     ztgamemgr::{GET_DATE as GAMEMGR_GET_DATE, IS_GAME_DATE as GAMEMGR_IS_GAME_DATE, IS_REAL_WORLD_DATE as GAMEMGR_IS_REAL_WORLD_DATE},
     ztui_multiguest::{ADD_ENTITY as MULTIGUEST_ADD_ENTITY, REMOVE_ENTITY as MULTIGUEST_REMOVE_ENTITY},
     ztunit::{
-        HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL,
         INIT as ZTUNIT_INIT, },
     ztworldmgr::GET_NEED_INDEX as ZTWORLDMGR_GET_NEED_INDEX,
 };
@@ -678,7 +677,7 @@ impl ZTGuest {
     }
 
     fn has_building_use_goal(self) -> bool {
-        unsafe { ZTUNIT_HAS_BUILDING_USE_GOAL.original()(self.0 as *const u32) }
+        ZTUnit(self.0).has_building_use_goal()
     }
 
     /// `ZTGuest::abortGoal` (`0x005ad820`). With `param` set and the guest's need index (`+0x24e`) matching the first

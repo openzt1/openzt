@@ -25,7 +25,6 @@ use openzt_detour::generated::{
     },
     ztfence::CLOSE_GATE as ZTFENCE_CLOSE_GATE,
     ztshow::ABORT_SHOW as ZTSHOW_ABORT_SHOW,
-    ztunit::{UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -596,7 +595,7 @@ impl ZTKeeper {
     /// Hands over to `ZTUnit::updateGoals`, which every `updateGoals` path ends with. `.hooked()` runs what vanilla's
     /// direct call would; nothing detours that address, so it is the real body, and a test can observe the hand-over.
     fn finish_update_goals(self) {
-        unsafe { ZTUNIT_UPDATE_GOALS.hooked()(self.0 as *const u32) };
+        ZTUnit(self.0).update_goals();
     }
 
     /// `ZTKeeper::updateGoals` (`0x00423d04`), laid out from the `.asm` and its outlined blocks:

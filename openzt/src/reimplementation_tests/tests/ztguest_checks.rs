@@ -27,9 +27,6 @@ use openzt_detour::{
     },
     zthabitat::GET_ALL_ANIMALS,
     ztui_guestinfo::SET_GUEST_VISIBLE,
-    ztunit::{
-        UPDATE_BUILDING_TILES,
-    },
     ztworldmgr::{GET_NEED_INDEX, REMOVE_FROM_MEMBER_LISTS},
     },
 };
@@ -139,6 +136,15 @@ fn sandboxed_find_predator(_this: u32, flag: bool) -> Option<i32> {
     }
     SANDBOX_LOG.lock().unwrap().push(format!("findPredator {flag}"));
     Some(0)
+}
+
+fn scripted_update_building_tiles(_this: u32, flag: bool) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(3) != 0;
+    record(format!("updateBuildingTiles {flag} {answer}"));
+    Some(answer)
 }
 
 fn scripted_in_friendly_chase(_this: u32) -> Option<bool> {
@@ -376,17 +382,6 @@ mod check_hooks {
         }
     }
 
-    #[detour(UPDATE_BUILDING_TILES)]
-    unsafe extern "thiscall" fn update_tiles(this: *const u32, flag: bool) -> bool {
-        if scripted() {
-            let answer = roll(3) != 0;
-            record(format!("updateBuildingTiles {flag} {answer}"));
-            answer
-        } else {
-            unsafe { UPDATE_BUILDING_TILES_DETOUR.call(this, flag) }
-        }
-    }
-
     #[detour(THROW_TRASH)]
     unsafe extern "thiscall" fn throw_trash(this: *const u32, arg: *const std::ffi::c_void) -> u32 {
         if scripted() {
@@ -426,7 +421,9 @@ mod check_hooks {
 
     #[detour(GO_TO_DEST)]
     unsafe extern "thiscall" fn go_to_dest_none(this: *const u32, name: bool, arg: u32) -> bool {
-        if scripted() {
+        if let Some(answer) = crate::reimplementation_tests::tests::ztunit::buildings::stub_go_to_dest_none(this as u32, name, arg) {
+            answer
+        } else if scripted() {
             let answer = roll(3) != 0;
             record(format!("goToDest {} {arg} {answer}", name as u32));
             answer
@@ -485,7 +482,9 @@ mod check_hooks {
 
     #[detour(GO_TO_DEST_0)]
     unsafe extern "thiscall" fn go_to_dest(this: *const u32, name: *const u32, arg: u32, flag: i8) -> u32 {
-        if scripted() {
+        if let Some(answer) = crate::reimplementation_tests::tests::ztunit::buildings::stub_go_to_dest_string(this as u32, name as u32, arg, flag) {
+            answer
+        } else if scripted() {
             let begin: u32 = get_from_memory(name as u32);
             let end: u32 = get_from_memory(name as u32 + 4);
             let text: String = (begin..end).map(|address| get_from_memory::<u8>(address) as char).collect();
@@ -597,6 +596,7 @@ pub(super) fn install_hooks() -> Result<(), String> {
         *crate::ztunit::live_support::intercept::IS_FUN_SATISFIER.lock().unwrap() = Some(scripted_is_fun_satisfier);
         *crate::ztunit::live_support::intercept::IN_FRIENDLY_CHASE.lock().unwrap() = Some(scripted_in_friendly_chase);
         *crate::ztunit::live_support::intercept::UPDATE_GOALS.lock().unwrap() = Some(scripted_update_goals);
+        *crate::ztunit::live_support::intercept::UPDATE_BUILDING_TILES.lock().unwrap() = Some(scripted_update_building_tiles);
         *crate::ztunit::live_support::intercept::FIND_PREDATOR.lock().unwrap() = Some(sandboxed_find_predator);
         *crate::ztunit::live_support::intercept::FIND_NEAREST_SATISFIER.lock().unwrap() = Some(scripted_find_nearest);
         *crate::ztunit::live_support::intercept::FIND_ANY_SATISFIER.lock().unwrap() = Some(scripted_find_any);

@@ -9,11 +9,17 @@
 //! own part. A method the vanilla body would only fault on (a unit whose entity type is missing or is not a unit type)
 //! answers `0`/`false` instead.
 //!
-//! This file holds the leaf getters and the animation getters. The lifecycle, goal, movement, satisfier, building and
-//! show groups follow in later stages of `plans/ztunit-scoping-plan.md`.
+//! This file holds the leaf getters, the animation getters, the lifecycle (constructor, save/load, map add/remove) and
+//! the goal and tank-position methods. The submodules hold the rest: `movement` (targets, facing, paths, blocking),
+//! `satisfiers` (targets, predators, satisfier searches), `buildings` and `building_list` (the building the unit uses
+//! and the vanilla list of buildings), `shows` (shows and tricks) and `messages` (the event messages).
 
+mod building_list;
+mod buildings;
 mod movement;
 mod satisfiers;
+mod messages;
+mod shows;
 
 use std::ffi::c_void;
 
@@ -27,7 +33,6 @@ use openzt_detour::{
     bfentity::{CREATE_NAME as BFENTITY_CREATE_NAME, SET_BS},
     bfentitytype::GET_UNIT_COUNT,
     bfinternat::GET_NUMBER_TEXT,
-    standalone::OPERATOR_DELETE,
     msvc_std_vectorgxmixerlink::DESTRUCTOR_0X411C0F as GXMIXERLINK_VECTOR_DESTRUCTOR,
     gxmixer::{CLEAR_ALL as GXMIXER_CLEAR_ALL, UPDATE as GXMIXER_UPDATE},
     bfunit::{
@@ -35,22 +40,20 @@ use openzt_detour::{
         INIT_AMBIENT_ANIMS as BFUNIT_INIT_AMBIENT_ANIMS, INTO_NEW_TILE as BFUNIT_INTO_NEW_TILE, LOAD as BFUNIT_LOAD, REMOVE_FROM_MAP as BFUNIT_REMOVE_FROM_MAP,
         SAVE as BFUNIT_SAVE, UPDATE_GOALS as BFUNIT_UPDATE_GOALS,
     },
-    msvc_std_basic_string::BASIC_STRING_RANGE,
-    msvc_std_listuint::LIST_UINT_CTOR,
     poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
     ztbuilding::{CHECK_USER as ZTBUILDING_CHECK_USER, REMOVE_USER as ZTBUILDING_REMOVE_USER},
     ztfence::{CLOSE_GATE as ZTFENCE_CLOSE_GATE, OPEN_GATE as ZTFENCE_OPEN_GATE},
     ztmapview::{CHECK_UNDO_BUFFER, PREPARE_TO_DELETE_ENTITY},
     ztthoughtmgr::REMOVE_THOUGHTS_BY_OBJECT,
     ztui_general::GET_MAPVIEW,
-    ztworldmgr::{GET_BUILDING_LIST, GET_NEED_INDEX},
+    ztworldmgr::GET_NEED_INDEX,
     ztunit::{
         DO_AMBIENT_ANIMS, GET_DEPTH, GET_FAST_ANIM_SPEED, GET_FAST_ANIM_SYMBOL, GET_HABITAT, GET_HABITAT_FROM_GATE, GET_HABITAT_FROM_TILE, GET_ICON_ANIM,
         GET_IDLE_ANIM, GET_IDLE_ANIM_SYMBOL, GET_MEDIUM_ANIM_SPEED, GET_MEDIUM_ANIM_SYMBOL, GET_ONLY_UNDERWATER, GET_SLOW_ANIM_SPEED, GET_SLOW_ANIM_SYMBOL,
         GET_SWIMS, GET_TANK, GET_TANK_MODE, GET_UNDERWATER, INIT_AMBIENT_ANIMS, IS_IN_TANK, IS_ON_PLATFORM, IS_ON_WATER, IS_WATER_TRAVELING, NO_SHADOW_PART,
         NO_UNDER_PART, SET_TANK_MODE,
         ADD_TO_MAP, CREATE_NAME, INIT_AFTER_LOAD, ABORT_GOAL, CLEAR_GOAL, CLEAR_STATE_VARIABLES, CONSTRUCTOR, DO_BUILDING, GET_RANDOM_OK, GOAL_SET, INIT_STATUS_VARS, INTO_NEW_TILE, IS_DOING_SOMETHING, LOAD,
-        REMOVE_FROM_BUILDING_IF_PRESENT as ZTUNIT_REMOVE_FROM_BUILDING_IF_PRESENT, REMOVE_FROM_MAP, RESET_AI, SAVE, SET_IS_REMOVED, UPDATE_GOALS,
+        REMOVE_FROM_MAP, RESET_AI, SAVE, SET_IS_REMOVED, UPDATE_GOALS,
         VALIDATE_TANK_POSITION,
     },
     zthabitat::{ADD_SHOW_UNIT as ZTHABITAT_ADD_SHOW_UNIT, GET_GATE_TILE_IN, GET_GATE_TILE_OUT, REMOVE_SHOW_UNIT as ZTHABITAT_REMOVE_SHOW_UNIT},
@@ -64,12 +67,18 @@ use openzt_detour::{
 use openzt_detour_macro::detour_mod;
 use tracing::error;
 
+use building_list::BuildingList;
+
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, low_byte_bool, save_to_memory},
+    msvc_deque::MsvcDeque,
+    vanilla_list::NodeList,
+    util::{get_from_memory, low_byte_bool, position_in_tile, ref_from_memory, save_to_memory, world_to_tile},
     bfentity::new_owned_name,
-    vanilla_string::VanillaString,
+    vanilla_string::{c_string_bytes, VanillaString},
+    zthabitatmgr::ZTHabitatMgr,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, call_slot_3, read_field, write_field},
+    ztworld::mgr::ztworldmgr::ZTWorldMgr,
     ztmegatilemgr::entity_type_matches,
     ztshow::mgr::ztshowmgr::ZTShowMgr,
 };
@@ -87,74 +96,127 @@ pub const UNIT_TYPE_TAG_RVA: u32 = 0x0023_86b0;
 const WORLD_MGR_RVA: u32 = 0x0023_8040;
 const HABITAT_MGR_RVA: u32 = 0x0023_805c;
 
-/// Offsets of the fields a unit's methods read or write, from the start of the unit.
+/// The `BFUnit` fields from the end of `BFEntity` (`0x154`) to the end of `BFUnit` (`0x214`). Fields the unit methods
+/// never touch are gaps; the offsets of the named fields are checked against vanilla's below.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BFUnitTail {
+    /// Sentinel of the unit's list of path steps (20-byte nodes `{next, previous, x, y, z}`).
+    pub path_steps: u32,
+    _gap_158: [u8; 4],
+    /// Start of the embedded `BFCogGoal`.
+    pub cog_goal: [u8; 0x14],
+    /// The goal id: `0x6e` on habitat duties, `0x6f` retrieving an escaped animal, `0x66`-`0x6a` in shows and buildings.
+    pub goal_id: u32,
+    /// The embedded `BFCogGoal`'s state word.
+    pub cog_goal_state: u32,
+    /// The id of the unit being chased or fled from.
+    pub target_unit_id: u32,
+    _gap_17c: [u8; 4],
+    /// Non-zero once a guest has a state to voice a thought about.
+    pub thought_state: u32,
+    _gap_184: [u8; 0x24],
+    /// A byte of the embedded `BFCogGoal`; the routines only run their goal while it is clear.
+    pub cog_goal_flag: u8,
+    _gap_1a9: [u8; 0x13],
+    /// `updateGoals` tests it against `3` ("in building").
+    pub building_state: u32,
+    _gap_1c0: [u8; 4],
+    /// Object notified (virtual `+0x18`) when the tank mode changed; null when none.
+    pub mode_listener: u32,
+    _gap_1c8: [u8; 0x24],
+    /// The depth mode string, the byte range `[begin, end)`.
+    pub depth_mode_begin: u32,
+    pub depth_mode_end: u32,
+    _gap_1f4: [u8; 4],
+    /// Movement speed written by `setSpeed`.
+    pub speed: u32,
+    _gap_1fc: [u8; 0xc],
+    /// `-1` while diving, `1` while rising.
+    pub vertical_direction: i32,
+    /// Set while the unit plays movement animations.
+    pub move_anim_enabled: u8,
+    /// Cleared by `clearStateVariables`; an animal's `releasePredator` clears it too.
+    pub byte_20d: u8,
+    /// `BFCogGoal` validity flag cleared by `updateGoals`' no-habitat tail.
+    pub cog_invalid: u8,
+    _gap_20f: u8,
+    /// Answer of `canIgnoreBlocking` when no blocking building is involved.
+    pub ignores_blocking: u8,
+    _gap_211: [u8; 3],
+}
+
+/// The `ZTUnit` fields from the end of `BFUnit` (`0x214`) to the end of `ZTUnit` (`0x260`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ZTUnitTail {
+    /// Offsets (x, y, z) inside the building tile the unit works at.
+    pub building_offset: [i32; 3],
+    /// A second default-initialised position.
+    pub position_b: [i32; 3],
+    /// The id of the predator `updateGoals` records when it switches to the predator goal.
+    pub predator: u32,
+    /// Answer of `getNonPathCost`; the constructor sets it to `1`.
+    pub non_path_cost: u32,
+    /// The tile the unit is heading for.
+    pub target_tile: u32,
+    /// World position of the target; saved, and `load` rebuilds `target_tile` from it.
+    pub target_position: [i32; 3],
+    /// Tile of the building the unit uses.
+    pub building_tile: u32,
+    /// The fence gate the unit is queued at.
+    pub gate: u32,
+    /// Set when something wants a predator check on the next goal update.
+    pub predator_check_pending: u8,
+    /// The slot of its building the unit occupies (`0xff` for none).
+    pub building_slot: u8,
+    /// The index of the need the unit is satisfying.
+    pub need_index: u8,
+    pub show_flag_a: u8,
+    pub show_flag_b: u8,
+    /// Set while the unit performs in a show.
+    pub in_show: u8,
+    /// Trick type the unit performs (`0` when none).
+    pub trick_type: u16,
+    /// The id of the `ZTShowInfo` the unit performs in.
+    pub show_info_id: u16,
+    _gap_256: [u8; 2],
+    /// `2` on land beside a gate, `3` on the surface, `4` underwater.
+    pub tank_mode: u32,
+    /// Non-zero while the unit is occupied.
+    pub busy: u8,
+    _gap_25d: [u8; 3],
+}
+
+/// Where each tail starts inside a unit.
+const BF_UNIT_TAIL_START: u32 = 0x154;
+const ZT_UNIT_TAIL_START: u32 = 0x214;
+
+const _: () = assert!(std::mem::size_of::<BFUnitTail>() as u32 == ZT_UNIT_TAIL_START - BF_UNIT_TAIL_START);
+const _: () = assert!(std::mem::size_of::<ZTUnitTail>() as u32 == UNIT_SIZE - ZT_UNIT_TAIL_START);
+
+impl BFUnitTail {
+    pub(crate) const fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+impl ZTUnitTail {
+    pub(crate) const fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+/// Offsets of the fields a unit's methods read or write, from the start of the unit. Those inside the two tail
+/// structs are derived from them; the `BFEntity` ones below `0x154` are written out.
 pub mod unit_offsets {
+    use super::{BFUnitTail, ZTUnitTail, BF_UNIT_TAIL_START as BF, ZT_UNIT_TAIL_START as ZT};
+    use std::mem::offset_of;
+
     /// `BFEntity` id, the key `ZTShowInfo::removeUnit` and `getEvents` use.
     pub const ENTITY_ID: u32 = 0x124;
     /// The entity's `ZTKeeperType` (or other entity type) pointer.
     pub const ENTITY_TYPE: u32 = 0x128;
-    /// Start of the embedded `BFCogGoal`.
-    pub const COG_GOAL: u32 = 0x15c;
-    /// `BFCogGoal` validity flag cleared by `updateGoals`' no-habitat tail.
-    pub const COG_INVALID: u32 = 0x20e;
-    /// The embedded `BFCogGoal`'s state word (`COG_GOAL + 0x18`); `0x13` marks a unit tied to a show.
-    pub const COG_GOAL_STATE: u32 = 0x174;
-    /// Movement speed written by `setSpeed`.
-    pub const SPEED: u32 = 0x1f8;
-    /// The tile the unit is heading for.
-    pub const TARGET_TILE: u32 = 0x234;
-    /// The unit's goal id: `0x6e` while on habitat duties, `0x6f` while retrieving an escaped animal.
-    pub const GOAL_ID: u32 = 0x170;
-    /// A byte of the embedded `BFCogGoal` (`COG_GOAL + 0x4c`); the routines only run their goal while it is clear.
-    pub const COG_GOAL_FLAG: u32 = 0x1a8;
-    /// The byte every `fRoutine` copies into its `done` flag: set while the unit is not moving.
-    pub const STOPPED: u32 = 0xf9;
-    pub use crate::ztstaff::staff_offsets::{ASSIGNED_HABITATS, ESCAPED_ANIMAL};
-    /// A byte `updateGoals` consumes: set when something wants a predator check on the next goal update.
-    pub const PREDATOR_CHECK_PENDING: u32 = 0x24c;
-    /// The predator `updateGoals` records when it switches to the predator goal.
-    pub const PREDATOR: u32 = 0x22c;
-    /// The fence gate the unit is queued at; `notifyHabitatNotComing` closes it.
-    pub const GATE: u32 = 0x248;
-    /// Byte `getHabitat` tests before consulting the show: set while the unit performs in a show.
-    pub const IN_SHOW: u32 = 0x251;
-    /// The id of the `ZTShowInfo` the unit performs in (`u16`).
-    pub const SHOW_INFO_ID: u32 = 0x254;
-    /// Tank mode: `2` on land beside a gate, `3` on the surface, `4` underwater (`getTankMode`/`setTankMode`).
-    pub const TANK_MODE: u32 = 0x258;
-    /// A byte `removeFromMap` tests before cancelling the unit's habitat visit.
-    pub const MBR_0X142: u32 = 0x142;
-    /// `initStatusVars` stores the unit's own address here.
-    pub const SELF_POINTER: u32 = 0x64;
-    /// `initStatusVars` stores `entity_type + 0x80` here when the type's `+0x84` is non-zero, otherwise null.
-    pub const TYPE_BLOCK_POINTER: u32 = 0x68;
-    /// `BFUnit` field the swim animation getters read: `-1` while diving, `1` while rising.
-    pub const VERTICAL_DIRECTION: u32 = 0x208;
-    /// Offsets inside the building tile the unit works at (x, y, z; `updateGoals`, `clearGoal`).
-    pub const BUILDING_OFFSET: u32 = 0x214;
-    /// A second default-initialised position (saved as `0x220`/`0x224`/`0x228`).
-    pub const POSITION_B: u32 = 0x220;
-    /// Saved first (`getNonPathCost` answer); the constructor sets it to `1`.
-    pub const NON_PATH_COST: u32 = 0x230;
-    /// World position of the target (x, y, z); saved, and `load` rebuilds [`TARGET_TILE`] from it.
-    pub const TARGET_POSITION: u32 = 0x238;
-    /// Tile of the building the unit uses (`setBuildingTile`).
-    pub const BUILDING_TILE: u32 = 0x244;
-    /// The index of the need the unit is satisfying; `doBuilding` compares it with the "building" need.
-    pub const NEED_INDEX: u32 = 0x24e;
-    /// Saved with [`SHOW_FLAG_B`] last; both are cleared by `handleShowEvents` case `0x271a`.
-    pub const SHOW_FLAG_A: u32 = 0x24f;
-    pub const SHOW_FLAG_B: u32 = 0x250;
-    /// Trick type the unit performs (`u16`, `0` when none).
-    pub const TRICK_TYPE: u32 = 0x252;
-    /// Non-zero while the unit is occupied (`isDoingSomething`, `getRandomOK`).
-    pub const BUSY: u32 = 0x25c;
-    /// Pointer to the unit's step list (a `std::list` sentinel): `intoNewTile` reads the second node.
-    pub const PATH_LIST: u32 = 0x154;
-    /// Byte set by `intoNewTile` when the unit crosses between water and land.
-    pub const MOVE_ANIM_DIRTY: u32 = 0x6c;
-    /// `BFUnit` word `updateGoals` tests against `3` (the "in building" state).
-    pub const BUILDING_STATE: u32 = 0x1bc;
     /// `BFEntity` remove flags `setIsRemoved` writes: the flag, and a byte it clears.
     pub const REMOVED_FLAG: u32 = 0x13c;
     pub const REMOVED_FLAG_B: u32 = 0x13d;
@@ -162,21 +224,83 @@ pub mod unit_offsets {
     pub const RESET_COUNTDOWN: u32 = 0x14c;
     /// Height above the terrain (`BFEntity`, `i32`).
     pub const HEIGHT: u32 = 0x120;
-    /// Byte set while the unit plays movement animations; `validateTankPosition` restarts them when the mode changes.
-    pub const MOVE_ANIM_ENABLED: u32 = 0x20c;
-    /// Object notified (virtual `+0x18`) when the tank mode changed; `null` when none.
-    pub const MODE_LISTENER: u32 = 0x1c4;
     /// `BFEntity` position (x, y, z).
     pub const POS_X: u32 = 0x114;
     pub const POS_Y: u32 = 0x118;
     pub const POS_Z: u32 = 0x11c;
+    /// A byte `removeFromMap` tests before cancelling the unit's habitat visit.
+    pub const MBR_0X142: u32 = 0x142;
+    /// `initStatusVars` stores the unit's own address here.
+    pub const SELF_POINTER: u32 = 0x64;
+    /// `initStatusVars` stores `entity_type + 0x80` here when the type's `+0x84` is non-zero, otherwise null.
+    pub const TYPE_BLOCK_POINTER: u32 = 0x68;
+    /// Byte set by `intoNewTile` when the unit crosses between water and land.
+    pub const MOVE_ANIM_DIRTY: u32 = 0x6c;
+    /// The byte every `fRoutine` copies into its `done` flag: set while the unit is not moving.
+    pub const STOPPED: u32 = 0xf9;
+    pub use crate::ztstaff::staff_offsets::{ASSIGNED_HABITATS, ESCAPED_ANIMAL};
+
+    /// `BFUnit` part.
+    pub const PATH_LIST: u32 = BF + offset_of!(BFUnitTail, path_steps) as u32;
+    pub const COG_GOAL: u32 = BF + offset_of!(BFUnitTail, cog_goal) as u32;
+    pub const GOAL_ID: u32 = BF + offset_of!(BFUnitTail, goal_id) as u32;
+    pub const COG_GOAL_STATE: u32 = BF + offset_of!(BFUnitTail, cog_goal_state) as u32;
+    pub const TARGET_UNIT_ID: u32 = BF + offset_of!(BFUnitTail, target_unit_id) as u32;
+    pub const THOUGHT_STATE: u32 = BF + offset_of!(BFUnitTail, thought_state) as u32;
+    pub const COG_GOAL_FLAG: u32 = BF + offset_of!(BFUnitTail, cog_goal_flag) as u32;
+    pub const BUILDING_STATE: u32 = BF + offset_of!(BFUnitTail, building_state) as u32;
+    pub const MODE_LISTENER: u32 = BF + offset_of!(BFUnitTail, mode_listener) as u32;
+    pub const DEPTH_MODE_BEGIN: u32 = BF + offset_of!(BFUnitTail, depth_mode_begin) as u32;
+    pub const DEPTH_MODE_END: u32 = BF + offset_of!(BFUnitTail, depth_mode_end) as u32;
+    pub const SPEED: u32 = BF + offset_of!(BFUnitTail, speed) as u32;
+    pub const VERTICAL_DIRECTION: u32 = BF + offset_of!(BFUnitTail, vertical_direction) as u32;
+    pub const MOVE_ANIM_ENABLED: u32 = BF + offset_of!(BFUnitTail, move_anim_enabled) as u32;
+    pub const BYTE_20D: u32 = BF + offset_of!(BFUnitTail, byte_20d) as u32;
+    pub const COG_INVALID: u32 = BF + offset_of!(BFUnitTail, cog_invalid) as u32;
+    pub const IGNORES_BLOCKING: u32 = BF + offset_of!(BFUnitTail, ignores_blocking) as u32;
+
+    /// `ZTUnit` part.
+    pub const BUILDING_OFFSET: u32 = ZT + offset_of!(ZTUnitTail, building_offset) as u32;
+    pub const POSITION_B: u32 = ZT + offset_of!(ZTUnitTail, position_b) as u32;
+    pub const PREDATOR: u32 = ZT + offset_of!(ZTUnitTail, predator) as u32;
+    pub const NON_PATH_COST: u32 = ZT + offset_of!(ZTUnitTail, non_path_cost) as u32;
+    pub const TARGET_TILE: u32 = ZT + offset_of!(ZTUnitTail, target_tile) as u32;
+    pub const TARGET_POSITION: u32 = ZT + offset_of!(ZTUnitTail, target_position) as u32;
+    pub const BUILDING_TILE: u32 = ZT + offset_of!(ZTUnitTail, building_tile) as u32;
+    pub const GATE: u32 = ZT + offset_of!(ZTUnitTail, gate) as u32;
+    pub const PREDATOR_CHECK_PENDING: u32 = ZT + offset_of!(ZTUnitTail, predator_check_pending) as u32;
+    pub const BUILDING_SLOT: u32 = ZT + offset_of!(ZTUnitTail, building_slot) as u32;
+    pub const NEED_INDEX: u32 = ZT + offset_of!(ZTUnitTail, need_index) as u32;
+    pub const SHOW_FLAG_A: u32 = ZT + offset_of!(ZTUnitTail, show_flag_a) as u32;
+    pub const SHOW_FLAG_B: u32 = ZT + offset_of!(ZTUnitTail, show_flag_b) as u32;
+    pub const IN_SHOW: u32 = ZT + offset_of!(ZTUnitTail, in_show) as u32;
+    pub const TRICK_TYPE: u32 = ZT + offset_of!(ZTUnitTail, trick_type) as u32;
+    pub const SHOW_INFO_ID: u32 = ZT + offset_of!(ZTUnitTail, show_info_id) as u32;
+    pub const TANK_MODE: u32 = ZT + offset_of!(ZTUnitTail, tank_mode) as u32;
+    pub const BUSY: u32 = ZT + offset_of!(ZTUnitTail, busy) as u32;
 }
 
-/// `ZTWorldMgr` map offsets (from the world manager): tile count along x and y, and the tile array (`0x8c` bytes each).
-const WORLD_MAP_X: u32 = 0x34;
-const WORLD_MAP_Y: u32 = 0x38;
-const WORLD_TILE_ARRAY: u32 = 0x40;
-const TILE_SIZE: u32 = 0x8c;
+/// The addresses vanilla reads and writes, as the decompiles show them: a change to a tail struct that moves a field
+/// fails the build here.
+const _: () = {
+    use unit_offsets::*;
+    assert!(PATH_LIST == 0x154 && COG_GOAL == 0x15c && GOAL_ID == 0x170 && COG_GOAL_STATE == 0x174);
+    assert!(TARGET_UNIT_ID == 0x178 && THOUGHT_STATE == 0x180 && COG_GOAL_FLAG == 0x1a8 && BUILDING_STATE == 0x1bc);
+    assert!(MODE_LISTENER == 0x1c4 && DEPTH_MODE_BEGIN == 0x1ec && DEPTH_MODE_END == 0x1f0 && SPEED == 0x1f8);
+    assert!(VERTICAL_DIRECTION == 0x208 && MOVE_ANIM_ENABLED == 0x20c && BYTE_20D == 0x20d && COG_INVALID == 0x20e);
+    assert!(IGNORES_BLOCKING == 0x210 && BUILDING_OFFSET == 0x214 && POSITION_B == 0x220 && PREDATOR == 0x22c);
+    assert!(NON_PATH_COST == 0x230 && TARGET_TILE == 0x234 && TARGET_POSITION == 0x238 && BUILDING_TILE == 0x244);
+    assert!(GATE == 0x248 && PREDATOR_CHECK_PENDING == 0x24c && BUILDING_SLOT == 0x24d && NEED_INDEX == 0x24e);
+    assert!(SHOW_FLAG_A == 0x24f && SHOW_FLAG_B == 0x250 && IN_SHOW == 0x251 && TRICK_TYPE == 0x252);
+    assert!(SHOW_INFO_ID == 0x254 && TANK_MODE == 0x258 && BUSY == 0x25c);
+};
+
+/// `ZTWorldMgr` map offsets (from the world manager): tile count along x and y, and the tile array.
+const WORLD_MAP_X: u32 = std::mem::offset_of!(ZTWorldMgr, map_x_size) as u32;
+const WORLD_MAP_Y: u32 = std::mem::offset_of!(ZTWorldMgr, map_y_size) as u32;
+const WORLD_TILE_ARRAY: u32 = std::mem::offset_of!(ZTWorldMgr, tile_array) as u32;
+const TILE_SIZE: u32 = tile_offsets::SIZE;
+const _: () = assert!(WORLD_MAP_X == 0x34 && WORLD_MAP_Y == 0x38 && WORLD_TILE_ARRAY == 0x40);
 
 /// RVAs of the game `rand` state (`DAT_00638060`), the "no position" default (`DAT_00639370`, three words), the
 /// data `goalSet` passes `BFCogGoal::set` (`DAT_00639360`) and the "building" need name (`DAT_0063afd8`).
@@ -222,19 +346,36 @@ fn is_building_use_goal(goal: u32) -> bool {
 const TANK_MODE_SURFACE: u32 = 3;
 const TANK_MODE_UNDERWATER: u32 = 4;
 
-/// `BFTile` fields: map coordinates, and the bytes `isInTank` and `isOnWater` test.
+/// `BFTile` field offsets, taken from the struct: map coordinates, the entity slots, the four edge (fence) slots and
+/// the bytes the cliff, water, walkable and ramp tests read.
 mod tile_offsets {
-    pub const X: u32 = 0x34;
-    pub const Y: u32 = 0x38;
-    /// The four entity slots of a tile, contiguous from here.
-    pub const ENTITY_SLOTS: u32 = 0x4;
-    pub const FLAGS_83: u32 = 0x83;
-    pub const FLAGS_85: u32 = 0x85;
+    use std::mem::{offset_of, size_of};
+
+    use crate::ztmapview::BFTile;
+
+    pub const SIZE: u32 = size_of::<BFTile>() as u32;
+    pub const X: u32 = offset_of!(BFTile, pos) as u32;
+    pub const Y: u32 = X + 4;
+    /// The four entity slots of a tile, contiguous from here; the last is `BFTile::entity_ptr`.
+    pub const ENTITY_SLOTS: u32 = offset_of!(BFTile, quadrant_entities) as u32;
+    /// The tile's own first word: the sentinel of the list of entities standing on it.
+    pub const ENTITY_LIST: u32 = offset_of!(BFTile, unit_list_ptr) as u32;
+    /// The four edge entities (fences), one per direction pair, contiguous from here.
+    pub const EDGE_ENTITIES: u32 = offset_of!(BFTile, north_fence) as u32;
+    pub const CLIFF_BITS: u32 = offset_of!(BFTile, cliff_bits) as u32;
+    pub const TERRAIN_FLAGS: u32 = offset_of!(BFTile, terrain_flags) as u32;
+    pub const HABITAT_FLAGS: u32 = offset_of!(BFTile, habitat_flags) as u32;
+    /// The slot of the fourth quadrant entity.
+    pub const ENTITY_PTR: u32 = offset_of!(BFTile, entity_ptr) as u32;
+    /// `TERRAIN_FLAGS` bits: water, walkable. `HABITAT_FLAGS` bit: ramp / tank tile.
+    pub const WATER_BITS: u8 = 0x3;
+    pub const WALKABLE_BIT: u8 = 0x8;
+    pub const TANK_BIT: u8 = 0x20;
+
+    const _: () = assert!(ENTITY_SLOTS + 12 == ENTITY_PTR);
 }
 
-/// `ZTHabitatMgr` field holding the per-column table of habitat rows (12-byte columns, `0x28`-byte cells), and the
 /// `ZTHabitat` fields `getHabitatFromGate` reads.
-const HABITAT_MGR_COLUMNS: u32 = 0x28;
 const HABITAT_GATE_TILE_OFFSET: u32 = 0x8c;
 const HABITAT_GATE_DIRECTION_OFFSET: u32 = 0x90;
 /// `ZTShowInfo` field `getHabitat` answers when it is set.
@@ -301,21 +442,20 @@ fn base() -> u32 {
     get_module_base("zoo.exe") as u32
 }
 
-/// The habitat the habitat manager records for `tile`'s column and row, or `0` with no manager or tile.
-fn habitat_at_tile(tile: u32) -> u32 {
+/// The address of the habitat manager's grid cell for `tile` (`ZTHabitatMgr::get_habitat_cell_addr`: its first word is
+/// the habitat, the following eight the neighbour entries), or `None` with no manager or tile, or a tile off the grid.
+fn habitat_cell(tile: u32) -> Option<u32> {
     let manager: u32 = get_from_memory(base() + HABITAT_MGR_RVA);
     if manager == 0 || tile == 0 {
-        return 0;
+        return None;
     }
-    cell_in_manager(manager, tile)
+    let (x, y): (i32, i32) = (get_from_memory(tile + tile_offsets::X), get_from_memory(tile + tile_offsets::Y));
+    unsafe { ref_from_memory::<ZTHabitatMgr>(manager) }.get_habitat_cell_addr(x, y)
 }
 
-fn cell_in_manager(manager: u32, tile: u32) -> u32 {
-    let x: u32 = get_from_memory(tile + tile_offsets::X);
-    let y: u32 = get_from_memory(tile + tile_offsets::Y);
-    let columns: u32 = get_from_memory(manager + HABITAT_MGR_COLUMNS);
-    let column: u32 = get_from_memory(columns.wrapping_add(x.wrapping_mul(12)));
-    get_from_memory(column.wrapping_add(y.wrapping_mul(0x28)))
+/// The habitat the habitat manager records for `tile`'s column and row, or `0` with no manager or tile.
+fn habitat_at_tile(tile: u32) -> u32 {
+    habitat_cell(tile).map_or(0, get_from_memory::<u32>)
 }
 
 /// A unit in vanilla memory, addressed by its raw pointer. All reads and writes are volatile through the address.
@@ -395,7 +535,7 @@ impl ZTUnit {
     /// `ZTUnit::isInTank` (`0x004106c4`): the tile under the unit has its tank bit (`+0x85`, `0x20`).
     pub fn is_in_tank(self) -> u32 {
         let tile = self.tile();
-        u32::from(tile != 0 && get_from_memory::<u8>(tile + tile_offsets::FLAGS_85) & 0x20 != 0)
+        u32::from(tile != 0 && get_from_memory::<u8>(tile + tile_offsets::HABITAT_FLAGS) & tile_offsets::TANK_BIT != 0)
     }
 
     /// `ZTUnit::isOnWater` (`0x00410fe0`): the tile under the unit has a water bit (`+0x83`, `0x3`).
@@ -405,7 +545,7 @@ impl ZTUnit {
             return answer;
         }
         let tile = self.tile();
-        tile != 0 && get_from_memory::<u8>(tile + tile_offsets::FLAGS_83) & 3 != 0
+        tile != 0 && get_from_memory::<u8>(tile + tile_offsets::TERRAIN_FLAGS) & tile_offsets::WATER_BITS != 0
     }
 
     /// `ZTUnit::getHabitatFromTile` (`0x0041060e`): the habitat manager's cell for `tile`.
@@ -446,11 +586,10 @@ impl ZTUnit {
     /// `ZTUnit::getHabitatFromGate` (`0x006130df`): the habitat whose gate tile is `tile`, or the one on the other
     /// side of the gate (the neighbour of `tile` in the habitat's gate direction).
     pub fn get_habitat_from_gate(self, tile: u32) -> u32 {
-        let manager: u32 = get_from_memory(base() + HABITAT_MGR_RVA);
-        if manager == 0 {
+        if get_from_memory::<u32>(base() + HABITAT_MGR_RVA) == 0 {
             return 0;
         }
-        let habitat = if tile == 0 { 0 } else { cell_in_manager(manager, tile) };
+        let habitat = habitat_at_tile(tile);
         if habitat == 0 || get_from_memory::<u32>(habitat + HABITAT_GATE_TILE_OFFSET) == tile {
             return habitat;
         }
@@ -460,7 +599,7 @@ impl ZTUnit {
         if neighbour == 0 {
             0
         } else {
-            cell_in_manager(manager, neighbour)
+            habitat_at_tile(neighbour)
         }
     }
 
@@ -715,8 +854,7 @@ mod goal_slots {
 /// `ZTTankExhibit` fields `validateTankPosition` reads: the ladder levels (in sixteenths of a tile).
 const TANK_LADDER_A: u32 = 0x184;
 const TANK_LADDER_B: u32 = 0x188;
-/// `BFTile` edge entities (fences) start here, two directions per slot; the fence type's name pointer is `+0xa4`.
-const TILE_EDGE_ENTITIES: u32 = 0x14;
+/// The fence type's name pointer (`+0xa4`); a gate's name starts with `g`.
 const FENCE_TYPE_NAME: u32 = 0xa4;
 /// `isCastClass` tag for `ZTFence` (`DAT_00638660`).
 const FENCE_TAG_RVA: u32 = 0x0023_8660;
@@ -735,32 +873,13 @@ fn call_slot_2_returning(this: u32, offset: u32, first: u32, second: u32) -> u32
     function(this, first, second)
 }
 
-/// `BFEntity` words of the queue `initAfterLoad` empties: a block-table container whose blocks hold `0x1f8` bytes of
-/// `vector<GXMixerLink>` (`0xc` bytes each). `[0x8c, 0x94)` and `[0xa0, 0x9c)` are the live ranges of its two
-/// front blocks, `0x98` and `0xa8` bound the table of block pointers (which starts at `0x98 + 4`).
+/// The mixer queue `initAfterLoad` empties: a `std::deque<vector<GXMixerLink>>` whose `start` iterator sits at `0x8c`
+/// (`{cur, first, last, node}`, the `finish` iterator following at `0x9c`). Each block holds `0x1f8` bytes of
+/// `vector<GXMixerLink>` elements (`0xc` bytes each).
 mod mixer_queue {
-    pub const FIRST_BEGIN: u32 = 0x8c;
-    pub const FIRST_CURSOR: u32 = 0x90;
-    pub const FIRST_END: u32 = 0x94;
-    pub const FIRST_TABLE: u32 = 0x98;
-    pub const SECOND_BEGIN: u32 = 0x9c;
-    pub const SECOND_CURSOR: u32 = 0xa0;
-    pub const SECOND_END: u32 = 0xa4;
-    pub const SECOND_TABLE: u32 = 0xa8;
+    pub const DEQUE_START: u32 = 0x8c;
     pub const BLOCK_BYTES: u32 = 0x1f8;
     pub const ELEMENT_BYTES: u32 = 0xc;
-}
-
-/// The bytes of the NUL-terminated string at `address`.
-fn c_string_at(address: u32) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    loop {
-        let byte: u8 = get_from_memory(address + bytes.len() as u32);
-        if byte == 0 {
-            return bytes;
-        }
-        bytes.push(byte);
-    }
 }
 
 /// Advances the game's `rand` state and returns the `rand()` result (`0..=0x7fff`).
@@ -858,7 +977,7 @@ impl ZTUnit {
         self.write(unit_offsets::NEED_INDEX - 1, 0xffu8);
         self.write(unit_offsets::NEED_INDEX, 0xffu8);
         self.write(unit_offsets::TANK_MODE, 0u32);
-        self.write(0x20d, 0u8);
+        self.write(unit_offsets::BYTE_20D, 0u8);
     }
 
     /// `ZTUnit::setIsRemoved` (`0x004fa78e`): lets the map view prepare to drop the entity, then sets the removed flag.
@@ -938,8 +1057,7 @@ impl ZTUnit {
             if position.map(|word| word as u32) == default_position() {
                 self.write(unit_offsets::TARGET_TILE, 0u32);
             } else {
-                let tile_coordinate = |value: i32| (value + ((value >> 31) & 0x3f)) >> 6;
-                self.write(unit_offsets::TARGET_TILE, map_tile(tile_coordinate(position[0]), tile_coordinate(position[1])));
+                self.write(unit_offsets::TARGET_TILE, map_tile(world_to_tile(position[0]), world_to_tile(position[1])));
             }
             let mut local = default_position();
             ok &= read_field(&mut local[0] as *mut u32 as u32, 4, file);
@@ -1006,7 +1124,7 @@ impl ZTUnit {
         let loading = get_from_memory::<u8>(base() + APP_RVA + APP_LOADING_FLAG) != 0;
         if !loading && self.read::<u8>(ENTITY_FLAG_143) == 0 && !locked() {
             let entity_type: u32 = self.read(unit_offsets::ENTITY_TYPE);
-            if call_slot_0(entity_type, goal_slots::TYPE_ID) == MERMAID_TYPE_ID {
+            if entity_type != 0 && call_slot_0(entity_type, goal_slots::TYPE_ID) == MERMAID_TYPE_ID {
                 self.start_mermaid_transform();
             }
         }
@@ -1027,18 +1145,21 @@ impl ZTUnit {
     /// type's next unit count, handed to the virtual `setName`; a type without a name gets `BFEntity::createName`.
     pub fn create_name(self) {
         let entity_type: u32 = self.read(unit_offsets::ENTITY_TYPE);
+        if entity_type == 0 {
+            return;
+        }
         let string_id = call_slot_0(entity_type, goal_slots::TYPE_ID);
         let mut buffer = [0u8; 520];
         unsafe { LOAD_STRING.hooked()((base() + APP_RVA) as *const u32, string_id as *const u32, buffer.as_mut_ptr()) };
         let length = buffer.iter().position(|&byte| byte == 0).unwrap_or(buffer.len());
         let mut name = buffer[..length].to_vec();
-        if c_string_at(base() + NO_NAME_TEXT_RVA) == name {
+        if c_string_bytes(base() + NO_NAME_TEXT_RVA) == name {
             unsafe { BFENTITY_CREATE_NAME.hooked()(self.0 as *const u32) };
             return;
         }
         if get_from_memory::<u8>(entity_type + TYPE_NUMBERED_NAMES) != 0 {
             let count = unsafe { GET_UNIT_COUNT.hooked()((entity_type + TYPE_UNIT_COUNTS) as *const u8, std::ptr::dangling::<i8>()) };
-            name.extend(c_string_at(base() + COUNT_SEPARATOR_RVA));
+            name.extend(c_string_bytes(base() + COUNT_SEPARATOR_RVA));
             let number = VanillaString::rvo_target();
             unsafe { GET_NUMBER_TEXT.hooked()(number.as_ptr(), count as u32, 0) };
             name.extend(number.bytes());
@@ -1080,37 +1201,8 @@ impl ZTUnit {
     }
 
     fn empty_mixer_queue(self) {
-        use mixer_queue::*;
         call_slot_1(self.0, goal_slots::SET_VISIBLE, 1);
-        let mut slot = self.read::<u32>(FIRST_TABLE).wrapping_add(4);
-        if slot < self.read::<u32>(SECOND_TABLE) {
-            loop {
-                let block: u32 = get_from_memory(slot);
-                Self::destroy_mixer_links(block, block.wrapping_add(BLOCK_BYTES));
-                if block != 0 {
-                    unsafe { OPERATOR_DELETE.original()(block) };
-                }
-                slot = slot.wrapping_add(4);
-                if slot >= self.read::<u32>(SECOND_TABLE) {
-                    break;
-                }
-            }
-        }
-        if self.read::<u32>(FIRST_TABLE) != self.read::<u32>(SECOND_TABLE) {
-            Self::destroy_mixer_links(self.read(FIRST_BEGIN), self.read(FIRST_END));
-            Self::destroy_mixer_links(self.read(SECOND_CURSOR), self.read(SECOND_BEGIN));
-            let block: u32 = self.read(SECOND_CURSOR);
-            if block != 0 {
-                unsafe { OPERATOR_DELETE.original()(block) };
-            }
-        } else {
-            Self::destroy_mixer_links(self.read(FIRST_BEGIN), self.read(SECOND_BEGIN));
-        }
-        let (begin, cursor, end, table) = (self.read::<u32>(FIRST_BEGIN), self.read::<u32>(FIRST_CURSOR), self.read::<u32>(FIRST_END), self.read::<u32>(FIRST_TABLE));
-        self.write(SECOND_BEGIN, begin);
-        self.write(SECOND_CURSOR, cursor);
-        self.write(SECOND_END, end);
-        self.write(SECOND_TABLE, table);
+        MsvcDeque::new(self.0 + mixer_queue::DEQUE_START, mixer_queue::BLOCK_BYTES).clear(Self::destroy_mixer_links);
         call_slot_3(self.0, goal_slots::STOP_EVERYTHING, 1, 1, 1);
     }
 
@@ -1134,38 +1226,13 @@ impl ZTUnit {
 
     /// Removes the unit from the first building that lists it as a user (`removeFromMap`'s building scan).
     fn leave_building(self) {
-        let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
-        let allocator_dummy: u8 = 0;
-        let mut list: u32 = 0;
-        let mut name = [0u32; 3];
-        const NAME: &[u8; 9] = b"building\0";
-        unsafe {
-            LIST_UINT_CTOR.hooked()(&mut list as *mut u32 as *const c_void, &allocator_dummy as *const u8 as u32);
-            BASIC_STRING_RANGE.hooked()(name.as_mut_ptr() as *const c_void, NAME.as_ptr() as *const u32, NAME.as_ptr().add(NAME.len() - 1) as i32);
-            GET_BUILDING_LIST.hooked()(world as *const u32, name.as_ptr() as *const i32, &mut list as *mut u32 as *const i32);
-        }
-        free_string(&name);
-        let head = list;
-        let mut node: u32 = get_from_memory(head);
-        while node != head {
-            let building: u32 = get_from_memory(node + 8);
+        let buildings = BuildingList::named_text(b"building");
+        for building in buildings.buildings() {
             if low_byte_bool(unsafe { ZTBUILDING_CHECK_USER.hooked()(building as *const c_void, self.0 as i32) }) {
                 unsafe { ZTBUILDING_REMOVE_USER.hooked()(building as *const u32, self.0 as *const i32, 0) };
                 break;
             }
-            node = get_from_memory(node);
         }
-        let mut node: u32 = get_from_memory(head);
-        while node != head {
-            let next: u32 = get_from_memory(node);
-            if node != 0 {
-                unsafe { POOLALLOC_DEALLOCATE.original()(node as *const u32, 0xc) };
-            }
-            node = next;
-        }
-        save_to_memory(head, head);
-        save_to_memory(head + 4, head);
-        unsafe { POOLALLOC_DEALLOCATE.original()(head as *const u32, 0xc) };
     }
 
     /// `ZTUnit::isDoingSomething` (`0x00420f65`).
@@ -1216,9 +1283,9 @@ impl ZTUnit {
     /// `ZTUnit::resetAI` (`0x005ae68b`): returns what vanilla leaves in `EAX` (the wander countdown it kept, or the
     /// quotient of the re-roll).
     pub fn reset_ai(self) -> u32 {
-        unsafe { ZTUNIT_REMOVE_FROM_BUILDING_IF_PRESENT.hooked()(self.0 as *const u32) };
+        self.remove_from_building_if_present();
         let entity_type: u32 = self.read(unit_offsets::ENTITY_TYPE);
-        if call_slot_0(entity_type, goal_slots::TYPE_ID) == 0x1530 {
+        if entity_type != 0 && call_slot_0(entity_type, goal_slots::TYPE_ID) == 0x1530 {
             let countdown: u32 = self.read(unit_offsets::RESET_COUNTDOWN);
             if countdown != 0 {
                 return countdown;
@@ -1252,7 +1319,7 @@ impl ZTUnit {
     /// `updateGoals`' once-in-fifteen check: a unit standing in a building's footprint that is not already using it
     /// takes the building-use goal and remembers where inside the tile it is.
     fn enter_tile_building(self, tile: u32) {
-        let building: u32 = get_from_memory(tile + tile_offsets::ENTITY_SLOTS + 0xc);
+        let building: u32 = get_from_memory(tile + tile_offsets::ENTITY_SLOTS + 3 * 4);
         if building == 0 || !unsafe { entity_type_matches(building, BUILDING_TAG_RVA) } || self.read::<u32>(unit_offsets::BUILDING_STATE) == 3 {
             return;
         }
@@ -1269,10 +1336,9 @@ impl ZTUnit {
         let building_tile = unsafe { BFENTITY_GET_TILE.hooked()(building as *const u32) } as u32;
         call_slot_1(self.0, goal_slots::SET_BUILDING_TILE, building_tile);
         let (x, y, z): (i32, i32, i32) = (get_from_memory(building + unit_offsets::POS_X), get_from_memory(building + unit_offsets::POS_Y), get_from_memory(building + unit_offsets::POS_Z));
-        let z_within = if z < 0 { z % 16 + 16 } else { z % 16 };
-        self.write(unit_offsets::BUILDING_OFFSET, x % 64);
-        self.write(unit_offsets::BUILDING_OFFSET + 4, y % 64);
-        self.write(unit_offsets::BUILDING_OFFSET + 8, z_within);
+        for (index, value) in position_in_tile(x, y, z).into_iter().enumerate() {
+            self.write(unit_offsets::BUILDING_OFFSET + index as u32 * 4, value);
+        }
     }
 
     /// `ZTUnit::validateTankPosition` (`0x00410857`): works out the tank mode (`0` land, `1`/`2` at a gate, `3` on the
@@ -1411,7 +1477,7 @@ impl ZTUnit {
     /// matching edge, or `0`. Vanilla reads the neighbour unchecked and faults on a map-edge tile; this answers `0`.
     pub fn get_gate(tile: u32, direction: u32) -> u32 {
         let gate_on_edge = |tile: u32, edge: u32| -> u32 {
-            let fence: u32 = get_from_memory(tile + TILE_EDGE_ENTITIES + (edge as i32 / 2) as u32 * 4);
+            let fence: u32 = get_from_memory(tile + tile_offsets::EDGE_ENTITIES + (edge as i32 / 2) as u32 * 4);
             if fence == 0 || !unsafe { entity_type_matches(fence, FENCE_TAG_RVA) } {
                 return 0;
             }
@@ -1454,17 +1520,14 @@ impl ZTUnit {
         let neighbour = unsafe { BFMAP_GET_NEIGHBOR.hooked()((world + 8) as *const u32, tile as *const u32, direction) };
         if self.slot_bool(unit_slots::GET_SWIMS) {
             let crosses_water = neighbour == 0
-                || (get_from_memory::<u8>(neighbour + tile_offsets::FLAGS_83) & 3 != 0) != (get_from_memory::<u8>(tile + tile_offsets::FLAGS_83) & 3 != 0);
+                || (get_from_memory::<u8>(neighbour + tile_offsets::TERRAIN_FLAGS) & tile_offsets::WATER_BITS != 0) != (get_from_memory::<u8>(tile + tile_offsets::TERRAIN_FLAGS) & tile_offsets::WATER_BITS != 0);
             if crosses_water {
                 call_slot_0(self.0, goal_slots::RESET_MOVE_ANIM);
                 call_slot_0(self.0, goal_slots::FORCE_UI_UPDATE);
                 self.write(unit_offsets::MOVE_ANIM_DIRTY, 1u8);
             }
         }
-        let path: u32 = self.read(unit_offsets::PATH_LIST);
-        let first: u32 = get_from_memory(path);
-        let second: u32 = if first == path { path } else { get_from_memory(first) };
-        if second != path {
+        if let Some(second) = NodeList::path_steps(self.read(unit_offsets::PATH_LIST)).nodes().nth(1) {
             let next_tile = map_tile(get_from_memory(second + 8), get_from_memory(second + 0xc));
             let towards = unsafe { BFMAP_GET_DIRECTION.hooked()(tile as i32, next_tile as i32) } as u32;
             let gate = self.gate(tile, towards);
@@ -1929,6 +1992,9 @@ pub fn init() {
     }
     movement::init();
     satisfiers::init();
+    buildings::init();
+    shows::init();
+    messages::init();
 }
 
 #[cfg(feature = "reimplementation-tests")]
@@ -1944,12 +2010,18 @@ pub(crate) mod live_support {
         let mut status = super::unit_detours::status();
         status.extend(super::movement::status());
         status.extend(super::satisfiers::status());
+        status.extend(super::buildings::status());
+        status.extend(super::shows::status());
+        status.extend(super::messages::status());
         status
     }
 
     pub(crate) use super::unit_detours::test_real as real;
     pub(crate) use super::movement::test_real as real_movement;
     pub(crate) use super::satisfiers::test_real as real_satisfiers;
+    pub(crate) use super::buildings::test_real as real_buildings;
+    pub(crate) use super::shows::test_real as real_shows;
+    pub(crate) use super::messages::test_real as real_messages;
 
     /// Test hook: while set, `ZTUnit::is_on_water` answers from it (when it returns `Some`) instead of reading the tile,
     /// so callers that reach it through the Rust method or the hooked address see the same scripted answer.
@@ -1972,6 +2044,8 @@ pub(crate) mod live_support {
         pub(crate) static UPDATE_GOALS: Mutex<Option<fn(u32) -> bool>> = Mutex::new(None);
         pub(crate) static DO_BUILDING: Mutex<Option<fn(u32) -> bool>> = Mutex::new(None);
         pub(crate) static INTO_NEW_TILE: Mutex<Option<fn(u32, u32) -> bool>> = Mutex::new(None);
+        pub(crate) static UPDATE_BUILDING_TILES: Mutex<Option<fn(u32, bool) -> Option<bool>>> = Mutex::new(None);
+        pub(crate) static HAS_BUILDING_USE_GOAL: Mutex<Option<fn(u32) -> Option<bool>>> = Mutex::new(None);
         pub(crate) static INIT_AFTER_LOAD: Mutex<Option<fn(u32, u32) -> Option<bool>>> = Mutex::new(None);
 
         pub(crate) static IS_NEED_OR_FUN_SATISFIER: Mutex<Option<fn(u32, u32, *const i32) -> Option<bool>>> = Mutex::new(None);
@@ -1983,6 +2057,16 @@ pub(crate) mod live_support {
         pub(crate) static FIND_NEAREST_SATISFIER: Mutex<Option<fn(u32, u32, u32, u32, i32, i32) -> Option<bool>>> = Mutex::new(None);
         /// Stands in for `doRandomWalk`'s two collaborators: `false` is `BFAIMgr::fRandomWalk`, `true` `BFUnit::goToDest`.
         pub(crate) static RANDOM_WALK: Mutex<Option<fn(u32, bool) -> Option<bool>>> = Mutex::new(None);
+
+        pub(in crate::ztunit) fn update_building_tiles(unit: u32, abort: bool) -> Option<bool> {
+            let hook = *UPDATE_BUILDING_TILES.lock().unwrap();
+            hook.and_then(|hook| hook(unit, abort))
+        }
+
+        pub(in crate::ztunit) fn has_building_use_goal(unit: u32) -> Option<bool> {
+            let hook = *HAS_BUILDING_USE_GOAL.lock().unwrap();
+            hook.and_then(|hook| hook(unit))
+        }
 
         pub(in crate::ztunit) fn random_walk(unit: u32, go_to_dest: bool) -> Option<bool> {
             let hook = *RANDOM_WALK.lock().unwrap();
@@ -2040,10 +2124,13 @@ pub(crate) mod live_support {
         }
     }
 
-    /// A zeroed unit-sized allocation, for building a unit with the port's constructor.
+    /// A zeroed allocation for a unit built with the port's constructor. It is guest-sized rather than unit-sized: a unit
+    /// over a guest type makes the base methods write guest fields (`updateBuildingTiles` sets a byte at `+0x33e`), which
+    /// would run past a `0x260`-byte block.
     pub fn allocate_unit_memory() -> u32 {
-        let memory = unsafe { OPERATOR_NEW.original()(UNIT_SIZE) } as u32;
-        unsafe { std::ptr::write_bytes(memory as *mut u8, 0, UNIT_SIZE as usize) };
+        let size = UNIT_SIZE.max(crate::ztguest::GUEST_SIZE);
+        let memory = unsafe { OPERATOR_NEW.original()(size) } as u32;
+        unsafe { std::ptr::write_bytes(memory as *mut u8, 0, size as usize) };
         memory
     }
 

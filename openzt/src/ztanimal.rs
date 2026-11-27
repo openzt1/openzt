@@ -60,7 +60,7 @@ use openzt_detour::generated::{
     bfentity::SET_WORLD_POS as BFENTITY_SET_WORLD_POS,
     bfmap::TILE_TO_WORLD as BFMAP_TILE_TO_WORLD,
     gxmixerlink::{CONSTRUCTOR as GXMIXERLINK_CONSTRUCTOR, DESTRUCTOR as GXMIXERLINK_DESTRUCTOR},
-    ztunit::{FORMAT_NAME_MESSAGE as ZTUNIT_FORMAT_NAME_MESSAGE, FIND_ANY_SATISFIER, STOP_EVERYTHING as ZTUNIT_STOP_EVERYTHING, UPDATE_BUILDING_TILES as ZTUNIT_UPDATE_BUILDING_TILES},
+    ztunit::STOP_EVERYTHING as ZTUNIT_STOP_EVERYTHING,
     ztanimal::{
         COMPARE_LT, GET_IDLE_ANIM_SYMBOL, GET_MOVE_ANIM, GET_ONLY_SWIMS,
         BREAK_ESCAPE_FENCE, FIND_PREY, GET_TERRAIN_COST, INVALIDATE_TARGET, SET_REACHED_ESCAPE_DESTINATION_TILE, SET_REACHED_ESCAPE_TILE,
@@ -80,7 +80,6 @@ use openzt_detour::generated::{
     },
     ztui_animalinfo::SET_ANIMAL_VISIBLE as ANIMALINFO_SET_ANIMAL_VISIBLE,
     ztui_animalinfo::FORCE_UPDATE as ANIMALINFO_FORCE_UPDATE,
-    ztunit::{HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL},
     ztworldmgr::GET_NEED_INDEX,
     ztgamemgr::GET_DATE as GAMEMGR_GET_DATE,
     msvc_std_listuint::INSERT as LIST_UINT_INSERT,
@@ -98,8 +97,6 @@ use openzt_detour::generated::{
     bfunit::DECIDE as BFUNIT_DECIDE,
     ztapp::GET_APP,
     zthabitat::SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
-    ztunit::{INTO_NEW_TILE as ZTUNIT_INTO_NEW_TILE, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
-    ztunit::{F_ZOO_MESSAGE_TILE_0 as ZTUNIT_F_ZOO_MESSAGE_TILE, FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IN_FRIENDLY_CHASE, F_ZOO_MESSAGE_NAME as ZTUNIT_F_ZOO_MESSAGE_NAME},
 };
 use glam::i32::IVec3;
 use openzt_detour_macro::detour_mod;
@@ -701,13 +698,6 @@ mod building_use {
     pub const BUILDING_X: u32 = 0x114;
     pub const BUILDING_Y: u32 = 0x118;
     pub const BUILDING_Z: u32 = 0x11c;
-
-    /// A world position reduced to the position inside its tile: `x` and `y` as C remainders by `64` (negative stays
-    /// negative), `z` as the remainder by `16` with `16` added when `z` is negative.
-    pub fn position_in_tile(x: i32, y: i32, z: i32) -> [i32; 3] {
-        let z_in_tile = if z < 0 { z.wrapping_rem(16).wrapping_add(16) } else { z.wrapping_rem(16) };
-        [x.wrapping_rem(64), y.wrapping_rem(64), z_in_tile]
-    }
 }
 
 /// Fields `doEscapedCheck` touches.
@@ -1875,7 +1865,7 @@ impl ZTAnimal {
     /// Whether the unit's need byte (`+0x24e`) names the need at `need_rva` and the unit has no building-use goal.
     fn need_matches_without_building_goal(self, need_rva: u32) -> bool {
         let index = unsafe { GET_NEED_INDEX.hooked()((base() + need_rva) as *const i8) } as u8;
-        self.read::<u8>(lifecycle::UNIT_NEED_BYTE) == index && !unsafe { ZTUNIT_HAS_BUILDING_USE_GOAL.hooked()(self.0 as *const u32) }
+        self.read::<u8>(lifecycle::UNIT_NEED_BYTE) == index && !ZTUnit(self.0).has_building_use_goal()
     }
 
     /// `ZTAnimal::abortGoal` (`0x005adb0a`): with `flag`, a unit whose need byte names the first need
@@ -2632,7 +2622,7 @@ impl ZTAnimal {
                         self.add_pending(animal_offsets::HAPPINESS_PENDING, Self::type_field(ty, pipeline::TYPE_HAPPY_BAD));
                         let habitat = call_slot_0(self.0, pipeline::SLOT_HABITAT);
                         if habitat != 0 && get_from_memory::<u8>(habitat + pipeline::HABITAT_NO_HATCH) == 0 {
-                            unsafe { ZTUNIT_F_ZOO_MESSAGE_NAME.original()(self.0 as *const u32, pipeline::MESSAGE_ID, 2, 0) };
+                            ZTUnit(self.0).f_zoo_message_name(pipeline::MESSAGE_ID, 2, 0);
                         }
                     } else {
                         self.add_pending(animal_offsets::HAPPINESS_PENDING, Self::type_field(ty, pipeline::TYPE_HAPPY_MID));
@@ -2744,7 +2734,7 @@ impl ZTAnimal {
                         save_to_memory(self.0 + hunger::BYTE_FOOD_WANTED, 0u8);
                     } else {
                         if self.hunger_gate_open(goal) {
-                            unsafe { ZTUNIT_F_ZOO_MESSAGE_NAME.original()(self.0 as *const u32, hunger::MESSAGE_HUNGRY, 2, 0) };
+                            ZTUnit(self.0).f_zoo_message_name(hunger::MESSAGE_HUNGRY, 2, 0);
                         }
                         self.update_flag_words(|v| v | 1, &[animal_offsets::STATUS_FLAGS, animal_offsets::STATUS_FLAGS_CRITICAL]);
                         if self.hunger() >= Self::type_field::<i32>(ty, hunger::TYPE_STARVING_AT) {
@@ -2890,7 +2880,7 @@ impl ZTAnimal {
         let goal: i32 = self.read(hunger::GOAL);
         if others <= 0 {
             extra = 0;
-            if goal == bored::GOAL_CHASE_PLAYMATE && low_byte_bool(unsafe { IN_FRIENDLY_CHASE.hooked()(self.0 as *const u32) }) {
+            if goal == bored::GOAL_CHASE_PLAYMATE && ZTUnit(self.0).in_friendly_chase() {
                 call_slot_0(self.0, bored::SLOT_CLEAR_GOAL);
                 set(bored::BYTE_PLAYMATE, 0);
             }
@@ -3183,7 +3173,7 @@ impl ZTAnimal {
         self.update_flag_words(|v| v & !(health::BITS_SICK | health::BITS_OTHER_SICK), &words);
         let period: i32 = get_from_memory(base() + health::PERIOD_RVA);
         save_to_memory(self.0 + health::COUNTDOWN, period.wrapping_sub(1));
-        let name_message = |id: u32| unsafe { ZTUNIT_F_ZOO_MESSAGE_NAME.original()(self.0 as *const u32, id, 2, 0) };
+        let name_message = |id: u32| ZTUnit(self.0).f_zoo_message_name(id, 2, 0);
         let get_sick = |this: Self| {
             save_to_memory(this.0 + health::BYTE_SICK, 1u8);
             save_to_memory(this.0 + animal_offsets::HEALTH, Self::type_field::<i32>(ty, health::TYPE_SICK_HEALTH));
@@ -3242,7 +3232,7 @@ impl ZTAnimal {
         }
         if low_byte_bool(call_slot_0(self.0, health::SLOT_REMOVED_MESSAGE)) {
             let tile = unsafe { GET_TILE.original()(self.0 as *const u32) } as u32;
-            unsafe { ZTUNIT_F_ZOO_MESSAGE_TILE.original()(self.0 as *const u32, health::MESSAGE_REMOVED, 2, tile, 0, 1) };
+            ZTUnit(self.0).f_zoo_message_tile(health::MESSAGE_REMOVED, 2, tile, 0, 1);
         }
     }
 }
@@ -3316,7 +3306,7 @@ impl ZTAnimal {
             return;
         }
         let goal: i32 = self.read(amb::GOAL);
-        if amb::GOALS_CHASE.contains(&goal) && !low_byte_bool(unsafe { IN_FRIENDLY_CHASE.hooked()(self.0 as *const u32) }) {
+        if amb::GOALS_CHASE.contains(&goal) && !ZTUnit(self.0).in_friendly_chase() {
             return;
         }
         let name = self.string_bytes_at(amb::SET_NAME_BEGIN);
@@ -3598,7 +3588,7 @@ impl ZTAnimal {
                 unsafe { ref_from_memory::<ZTHabitat>(habitat) }.add_baby_born_bonus(ty);
             }
             let mate = self.f_get_mate(found_address as u32);
-            unsafe { ZTUNIT_F_ZOO_MESSAGE_NAME.original()(mate as *const u32, repro::MESSAGE_BIRTH, 4, 1) };
+            ZTUnit(mate).f_zoo_message_name(repro::MESSAGE_BIRTH, 4, 1);
         }
     }
 
@@ -4034,7 +4024,7 @@ impl ZTAnimal {
             let period: i32 = get_from_memory(base() + conditionals::MESSAGE_PERIOD);
             save_to_memory(self.0 + conditionals::COUNTDOWN_MESSAGE, period.wrapping_sub(1));
             if self.happiness() <= conditionals::MESSAGE_HAPPINESS {
-                unsafe { ZTUNIT_F_ZOO_MESSAGE_NAME.original()(this, conditionals::MESSAGE_ID, 2, 0) };
+                ZTUnit(this as u32).f_zoo_message_name(conditionals::MESSAGE_ID, 2, 0);
             }
         }
         call_slot_1(self.0, conditionals::SLOT_TICK_NOTIFY, 0);
@@ -4124,16 +4114,7 @@ impl ZTAnimal {
         let mut building: u32 = 0;
         let this = self.0 as *const u32;
         let own_tile = unsafe { GET_TILE.original()(this) };
-        let found = unsafe {
-            FIND_NEAREST_SATISFIER.hooked()(
-                this,
-                own_tile,
-                need_name as *const i32,
-                &mut building as *mut u32 as *const u32,
-                building_use::SEARCH_RADIUS,
-                building_use::SEARCH_FLAG,
-            )
-        };
+        let found = ZTUnit(self.0).find_nearest_satisfier(own_tile as u32, need_name as u32, &mut building as *mut u32 as u32, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG);
         if !found || building == 0 {
             return;
         }
@@ -4146,7 +4127,7 @@ impl ZTAnimal {
         let x: i32 = get_from_memory(building + building_use::BUILDING_X);
         let y: i32 = get_from_memory(building + building_use::BUILDING_Y);
         let z: i32 = get_from_memory(building + building_use::BUILDING_Z);
-        let [tile_x, tile_y, tile_z] = building_use::position_in_tile(x, y, z);
+        let [tile_x, tile_y, tile_z] = crate::util::position_in_tile(x, y, z);
         save_to_memory(self.0 + building_use::UNIT_POSITION, tile_x);
         save_to_memory(self.0 + building_use::UNIT_POSITION + 4, tile_y);
         save_to_memory(self.0 + building_use::UNIT_POSITION + 8, tile_z);
@@ -4572,8 +4553,7 @@ impl ZTAnimal {
         if label.is_null() {
             return;
         }
-        let mut text = [0u32; 3];
-        unsafe { ZTUNIT_FORMAT_NAME_MESSAGE.original()(self.0 as *const u32, text.as_mut_ptr() as *const u32, alerts::ESCAPED_MESSAGE) };
+        let text = ZTUnit(self.0).format_name_message(alerts::ESCAPED_MESSAGE).release();
         let set_caption = unsafe {
             transmute::<u32, unsafe extern "thiscall" fn(u32, u32, u32, u32, u32)>(get_from_memory::<u32>(get_from_memory::<u32>(label as u32) + alerts::SLOT_SET_CAPTION))
         };
@@ -4733,7 +4713,7 @@ impl ZTAnimal {
         save_to_memory(self.0 + eating::BYTE_EGG, 0u8);
         self.rebase_mixer_on_idle_anim();
         unsafe {
-            ZTUNIT_F_ZOO_MESSAGE_NAME.original()(self.0 as *const u32, eating::MESSAGE_HATCHED, 4, 1);
+            ZTUnit(self.0).f_zoo_message_name(eating::MESSAGE_HATCHED, 4, 1);
             ANIMALINFO_FORCE_UPDATE.original()(std::ptr::null());
         }
     }
@@ -5473,14 +5453,13 @@ fn tile_has_entity_id(tile: u32, id: u32) -> bool {
     false
 }
 
-/// The position vanilla stores for a building: its x/y words reduced to the tile (`% 64`) and z reduced to `% 16`, plus
-/// `16` for a negative z.
+/// The position vanilla stores for a building: its world position reduced to the tile.
 fn building_tile_position(building: u32) -> [i32; 3] {
-    let x: i32 = get_from_memory(building + building_use::BUILDING_X);
-    let y: i32 = get_from_memory(building + building_use::BUILDING_Y);
-    let z: i32 = get_from_memory(building + building_use::BUILDING_Z);
-    let z_in_tile = if z < 0 { z.wrapping_rem(16).wrapping_add(16) } else { z.wrapping_rem(16) };
-    [x.wrapping_rem(64), y.wrapping_rem(64), z_in_tile]
+    crate::util::position_in_tile(
+        get_from_memory(building + building_use::BUILDING_X),
+        get_from_memory(building + building_use::BUILDING_Y),
+        get_from_memory(building + building_use::BUILDING_Z),
+    )
 }
 
 impl ZTAnimal {
@@ -5711,12 +5690,11 @@ impl ZTAnimal {
         let need = (base() + building_use::NEED_NAME) as *const i32;
         let mut building: u32 = 0;
         let own_tile = self.own_tile() as i32;
-        let found = unsafe {
-            if nearest {
-                FIND_NEAREST_SATISFIER.hooked()(this, own_tile, need, &mut building as *mut u32 as *const u32, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
-            } else {
-                FIND_ANY_SATISFIER.hooked()(this, own_tile, need, &mut building as *mut u32 as *const i32, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
-            }
+        let (out, unit) = (&mut building as *mut u32 as u32, ZTUnit(self.0));
+        let found = if nearest {
+            unit.find_nearest_satisfier(own_tile as u32, need as u32, out, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
+        } else {
+            unit.find_any_satisfier(own_tile as u32, need as u32, out, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
         };
         if !found {
             call_slot_0(self.0, lifecycle::SLOT_CLEAR_GOAL);
@@ -5728,7 +5706,7 @@ impl ZTAnimal {
         let building_tile = unsafe { GET_TILE.original()(building as *const u32) } as u32;
         call_slot_1(self.0, movement::SLOT_SET_BUILDING_TILE, building_tile);
         self.store_building_position(building);
-        if !unsafe { ZTUNIT_UPDATE_BUILDING_TILES.hooked()(this, nearest) } {
+        if !ZTUnit(this as u32).update_building_tiles(nearest) {
             call_slot_0(self.0, lifecycle::SLOT_CLEAR_GOAL);
             return false;
         }
@@ -5752,12 +5730,11 @@ impl ZTAnimal {
         let need = (base() + lifecycle::NEED_B) as *const i32;
         let mut building: u32 = 0;
         let own_tile = self.own_tile() as i32;
-        let found = unsafe {
-            if nearest {
-                FIND_NEAREST_SATISFIER.hooked()(this, own_tile, need, &mut building as *mut u32 as *const u32, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
-            } else {
-                FIND_ANY_SATISFIER.hooked()(this, own_tile, need, &mut building as *mut u32 as *const i32, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
-            }
+        let (out, unit) = (&mut building as *mut u32 as u32, ZTUnit(self.0));
+        let found = if nearest {
+            unit.find_nearest_satisfier(own_tile as u32, need as u32, out, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
+        } else {
+            unit.find_any_satisfier(own_tile as u32, need as u32, out, building_use::SEARCH_RADIUS, building_use::SEARCH_FLAG)
         };
         if !found || building == 0 {
             return found;
@@ -6635,7 +6612,7 @@ impl ZTAnimal {
         }
         if self.flag(goal_flow::BYTE_3A0)
             && saved != goal_flow::GOAL_SLEEP
-            && !unsafe { ZTUNIT_HAS_BUILDING_USE_GOAL.hooked()(this as *const u32) }
+            && !ZTUnit(this as u32).has_building_use_goal()
             && !self.flag(goal_flow::BYTE_3A2)
         {
             self.set_goal(goal_flow::GOAL_SLEEP, 1);
@@ -6646,12 +6623,12 @@ impl ZTAnimal {
         }
         let position: [u32; 3] = [self.read(building_use::UNIT_POSITION), self.read(building_use::UNIT_POSITION + 4), self.read(building_use::UNIT_POSITION + 8)];
         let need: i32 = self.read(building_use::UNIT_NEED_WORD);
-        let satisfier = unsafe { IS_NEED_OR_FUN_SATISFIER.hooked()(this as *const u32, need, position.as_ptr()) };
+        let satisfier = ZTUnit(self.0).is_need_or_fun_satisfier(need as u32, position.as_ptr() as *const i32);
         if satisfier && get_from_memory::<u8>(self.goal_block() + goal_flow::GOAL_BYTE_4C) == 0 {
             let goal = self.current_goal();
             let in_use = goal_flow::GOAL_USE_BUILDING.contains(&goal) || self.current_goal_is_building_use();
             if !in_use || (saved == goal_flow::GOAL_USE_BUILDING[0] && !self.has_pending_goals()) {
-                unsafe { ZTUNIT_UPDATE_BUILDING_TILES.hooked()(this as *const u32, false) };
+                ZTUnit(this as u32).update_building_tiles(false);
                 return GoalFlow::Tail;
             }
         }
@@ -6680,7 +6657,7 @@ impl ZTAnimal {
             other => other,
         };
         if flow == GoalFlow::Tail {
-            unsafe { ZTUNIT_UPDATE_GOALS.hooked()(self.0 as *const u32) };
+            ZTUnit(self.0).update_goals();
         }
     }
 
@@ -6816,7 +6793,7 @@ impl ZTAnimal {
         } else if self.flag(escaped::BYTE_RAMPAGING) {
             self.trample_scenery(tile);
         }
-        unsafe { ZTUNIT_INTO_NEW_TILE.hooked()(self.0 as *const u32, direction) };
+        ZTUnit(self.0).into_new_tile(direction);
     }
 }
 
@@ -8201,21 +8178,4 @@ pub(crate) mod live_support {
     }
 
     pub(crate) use super::animal_detours::test_real as real;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::building_use::position_in_tile;
-
-    #[test]
-    fn position_in_tile_follows_c_remainders() {
-        assert_eq!(position_in_tile(0, 0, 0), [0, 0, 0]);
-        assert_eq!(position_in_tile(130, 64, 33), [2, 0, 1]);
-        assert_eq!(position_in_tile(-130, -1, 16), [-2, -1, 0]);
-        // A negative height gets the tile height added to its (negative) remainder: -1 % 16 = -1, +16 = 15.
-        assert_eq!(position_in_tile(5, 5, -1), [5, 5, 15]);
-        assert_eq!(position_in_tile(5, 5, -16), [5, 5, 16]);
-        assert_eq!(position_in_tile(5, 5, -17), [5, 5, 15]);
-        assert_eq!(position_in_tile(i32::MIN, i32::MAX, i32::MIN), [0, 63, 16]);
-    }
 }

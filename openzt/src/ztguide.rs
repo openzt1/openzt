@@ -26,7 +26,6 @@ use openzt_detour::generated::{
         INIT_STATUS_VARS, IS_SPEAKING, LOAD, RELEASE_GUESTS, REMOVE_FROM_MAP, REMOVE_GUEST, SAVE, TILE_FILTER, TRIGGER_NEARBY_GUESTS, UPDATE_GOALS,
     },
     ztguest::FOLLOW_GUIDE,
-    ztunit::{UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -672,7 +671,7 @@ impl ZTGuide {
 
     /// Hands over to `ZTUnit::updateGoals`, which every `updateGoals` path ends with. Nothing detours that address.
     fn finish_update_goals(self) {
-        unsafe { ZTUNIT_UPDATE_GOALS.hooked()(self.0 as *const u32) };
+        ZTUnit(self.0).update_goals();
     }
 
     /// `ZTGuide::updateGoals` (`0x0058ce7e`):

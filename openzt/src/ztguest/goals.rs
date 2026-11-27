@@ -12,7 +12,6 @@ use openzt_detour::{
         bfentity::{GET_TILE as BFENTITY_GET_TILE, SET_BS, UPDATE as BFENTITY_UPDATE},
         msvc_std_basic_string::BASIC_STRING_RANGE,
         ztguest::{F_GUEST_THOUGHT, GET_NUM_NONSEEN_SITES, INIT_AFTER_LOAD, LISTEN, TRIGGER_GRANDSTAND_ESCAPE_1, UPDATE, UPDATE_GOALS},
-        ztunit::{INIT_AFTER_LOAD as ZTUNIT_INIT_AFTER_LOAD, IN_FRIENDLY_CHASE, UPDATE_BUILDING_TILES, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
         ztthoughtmgr::ADD_THOUGHT,
         ztworldmgr::FIND_NEAREST_UNSEEN_STARTING_SHOW,
     },
@@ -23,12 +22,11 @@ use openzt_detour_macro::detour_mod;
 use tracing::error;
 
 use super::{
-    checks::{position_xy, position_z},
     guest_offsets, lifecycle_offsets, ZTGuest, GUEST_TYPE_TAG_RVA,
 };
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, low_byte_bool},
+    util::{get_from_memory, low_byte_bool, position_in_tile_xy, position_in_tile_z},
     zthabitat::next_game_random,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, call_slot_3},
 };
@@ -155,7 +153,7 @@ impl ZTGuest {
     }
 
     fn finish_goals(self) {
-        unsafe { ZTUNIT_UPDATE_GOALS.hooked()(self.0 as *const u32) };
+        crate::ztunit::ZTUnit(self.0).update_goals();
     }
 
     /// `FUN_004290c9`: the tail two exits share.
@@ -205,7 +203,7 @@ impl ZTGuest {
             && low_byte_bool(call_slot_0(target, slots::TARGET_DANGEROUS))
             && entry_goal != goal::SCARED
             && entry_goal != goal::SCARED_B
-            && (entry_goal != goal::GRANDSTAND || low_byte_bool(unsafe { IN_FRIENDLY_CHASE.hooked()(self.0 as *const u32) }))
+            && (entry_goal != goal::GRANDSTAND || crate::ztunit::ZTUnit(self.0).in_friendly_chase())
         {
             self.write(fields::FLAG_0X24C, 0u8);
             call_slot_3(self.0, slots::STOP_EVERYTHING, 1, 1, 1);
@@ -304,7 +302,7 @@ impl ZTGuest {
 
         let record = self.position_record();
         let grid: i32 = self.read(lifecycle_offsets::BUILDING_GRID);
-        let on_satisfier = unsafe { openzt_detour::generated::ztunit::IS_NEED_OR_FUN_SATISFIER.hooked()(self.0 as *const u32, grid, record.as_ptr()) };
+        let on_satisfier = crate::ztunit::ZTUnit(self.0).is_need_or_fun_satisfier(grid as u32, record.as_ptr() as *const i32);
         if !on_satisfier {
             return check_valid();
         }
@@ -330,7 +328,7 @@ impl ZTGuest {
         if self.read::<u8>(fields::NEEDS_FLAG) != 0 || matches!(entry_goal, goal::SEAT | goal::SCARED_B | goal::SCARED | goal::LEAVE) {
             return false;
         }
-        if unsafe { UPDATE_BUILDING_TILES.hooked()(self.0 as *const u32, false) } {
+        if crate::ztunit::ZTUnit(self.0).update_building_tiles(false) {
             return false;
         }
 
@@ -391,13 +389,13 @@ impl ZTGuest {
         let x: i32 = get_from_memory(show + fields::SHOW_X);
         let y: i32 = get_from_memory(show + fields::SHOW_Y);
         let z: i32 = get_from_memory(show + fields::SHOW_Z);
-        self.write(lifecycle_offsets::POSITION_RECORD, position_xy(x));
-        self.write(lifecycle_offsets::POSITION_RECORD + 4, position_xy(y));
-        self.write(lifecycle_offsets::POSITION_RECORD + 8, position_z(z));
+        self.write(lifecycle_offsets::POSITION_RECORD, position_in_tile_xy(x));
+        self.write(lifecycle_offsets::POSITION_RECORD + 4, position_in_tile_xy(y));
+        self.write(lifecycle_offsets::POSITION_RECORD + 8, position_in_tile_z(z));
         self.set_goal_virtual(goal::SHOW, 4);
         let default: u32 = get_from_memory(base() + SHOW_DEFAULT_RVA);
         self.write(fields::GOAL_DEFAULT, default);
-        unsafe { UPDATE_BUILDING_TILES.hooked()(self.0 as *const u32, false) };
+        crate::ztunit::ZTUnit(self.0).update_building_tiles(false);
     }
 
     /// `ZTGuest::fGuestThought` (`0x004231c1`): a thought about an animal that is flagged (`+0x395`) is replaced by
@@ -425,7 +423,7 @@ impl ZTGuest {
                 self.clear_goal_slot();
             }
         }
-        unsafe { ZTUNIT_INIT_AFTER_LOAD.hooked()(self.0 as *const u32, version) }
+        crate::ztunit::ZTUnit(self.0).init_after_load(version)
     }
 
     /// The other guests standing on this guest's tile, in tile-list order, that `visit` is called with.

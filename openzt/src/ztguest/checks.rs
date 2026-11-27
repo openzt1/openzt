@@ -21,7 +21,6 @@ use openzt_detour::generated::{
         UPDATE_STATUS_VARIABLES,
     },
     zthabitat::GET_ALL_ANIMALS,
-    ztunit::{FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -31,7 +30,7 @@ use super::{
 };
 use crate::{
     globals::{get_module_base, globals},
-    util::{get_from_memory, low_byte_bool},
+    util::{get_from_memory, low_byte_bool, position_in_tile_xy, position_in_tile_z},
     zthabitat::{
         next_game_random,
         viewing_area::{recalculate_characteristics as recalculate_viewing_area, recalculate_observable_area},
@@ -216,21 +215,6 @@ fn base() -> u32 {
     get_module_base("zoo.exe") as u32
 }
 
-/// `x % 64` as C computes it (the sign of the dividend), the shape the position record's first two words take.
-pub(super) fn position_xy(value: i32) -> i32 {
-    value.wrapping_rem(64)
-}
-
-/// The record's third word: `value % 16` as C computes it, plus `16` for a negative value.
-pub(super) fn position_z(value: i32) -> i32 {
-    let remainder = value.wrapping_rem(16);
-    if value < 0 {
-        remainder + 16
-    } else {
-        remainder
-    }
-}
-
 /// How a need check treats one of the hunger/thirst/bathroom needs.
 struct NeedSpec {
     countdown: u32,
@@ -354,7 +338,7 @@ impl ZTGuest {
     pub(super) fn standing_on_satisfier(self) -> bool {
         let record = self.position_record();
         let grid: i32 = self.read(lifecycle_offsets::BUILDING_GRID);
-        unsafe { IS_NEED_OR_FUN_SATISFIER.hooked()(self.0 as *const u32, grid, record.as_ptr()) }
+        crate::ztunit::ZTUnit(self.0).is_need_or_fun_satisfier(grid as u32, record.as_ptr() as *const i32)
     }
 
     fn carried_item(self, slot: u32) -> u32 {
@@ -390,9 +374,9 @@ impl ZTGuest {
         let x: i32 = get_from_memory(building + BUILDING_POSITION_X);
         let y: i32 = get_from_memory(building + BUILDING_POSITION_Y);
         let z: i32 = get_from_memory(building + BUILDING_POSITION_Z);
-        self.write(lifecycle_offsets::POSITION_RECORD, position_xy(x));
-        self.write(lifecycle_offsets::POSITION_RECORD + 4, position_xy(y));
-        self.write(lifecycle_offsets::POSITION_RECORD + 8, position_z(z));
+        self.write(lifecycle_offsets::POSITION_RECORD, position_in_tile_xy(x));
+        self.write(lifecycle_offsets::POSITION_RECORD + 4, position_in_tile_xy(y));
+        self.write(lifecycle_offsets::POSITION_RECORD + 8, position_in_tile_z(z));
     }
 
     /// Searches for the nearest building of `name` and walks towards it. With none in range, a random building of the
@@ -401,7 +385,7 @@ impl ZTGuest {
         let name_address = (base() + name) as *const i32;
         let mut found: u32 = 0;
         let tile = unsafe { BFENTITY_GET_TILE.hooked()(self.0 as *const u32) };
-        let reached = unsafe { FIND_NEAREST_SATISFIER.hooked()(self.0 as *const u32, tile, name_address, &mut found as *mut u32 as *const u32, SATISFIER_SEARCH_RANGE, -1) };
+        let reached = crate::ztunit::ZTUnit(self.0).find_nearest_satisfier(tile as u32, name_address as u32, &mut found as *mut u32 as u32, SATISFIER_SEARCH_RANGE, -1);
         if reached {
             if found == 0 {
                 return;

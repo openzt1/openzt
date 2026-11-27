@@ -2,9 +2,15 @@
 //! animal types, runs the real body (through the detour trampoline) on one and the Rust port on the other, and compares
 //! return values and the unit's whole memory.
 
+pub(super) mod buildings;
+mod messages;
+mod shows;
 mod targets;
 
 use openzt_detour::generated::ztunit as generated;
+pub(crate) use buildings::{run_ztunit_buildings_live_test, run_ztunit_update_building_tiles_live_test};
+pub(crate) use messages::run_ztunit_messages_live_test;
+pub(crate) use shows::run_ztunit_shows_live_test;
 pub(crate) use targets::{run_ztunit_blocking_live_test, run_ztunit_paths_live_test, run_ztunit_satisfiers_live_test, run_ztunit_targets_live_test, run_ztunit_f_was_caught_live_test, run_ztunit_find_any_live_test, run_ztunit_find_nearest_live_test, run_ztunit_find_predator_live_test, run_ztunit_path_away_live_test, run_ztunit_z_dest_live_test};
 
 use super::ztanimal::{live_animal_types, Lcg};
@@ -23,6 +29,15 @@ const POS_Y: u32 = 0x118;
 const POS_Z: u32 = 0x11c;
 /// The game's `rand` state (`DAT_00638060`).
 const RNG_STATE_RVA: u32 = 0x0023_8060;
+
+/// Animal types plus, when the live zoo holds them, a guest type and a keeper type, so the guest-only and staff-only
+/// branches of the base class run against units whose entity type casts to `ZTGuest` / `ZTStaff`.
+pub(crate) fn live_unit_types(animals: usize) -> Vec<u32> {
+    let mut types = live_animal_types(animals);
+    types.extend(crate::ztguest::live_support::find_guest_type());
+    types.extend(crate::ztkeeper::live_support::find_keeper_type());
+    types
+}
 
 fn pin_rng(seed: u32) {
     save_to_memory(get_module_base("zoo.exe") as u32 + RNG_STATE_RVA, seed);
@@ -545,11 +560,15 @@ pub(crate) fn run_ztunit_save_load_live_test(failure_log: &mut Option<std::fs::F
     if let Err(e) = install_stubs() {
         return finish_test(test_name, vec![e], failure_log);
     }
-    let types = live_animal_types(2);
+    let types = live_unit_types(2);
     if types.is_empty() {
         return finish_test(test_name, vec!["the live world holds no animal type".to_string()], failure_log);
     }
     let world = globals().ztworldmgr();
+    let mut animal_lengths: Vec<usize> = Vec::new();
+    if crate::ztguest::live_support::find_guest_type().is_none() || crate::ztkeeper::live_support::find_keeper_type().is_none() {
+        failures.push("the live world holds no guest or keeper type, so the guest and staff branches were not exercised".to_string());
+    }
     let tile = world.get_tile_ptr(world.map_x_size / 2, world.map_y_size / 2);
     for (type_index, &unit_type) in types.iter().enumerate() {
         for seed in 1..=8u32 {
@@ -565,6 +584,15 @@ pub(crate) fn run_ztunit_save_load_live_test(failure_log: &mut Option<std::fs::F
             let (real_ok, real_bytes) = capture_save(source, false);
             let (port_ok, port_bytes) = capture_save(source, true);
             check(&mut failures, &format!("{label} save result"), real_ok, port_ok);
+            // A guest never saves the trick words, so its stream is shorter than an animal's for the same seed.
+            if type_index == 0 {
+                animal_lengths.push(port_bytes.len());
+            } else if Some(unit_type) == crate::ztguest::live_support::find_guest_type() {
+                let animal_length = animal_lengths[seed as usize - 1];
+                if port_bytes.len() >= animal_length {
+                    failures.push(format!("{label} guest save is {} bytes, animal {animal_length}: trick words not skipped", port_bytes.len()));
+                }
+            }
             if real_bytes != port_bytes {
                 failures.push(format!("{label} save bytes differ: real {} bytes, port {} bytes", real_bytes.len(), port_bytes.len()));
             }
