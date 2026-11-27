@@ -25,11 +25,12 @@ use openzt_detour::generated::{
     },
     ztfence::CLOSE_GATE as ZTFENCE_CLOSE_GATE,
     ztshow::ABORT_SHOW as ZTSHOW_ABORT_SHOW,
-    ztunit::{RESET_AI as ZTUNIT_RESET_AI, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
+    ztunit::{UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
 
+use crate::ztunit::ZTUnit;
 use crate::{
     bfentity::set_bs,
     bfscriptmgr::RawString,
@@ -71,45 +72,7 @@ pub const PATHING_TO_HABITAT_GATE_OFFSET: u32 = 0x2a8;
 pub const OWN_DWORD_OFFSETS: [u32; 5] =
     [FOOD_TO_LEAVE_OFFSET, SICK_ANIMAL_COUNT_OFFSET, DIRT_TILE_COUNT_OFFSET, HABITAT_SELECT_DISABLED_OFFSET, FOOD_TYPE_TO_LEAVE_OFFSET];
 
-/// Offsets inherited from `ZTUnit`/`BFEntity` that keeper methods read or write. Shared with the other staff
-/// classes, so they live here only until a `ZTStaff` module exists.
-pub mod unit_offsets {
-    /// `BFEntity` id, the key `ZTShowInfo::removeUnit` and `getEvents` use.
-    pub const ENTITY_ID: u32 = 0x124;
-    /// The entity's `ZTKeeperType` (or other entity type) pointer.
-    pub const ENTITY_TYPE: u32 = 0x128;
-    /// Start of the embedded `BFCogGoal`.
-    pub const COG_GOAL: u32 = 0x15c;
-    /// `BFCogGoal` validity flag cleared by `updateGoals`' no-habitat tail.
-    pub const COG_INVALID: u32 = 0x20e;
-    /// The embedded `BFCogGoal`'s state word (`COG_GOAL + 0x18`); `0x13` marks a unit tied to a show.
-    pub const COG_GOAL_STATE: u32 = 0x174;
-    /// Movement speed written by `setSpeed`.
-    pub const SPEED: u32 = 0x1f8;
-    /// The tile the unit is heading for.
-    pub const TARGET_TILE: u32 = 0x234;
-    /// The unit's goal id: `0x6e` while on habitat duties, `0x6f` while retrieving an escaped animal.
-    pub const GOAL_ID: u32 = 0x170;
-    /// A byte of the embedded `BFCogGoal` (`COG_GOAL + 0x4c`); the routines only run their goal while it is clear.
-    pub const COG_GOAL_FLAG: u32 = 0x1a8;
-    /// The byte every `fRoutine` copies into its `done` flag: set while the unit is not moving.
-    pub const STOPPED: u32 = 0xf9;
-    pub use crate::ztstaff::staff_offsets::{ASSIGNED_HABITATS, ESCAPED_ANIMAL};
-    /// A byte `updateGoals` consumes: set when something wants a predator check on the next goal update.
-    pub const PREDATOR_CHECK_PENDING: u32 = 0x24c;
-    /// The predator `updateGoals` records when it switches to the predator goal.
-    pub const PREDATOR: u32 = 0x22c;
-    /// The fence gate the unit is queued at; `notifyHabitatNotComing` closes it.
-    pub const GATE: u32 = 0x248;
-    /// The id of the `ZTShowInfo` the unit performs in (`u16`).
-    pub const SHOW_INFO_ID: u32 = 0x254;
-    /// A byte `removeFromMap` tests before cancelling the unit's habitat visit.
-    pub const MBR_0X142: u32 = 0x142;
-    /// `initStatusVars` stores the unit's own address here.
-    pub const SELF_POINTER: u32 = 0x64;
-    /// `initStatusVars` stores `entity_type + 0x80` here when the type's `+0x84` is non-zero, otherwise null.
-    pub const TYPE_BLOCK_POINTER: u32 = 0x68;
-}
+pub use crate::ztunit::unit_offsets;
 
 /// `ZTHabitat` fields the keeper methods read; the habitat code owns their meaning.
 mod habitat_offsets {
@@ -367,7 +330,7 @@ impl ZTKeeper {
 
     /// `ZTKeeper::resetAI` (`0x005ae772`): the `ZTUnit` reset, then back to habitat duties.
     pub fn reset_ai(self) {
-        unsafe { ZTUNIT_RESET_AI.original()(self.0 as *const u32) };
+        ZTUnit(self.0).reset_ai();
         call_slot_2(self.0, slots::GOAL_SET, GOAL_HABITAT_DUTIES, 0);
     }
 

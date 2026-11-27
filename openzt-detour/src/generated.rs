@@ -4117,6 +4117,7 @@ pub mod zthabitat {
 pub mod zthabitatmgr {
     use super::*;
 
+    pub const GET_NON_WORLD_HABITATS: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x00401893, function_type: PhantomData};
     pub const GET_TANK: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32) -> *const i32> = FunctionDef{address: 0x0040fb2f, function_type: PhantomData};
     pub const GET_HABITAT: FunctionDef<unsafe extern "thiscall" fn(*const u32, i32, i32) -> u32> = FunctionDef{address: 0x00410bf9, function_type: PhantomData};
     pub const GET_ZOO_ENTRANCE_TILE: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> i32> = FunctionDef{address: 0x00410d04, function_type: PhantomData};
@@ -5610,6 +5611,7 @@ pub mod ztui_multistaff {
 
     pub const UPDATE: FunctionDef<unsafe extern "cdecl" fn(u32)> = FunctionDef{address: 0x0041a39f, function_type: PhantomData};
     pub const ADD_ENTITY: FunctionDef<unsafe extern "cdecl" fn(*const u32)> = FunctionDef{address: 0x00457f81, function_type: PhantomData};
+    pub const REMOVE_ENTITY: FunctionDef<unsafe extern "cdecl" fn(*const i32)> = FunctionDef{address: 0x00501f2b, function_type: PhantomData};
 }
 
 // ZTUI::ncbuildinginfo class functions
@@ -5898,6 +5900,12 @@ pub mod ztunittype {
     pub const GET_SLOW_ANIM_SYMBOL: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> *const u32> = FunctionDef{address: 0x004137da, function_type: PhantomData};
     pub const GET_SOUND_ROOT: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const c_void) -> *const u32> = FunctionDef{address: 0x00430a08, function_type: PhantomData};
     pub const GET_TRICK_LIST: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32)> = FunctionDef{address: 0x0046e647, function_type: PhantomData};
+    pub const GET_SURF_SWIM_ANIM_SYMBOL: FunctionDef<unsafe extern "stdcall" fn() -> *const u32> = FunctionDef{address: 0x00492b83, function_type: PhantomData};
+    pub const GET_SUB_IDLE_ANIM_SYMBOL: FunctionDef<unsafe extern "stdcall" fn() -> *const u32> = FunctionDef{address: 0x004930f9, function_type: PhantomData};
+    pub const GET_SURF_IDLE_ANIM_SYMBOL: FunctionDef<unsafe extern "stdcall" fn() -> *const u32> = FunctionDef{address: 0x004931a3, function_type: PhantomData};
+    pub const GET_SUB_SWIM_ANIM_SYMBOL: FunctionDef<unsafe extern "stdcall" fn() -> *const u32> = FunctionDef{address: 0x00497323, function_type: PhantomData};
+    pub const GET_DIVE_ANIM_SYMBOL: FunctionDef<unsafe extern "stdcall" fn() -> *const u32> = FunctionDef{address: 0x00497388, function_type: PhantomData};
+    pub const GET_RISE_ANIM_SYMBOL: FunctionDef<unsafe extern "stdcall" fn() -> *const u32> = FunctionDef{address: 0x004973b5, function_type: PhantomData};
     pub const SET_IDLE_ANIMATION: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004b54ea, function_type: PhantomData};
     pub const SET_IDLE_ANIMATION_WATER: FunctionDef<unsafe extern "thiscall" fn(*const u32) -> u32> = FunctionDef{address: 0x004b5504, function_type: PhantomData};
     pub const LOAD_CHARACTERISTICS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const i32, u32) -> bool> = FunctionDef{address: 0x004b5681, function_type: PhantomData};
@@ -6150,6 +6158,7 @@ pub mod msvc_std_listuint {
 
     pub const LIST_UINT_CTOR: FunctionDef<unsafe extern "thiscall" fn(*const c_void, u32) -> *const u32> = FunctionDef{address: 0x0040143b, function_type: PhantomData};
     pub const INSERT: FunctionDef<unsafe extern "stdcall" fn(*const i32, i32, *const i32) -> *const i32> = FunctionDef{address: 0x0040146c, function_type: PhantomData};
+    pub const ERASE_NODE: FunctionDef<unsafe extern "stdcall" fn(*const i32, *const i32)> = FunctionDef{address: 0x0040189e, function_type: PhantomData};
     pub const BEGIN: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const u32)> = FunctionDef{address: 0x00404a67, function_type: PhantomData};
     pub const LIST: FunctionDef<unsafe extern "thiscall" fn(*const c_void)> = FunctionDef{address: 0x0040f2f8, function_type: PhantomData};
     pub const ERASE: FunctionDef<unsafe extern "thiscall" fn(*const c_void, *const i32, *const i32, *const i32)> = FunctionDef{address: 0x00412fb8, function_type: PhantomData};

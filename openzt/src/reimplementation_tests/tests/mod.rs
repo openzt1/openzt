@@ -29,6 +29,7 @@ pub(crate) mod ztmegatilemgr;
 pub(crate) mod zoostatus;
 pub(crate) mod ztkeeper;
 pub(crate) mod ztstaff;
+pub(crate) mod ztunit;
 pub(crate) mod ztanimal;
 pub(crate) mod ztanimal_checks;
 pub(crate) mod ztanimal_drop_visible;

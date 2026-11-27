@@ -2,7 +2,7 @@
 //! the port and the hooked address into identically built fixtures. Result, bytes consumed, whole-animal memory, both
 //! strings, the escape record and the escaped-animal list must agree, for whole streams and for streams cut short.
 
-use openzt_detour::generated::{ztanimal::{INIT_STATUS_VARS, LOAD}, ztunit::SAVE as ZTUNIT_SAVE};
+use openzt_detour::generated::ztanimal::{INIT_STATUS_VARS, LOAD};
 
 use super::{
     ztanimal::{base, build_animal, live_animal_types, Lcg},
@@ -218,7 +218,7 @@ fn stream(version: u32, config: &Config, tail: &[u8]) -> (Vec<u8>, usize) {
 fn unit_tail(entity_type: u32) -> Vec<u8> {
     let animal = build_animal(entity_type);
     io_redirect::begin_capture();
-    unsafe { ZTUNIT_SAVE.original()(animal.0 as *const u32, std::ptr::null()) };
+    crate::ztunit::live_support::real::save(animal.0, 0);
     io_redirect::end_capture()
 }
 

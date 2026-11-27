@@ -26,11 +26,12 @@ use openzt_detour::generated::{
         INIT_STATUS_VARS, IS_SPEAKING, LOAD, RELEASE_GUESTS, REMOVE_FROM_MAP, REMOVE_GUEST, SAVE, TILE_FILTER, TRIGGER_NEARBY_GUESTS, UPDATE_GOALS,
     },
     ztguest::FOLLOW_GUIDE,
-    ztunit::{CLEAR_GOAL as ZTUNIT_CLEAR_GOAL, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
+    ztunit::{UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
 
+use crate::ztunit::ZTUnit;
 use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
@@ -340,7 +341,7 @@ impl ZTGuide {
     /// `ZTGuide::clearGoal` (`0x0061b9a8`, vtable `+0x174`): `ZTUnit::clearGoal`, then the follower list is emptied
     /// and `+0x2a0` cleared.
     pub fn clear_goal(self) {
-        unsafe { ZTUNIT_CLEAR_GOAL.original()(self.0 as *const u32) };
+        ZTUnit(self.0).clear_goal();
         self.empty_followers();
         save_to_memory(self.0 + VIEWING_AREA_INFORMED_OFFSET, 0u8);
     }

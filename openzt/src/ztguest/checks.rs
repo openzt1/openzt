@@ -21,7 +21,7 @@ use openzt_detour::generated::{
         UPDATE_STATUS_VARIABLES,
     },
     zthabitat::GET_ALL_ANIMALS,
-    ztunit::{DO_AMBIENT_ANIMS as ZTUNIT_DO_AMBIENT_ANIMS, FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IS_ON_WATER},
+    ztunit::{FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER},
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -315,7 +315,7 @@ impl ZTGuest {
     }
 
     pub(super) fn is_on_water(self) -> bool {
-        unsafe { IS_ON_WATER.hooked()(self.0 as *const u32) }
+        crate::ztunit::ZTUnit(self.0).is_on_water()
     }
 
     fn goal_id(self) -> u32 {
@@ -1045,7 +1045,7 @@ impl ZTGuest {
         if self.read::<u8>(AMBIENT_TRIGGER_FLAG) != 0 {
             self.write(guest_offsets::FLAG_0X339, 1u8);
         }
-        unsafe { ZTUNIT_DO_AMBIENT_ANIMS.original()(self.0 as *const u32, std::ptr::null()) };
+        crate::ztunit::ZTUnit(self.0).do_ambient_anims(0);
     }
 
     /// `ZTGuest::checkLeaveZoo` (`0x004a6acc`): with an AI manager and a guest type, and outside goal `0x71` and off the

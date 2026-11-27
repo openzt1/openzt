@@ -128,6 +128,7 @@ pub(super) mod detour_zoo_main {
         tests.extend([RegisteredTest { name: "MENUMUSICHANDLER_ORIGINAL_ROUTES_TO_TRAMPOLINE", run: tests::ztgamemgr_menumusichandler::run_menumusichandler_original_routes_to_trampoline_test }]);
         tests.push(RegisteredTest { name: "AMBIENTS_DETOURS_ENABLED", run: tests::ambients::run_ambients_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTUNIT_DETOURS_ENABLED", run: tests::ztunit::run_ztunit_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSTAFF_DETOURS_ENABLED", run: tests::ztstaff::run_ztstaff_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTKEEPER_DETOURS_ENABLED", run: tests::ztkeeper::run_ztkeeper_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTMAINT_DETOURS_ENABLED", run: tests::ztmaint::run_ztmaint_detours_enabled_test });
@@ -1168,6 +1169,27 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTSOUNDSCAPE_INIT", run: tests::ztsoundscape::run_ztsoundscape_init_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE", run: tests::ztsoundscape::run_ztsoundscape_update_test },
             RegisteredTest { name: "ZTSOUNDSCAPE_UPDATE_ATTEMPT_FAILURE", run: tests::ztsoundscape::run_ztsoundscape_update_attempt_failure_test },
+            RegisteredTest { name: "ZTUNIT_LEAF_LIVE", run: tests::ztunit::run_ztunit_leaf_live_test },
+            RegisteredTest { name: "ZTUNIT_ANIM_LIVE", run: tests::ztunit::run_ztunit_anim_live_test },
+            RegisteredTest { name: "ZTUNIT_AMBIENT_LIVE", run: tests::ztunit::run_ztunit_ambient_live_test },
+            RegisteredTest { name: "ZTUNIT_LIFECYCLE_LIVE", run: tests::ztunit::run_ztunit_lifecycle_live_test },
+            RegisteredTest { name: "ZTUNIT_SAVE_LOAD_LIVE", run: tests::ztunit::run_ztunit_save_load_live_test },
+            RegisteredTest { name: "ZTUNIT_GOALS_LIVE", run: tests::ztunit::run_ztunit_goals_live_test },
+            RegisteredTest { name: "ZTUNIT_TICK_LIVE", run: tests::ztunit::run_ztunit_tick_live_test },
+            RegisteredTest { name: "ZTUNIT_TANK_LIVE", run: tests::ztunit::run_ztunit_tank_live_test },
+            RegisteredTest { name: "ZTUNIT_ADD_TO_MAP_LIVE", run: tests::ztunit::run_ztunit_add_to_map_live_test },
+            RegisteredTest { name: "ZTUNIT_CREATE_NAME_LIVE", run: tests::ztunit::run_ztunit_create_name_live_test },
+            RegisteredTest { name: "ZTUNIT_INIT_AFTER_LOAD_LIVE", run: tests::ztunit::run_ztunit_init_after_load_live_test },
+            RegisteredTest { name: "ZTUNIT_TARGETS_LIVE", run: tests::ztunit::run_ztunit_targets_live_test },
+            RegisteredTest { name: "ZTUNIT_BLOCKING_LIVE", run: tests::ztunit::run_ztunit_blocking_live_test },
+            RegisteredTest { name: "ZTUNIT_SATISFIERS_LIVE", run: tests::ztunit::run_ztunit_satisfiers_live_test },
+            RegisteredTest { name: "ZTUNIT_PATHS_LIVE", run: tests::ztunit::run_ztunit_paths_live_test },
+            RegisteredTest { name: "ZTUNIT_Z_DEST_LIVE", run: tests::ztunit::run_ztunit_z_dest_live_test },
+            RegisteredTest { name: "ZTUNIT_PATH_AWAY_LIVE", run: tests::ztunit::run_ztunit_path_away_live_test },
+            RegisteredTest { name: "ZTUNIT_FIND_PREDATOR_LIVE", run: tests::ztunit::run_ztunit_find_predator_live_test },
+            RegisteredTest { name: "ZTUNIT_FIND_NEAREST_LIVE", run: tests::ztunit::run_ztunit_find_nearest_live_test },
+            RegisteredTest { name: "ZTUNIT_FIND_ANY_LIVE", run: tests::ztunit::run_ztunit_find_any_live_test },
+            RegisteredTest { name: "ZTUNIT_F_WAS_CAUGHT_LIVE", run: tests::ztunit::run_ztunit_f_was_caught_live_test },
             RegisteredTest { name: "ZTSTAFF_FIXTURE_LAYOUT_LIVE", run: tests::ztstaff::run_ztstaff_fixture_layout_live_test },
             RegisteredTest { name: "ZTSTAFF_ASSIGNED_HABITATS_LIVE", run: tests::ztstaff::run_ztstaff_assigned_habitats_live_test },
             RegisteredTest { name: "ZTSTAFF_LEAF_LIVE", run: tests::ztstaff::run_ztstaff_leaf_live_test },

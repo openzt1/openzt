@@ -28,8 +28,7 @@ use openzt_detour::{
     zthabitat::GET_ALL_ANIMALS,
     ztui_guestinfo::SET_GUEST_VISIBLE,
     ztunit::{
-        DO_BUILDING as ZTUNIT_DO_BUILDING, FIND_ANY_SATISFIER, FIND_NEAREST_SATISFIER, IS_FUN_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IS_ON_WATER,
-        UPDATE_BUILDING_TILES, FIND_PREDATOR,
+        UPDATE_BUILDING_TILES,
     },
     ztworldmgr::{GET_NEED_INDEX, REMOVE_FROM_MEMBER_LISTS},
     },
@@ -85,6 +84,101 @@ fn roll(modulus: u32) -> u32 {
 
 fn record(entry: String) {
     SCRIPT.lock().unwrap().log.push(entry);
+}
+
+fn scripted_is_need_or_fun_satisfier(_this: u32, grid: u32, record_ptr: *const i32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(4) == 0;
+    let words: Vec<u32> = (0..3).map(|i| get_from_memory::<u32>(record_ptr as u32 + i * 4)).collect();
+    record(format!("isNeedOrFunSatisfier {grid:#x} {words:x?} {answer}"));
+    Some(answer)
+}
+
+fn scripted_is_fun_satisfier(building: u32, position: *const i32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(2) == 0 && building != 0;
+    let words: Vec<u32> = (0..3).map(|i| get_from_memory::<u32>(position as u32 + i * 4)).collect();
+    record(format!("isFunSatisfier {} {words:x?} {answer}", building != 0));
+    Some(answer)
+}
+
+fn scripted_find_any(_this: u32, tile: u32, name: u32, out: u32, range: i32, other: i32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let found = roll(3) != 0;
+    let building = if roll(3) == 0 && !NON_NULL_TARGET.load(Ordering::SeqCst) { 0 } else { fake_building() };
+    if found {
+        save_to_memory(out, building);
+    }
+    record(format!("findAnySatisfier {} {:#x} {found} {} {range:#x} {other}", tile != 0, name - base(), building != 0 && found));
+    Some(found)
+}
+
+fn scripted_find_nearest(_this: u32, tile: u32, name: u32, out: u32, range: i32, other: i32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let found = roll(3) != 0;
+    let building = if roll(3) == 0 && !NON_NULL_TARGET.load(Ordering::SeqCst) { 0 } else { fake_building() };
+    if found {
+        save_to_memory(out, building);
+    }
+    record(format!("findNearestSatisfier {} {:#x} {found} {} {range:#x} {other}", tile != 0, name - base(), building != 0 && found));
+    Some(found)
+}
+
+/// `ZTUnit::findPredator` reads the unit's tile, which a clone that is not on the map does not have.
+fn sandboxed_find_predator(_this: u32, flag: bool) -> Option<i32> {
+    if !SANDBOX.load(Ordering::SeqCst) {
+        return None;
+    }
+    SANDBOX_LOG.lock().unwrap().push(format!("findPredator {flag}"));
+    Some(0)
+}
+
+fn scripted_in_friendly_chase(_this: u32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(2) == 0;
+    record(format!("inFriendlyChase {answer}"));
+    Some(answer)
+}
+
+fn scripted_init_after_load(_this: u32, version: u32) -> Option<bool> {
+    if scripted() {
+        let answer = roll(2) == 0;
+        record(format!("ZTUnit initAfterLoad {version:#x} {answer}"));
+        Some(answer)
+    } else {
+        None
+    }
+}
+
+fn scripted_do_building(_this: u32) -> bool {
+    if scripted() {
+        record("ZTUnit::doBuilding".to_string());
+        true
+    } else {
+        false
+    }
+}
+
+fn scripted_update_goals(_this: u32) -> bool {
+    if scripted() {
+        record("ZTUnit updateGoals".to_string());
+        true
+    } else if SANDBOX.load(Ordering::SeqCst) {
+        SANDBOX_LOG.lock().unwrap().push("ZTUnit updateGoals".to_string());
+        true
+    } else {
+        false
+    }
 }
 
 fn scripted() -> bool {
@@ -282,48 +376,6 @@ mod check_hooks {
         }
     }
 
-    #[detour(IS_NEED_OR_FUN_SATISFIER)]
-    unsafe extern "thiscall" fn satisfier(this: *const u32, grid: i32, record_ptr: *const u32) -> bool {
-        if scripted() {
-            let answer = roll(4) == 0;
-            let words: Vec<u32> = (0..3).map(|i| get_from_memory::<u32>(record_ptr as u32 + i * 4)).collect();
-            record(format!("isNeedOrFunSatisfier {grid:#x} {words:x?} {answer}"));
-            answer
-        } else {
-            unsafe { IS_NEED_OR_FUN_SATISFIER_DETOUR.call(this, grid, record_ptr) }
-        }
-    }
-
-    #[detour(FIND_NEAREST_SATISFIER)]
-    unsafe extern "thiscall" fn nearest(this: *const u32, tile: i32, name: *const i32, out: *const u32, range: i32, other: i32) -> bool {
-        if scripted() {
-            let found = roll(3) != 0;
-            let building = if roll(3) == 0 && !NON_NULL_TARGET.load(Ordering::SeqCst) { 0 } else { fake_building() };
-            if found {
-                save_to_memory(out as u32, building);
-            }
-            record(format!("findNearestSatisfier {} {:#x} {found} {} {range:#x} {other}", tile != 0, name as u32 - base(), building != 0 && found));
-            found
-        } else {
-            unsafe { FIND_NEAREST_SATISFIER_DETOUR.call(this, tile, name, out, range, other) }
-        }
-    }
-
-    #[detour(FIND_ANY_SATISFIER)]
-    unsafe extern "thiscall" fn any(this: *const u32, tile: i32, name: *const i32, out: *const i32, range: i32, other: i32) -> bool {
-        if scripted() {
-            let found = roll(3) != 0;
-            let building = if roll(3) == 0 && !NON_NULL_TARGET.load(Ordering::SeqCst) { 0 } else { fake_building() };
-            if found {
-                save_to_memory(out as u32, building);
-            }
-            record(format!("findAnySatisfier {} {:#x} {found} {} {range:#x} {other}", tile != 0, name as u32 - base(), building != 0 && found));
-            found
-        } else {
-            unsafe { FIND_ANY_SATISFIER_DETOUR.call(this, tile, name, out, range, other) }
-        }
-    }
-
     #[detour(UPDATE_BUILDING_TILES)]
     unsafe extern "thiscall" fn update_tiles(this: *const u32, flag: bool) -> bool {
         if scripted() {
@@ -332,17 +384,6 @@ mod check_hooks {
             answer
         } else {
             unsafe { UPDATE_BUILDING_TILES_DETOUR.call(this, flag) }
-        }
-    }
-
-    /// `ZTUnit::findPredator` reads the unit's tile, which a clone that is not on the map does not have.
-    #[detour(FIND_PREDATOR)]
-    unsafe extern "thiscall" fn find_predator(this: *const u32, flag: bool) -> i32 {
-        if SANDBOX.load(Ordering::SeqCst) {
-            SANDBOX_LOG.lock().unwrap().push(format!("findPredator {flag}"));
-            0
-        } else {
-            unsafe { FIND_PREDATOR_DETOUR.call(this, flag) }
         }
     }
 
@@ -417,44 +458,12 @@ mod check_hooks {
         }
     }
 
-    #[detour(IS_FUN_SATISFIER)]
-    unsafe extern "stdcall" fn is_fun_satisfier(building: i32, position: *const u32) -> u32 {
-        if scripted() {
-            let answer = roll(2) == 0 && building != 0;
-            let words: Vec<u32> = (0..3).map(|i| get_from_memory::<u32>(position as u32 + i * 4)).collect();
-            record(format!("isFunSatisfier {} {words:x?} {answer}", building != 0));
-            answer as u32
-        } else {
-            unsafe { IS_FUN_SATISFIER_DETOUR.call(building, position) }
-        }
-    }
-
-    #[detour(ZTUNIT_DO_BUILDING)]
-    unsafe extern "thiscall" fn unit_do_building(this: *const u32) {
-        if scripted() {
-            record("ZTUnit::doBuilding".to_string());
-        } else {
-            unsafe { ZTUNIT_DO_BUILDING_DETOUR.call(this) }
-        }
-    }
-
     #[detour(SET_GUEST_VISIBLE)]
     unsafe extern "cdecl" fn set_guest_visible(this: *const u32, flag: i8) {
         if scripted() {
             record(format!("setGuestVisible {flag}"));
         } else {
             unsafe { SET_GUEST_VISIBLE_DETOUR.call(this, flag) }
-        }
-    }
-
-    #[detour(IS_ON_WATER)]
-    unsafe extern "fastcall" fn on_water(this: *const u32) -> bool {
-        if scripted() {
-            let answer = roll(5) == 0;
-            record(format!("isOnWater {answer}"));
-            answer
-        } else {
-            unsafe { IS_ON_WATER_DETOUR.call(this) }
         }
     }
 
@@ -497,6 +506,16 @@ mod check_hooks {
             unsafe { PREYS_ON_MAN_DETOUR.call(this) }
         }
     }
+}
+
+/// While a check runs scripted, `ZTUnit::isOnWater` answers from the script.
+fn scripted_on_water(_unit: u32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(5) == 0;
+    record(format!("isOnWater {answer}"));
+    Some(answer)
 }
 
 /// The movement port's override slots: while a check runs scripted, `findPlaceToSit`, `findTrashCan` and
@@ -571,6 +590,16 @@ pub(super) fn install_hooks() -> Result<(), String> {
         *live_support::check_overrides::DIFFERENT_SPECIES.lock().unwrap() = Some(scripted_different_species);
         *live_support::check_overrides::FIND_ANIMAL.lock().unwrap() = Some(scripted_find_animal);
         *live_support::check_overrides::CROWD_DENSITY.lock().unwrap() = Some(scripted_crowd_density);
+        *crate::ztunit::live_support::on_water_override::HOOK.lock().unwrap() = Some(scripted_on_water);
+        *crate::ztunit::live_support::intercept::INIT_AFTER_LOAD.lock().unwrap() = Some(scripted_init_after_load);
+        *crate::ztunit::live_support::intercept::DO_BUILDING.lock().unwrap() = Some(scripted_do_building);
+        *crate::ztunit::live_support::intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap() = Some(scripted_is_need_or_fun_satisfier);
+        *crate::ztunit::live_support::intercept::IS_FUN_SATISFIER.lock().unwrap() = Some(scripted_is_fun_satisfier);
+        *crate::ztunit::live_support::intercept::IN_FRIENDLY_CHASE.lock().unwrap() = Some(scripted_in_friendly_chase);
+        *crate::ztunit::live_support::intercept::UPDATE_GOALS.lock().unwrap() = Some(scripted_update_goals);
+        *crate::ztunit::live_support::intercept::FIND_PREDATOR.lock().unwrap() = Some(sandboxed_find_predator);
+        *crate::ztunit::live_support::intercept::FIND_NEAREST_SATISFIER.lock().unwrap() = Some(scripted_find_nearest);
+        *crate::ztunit::live_support::intercept::FIND_ANY_SATISFIER.lock().unwrap() = Some(scripted_find_any);
         if let Err(e) = unsafe { check_hooks::init_detours() } {
             result = Err(format!("could not install the check hooks: {e:?}"));
         }
@@ -1164,7 +1193,6 @@ mod goal_hooks {
     use openzt_detour::generated::{
         bfcoggoal::{SET as BFCOGGOAL_SET, SET_ID as BFCOGGOAL_SET_ID},
         ztthoughtmgr::ADD_THOUGHT,
-        ztunit::{IN_FRIENDLY_CHASE, INIT_AFTER_LOAD as ZTUNIT_INIT_AFTER_LOAD, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
         ztworldmgr::{FIND_NEAREST_UNSEEN_STARTING_SHOW, GET_ATTRACTIONS as GET_ATTRACTIONS_WORLD, GET_GAWK_SCENERY as GET_GAWK_SCENERY_WORLD, SATISFIES as SATISFIES_WORLD},
     };
 
@@ -1199,17 +1227,6 @@ mod goal_hooks {
         }
     }
 
-    #[detour(ZTUNIT_UPDATE_GOALS)]
-    unsafe extern "thiscall" fn unit_update_goals(this: *const u32) {
-        if scripted() {
-            record("ZTUnit updateGoals".to_string());
-        } else if SANDBOX.load(Ordering::SeqCst) {
-            SANDBOX_LOG.lock().unwrap().push("ZTUnit updateGoals".to_string());
-        } else {
-            unsafe { ZTUNIT_UPDATE_GOALS_DETOUR.call(this) }
-        }
-    }
-
     #[detour(FIND_NEAREST_UNSEEN_STARTING_SHOW)]
     unsafe extern "stdcall" fn nearest_show(guest: *const c_void) -> u32 {
         if scripted() {
@@ -1218,17 +1235,6 @@ mod goal_hooks {
             show
         } else {
             unsafe { FIND_NEAREST_UNSEEN_STARTING_SHOW_DETOUR.call(guest) }
-        }
-    }
-
-    #[detour(IN_FRIENDLY_CHASE)]
-    unsafe extern "thiscall" fn friendly_chase(this: *const u32) -> u32 {
-        if scripted() {
-            let answer = roll(2) == 0;
-            record(format!("inFriendlyChase {answer}"));
-            answer as u32
-        } else {
-            unsafe { IN_FRIENDLY_CHASE_DETOUR.call(this) }
         }
     }
 
@@ -1260,16 +1266,6 @@ mod goal_hooks {
         }
     }
 
-    #[detour(ZTUNIT_INIT_AFTER_LOAD)]
-    unsafe extern "thiscall" fn unit_init_after_load(this: *const u32, version: u32) -> bool {
-        if scripted() {
-            let answer = roll(2) == 0;
-            record(format!("ZTUnit initAfterLoad {version:#x} {answer}"));
-            answer
-        } else {
-            unsafe { ZTUNIT_INIT_AFTER_LOAD_DETOUR.call(this, version) }
-        }
-    }
 }
 
 /// `ZTGUEST_GOALS_LIVE`: `updateGoals` and `initAfterLoad` against the real bodies in the scripted environment, with

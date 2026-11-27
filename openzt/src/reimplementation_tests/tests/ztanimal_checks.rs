@@ -1433,7 +1433,7 @@ static SATISFIER_SEAM_BUILDING: AtomicU32 = AtomicU32::new(0);
 
 #[openzt_detour_macro::detour_mod]
 mod search_seams {
-    use openzt_detour::generated::{ztunit::FIND_NEAREST_SATISFIER, ztworldmgr::FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL};
+    use openzt_detour::generated::ztworldmgr::FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL;
 
     use super::*;
 
@@ -1447,23 +1447,22 @@ mod search_seams {
             unsafe { FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL_DETOUR.call(this, animal, position) }
         }
     }
+}
 
-    #[detour(FIND_NEAREST_SATISFIER)]
-    unsafe extern "thiscall" fn find_nearest(this: *const u32, tile: i32, name: *const i32, out: *const u32, range: i32, flag: i32) -> bool {
-        if SATISFIER_SEAM_ARMED.load(Ordering::SeqCst) {
-            let building = SATISFIER_SEAM_BUILDING.load(Ordering::SeqCst);
-            CALLS.lock().unwrap().push(0xfd00_0000 | u32::from(building != 0));
-            if building != 0 {
-                save_to_memory(out as u32, building);
-            }
-            building != 0
-        } else {
-            unsafe { FIND_NEAREST_SATISFIER_DETOUR.call(this, tile, name, out, range, flag) }
-        }
+fn seam_find_nearest(_this: u32, _tile: u32, _name: u32, out: u32, _range: i32, _filter: i32) -> Option<bool> {
+    if !SATISFIER_SEAM_ARMED.load(Ordering::SeqCst) {
+        return None;
     }
+    let building = SATISFIER_SEAM_BUILDING.load(Ordering::SeqCst);
+    CALLS.lock().unwrap().push(0xfd00_0000 | u32::from(building != 0));
+    if building != 0 {
+        save_to_memory(out, building);
+    }
+    Some(building != 0)
 }
 
 fn install_search_seams() {
+    *crate::ztunit::live_support::intercept::FIND_NEAREST_SATISFIER.lock().unwrap() = Some(seam_find_nearest);
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
         if let Err(e) = unsafe { search_seams::init_detours() } {

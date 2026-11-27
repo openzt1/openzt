@@ -171,6 +171,7 @@ pub fn init() {
 
         // ZTKeeper: no detours yet; the call stays here so each method group's detours are installed under the
         // battery as soon as they exist.
+        crate::ztunit::init();
         crate::ztstaff::init();
         crate::ztkeeper::init();
         crate::ztmaint::init();

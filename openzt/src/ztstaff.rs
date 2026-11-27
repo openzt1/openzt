@@ -30,14 +30,13 @@ use openzt_detour::generated::{
     },
     ztui_multistaff::ADD_ENTITY as MULTISTAFF_ADD_ENTITY,
     ztunit::{
-        ADD_TO_MAP as ZTUNIT_ADD_TO_MAP, CONSTRUCTOR as ZTUNIT_CONSTRUCTOR, DESTRUCTOR_0 as ZTUNIT_DESTRUCTOR_0, INIT_AFTER_LOAD as ZTUNIT_INIT_AFTER_LOAD,
-        INIT_STATUS_VARS as ZTUNIT_INIT_STATUS_VARS, LOAD as ZTUNIT_LOAD, PICK_RANDOM_DEST as ZTUNIT_PICK_RANDOM_DEST,
-        REMOVE_FROM_MAP as ZTUNIT_REMOVE_FROM_MAP, SAVE as ZTUNIT_SAVE, SET_TARGET_TILE as ZTUNIT_SET_TARGET_TILE,
+        DESTRUCTOR_0 as ZTUNIT_DESTRUCTOR_0,
     },
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
 
+use crate::ztunit::ZTUnit;
 use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, save_to_memory},
@@ -277,7 +276,7 @@ impl ZTStaff {
     /// `ZTStaff::ZTStaff` (`0x00457a0c`): the `ZTUnit` constructor, an empty assigned-habitat list (its sentinel from the
     /// 12-byte freelist) and cleared vectors, then the `ZTStaff` vtable.
     pub fn construct(self, staff_type: u32) {
-        unsafe { ZTUNIT_CONSTRUCTOR.original()(self.0 as *const u32, staff_type) };
+        ZTUnit(self.0).construct(staff_type);
         unsafe { LIST_UINT_CTOR.original()((self.0 + staff_offsets::ASSIGNED_HABITATS) as *const c_void, 0) };
         for offset in (staff_offsets::GATE_TILES_BEGIN..=staff_offsets::SKIP_TILES_CAPACITY).step_by(4) {
             self.write(offset, 0u32);
@@ -328,7 +327,7 @@ impl ZTStaff {
     /// the second draw's quotient. A unit whose type is not a staff type is treated as having both periods `0`
     /// (vanilla reads through a null type there and faults).
     pub fn init_status_vars(self) -> u32 {
-        unsafe { ZTUNIT_INIT_STATUS_VARS.original()(self.0 as *const u32) };
+        ZTUnit(self.0).init_status_vars();
         let staff_type = self.staff_type();
         let period = |offset: u32| if staff_type == 0 { 0 } else { get_from_memory::<i32>(staff_type + offset) };
         let first = period(TYPE_INITIAL_PERIOD_OFFSET);
@@ -359,7 +358,7 @@ impl ZTStaff {
     /// `ZTStaff::addToMap` (`0x00449ed0`): `ZTUnit::addToMap`; on success a unit not excluded by `+0x142`/`+0x143` is
     /// appended to the global staff list and handed to `ZTUI::multistaff::addEntity`. Returns `ZTUnit`'s result.
     pub fn add_to_map(self) -> bool {
-        let added = unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) };
+        let added = ZTUnit(self.0).add_to_map();
         if added && !self.excluded_from_panel() {
             vanilla_list::push_back(Self::global_staff_list(), self.0);
             unsafe { MULTISTAFF_ADD_ENTITY.original()(self.0 as *const u32) };
@@ -379,7 +378,7 @@ impl ZTStaff {
         if !keep_escaped_animal {
             self.done_capture();
         }
-        unsafe { ZTUNIT_REMOVE_FROM_MAP.original()(self.0 as *const u32, keep_escaped_animal) };
+        ZTUnit(self.0).remove_from_map(keep_escaped_animal);
     }
 
     /// `ZTStaff::save` (`0x004795f9`): the two countdowns, the assigned-habitat count, the gate-tile `x` and `y` of each
@@ -400,7 +399,7 @@ impl ZTStaff {
             ok &= wrote_x & wrote_y;
         }
         ok &= write_field(self.0 + staff_offsets::ESCAPED_ANIMAL, 4, file);
-        let unit_ok = unsafe { ZTUNIT_SAVE.original()(self.0 as *const u32, file) };
+        let unit_ok = ZTUnit(self.0).save(file as u32);
         unit_ok & ok
     }
 
@@ -451,7 +450,7 @@ impl ZTStaff {
         if !ok {
             return false;
         }
-        let unit_ok = unsafe { ZTUNIT_LOAD.original()(self.0 as *const u32, file, version) };
+        let unit_ok = ZTUnit(self.0).load(file as u32, version);
         unit_ok & ok
     }
 
@@ -474,7 +473,7 @@ impl ZTStaff {
     /// `ZTStaff::initAfterLoad` (`0x005952dc`): `reassignHabitats`, then `ZTUnit::initAfterLoad`; true when both succeed.
     pub fn init_after_load(self, param: u32) -> bool {
         let reassigned = self.reassign_habitats();
-        let unit_ok = unsafe { ZTUNIT_INIT_AFTER_LOAD.original()(self.0 as *const u32, param) };
+        let unit_ok = ZTUnit(self.0).init_after_load(param);
         unit_ok & low_byte_bool(reassigned)
     }
 
@@ -514,7 +513,7 @@ impl ZTStaff {
             }
         };
         mark(false);
-        unsafe { ZTUNIT_SET_TARGET_TILE.original()(self.0 as *const u32, tile as *const u32, flag) };
+        crate::ztunit::ZTUnit(self.0).set_target_tile(tile, flag);
         mark(true);
     }
 
@@ -527,7 +526,7 @@ impl ZTStaff {
     pub fn pick_random_dest(self, position: u32) -> u32 {
         let own_tile = Self::tile_of(self.0);
         let habitat = call_slot_1(self.0, SLOT_GET_HABITAT_FROM_TILE, own_tile);
-        let defer = || unsafe { ZTUNIT_PICK_RANDOM_DEST.original()(self.0 as *const u32, position as *const IVec3) };
+        let defer = || u32::from(crate::ztunit::ZTUnit(self.0).pick_random_dest(position as *mut [i32; 3]));
         if habitat == 0 {
             return defer();
         }

@@ -48,6 +48,14 @@ impl VanillaString {
         self as *const VanillaString as *const u32
     }
 
+    /// The string's bytes (empty when unset).
+    pub(crate) fn bytes(&self) -> Vec<u8> {
+        if self.ptr.is_null() || self.end <= self.ptr {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(self.ptr, self.end as usize - self.ptr as usize) }.to_vec()
+    }
+
     pub(crate) fn as_str(&self) -> std::borrow::Cow<'_, str> {
         if self.ptr.is_null() || self.end <= self.ptr {
             return std::borrow::Cow::Borrowed("");

@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use openzt_detour::generated::{
     standalone::OPERATOR_DELETE,
-    ztunit::UPDATE_GOALS as ZTUNIT_UPDATE_GOALS,
     ztkeeper::{CLEANS_UP, DESTRUCTOR_0, F_ESCAPED_ANIMAL_ROUTINE, F_HABITAT_ROUTINE, F_ROUTINE, GET_TERRAIN_COST, IN_TARGET_HABITAT, REMOVE_FROM_MAP, SET_SPEED},
 };
 
@@ -1226,17 +1225,12 @@ pub(crate) fn run_ztkeeper_listen_live_test(failure_log: &mut Option<std::fs::Fi
 /// real one evaluates the cog goal's `decide`, which reaches habitat code that cannot take the fake habitats below.
 pub(crate) static GOALS_INTERCEPT: AtomicU32 = AtomicU32::new(0);
 
-#[openzt_detour_macro::detour_mod]
-mod unit_goals_hook {
-    use super::*;
-
-    #[detour(ZTUNIT_UPDATE_GOALS)]
-    unsafe extern "thiscall" fn unit_update_goals(this: *const u32) {
-        if GOALS_INTERCEPT.load(Ordering::SeqCst) != 0 {
-            goals_record(6, 0, 0, 0);
-        } else {
-            unsafe { ZTUNIT_UPDATE_GOALS_DETOUR.call(this) }
-        }
+fn unit_update_goals_hook(_this: u32) -> bool {
+    if GOALS_INTERCEPT.load(Ordering::SeqCst) != 0 {
+        goals_record(6, 0, 0, 0);
+        true
+    } else {
+        false
     }
 }
 
@@ -1293,14 +1287,8 @@ extern "thiscall" fn goals_is_tank(_habitat: u32) -> u32 {
 
 /// Installs the `ZTUnit::updateGoals` recording hook once; returns an error message on failure.
 pub(crate) fn install_goals_hook() -> Result<(), String> {
-    static HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
-    let mut result = Ok(());
-    HOOK_INSTALLED.call_once(|| {
-        if let Err(e) = unsafe { unit_goals_hook::init_detours() } {
-            result = Err(format!("could not install the ZTUnit::updateGoals hook: {e:?}"));
-        }
-    });
-    result
+    *crate::ztunit::live_support::intercept::UPDATE_GOALS.lock().unwrap() = Some(unit_update_goals_hook);
+    Ok(())
 }
 
 /// `ZTKEEPER_UPDATE_GOALS_LIVE`: `updateGoals` on twin fixtures over the cross product of every input the branches

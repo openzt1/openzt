@@ -23,7 +23,7 @@ use openzt_detour::generated::{
     poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
     standalone::{OPERATOR_DELETE, OPERATOR_NEW},
     ztanimal as generated,
-    ztunit::{HAS_BUILDING_USE_GOAL, INTO_NEW_TILE as ZTUNIT_INTO_NEW_TILE, IS_NEED_OR_FUN_SATISFIER, UPDATE_BUILDING_TILES},
+    ztunit::{HAS_BUILDING_USE_GOAL, UPDATE_BUILDING_TILES},
 };
 
 use super::{
@@ -320,15 +320,6 @@ mod goal_seams {
         }
     }
 
-    #[detour(ZTUNIT_INTO_NEW_TILE)]
-    unsafe extern "thiscall" fn unit_into_new_tile(this: *const u32, direction: u32) {
-        if scripted() {
-            record(format!("ZTUnit intoNewTile {direction}"));
-        } else {
-            unsafe { ZTUNIT_INTO_NEW_TILE_DETOUR.call(this, direction) }
-        }
-    }
-
     #[detour(UPDATE_BUILDING_TILES)]
     unsafe extern "thiscall" fn update_building_tiles(this: *const u32, flag: bool) -> bool {
         if scripted() {
@@ -348,18 +339,6 @@ mod goal_seams {
             answer
         } else {
             unsafe { HAS_BUILDING_USE_GOAL_DETOUR.call(this) }
-        }
-    }
-
-    #[detour(IS_NEED_OR_FUN_SATISFIER)]
-    unsafe extern "thiscall" fn satisfier(this: *const u32, need: i32, position: *const u32) -> bool {
-        if scripted() {
-            let answer = roll(2) == 0;
-            let words: Vec<u32> = (0..3).map(|i| get_from_memory::<u32>(position as u32 + i * 4)).collect();
-            record(format!("isNeedOrFunSatisfier {need:#x} {words:x?} {answer}"));
-            answer
-        } else {
-            unsafe { IS_NEED_OR_FUN_SATISFIER_DETOUR.call(this, need, position) }
         }
     }
 
@@ -384,6 +363,25 @@ mod goal_seams {
     }
 }
 
+fn unit_into_new_tile_hook(_this: u32, direction: u32) -> bool {
+    if scripted() {
+        record(format!("ZTUnit intoNewTile {direction}"));
+        true
+    } else {
+        false
+    }
+}
+
+fn scripted_is_need_or_fun_satisfier(_this: u32, need: u32, position: *const i32) -> Option<bool> {
+    if !scripted() {
+        return None;
+    }
+    let answer = roll(2) == 0;
+    let words: Vec<u32> = (0..3).map(|i| get_from_memory::<u32>(position as u32 + i * 4)).collect();
+    record(format!("isNeedOrFunSatisfier {need:#x} {words:x?} {answer}"));
+    Some(answer)
+}
+
 fn install_seams() -> Result<(), String> {
     static INSTALLED: Once = Once::new();
     let mut result = Ok(());
@@ -392,6 +390,8 @@ fn install_seams() -> Result<(), String> {
             result = Err(format!("could not install the goal-pipeline seams: {e:?}"));
         }
     });
+    *crate::ztunit::live_support::intercept::INTO_NEW_TILE.lock().unwrap() = Some(unit_into_new_tile_hook);
+    *crate::ztunit::live_support::intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap() = Some(scripted_is_need_or_fun_satisfier);
     result.and_then(|()| install_goals_hook())
 }
 

@@ -39,9 +39,8 @@ use openzt_detour::generated::{
     ztgamemgr::{GET_DATE as GAMEMGR_GET_DATE, IS_GAME_DATE as GAMEMGR_IS_GAME_DATE, IS_REAL_WORLD_DATE as GAMEMGR_IS_REAL_WORLD_DATE},
     ztui_multiguest::{ADD_ENTITY as MULTIGUEST_ADD_ENTITY, REMOVE_ENTITY as MULTIGUEST_REMOVE_ENTITY},
     ztunit::{
-        ADD_TO_MAP as ZTUNIT_ADD_TO_MAP, CLEAR_GOAL as ZTUNIT_CLEAR_GOAL, GET_RANDOM_OK as ZTUNIT_GET_RANDOM_OK, HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL,
-        INIT as ZTUNIT_INIT, INIT_STATUS_VARS as ZTUNIT_INIT_STATUS_VARS, LOAD as ZTUNIT_LOAD, REMOVE_FROM_MAP as ZTUNIT_REMOVE_FROM_MAP, RESET_AI as ZTUNIT_RESET_AI, SAVE as ZTUNIT_SAVE,
-    },
+        HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL,
+        INIT as ZTUNIT_INIT, },
     ztworldmgr::GET_NEED_INDEX as ZTWORLDMGR_GET_NEED_INDEX,
 };
 use openzt_detour_macro::detour_mod;
@@ -54,6 +53,7 @@ mod movement;
 mod sites;
 mod viewing;
 
+use crate::ztunit::ZTUnit;
 use crate::{
     globals::{get_module_base, globals},
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
@@ -288,7 +288,7 @@ impl ZTGuest {
 
     /// `ZTGuest::getRandomOK` (`0x00422594`): `ZTUnit::getRandomOK` holds and `randomDone` has not run.
     pub fn random_ok(self) -> bool {
-        low_byte_bool(unsafe { ZTUNIT_GET_RANDOM_OK.original()(self.0 as *const u32) }) && self.read::<u8>(guest_offsets::RANDOM_DONE) == 0
+        ZTUnit(self.0).get_random_ok() && self.read::<u8>(guest_offsets::RANDOM_DONE) == 0
     }
 
     /// `ZTGuest::getViewingArea` (`0x004232f4`): runs `checkViewingArea` on the current id (its result is unused,
@@ -586,7 +586,7 @@ impl ZTGuest {
     /// `+0x33f` cleared. A guest following a guide is removed from the guide's follower list and forgets it (`+0x2e4`
     /// is left alone when the guide cannot be found).
     pub fn clear_goal(self) {
-        unsafe { ZTUNIT_CLEAR_GOAL.original()(self.0 as *const u32) };
+        ZTUnit(self.0).clear_goal();
         self.write(lifecycle_offsets::NEED_INDEX_A, 0xffu8);
         self.write(lifecycle_offsets::NEED_INDEX, 0xffu8);
         self.write(lifecycle_offsets::DEFAULT_0X230, get_from_memory::<u32>(get_module_base("zoo.exe") as u32 + lifecycle_globals::DEFAULT_0X230));
@@ -617,7 +617,7 @@ impl ZTGuest {
     /// `ZTGuest::addToMap` (`0x00412ba7`): `ZTUnit::addToMap`; on success a guest not excluded by `+0x142`/`+0x143` is
     /// appended to the multi-guest panel's list and handed to `ZTUI::multiguest::addEntity`. Returns `ZTUnit`'s result.
     pub fn add_to_map(self) -> bool {
-        let added = unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) };
+        let added = ZTUnit(self.0).add_to_map();
         if added && self.tracked_by_multiguest() {
             vanilla_list::push_back(self.multiguest_list(), self.0);
             unsafe { MULTIGUEST_ADD_ENTITY.original()(self.0 as *const u32) };
@@ -639,12 +639,12 @@ impl ZTGuest {
         if guide != 0 {
             ZTGuide(guide).remove_guest(self.read(lifecycle_offsets::ENTITY_ID));
         }
-        unsafe { ZTUNIT_REMOVE_FROM_MAP.original()(self.0 as *const u32, param) };
+        ZTUnit(self.0).remove_from_map(param);
     }
 
     /// `ZTGuest::resetAI` (`0x005ae78a`): `ZTUnit::resetAI`, then the virtual `+0x294` with `0`.
     pub fn reset_ai(self) {
-        unsafe { ZTUNIT_RESET_AI.original()(self.0 as *const u32) };
+        ZTUnit(self.0).reset_ai();
         call_slot_1(self.0, lifecycle_slots::RESET_AI_TAIL, 0);
     }
 
@@ -780,7 +780,7 @@ impl ZTGuest {
         ] {
             put!(this + offset, size);
         }
-        let unit_ok = unsafe { ZTUNIT_SAVE.original()(self.0 as *const u32, file) };
+        let unit_ok = ZTUnit(self.0).save(file as u32);
         unit_ok && ok
     }
 }
@@ -1097,7 +1097,7 @@ impl ZTGuest {
         if !ok {
             return false;
         }
-        unsafe { ZTUNIT_LOAD.original()(self.0 as *const u32, file, version) }
+        ZTUnit(self.0).load(file as u32, version)
     }
 }
 
@@ -1172,7 +1172,7 @@ impl ZTGuest {
     /// the date, the random animal type, the Halloween costume bytes and the unit's self and type-block pointers are
     /// set.
     pub fn init_status_vars(self) {
-        unsafe { ZTUNIT_INIT_STATUS_VARS.original()(self.0 as *const u32) };
+        ZTUnit(self.0).init_status_vars();
         let guest_type = self.guest_type();
         if guest_type == 0 {
             return;

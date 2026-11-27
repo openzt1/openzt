@@ -30,7 +30,6 @@ use openzt_detour::generated::{
         ztui_showpanel::SET_EXHIBIT,
         ztcheat::RENAME_EXHIBIT as ZTCHEAT_RENAME_EXHIBIT,
         ztui_habitatinfo::REFILL_HABITAT_LIST as ZTUI_REFILL_HABITAT_LIST,
-        ztunit::GET_HABITAT as ZTUNIT_GET_HABITAT,
         ztunittype::{GET_DINO_DIRT_TYPE as ZTUNITTYPE_GET_DINO_DIRT_TYPE, GET_DIRT_TYPE as ZTUNITTYPE_GET_DIRT_TYPE},
     };
 use getset::Getters;
@@ -844,7 +843,7 @@ impl ZTHabitat {
         }
 
         if self.needs_service(keeper_ptr, true) {
-            let keepers_habitat = unsafe { ZTUNIT_GET_HABITAT.original()(keeper_ptr as *const u32) } as u32;
+            let keepers_habitat = crate::ztunit::ZTUnit(keeper_ptr).get_habitat();
             if keepers_habitat != self_ptr {
                 return self_ptr;
             }

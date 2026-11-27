@@ -60,7 +60,7 @@ use openzt_detour::generated::{
     bfentity::SET_WORLD_POS as BFENTITY_SET_WORLD_POS,
     bfmap::TILE_TO_WORLD as BFMAP_TILE_TO_WORLD,
     gxmixerlink::{CONSTRUCTOR as GXMIXERLINK_CONSTRUCTOR, DESTRUCTOR as GXMIXERLINK_DESTRUCTOR},
-    ztunit::{CHASE_DONE as ZTUNIT_CHASE_DONE, FORMAT_NAME_MESSAGE as ZTUNIT_FORMAT_NAME_MESSAGE, FIND_ANY_SATISFIER, STOP_EVERYTHING as ZTUNIT_STOP_EVERYTHING, UPDATE_BUILDING_TILES as ZTUNIT_UPDATE_BUILDING_TILES},
+    ztunit::{FORMAT_NAME_MESSAGE as ZTUNIT_FORMAT_NAME_MESSAGE, FIND_ANY_SATISFIER, STOP_EVERYTHING as ZTUNIT_STOP_EVERYTHING, UPDATE_BUILDING_TILES as ZTUNIT_UPDATE_BUILDING_TILES},
     ztanimal::{
         COMPARE_LT, GET_IDLE_ANIM_SYMBOL, GET_MOVE_ANIM, GET_ONLY_SWIMS,
         BREAK_ESCAPE_FENCE, FIND_PREY, GET_TERRAIN_COST, INVALIDATE_TARGET, SET_REACHED_ESCAPE_DESTINATION_TILE, SET_REACHED_ESCAPE_TILE,
@@ -80,7 +80,7 @@ use openzt_detour::generated::{
     },
     ztui_animalinfo::SET_ANIMAL_VISIBLE as ANIMALINFO_SET_ANIMAL_VISIBLE,
     ztui_animalinfo::FORCE_UPDATE as ANIMALINFO_FORCE_UPDATE,
-    ztunit::{ADD_TO_MAP as ZTUNIT_ADD_TO_MAP, REMOVE_FROM_MAP as ZTUNIT_REMOVE_FROM_MAP, INIT_STATUS_VARS as ZTUNIT_INIT_STATUS_VARS, LOAD as ZTUNIT_LOAD, CLEAR_GOAL as ZTUNIT_CLEAR_GOAL, CLEAR_STATE_VARIABLES as ZTUNIT_CLEAR_STATE_VARIABLES, SAVE as ZTUNIT_SAVE, HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL},
+    ztunit::{HAS_BUILDING_USE_GOAL as ZTUNIT_HAS_BUILDING_USE_GOAL},
     ztworldmgr::GET_NEED_INDEX,
     ztgamemgr::GET_DATE as GAMEMGR_GET_DATE,
     msvc_std_listuint::INSERT as LIST_UINT_INSERT,
@@ -88,7 +88,6 @@ use openzt_detour::generated::{
     ztanimal::IS_ON_GRASS as ZTANIMAL_IS_ON_GRASS,
     bfmap::{CAN_ADD_ENTITY as BFMAP_CAN_ADD_ENTITY, GET_NEIGHBORS_1 as BFMAP_GET_NEIGHBORS_AROUND},
     ztworldmgr::{CREATE_SCENERY as ZTWORLDMGR_CREATE_SCENERY, FIND_ADJACENT_ELECTRIC_FENCE_TO_ANIMAL as ZTWORLDMGR_FIND_FENCE},
-    ztunit::{GET_SWIMS as ZTUNIT_GET_SWIMS, GET_UNDERWATER as ZTUNIT_GET_UNDERWATER},
     msvc_std_dequegxmixerchain::CLEAR_0X41BF8F as MIXER_CHAIN_DEQUE_CLEAR,
     gxmixerlink::COPY_0X40DDD5 as GXMIXERLINK_COPY,
     ztui_animalinfo::SET_ANIMAL_ESCAPED as ANIMALINFO_SET_ANIMAL_ESCAPED,
@@ -100,7 +99,7 @@ use openzt_detour::generated::{
     ztapp::GET_APP,
     zthabitat::SET_DIRTY_CHARACTERISTICS as ZTHABITAT_SET_DIRTY_CHARACTERISTICS,
     ztunit::{INTO_NEW_TILE as ZTUNIT_INTO_NEW_TILE, UPDATE_GOALS as ZTUNIT_UPDATE_GOALS},
-    ztunit::{DO_AMBIENT_ANIMS as ZTUNIT_DO_AMBIENT_ANIMS, F_ZOO_MESSAGE_TILE_0 as ZTUNIT_F_ZOO_MESSAGE_TILE, FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IN_FRIENDLY_CHASE, F_ZOO_MESSAGE_NAME as ZTUNIT_F_ZOO_MESSAGE_NAME, SET_IS_REMOVED as ZTUNIT_SET_IS_REMOVED, IS_DOING_SOMETHING as ZTUNIT_IS_DOING_SOMETHING, CLIFFS_OK as ZTUNIT_CLIFFS_OK, GET_HABITAT as ZTUNIT_GET_HABITAT, GET_IDLE_ANIM as ZTUNIT_GET_IDLE_ANIM, GET_IDLE_ANIM_SYMBOL as ZTUNIT_GET_IDLE_ANIM_SYMBOL},
+    ztunit::{F_ZOO_MESSAGE_TILE_0 as ZTUNIT_F_ZOO_MESSAGE_TILE, FIND_NEAREST_SATISFIER, IS_NEED_OR_FUN_SATISFIER, IN_FRIENDLY_CHASE, F_ZOO_MESSAGE_NAME as ZTUNIT_F_ZOO_MESSAGE_NAME},
 };
 use glam::i32::IVec3;
 use openzt_detour_macro::detour_mod;
@@ -113,6 +112,7 @@ use crate::{
     zthabitat::{next_game_random, ZTHabitat, ZTTankExhibit},
     pool_vec::PoolVec,
     vanilla_string::VanillaString,
+    ztunit::ZTUnit,
     ztkeeper::{read_field, call_slot_0, call_slot_1, call_slot_2, call_slot_3, unit_offsets, write_field},
     ztmegatilemgr::entity_type_matches,
 };
@@ -1202,7 +1202,7 @@ impl ZTAnimal {
                 return self.animal_type().map_or(0, |ty| Self::type_field(ty, type_offsets::BOX_IDLE_ANIM));
             }
         }
-        unsafe { ZTUNIT_GET_IDLE_ANIM.original()(self.0 as *const u32, force_unit) }
+        ZTUnit(self.0).get_idle_anim(force_unit)
     }
 
     /// `ZTAnimal::getIdleAnimSymbol`: an egg answers its type's slot `+0xd8`, a boxed animal the type's slot `+0xd4`,
@@ -1213,7 +1213,7 @@ impl ZTAnimal {
         } else if self.is_boxed() {
             presentation::TYPE_BOX_IDLE_SYMBOL
         } else {
-            return unsafe { ZTUNIT_GET_IDLE_ANIM_SYMBOL.original()(self.0 as *const u32) } as u32;
+            return ZTUnit(self.0).get_idle_anim_symbol();
         };
         let Some(entity_type) = self.animal_type() else { return 0 };
         let function = unsafe { transmute::<u32, extern "thiscall" fn(u32) -> u32>(get_from_memory::<u32>(get_from_memory::<u32>(entity_type) + slot)) };
@@ -1330,7 +1330,7 @@ impl ZTAnimal {
         if self.is_egg() != 0 {
             return 0;
         }
-        u32::from(unsafe { ZTUNIT_GET_SWIMS.original()(self.0 as *const u32) })
+        u32::from(ZTUnit(self.0).get_swims())
     }
 
     /// `ZTAnimal::getUnderwater`: an egg is never underwater, everything else is `ZTUnit::getUnderwater` (`0x00410794`).
@@ -1338,7 +1338,7 @@ impl ZTAnimal {
         if self.is_egg() != 0 {
             return 0;
         }
-        u32::from(unsafe { ZTUNIT_GET_UNDERWATER.original()(self.0 as *const u32) })
+        u32::from(ZTUnit(self.0).get_underwater())
     }
 
     /// `ZTAnimal::isWalkableBy`: not boxed and the type's walkable-by slot accepts `other`.
@@ -1366,7 +1366,7 @@ impl ZTAnimal {
                 return true;
             }
         }
-        unsafe { ZTUNIT_CLIFFS_OK.original()(self.0 as *const u32, tile as *const u32, direction) }
+        ZTUnit(self.0).cliffs_ok(tile, direction)
     }
 
     /// `ZTAnimal::getPreyUnit`: the prey id resolved to a live, non-removed unit, else `0`.
@@ -1671,7 +1671,7 @@ impl ZTAnimal {
     /// flag bytes, or one of the show, escape and chase goals.
     pub fn is_doing_something(self) -> bool {
         let goal: i32 = self.read(unit_offsets::GOAL_ID);
-        if unsafe { ZTUNIT_IS_DOING_SOMETHING.original()(self.0 as *const u32) } & 0xff != 0 {
+        if ZTUnit(self.0).is_doing_something() {
             return true;
         }
         if [strings_rva::SICK, strings_rva::SLEEP, strings_rva::EAT, strings_rva::TEST_FENCE].into_iter().any(|rva| self.behaviour_is(rva)) {
@@ -1683,7 +1683,7 @@ impl ZTAnimal {
 
     /// `ZTAnimal::calcHabitat`: caches `ZTUnit::getHabitat` at `+0x388`.
     pub fn calc_habitat(self) {
-        let habitat = unsafe { ZTUNIT_GET_HABITAT.original()(self.0 as *const u32) };
+        let habitat = ZTUnit(self.0).get_habitat();
         save_to_memory(self.0 + animal_offsets::CACHED_HABITAT, habitat);
     }
 
@@ -1775,7 +1775,7 @@ impl ZTAnimal {
     /// `ZTAnimal::clearGoal` (`0x0043e784`): `ZTUnit::clearGoal`, then the goal bytes, `+0x24c`, the prey id and
     /// `+0x22c` are zeroed and the escape info cleared.
     pub fn clear_goal(self) {
-        unsafe { ZTUNIT_CLEAR_GOAL.original()(self.0 as *const u32) };
+        ZTUnit(self.0).clear_goal();
         for offset in lifecycle::CLEAR_BYTES {
             save_to_memory(self.0 + offset, 0u8);
         }
@@ -1788,7 +1788,7 @@ impl ZTAnimal {
     /// `ZTAnimal::clearStateVariables` (`0x0046adf2`): the prey id is zeroed, then `ZTUnit::clearStateVariables`.
     pub fn clear_state_variables(self) {
         save_to_memory(self.0 + animal_offsets::PREY_ID, 0u32);
-        unsafe { ZTUNIT_CLEAR_STATE_VARIABLES.original()(self.0 as *const u32) };
+        ZTUnit(self.0).clear_state_variables();
     }
 
     /// `ZTAnimal::setDeathCheck` (`0x0059b225`): `change_type` `0` adds `value` to the death countdown, `1` sets it, `2`
@@ -1963,7 +1963,7 @@ impl ZTAnimal {
         };
         ok &= write(&x as *const u32 as u32, 4);
         ok &= write(&y as *const u32 as u32, 4);
-        let unit_ok = unsafe { ZTUNIT_SAVE.original()(self.0 as *const u32, file) };
+        let unit_ok = ZTUnit(self.0).save(file as u32);
         unit_ok & ok
     }
 
@@ -2187,7 +2187,7 @@ impl ZTAnimal {
         if !ok {
             return false;
         }
-        unsafe { ZTUNIT_LOAD.original()(self.0 as *const u32, file, version) & ok }
+        ZTUnit(self.0).load(file as u32, version) & ok
     }
 
     /// Replaces the pool string at `offset` with the NUL-terminated text at `text`.
@@ -2216,7 +2216,7 @@ impl ZTAnimal {
     /// order of [`init_layout::PERIODS`]), the date stamps, the clamps from the type and the AI manager's countdown,
     /// the unit's self and type-block pointers, and finally `setHomeHabitat(0)`.
     pub fn init_status_vars(self) {
-        unsafe { ZTUNIT_INIT_STATUS_VARS.original()(self.0 as *const u32) };
+        ZTUnit(self.0).init_status_vars();
         let Some(entity_type) = self.animal_type() else {
             return;
         };
@@ -2354,7 +2354,7 @@ impl ZTAnimal {
         if self.flag(0x395) && self.flag(animal_offsets::NOT_SELECTABLE) {
             return false;
         }
-        let added = unsafe { ZTUNIT_ADD_TO_MAP.original()(self.0 as *const u32) };
+        let added = ZTUnit(self.0).add_to_map();
         if !added {
             return false;
         }
@@ -2404,7 +2404,7 @@ impl ZTAnimal {
         if !flag {
             self.mark_habitat_dirty();
         }
-        unsafe { ZTUNIT_REMOVE_FROM_MAP.original()(self.0 as *const u32, flag) };
+        ZTUnit(self.0).remove_from_map(flag);
     }
 
     /// `ZTAnimal::setDying` (`0x005a5606`): stores `flag` in `+0x3a6`, tells the animal-info panel, and a dying animal
@@ -2581,7 +2581,7 @@ impl ZTAnimal {
             return;
         }
         if self.flag(animal_offsets::NOT_SELECTABLE) {
-            unsafe { ZTUNIT_SET_IS_REMOVED.original()(self.0 as *const u32, 1) };
+            ZTUnit(self.0).set_is_removed(1);
         } else {
             self.hatch_egg();
         }
@@ -3369,7 +3369,7 @@ impl ZTAnimal {
             return;
         }
         let no_ambient: *const u32 = std::ptr::null();
-        let run_ambient = || unsafe { ZTUNIT_DO_AMBIENT_ANIMS.original()(self.0 as *const u32, no_ambient) };
+        let run_ambient = || ZTUnit(self.0).do_ambient_anims(no_ambient as u32);
         if low_byte_bool(call_slot_0(self.0, amb::SLOT_ON_LAND)) && tile_flag(amb::TILE_FLAGS, amb::TILE_WATERISH) {
             run_ambient();
             if !self.flag(amb::BYTE_SICK) {
@@ -3624,7 +3624,7 @@ impl ZTAnimal {
             };
         }
         if !played {
-            unsafe { ZTUNIT_SET_IS_REMOVED.original()(self.0 as *const u32, 1) };
+            ZTUnit(self.0).set_is_removed(1);
             if habitat != 0 {
                 unsafe { TRIGGER_DEATH_ARRIVED.hooked()(habitat as *const u32, 0) };
             }
@@ -3978,7 +3978,7 @@ impl ZTAnimal {
                 let end: u32 = self.read(unit_fields::BEHAVIOUR_END);
                 let is_die = end.wrapping_sub(begin) == 4 && unsafe { std::slice::from_raw_parts(begin as *const u8, 4) } == b"bDie";
                 if !is_die {
-                    unsafe { ZTUNIT_SET_IS_REMOVED.original()(this, 1) };
+                    ZTUnit(this as u32).set_is_removed(1);
                 }
             }
             return;
@@ -4118,11 +4118,11 @@ impl ZTAnimal {
             self.read(building_use::UNIT_POSITION + 4),
             self.read(building_use::UNIT_POSITION + 8),
         ];
-        let this = self.0 as *const u32;
-        if unsafe { IS_NEED_OR_FUN_SATISFIER.original()(this, self.read::<i32>(building_use::UNIT_NEED_WORD), position.as_ptr() as *const u32) } {
+        if ZTUnit(self.0).is_need_or_fun_satisfier(self.read::<u32>(building_use::UNIT_NEED_WORD), position.as_ptr()) {
             return;
         }
         let mut building: u32 = 0;
+        let this = self.0 as *const u32;
         let own_tile = unsafe { GET_TILE.original()(this) };
         let found = unsafe {
             FIND_NEAREST_SATISFIER.hooked()(
@@ -4404,7 +4404,7 @@ impl ZTAnimal {
             unsafe { ref_from_memory::<ZTHabitat>(habitat) }.recalculate_characteristics();
         }
         if get_from_memory::<i32>(habitat + feeding::HABITAT_ANIMAL_COUNT) < 1 {
-            unsafe { ZTUNIT_SET_IS_REMOVED.original()(self.0 as *const u32, 1) };
+            ZTUnit(self.0).set_is_removed(1);
         }
     }
 
@@ -4518,7 +4518,7 @@ impl ZTAnimal {
 
     /// `ZTAnimal::chaseDone` (`0x004a4d5f`): forwards to `ZTUnit::chaseDone` on the same object with the same argument.
     pub fn chase_done(self, unit: u32) -> bool {
-        unsafe { ZTUNIT_CHASE_DONE.original()(self.0 as *const u32, unit as *const u32) }
+        ZTUnit(self.0).chase_done(unit)
     }
 
     /// `ZTAnimal::consume` (`0x0050e648`): a guest that this type does not eat (`+0x3d5` clear) is left alone. Anything else
@@ -4553,7 +4553,7 @@ impl ZTAnimal {
             };
         }
         call_slot_1(unit, alerts::SLOT_BEFORE_REMOVE, 0);
-        unsafe { ZTUNIT_SET_IS_REMOVED.original()(unit as *const u32, 1) };
+        ZTUnit(unit).set_is_removed(1);
     }
 
     /// `ZTAnimal::showEscapedAnimalAlert` (`0x0058cb88`): plays the shared exclaim animation on the dialog's icon element,
