@@ -3,17 +3,17 @@
 //!
 //! A unit records its building as a tile record (`+0x244`, a `BFTile` whose four entity slots hold the buildings
 //! standing on its quadrants) plus an offset `(x, y, z)` inside that tile (`+0x214`); the building is whatever
-//! building occupies the quadrant the offset names. Every collaborator on the building side (`ZTBuilding`,
-//! `BFUnit::goToDest`, `ZTGuest::fGuestThought`) stays vanilla and is called through its `generated.rs` entry.
+//! building occupies the quadrant the offset names. Admission, entry and exit are `ZTBuilding`'s ported methods; the
+//! other collaborators (`ZTBuilding::findNearestOpenSlot`, `BFUnit::goToDest`, `ZTGuest::fGuestThought`) are called
+//! through their `generated.rs` entries.
 
-use std::ffi::c_void;
+use std::{ffi::c_void, mem::offset_of};
 
 use openzt_detour::generated::{
     bfentity::{GET_INSIDE_POS, GET_TILE as BFENTITY_GET_TILE, SET_BS},
     bfmap::GET_DIRECTION_0 as BFMAP_GET_DIRECTION,
     bfunit::{GO_TO_DEST_0 as BFUNIT_GO_TO_DEST_STRING, GO_TO_DEST_1 as BFUNIT_GO_TO_DEST},
     msvc_std_basic_string::BASIC_STRING_RANGE,
-    ztbuilding::{ADD_USER, CAN_ADD_USER, FIND_NEAREST_OPEN_SLOT, REMOVE_MEMBER, REMOVE_USER, REMOVE_USER_IF_PRESENT, YANK_USER_IF_PRESENT},
     ztguest::F_GUEST_THOUGHT,
     ztunit::{
         F_ENTER_BUILDING, F_EXIT_BUILDING, F_RETURN_TO_BUILDING, GET_HABITAT_FROM_VA, GET_SHOW_ITEM, HAS_BUILDING_USE_GOAL, REMOVE_FROM_BUILDING_IF_PRESENT, SET_BUILDING_GOAL,
@@ -29,10 +29,12 @@ use super::{
 };
 use crate::{
     bfentity::new_owned_name,
+    bfentitytype::ZTBuildingType,
     util::{get_from_memory, low_byte_bool, position_in_tile},
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, call_slot_3},
     vanilla_list::NodeList,
     vanilla_string::{c_string_bytes, object_bytes, range_bytes},
+    ztbuilding::ZTBuilding,
     ztmegatilemgr::entity_type_matches,
 };
 
@@ -72,16 +74,10 @@ const GOAL_LEAVE_BUILDING: u32 = 0x83;
 const THOUGHT_BUILDING_FULL: u32 = 0x2803;
 
 /// `ZTBuildingType` fields: the byte that picks the exhibit-style goal, the byte `updateBuildingTiles` removes a member on
-/// leaving, and the occupancy a full building reaches (`+0x16c`, compared with the building's `+0x18c`).
-const TYPE_EXHIBIT_FLAG: u32 = 0x1a4;
-const TYPE_REMOVES_MEMBER: u32 = 0x19b;
-const TYPE_FULL_COUNT: u32 = 0x16c;
-/// `ZTBuilding` fields: the user records (`0x24` bytes each, `{begin, end}` at `+0x170`/`+0x174`), the occupancy
-/// (`+0x18c`).
-const BUILDING_USERS_BEGIN: u32 = 0x170;
-const BUILDING_USERS_END: u32 = 0x174;
-const BUILDING_OCCUPANCY: u32 = 0x18c;
-const USER_RECORD_SIZE: i32 = 0x24;
+/// leaving, and the occupancy a full building reaches.
+const TYPE_EXHIBIT_FLAG: u32 = offset_of!(ZTBuildingType, direct_entrance) as u32;
+const TYPE_REMOVES_MEMBER: u32 = offset_of!(ZTBuildingType, user_tracker) as u32;
+const TYPE_FULL_COUNT: u32 = offset_of!(ZTBuildingType, i_capacity) as u32;
 /// `BFEntity` fields: position (x, y, z), and the building type's name range (`+0xa4`/`+0xa8` of its entity type).
 const ENTITY_POS: u32 = 0x114;
 const TYPE_NAME_BEGIN: u32 = 0xa4;
@@ -89,8 +85,7 @@ const TYPE_NAME_END: u32 = 0xa8;
 /// `ZTGuest` byte `updateBuildingTiles` sets when a guest that is not returning gives up on the building.
 const GUEST_GAVE_UP: u32 = 0x33e;
 
-/// `ZTBuilding`/`BFUnit` collaborators, all called through their vanilla entries. A live test reaches them by
-/// detouring the entries; nothing here is intercepted.
+/// The "building" need's name object.
 fn building_need_name() -> u32 {
     base() + BUILDING_NEED_NAME_RVA
 }
@@ -142,8 +137,8 @@ impl ZTUnit {
         let mut need = [0u32; 3];
         unsafe { GET_NEED_FROM_INDEX.hooked()(need.as_mut_ptr(), self.read::<u8>(unit_offsets::NEED_INDEX)) };
         if low_byte_bool(unsafe { SATISFIES.hooked()(building as i32, need.as_ptr() as *const i8, std::ptr::null()) }) {
-            let can_add = unsafe { CAN_ADD_USER.hooked()(building as *const u32, self.0 as *const i32, u32::from(slot) as *const i32) };
-            unsafe { out.write(low_byte_bool(can_add)) };
+            let can_add = ZTBuilding(building).can_add_user(self.0, u32::from(slot));
+            unsafe { out.write(can_add) };
         } else {
             building = 0;
         }
@@ -159,7 +154,7 @@ impl ZTUnit {
         let building = self.validate_building_slot(&mut can_add, true);
         if building != 0 && can_add {
             let slot = u32::from(self.read::<u8>(unit_offsets::BUILDING_SLOT));
-            if !low_byte_bool(unsafe { ADD_USER.hooked()(building as *const u32, self.0 as *const i32, slot as *const i32) }) {
+            if !ZTBuilding(building).add_user(self.0, slot) {
                 call_slot_3(self.0, goal_slots::STOP_EVERYTHING, 1, 1, 0);
             }
             return true;
@@ -178,7 +173,7 @@ impl ZTUnit {
             return false;
         }
         call_slot_0(self.0, slots::DO_BUILDING);
-        unsafe { REMOVE_USER.hooked()(building as *const u32, self.0 as *const i32, 0) };
+        ZTBuilding(building).remove_user(self.0, false);
         true
     }
 
@@ -206,8 +201,8 @@ impl ZTUnit {
         }
         let mut can_add = false;
         let building = self.validate_building_slot(&mut can_add, false);
-        if building != 0 && !low_byte_bool(unsafe { REMOVE_USER_IF_PRESENT.hooked()(building as *const u32, self.0 as *const i32) }) {
-            unsafe { YANK_USER_IF_PRESENT.hooked()(building as *const u32, self.0 as i32) };
+        if building != 0 && !ZTBuilding(building).remove_user_if_present(self.0) {
+            ZTBuilding(building).yank_user_if_present(self.0);
         }
     }
 
@@ -343,20 +338,22 @@ impl ZTUnit {
         if building == 0 || world == 0 {
             return self.update_building_tiles_tail(abort, false, building);
         }
-        let building_pos: [i32; 3] = [get_from_memory(building + ENTITY_POS), get_from_memory(building + ENTITY_POS + 4), get_from_memory(building + ENTITY_POS + 8)];
-        let mut slot: u8 = 0;
-        let found = low_byte_bool(unsafe { FIND_NEAREST_OPEN_SLOT.hooked()(building as *const u32, self.0 as *const i32, &mut slot as *mut u8 as *const u32, building_pos.as_ptr() as u32) });
+        // The search writes both through their addresses: the slot, and over the building's position the entrance found.
+        let mut building_pos: [i32; 3] = [get_from_memory(building + ENTITY_POS), get_from_memory(building + ENTITY_POS + 4), get_from_memory(building + ENTITY_POS + 8)];
+        let mut slot: u32 = 0;
+        let slot_out = std::ptr::from_mut(&mut slot) as u32;
+        let found = ZTBuilding(building).find_nearest_open_slot(self.0, slot_out, building_pos.as_mut_ptr() as u32);
         if !found {
-            let users = (get_from_memory::<i32>(building + BUILDING_USERS_END)).wrapping_sub(get_from_memory::<i32>(building + BUILDING_USERS_BEGIN)) / USER_RECORD_SIZE;
-            let building_type: u32 = get_from_memory(building + unit_offsets::ENTITY_TYPE);
-            if users > 0 && building_type != 0 && get_from_memory::<i32>(building + BUILDING_OCCUPANCY) >= get_from_memory::<i32>(building_type + TYPE_FULL_COUNT) {
+            let handle = ZTBuilding(building);
+            let building_type = handle.entity_type();
+            if handle.slot_count() > 0 && building_type != 0 && handle.occupancy() >= get_from_memory::<i32>(building_type + TYPE_FULL_COUNT) {
                 if unsafe { entity_type_matches(self.0, GUEST_TAG_RVA) } && self.read::<u32>(unit_offsets::THOUGHT_STATE) != 0 {
                     unsafe { F_GUEST_THOUGHT.hooked()(self.0 as *const u32, THOUGHT_BUILDING_FULL, building as *const i32, std::ptr::null()) };
                 }
             }
             return self.update_building_tiles_tail(abort, false, building);
         }
-        self.write(unit_offsets::BUILDING_SLOT, slot);
+        self.write(unit_offsets::BUILDING_SLOT, get_from_memory::<u8>(slot_out));
         let (destination_tile, destination) = self.path_destination();
         if destination_tile == 0 {
             return self.update_building_tiles_tail(abort, false, building);
@@ -421,7 +418,7 @@ impl ZTUnit {
         if building != 0 && unsafe { entity_type_matches(building, BUILDING_TAG_RVA) } {
             let building_type: u32 = get_from_memory(building + unit_offsets::ENTITY_TYPE);
             if get_from_memory::<u8>(building_type + TYPE_REMOVES_MEMBER) != 0 {
-                unsafe { REMOVE_MEMBER.hooked()(building as *const u32, self.0 as i32) };
+                ZTBuilding(building).remove_member(self.0);
             }
         }
         call_slot_2(self.0, goal_slots::GOAL_SET, GOAL_LEAVE_BUILDING, 1);

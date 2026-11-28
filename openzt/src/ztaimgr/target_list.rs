@@ -100,6 +100,33 @@ impl TargetList {
         save_to_memory(self.sentinel + NODE_PREV, node);
     }
 
+    /// Makes the list hold `positions`, as `list<T>::operator=` does: the nodes there are overwritten in order, the
+    /// ones left over are freed and the ones missing are appended.
+    pub(crate) unsafe fn assign(&self, pool: &mut impl NodePool, positions: &[[i32; 3]]) {
+        let mut node = Self::next(self.sentinel);
+        let mut values = positions.iter();
+        while node != self.sentinel {
+            let next = Self::next(node);
+            match values.next() {
+                Some(position) => {
+                    for (index, word) in position.iter().enumerate() {
+                        save_to_memory(node + NODE_POSITION + 4 * index as u32, *word);
+                    }
+                }
+                None => {
+                    let previous = get_from_memory::<u32>(node + NODE_PREV);
+                    save_to_memory(previous + NODE_NEXT, next);
+                    save_to_memory(next + NODE_PREV, previous);
+                    unsafe { pool.free(node) };
+                }
+            }
+            node = next;
+        }
+        for position in values {
+            unsafe { self.push_back(pool, *position) };
+        }
+    }
+
     /// Frees every node front to back (so the last node freed is the last one in the list, as `BFUnit::stop`
     /// does) and leaves the sentinel pointing at itself.
     pub(crate) unsafe fn clear(&self, pool: &mut impl NodePool) {
@@ -196,6 +223,23 @@ mod tests {
         unsafe { list.push_back(&mut pool, [4, 0, 0]) };
         assert_eq!(*pool.allocated.last().unwrap(), nodes[2]);
         assert_eq!(list.positions(), [[4, 0, 0]]);
+    }
+
+    #[test]
+    fn assign_reuses_frees_and_appends_nodes() {
+        let (list, _keep) = new_list();
+        let mut pool = FakePool::default();
+        for value in [1, 2, 3] {
+            unsafe { list.push_back(&mut pool, [value, 0, 0]) };
+        }
+        let nodes = pool.allocated.clone();
+        unsafe { list.assign(&mut pool, &[[4, 0, 0]]) };
+        assert_eq!(list.positions(), [[4, 0, 0]]);
+        assert_eq!(pool.freed_in_order, &nodes[1..]);
+        assert_eq!(get_from_memory::<u32>(list.sentinel + NODE_PREV), nodes[0]);
+        unsafe { list.assign(&mut pool, &[[5, 0, 0], [6, 0, 0]]) };
+        assert_eq!(list.positions(), [[5, 0, 0], [6, 0, 0]]);
+        assert_eq!(pool.allocated.len(), 4);
     }
 
     #[test]

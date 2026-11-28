@@ -401,6 +401,12 @@ impl ZTGuest {
     /// `ZTGuest::fGuestThought` (`0x004231c1`): a thought about an animal that is flagged (`+0x395`) is replaced by
     /// thought `0x280a`.
     pub fn guest_thought(self, thought: u32, subject: u32, habitat: u32) {
+        #[cfg(feature = "reimplementation-tests")]
+        {
+            if overrides::THOUGHT.lock().ok().and_then(|hook| *hook).is_some_and(|hook| hook(self.0, thought, subject, habitat)) {
+                return;
+            }
+        }
         let mut id = thought;
         if subject != 0 {
             let subject_type: u32 = get_from_memory(subject + fields::ENTITY_TYPE);
@@ -667,7 +673,7 @@ impl ZTGuest {
     }
 }
 
-/// Overrides the live tests install on the detours.
+/// Overrides the live tests install on the detours and ported methods.
 #[cfg(feature = "reimplementation-tests")]
 pub(crate) mod overrides {
     use std::sync::Mutex;
@@ -699,12 +705,6 @@ mod detours {
 
     #[detour(F_GUEST_THOUGHT)]
     unsafe extern "thiscall" fn f_guest_thought(this: *const u32, thought: u32, subject: *const i32, habitat: *const i32) {
-        #[cfg(feature = "reimplementation-tests")]
-        {
-            if super::overrides::THOUGHT.lock().ok().and_then(|hook| *hook).is_some_and(|hook| hook(this as u32, thought, subject as u32, habitat as u32)) {
-                return;
-            }
-        }
         ZTGuest(this as u32).guest_thought(thought, subject as u32, habitat as u32);
     }
 

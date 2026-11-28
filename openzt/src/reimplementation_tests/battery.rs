@@ -130,6 +130,7 @@ pub(super) mod detour_zoo_main {
         tests.push(RegisteredTest { name: "ZTSOUNDSCAPE_DETOURS_ENABLED", run: tests::ztsoundscape::run_ztsoundscape_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTUNIT_DETOURS_ENABLED", run: tests::ztunit::run_ztunit_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTSTAFF_DETOURS_ENABLED", run: tests::ztstaff::run_ztstaff_detours_enabled_test });
+        tests.push(RegisteredTest { name: "ZTBUILDING_DETOURS_ENABLED", run: tests::ztbuilding::run_ztbuilding_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTKEEPER_DETOURS_ENABLED", run: tests::ztkeeper::run_ztkeeper_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTMAINT_DETOURS_ENABLED", run: tests::ztmaint::run_ztmaint_detours_enabled_test });
         tests.push(RegisteredTest { name: "ZTANIMAL_DETOURS_ENABLED", run: tests::ztanimal::run_ztanimal_detours_enabled_test });
@@ -1324,6 +1325,32 @@ pub(super) mod detour_zoo_main {
             RegisteredTest { name: "ZTUNIT_UPDATE_BUILDING_TILES_LIVE", run: tests::ztunit::run_ztunit_update_building_tiles_live_test },
             RegisteredTest { name: "ZTUNIT_SHOWS_LIVE", run: tests::ztunit::run_ztunit_shows_live_test },
             RegisteredTest { name: "ZTUNIT_MESSAGES_LIVE", run: tests::ztunit::run_ztunit_messages_live_test },
+            RegisteredTest { name: "ZTBUILDING_LAYOUT_LIVE", run: tests::ztbuilding::run_ztbuilding_layout_live_test },
+            RegisteredTest { name: "ZTBUILDING_UPGRADES_LIVE", run: tests::ztbuilding::run_ztbuilding_upgrades_live_test },
+            RegisteredTest { name: "ZTBUILDING_MONTHLY_LIVE", run: tests::ztbuilding::run_ztbuilding_monthly_live_test },
+            RegisteredTest { name: "ZTBUILDING_MEMBERS_LIVE", run: tests::ztbuilding::run_ztbuilding_members_live_test },
+            RegisteredTest { name: "ZTBUILDING_EVENTS_LIVE", run: tests::ztbuilding::run_ztbuilding_events_live_test },
+            RegisteredTest { name: "ZTBUILDING_SLOT_HELPERS_LIVE", run: tests::ztbuilding_users::run_ztbuilding_slot_helpers_live_test },
+            RegisteredTest { name: "ZTBUILDING_TRASH_LIVE", run: tests::ztbuilding_users::run_ztbuilding_trash_live_test },
+            RegisteredTest { name: "ZTBUILDING_ITEMS_LIVE", run: tests::ztbuilding_users::run_ztbuilding_items_live_test },
+            RegisteredTest { name: "ZTBUILDING_USERS_LIVE", run: tests::ztbuilding_users::run_ztbuilding_users_live_test },
+            RegisteredTest { name: "ZTBUILDING_GEOMETRY_LIVE", run: tests::ztbuilding_geometry::run_ztbuilding_geometry_live_test },
+            RegisteredTest { name: "ZTBUILDING_EXITS_LIVE", run: tests::ztbuilding_geometry::run_ztbuilding_exits_live_test },
+            RegisteredTest { name: "ZTBUILDING_EXIT_VIA_LIVE", run: tests::ztbuilding_geometry::run_ztbuilding_exit_via_live_test },
+            RegisteredTest { name: "ZTBUILDING_FIND_SLOT_LIVE", run: tests::ztbuilding_geometry::run_ztbuilding_find_slot_live_test },
+            RegisteredTest { name: "ZTBUILDING_CTOR_LIVE", run: tests::ztbuilding_lifecycle::run_ztbuilding_ctor_live_test },
+            RegisteredTest { name: "ZTBUILDING_STATUS_LIVE", run: tests::ztbuilding_lifecycle::run_ztbuilding_status_live_test },
+            RegisteredTest { name: "ZTBUILDING_SAVE_LOAD_LIVE", run: tests::ztbuilding_lifecycle::run_ztbuilding_save_load_live_test },
+            RegisteredTest { name: "ZTBUILDING_MAP_LIVE", run: tests::ztbuilding_lifecycle::run_ztbuilding_map_live_test },
+            RegisteredTest { name: "ZTBUILDING_AFTER_LOAD_LIVE", run: tests::ztbuilding_lifecycle::run_ztbuilding_after_load_live_test },
+            RegisteredTest { name: "ZTBUILDING_BIRTH_NAME_LIVE", run: tests::ztbuilding_lifecycle::run_ztbuilding_birth_name_live_test },
+            RegisteredTest { name: "ZTBUILDING_TIMER_LIVE", run: tests::ztbuilding_tick::run_ztbuilding_timer_live_test },
+            RegisteredTest { name: "ZTBUILDING_ANIM_LIVE", run: tests::ztbuilding_tick::run_ztbuilding_anim_live_test },
+            RegisteredTest { name: "ZTBUILDING_SOUND_LIVE", run: tests::ztbuilding_tick::run_ztbuilding_sound_live_test },
+            RegisteredTest { name: "ZTBUILDING_UPDATE_LIVE", run: tests::ztbuilding_tick::run_ztbuilding_update_live_test },
+            RegisteredTest { name: "ZTBUILDING_WATER_LIVE", run: tests::ztbuilding_tick::run_ztbuilding_water_live_test },
+            RegisteredTest { name: "ZTBUILDING_SHOW_EVENTS_LIVE", run: tests::ztbuilding_tick::run_ztbuilding_show_events_live_test },
+            RegisteredTest { name: "ZTBUILDING_RUBBLE_LIVE", run: tests::ztbuilding_rubble::run_ztbuilding_rubble_live_test },
             RegisteredTest { name: "ZTGUEST_DO_AMBIENT_ANIMS_LIVE", run: tests::ztguest_viewing::run_ztguest_do_ambient_anims_live_test },
             RegisteredTest { name: "ZTGUEST_VIEWING_STATS_LIVE", run: tests::ztguest_viewing::run_ztguest_viewing_stats_live_test },
             RegisteredTest { name: "ZTGUEST_VIEWING_AREA_LIVE", run: tests::ztguest_viewing::run_ztguest_viewing_area_live_test },

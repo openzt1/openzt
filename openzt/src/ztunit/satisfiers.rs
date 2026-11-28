@@ -1,10 +1,11 @@
 //! `ZTUnit` target, predator and satisfier methods (group E of `plans/ztunit-scoping-plan.md`).
 
+use std::mem::offset_of;
+
 use openzt_detour::generated::{
     bfcoggoal::SET_ID as BFCOGGOAL_SET_ID,
     bfentity::{GET_GRID_POS, GET_TILE as BFENTITY_GET_TILE, SET_BS, SET_DIRECTION as BFENTITY_SET_DIRECTION},
     poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
-    ztbuilding::HAS_OPEN_SLOT,
     ztunit::{
         AVOID_DONE, CAUGHT_DONE, CHASE_DONE, CHECK_PREDATOR, FIND_NEARBY_NEED_SATISFIER, F_WAS_CAUGHT, FIND_ANY_SATISFIER, FIND_NEAREST_SATISFIER, FIND_PREDATOR, GET_PREDATOR_UNIT, GET_TARGET_UNIT, IN_FRIENDLY_CHASE, IS_FUN_SATISFIER, IS_NEED_OR_FUN_SATISFIER,
         RELEASE_PREDATOR,
@@ -18,6 +19,8 @@ use super::{building_list::BuildingList, base, call_slot_2_returning, game_rand,
 use crate::{
     util::{get_from_memory, low_byte_bool, save_to_memory},
     bfentity::new_owned_name,
+    bfentitytype::ZTBuildingType,
+    ztbuilding::ZTBuilding,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2},
     ztanimal::ZTAnimal,
     ztmegatilemgr::entity_type_matches,
@@ -72,12 +75,11 @@ const ESCAPE_LIST_RVA: u32 = 0x0023_8fb0;
 const SIGHT_RADIUS_RVA: u32 = 0x0023_94f4;
 const CHECK_PREDATOR_SLOT: u32 = 0x304;
 /// `findNearestSatisfier`: the shared candidate vector (`DAT_0063c538`, `{begin, end, cap}` words), the building type's
-/// "scale by happiness" byte and float, the building's fill float, and the two thresholds in `ZooStatus` (`ZTGameMgr +
+/// commerce flag and default cost (compared with the building's price), and the two thresholds in `ZooStatus` (`ZTGameMgr +
 /// 0x114` and `+ 0x118`).
 const CANDIDATE_VECTOR_RVA: u32 = 0x0023_c538;
-const BUILDING_TYPE_SCALES: u32 = 0x23d;
-const BUILDING_TYPE_SCALE: u32 = 0x178;
-const BUILDING_FILL: u32 = 0x1ac;
+const TYPE_COMMERCE: u32 = offset_of!(ZTBuildingType, commerce) as u32;
+const TYPE_DEFAULT_COST: u32 = offset_of!(ZTBuildingType, default_cost) as u32;
 const GAME_MGR_LOW_THRESHOLD: u32 = 0x114;
 const GAME_MGR_HIGH_THRESHOLD: u32 = 0x118;
 /// `fWasCaught`: the goal that marks "caught by a predator" and the building-use goal range it leaves alone, the animal type's
@@ -334,19 +336,19 @@ impl ZTUnit {
             if building_habitat != call_slot_1(self.0, unit_slots::GET_HABITAT_FROM_TILE, tile) {
                 continue;
             }
-            if !low_byte_bool(unsafe { HAS_OPEN_SLOT.hooked()(building as *const u32, self.0 as *const u32) }) {
+            if !ZTBuilding(building).has_open_slot(self.0) {
                 continue;
             }
             let building_tile = unsafe { BFENTITY_GET_TILE.hooked()(building as *const u32) } as u32;
             let mut distance = tile_distance_squared(tile, building_tile);
-            if building_type != 0 && unsafe { entity_type_matches(building, BUILDING_TAG_RVA) } && get_from_memory::<u8>(building_type + BUILDING_TYPE_SCALES) != 0 {
-                let scale = f64::from(get_from_memory::<f32>(building_type + BUILDING_TYPE_SCALE));
-                let fill = f64::from(get_from_memory::<f32>(building + BUILDING_FILL));
+            if building_type != 0 && unsafe { entity_type_matches(building, BUILDING_TAG_RVA) } && get_from_memory::<u8>(building_type + TYPE_COMMERCE) != 0 {
+                let default_cost = f64::from(get_from_memory::<f32>(building_type + TYPE_DEFAULT_COST));
+                let price = f64::from(ZTBuilding(building).price());
                 let low = f64::from(get_from_memory::<f32>(game_manager + GAME_MGR_LOW_THRESHOLD));
                 let high = f64::from(get_from_memory::<f32>(game_manager + GAME_MGR_HIGH_THRESHOLD));
                 // The x87 compares treat a NaN as "below"/"not above", which the negated comparisons reproduce.
-                let threshold = if !(fill >= high * scale) {
-                    (!(fill > low * scale)).then_some(low)
+                let threshold = if !(price >= high * default_cost) {
+                    (!(price > low * default_cost)).then_some(low)
                 } else {
                     Some(high)
                 };
@@ -403,7 +405,7 @@ impl ZTUnit {
             if building_habitat != call_slot_1(self.0, unit_slots::GET_HABITAT_FROM_TILE, tile) {
                 continue;
             }
-            if !low_byte_bool(unsafe { HAS_OPEN_SLOT.hooked()(building as *const u32, self.0 as *const u32) }) {
+            if !ZTBuilding(building).has_open_slot(self.0) {
                 continue;
             }
             let building_tile = unsafe { BFENTITY_GET_TILE.hooked()(building as *const u32) } as u32;

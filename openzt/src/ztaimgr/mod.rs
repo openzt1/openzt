@@ -166,7 +166,7 @@ mod links;
 mod play;
 mod play_variants;
 mod walk;
-mod target_list;
+pub(crate) mod target_list;
 mod wrappers;
 mod ai_params;
 mod detours;

@@ -41,7 +41,6 @@ use openzt_detour::{
         SAVE as BFUNIT_SAVE, UPDATE_GOALS as BFUNIT_UPDATE_GOALS,
     },
     poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
-    ztbuilding::{CHECK_USER as ZTBUILDING_CHECK_USER, REMOVE_USER as ZTBUILDING_REMOVE_USER},
     ztfence::{CLOSE_GATE as ZTFENCE_CLOSE_GATE, OPEN_GATE as ZTFENCE_OPEN_GATE},
     ztmapview::{CHECK_UNDO_BUFFER, PREPARE_TO_DELETE_ENTITY},
     ztthoughtmgr::REMOVE_THOUGHTS_BY_OBJECT,
@@ -79,6 +78,7 @@ use crate::{
     zthabitatmgr::ZTHabitatMgr,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, call_slot_3, read_field, write_field},
     ztworld::mgr::ztworldmgr::ZTWorldMgr,
+    ztbuilding::ZTBuilding,
     ztmegatilemgr::entity_type_matches,
     ztshow::mgr::ztshowmgr::ZTShowMgr,
 };
@@ -897,7 +897,7 @@ fn default_position() -> [u32; 3] {
 }
 
 /// The tile of the zoo map at `(x, y)`, or `0` outside the map.
-fn map_tile(x: i32, y: i32) -> u32 {
+pub(crate) fn map_tile(x: i32, y: i32) -> u32 {
     let world: u32 = get_from_memory(base() + WORLD_MGR_RVA);
     let width: i32 = get_from_memory(world + WORLD_MAP_X);
     let height: i32 = get_from_memory(world + WORLD_MAP_Y);
@@ -1228,8 +1228,8 @@ impl ZTUnit {
     fn leave_building(self) {
         let buildings = BuildingList::named_text(b"building");
         for building in buildings.buildings() {
-            if low_byte_bool(unsafe { ZTBUILDING_CHECK_USER.hooked()(building as *const c_void, self.0 as i32) }) {
-                unsafe { ZTBUILDING_REMOVE_USER.hooked()(building as *const u32, self.0 as *const i32, 0) };
+            if ZTBuilding(building).check_user(self.0) {
+                ZTBuilding(building).remove_user(self.0, false);
                 break;
             }
         }

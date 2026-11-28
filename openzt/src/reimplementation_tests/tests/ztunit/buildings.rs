@@ -2,14 +2,14 @@
 //! and one through the port, with the unit's virtual slots and the `ZTBuilding`/`BFUnit::goToDest` collaborators scripted so
 //! the calls made can be compared as well as the memory and the answers.
 
+use std::mem::offset_of;
 use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, Ordering},
-    Mutex, Once,
+    Mutex,
 };
 
 use openzt_detour::generated::{
     bfentity::GET_TILE as BFENTITY_GET_TILE,
-    ztbuilding::{ADD_USER, CAN_ADD_USER, FIND_NEAREST_OPEN_SLOT, REMOVE_MEMBER, REMOVE_USER, REMOVE_USER_IF_PRESENT, YANK_USER_IF_PRESENT},
     ztworldmgr::GET_NEED_INDEX,
 };
 
@@ -19,9 +19,11 @@ use super::{
     take_log, Twins,
 };
 use crate::{
+    bfentitytype::ZTBuildingType,
     globals::{get_module_base, globals},
     reimplementation_tests::{harness::finish_test, tests::ztanimal::live_animal_types},
     util::{get_from_memory, save_to_memory},
+    ztbuilding::{building_offsets, live_support::intercept as building_intercept},
     ztunit::{live_support::real_buildings, unit_offsets, ZTUnit},
 };
 
@@ -86,91 +88,85 @@ pub(in crate::reimplementation_tests::tests) fn stub_go_to_dest_string(_this: u3
     Some(GO_TO_DEST_ANSWER.load(Ordering::SeqCst))
 }
 
-#[openzt_detour_macro::detour_mod]
-mod building_stubs {
-    use super::*;
-
-    #[detour(ADD_USER)]
-    unsafe extern "thiscall" fn add_user(this: *const u32, unit: *const i32, slot: *const i32) -> u32 {
-        if stubbing() {
-            log(format!("addUser {}", slot as u32 & 0xff));
-            ADD_USER_ANSWER.load(Ordering::SeqCst)
-        } else {
-            unsafe { ADD_USER_DETOUR.call(this, unit, slot) }
-        }
+fn scripted_find_nearest_open_slot(_building: u32, _unit: u32, slot_out: u32, position_out: u32) -> Option<bool> {
+    if !stubbing() {
+        return None;
     }
+    let words: Vec<i32> = (0..3).map(|i| get_from_memory::<i32>(position_out + i * 4)).collect();
+    log(format!("findNearestOpenSlot {words:?}"));
+    save_to_memory(slot_out, OPEN_SLOT_BYTE.load(Ordering::SeqCst));
+    Some(OPEN_SLOT_ANSWER.load(Ordering::SeqCst) != 0)
+}
 
-    #[detour(CAN_ADD_USER)]
-    unsafe extern "thiscall" fn can_add_user(this: *const u32, unit: *const i32, slot: *const i32) -> u32 {
-        if stubbing() {
-            log(format!("canAddUser {}", slot as u32 & 0xff));
-            CAN_ADD_ANSWER.load(Ordering::SeqCst)
-        } else {
-            unsafe { CAN_ADD_USER_DETOUR.call(this, unit, slot) }
-        }
+fn scripted_add_user(_building: u32, _unit: u32, slot: u32) -> Option<bool> {
+    if !stubbing() {
+        return None;
     }
+    log(format!("addUser {}", slot & 0xff));
+    Some(ADD_USER_ANSWER.load(Ordering::SeqCst) != 0)
+}
 
-    #[detour(REMOVE_USER)]
-    unsafe extern "thiscall" fn remove_user(this: *const u32, unit: *const i32, flag: i8) -> u32 {
-        if stubbing() {
-            log(format!("removeUser {flag}"));
-            0
-        } else {
-            unsafe { REMOVE_USER_DETOUR.call(this, unit, flag) }
-        }
+fn scripted_can_add_user(_building: u32, _unit: u32, slot: u32) -> Option<bool> {
+    if !stubbing() {
+        return None;
     }
+    log(format!("canAddUser {}", slot & 0xff));
+    Some(CAN_ADD_ANSWER.load(Ordering::SeqCst) != 0)
+}
 
-    #[detour(REMOVE_USER_IF_PRESENT)]
-    unsafe extern "thiscall" fn remove_user_if_present(this: *const u32, unit: *const i32) -> u32 {
-        if stubbing() {
-            log("removeUserIfPresent".to_string());
-            REMOVE_IF_PRESENT_ANSWER.load(Ordering::SeqCst)
-        } else {
-            unsafe { REMOVE_USER_IF_PRESENT_DETOUR.call(this, unit) }
-        }
+fn scripted_remove_user(_building: u32, _unit: u32, eject: bool) -> Option<bool> {
+    if !stubbing() {
+        return None;
     }
+    log(format!("removeUser {}", u8::from(eject)));
+    Some(false)
+}
 
-    #[detour(YANK_USER_IF_PRESENT)]
-    unsafe extern "thiscall" fn yank_user_if_present(this: *const u32, unit: i32) -> u32 {
-        if stubbing() {
-            log("yankUserIfPresent".to_string());
-            0
-        } else {
-            unsafe { YANK_USER_IF_PRESENT_DETOUR.call(this, unit) }
-        }
+fn scripted_remove_user_if_present(_building: u32, _unit: u32) -> Option<bool> {
+    if !stubbing() {
+        return None;
     }
+    log("removeUserIfPresent".to_string());
+    Some(REMOVE_IF_PRESENT_ANSWER.load(Ordering::SeqCst) != 0)
+}
 
-    #[detour(REMOVE_MEMBER)]
-    unsafe extern "thiscall" fn remove_member(this: *const u32, unit: i32) {
-        if stubbing() {
-            log("removeMember".to_string());
-        } else {
-            unsafe { REMOVE_MEMBER_DETOUR.call(this, unit) }
-        }
+fn scripted_yank_user_if_present(_building: u32, _unit: u32) -> Option<bool> {
+    if !stubbing() {
+        return None;
     }
+    log("yankUserIfPresent".to_string());
+    Some(false)
+}
 
-    #[detour(FIND_NEAREST_OPEN_SLOT)]
-    unsafe extern "thiscall" fn find_nearest_open_slot(this: *const u32, unit: *const i32, out: *const u32, position: u32) -> u32 {
-        if stubbing() {
-            let words: Vec<i32> = (0..3).map(|i| get_from_memory::<i32>(position + i * 4)).collect();
-            log(format!("findNearestOpenSlot {words:?}"));
-            save_to_memory(out as u32, OPEN_SLOT_BYTE.load(Ordering::SeqCst));
-            OPEN_SLOT_ANSWER.load(Ordering::SeqCst)
-        } else {
-            unsafe { FIND_NEAREST_OPEN_SLOT_DETOUR.call(this, unit, out, position) }
-        }
+/// The `ZTBuilding` user-method hooks.
+struct UserHooks {
+    add: Option<fn(u32, u32, u32) -> Option<bool>>,
+    can_add: Option<fn(u32, u32, u32) -> Option<bool>>,
+    remove: Option<fn(u32, u32, bool) -> Option<bool>>,
+    remove_if_present: Option<fn(u32, u32) -> Option<bool>>,
+    yank_if_present: Option<fn(u32, u32) -> Option<bool>>,
+    find_open_slot: Option<fn(u32, u32, u32, u32) -> Option<bool>>,
+}
+
+/// Swaps in the scripted `ZTBuilding` user methods, returning what to restore.
+fn install_user_hooks() -> UserHooks {
+    UserHooks {
+        add: building_intercept::ADD_USER.lock().unwrap().replace(scripted_add_user),
+        can_add: building_intercept::CAN_ADD_USER.lock().unwrap().replace(scripted_can_add_user),
+        remove: building_intercept::REMOVE_USER.lock().unwrap().replace(scripted_remove_user),
+        remove_if_present: building_intercept::REMOVE_USER_IF_PRESENT.lock().unwrap().replace(scripted_remove_user_if_present),
+        yank_if_present: building_intercept::YANK_USER_IF_PRESENT.lock().unwrap().replace(scripted_yank_user_if_present),
+        find_open_slot: building_intercept::FIND_NEAREST_OPEN_SLOT.lock().unwrap().replace(scripted_find_nearest_open_slot),
     }
 }
 
-fn install_stubs() -> Result<(), String> {
-    static INSTALLED: Once = Once::new();
-    let mut result = Ok(());
-    INSTALLED.call_once(|| {
-        if let Err(e) = unsafe { building_stubs::init_detours() } {
-            result = Err(format!("could not install the building stubs: {e:?}"));
-        }
-    });
-    result
+fn restore_user_hooks(saved: UserHooks) {
+    *building_intercept::ADD_USER.lock().unwrap() = saved.add;
+    *building_intercept::CAN_ADD_USER.lock().unwrap() = saved.can_add;
+    *building_intercept::REMOVE_USER.lock().unwrap() = saved.remove;
+    *building_intercept::REMOVE_USER_IF_PRESENT.lock().unwrap() = saved.remove_if_present;
+    *building_intercept::YANK_USER_IF_PRESENT.lock().unwrap() = saved.yank_if_present;
+    *building_intercept::FIND_NEAREST_OPEN_SLOT.lock().unwrap() = saved.find_open_slot;
 }
 
 // ---- scripted virtual slots ------------------------------------------------------------------------------------
@@ -269,7 +265,17 @@ fn scripted_set_bs(_this: u32, begin: u32, end: u32, call_flag: i8, force: i8, c
     Some(SET_BS_ANSWER.load(Ordering::SeqCst) != 0)
 }
 
+fn scripted_remove_member(_building: u32, _unit: u32) -> bool {
+    if !stubbing() {
+        return false;
+    }
+    log("removeMember".to_string());
+    true
+}
+
 type SavedHooks = (
+    UserHooks,
+    Option<fn(u32, u32) -> bool>,
     Option<fn(u32, u32, *const i32) -> Option<bool>>,
     Option<fn(u32, u32, u32, u32, i32, i32) -> Option<bool>>,
     Option<crate::bfentity::set_bs_override::Hook>,
@@ -277,7 +283,9 @@ type SavedHooks = (
 
 fn install_hooks() -> SavedHooks {
     use crate::ztunit::live_support::intercept;
-    let saved = (*intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap(), *intercept::FIND_ANY_SATISFIER.lock().unwrap(), *crate::bfentity::set_bs_override::HOOK.lock().unwrap());
+    let user_hooks = install_user_hooks();
+    let saved = (user_hooks, *building_intercept::REMOVE_MEMBER.lock().unwrap(), *intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap(), *intercept::FIND_ANY_SATISFIER.lock().unwrap(), *crate::bfentity::set_bs_override::HOOK.lock().unwrap());
+    *building_intercept::REMOVE_MEMBER.lock().unwrap() = Some(scripted_remove_member);
     *intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap() = Some(scripted_need_or_fun);
     *intercept::FIND_ANY_SATISFIER.lock().unwrap() = Some(scripted_find_any);
     *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = Some(scripted_set_bs);
@@ -286,9 +294,11 @@ fn install_hooks() -> SavedHooks {
 
 fn restore_hooks(saved: SavedHooks) {
     use crate::ztunit::live_support::intercept;
-    *intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap() = saved.0;
-    *intercept::FIND_ANY_SATISFIER.lock().unwrap() = saved.1;
-    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = saved.2;
+    restore_user_hooks(saved.0);
+    *building_intercept::REMOVE_MEMBER.lock().unwrap() = saved.1;
+    *intercept::IS_NEED_OR_FUN_SATISFIER.lock().unwrap() = saved.2;
+    *intercept::FIND_ANY_SATISFIER.lock().unwrap() = saved.3;
+    *crate::bfentity::set_bs_override::HOOK.lock().unwrap() = saved.4;
 }
 
 // ---- fixtures --------------------------------------------------------------------------------------------------
@@ -367,9 +377,6 @@ const QUADRANTS: [[i32; 3]; 4] = [[0, 0, 5], [0, 32, 5], [32, 0, 5], [32, 32, 5]
 pub(crate) fn run_ztunit_buildings_live_test(failure_log: &mut Option<std::fs::File>) -> bool {
     let test_name = "ZTUNIT_BUILDINGS_LIVE";
     let mut failures: Vec<String> = Vec::new();
-    if let Err(e) = install_stubs() {
-        return finish_test(test_name, vec![e], failure_log);
-    }
     let types = live_animal_types(2);
     let buildings = distinct_buildings(8);
     if types.is_empty() || buildings.is_empty() {
@@ -603,7 +610,7 @@ pub(crate) fn run_ztunit_update_building_tiles_live_test(failure_log: &mut Optio
     let mut failures: Vec<String> = Vec::new();
     // The `goToDest` stubs live in the detours `ztguest_checks.rs` owns; installing those hooks early would change the
     // guest tests that run before this one, so this test is registered after them.
-    if let Err(e) = install_stubs().and_then(|()| super::super::ztguest_checks::install_hooks()) {
+    if let Err(e) = super::super::ztguest_checks::install_hooks() {
         return finish_test(test_name, vec![e], failure_log);
     }
     let types = super::live_unit_types(2);
@@ -749,16 +756,16 @@ fn leaked_text(text: &[u8]) -> u32 {
 }
 
 /// `ZTBuilding` / `ZTBuildingType` fields `updateBuildingTiles` reads to decide a full building turned a guest away.
-const BUILDING_USERS_BEGIN: u32 = 0x170;
-const BUILDING_USERS_END: u32 = 0x174;
-const BUILDING_OCCUPANCY: u32 = 0x18c;
-const TYPE_FULL_COUNT: u32 = 0x16c;
+const BUILDING_SLOTS_BEGIN: u32 = building_offsets::SLOTS;
+const BUILDING_SLOTS_END: u32 = building_offsets::SLOTS + 4;
+const BUILDING_OCCUPANCY: u32 = building_offsets::OCCUPANCY;
+const TYPE_FULL_COUNT: u32 = offset_of!(ZTBuildingType, i_capacity) as u32;
 /// `BFUnit` word the guest-thought check reads, and the `ZTGuest` byte set when a guest gives up on a building.
 const UNIT_THOUGHT_STATE: u32 = 0x180;
 const GUEST_GAVE_UP: u32 = 0x33e;
 
 /// The "building full" branch of `updateBuildingTiles` for a unit that is a guest: the building is made to look full (one
-/// user record, occupancy at the type's limit; restored afterwards) and the guest-thought override logs the call, so the
+/// slot record, occupancy at the type's limit; restored afterwards) and the guest-thought override logs the call, so the
 /// real body and the port are compared on the thought itself, with and without a thought state. Returns how many cases
 /// raised the thought.
 fn guest_thought_cases(twins: &Twins, buildings: &[(u32, u32)], failures: &mut Vec<String>) -> u32 {
@@ -777,10 +784,10 @@ fn guest_thought_cases(twins: &Twins, buildings: &[(u32, u32)], failures: &mut V
         if building_type == 0 {
             continue;
         }
-        let saved_fields = [get_from_memory::<u32>(building + BUILDING_USERS_BEGIN), get_from_memory(building + BUILDING_USERS_END), get_from_memory(building + BUILDING_OCCUPANCY)];
+        let saved_fields = [get_from_memory::<u32>(building + BUILDING_SLOTS_BEGIN), get_from_memory(building + BUILDING_SLOTS_END), get_from_memory(building + BUILDING_OCCUPANCY)];
         let records = leaked_words(vec![0; 9]);
-        save_to_memory(building + BUILDING_USERS_BEGIN, records);
-        save_to_memory(building + BUILDING_USERS_END, records + 0x24);
+        save_to_memory(building + BUILDING_SLOTS_BEGIN, records);
+        save_to_memory(building + BUILDING_SLOTS_END, records + 0x24);
         save_to_memory(building + BUILDING_OCCUPANCY, get_from_memory::<u32>(building_type + TYPE_FULL_COUNT));
         for thought_state in [0u32, 1] {
             for abort in [false, true] {
@@ -808,8 +815,8 @@ fn guest_thought_cases(twins: &Twins, buildings: &[(u32, u32)], failures: &mut V
                 raised += u32::from(raised_here);
             }
         }
-        save_to_memory(building + BUILDING_USERS_BEGIN, saved_fields[0]);
-        save_to_memory(building + BUILDING_USERS_END, saved_fields[1]);
+        save_to_memory(building + BUILDING_SLOTS_BEGIN, saved_fields[0]);
+        save_to_memory(building + BUILDING_SLOTS_END, saved_fields[1]);
         save_to_memory(building + BUILDING_OCCUPANCY, saved_fields[2]);
     }
     *THOUGHT.lock().unwrap() = saved_hook;

@@ -21,6 +21,7 @@ use crate::{
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory},
     zthabitat::{next_game_random, ZTHabitat},
     ztkeeper::{call_slot_0, call_slot_1, unit_offsets},
+    ztbuilding::ZTBuilding,
     ztmegatilemgr::entity_type_matches,
 };
 
@@ -58,8 +59,7 @@ const TYPE_HAPPY_LOW: u32 = 0x1ec;
 const POSITION_RECORD: u32 = 0x214;
 const BUILDING_GRID: u32 = 0x244;
 const SCENERY_GRID: u32 = 0x234;
-/// Building word naming its show, and the show info's chain to the venue record.
-const BUILDING_SHOW_ID: u32 = 0x1c4;
+/// The show info's chain to the venue record.
 const SHOW_INFO_VENUE: u32 = 0xa0;
 const VENUE_SITE: u32 = 0x8c;
 const SITE_WORDS: u32 = 0x34;
@@ -339,7 +339,7 @@ impl ZTGuest {
         if building == 0 || !unsafe { entity_type_matches(building, BUILDING_TAG_RVA) } {
             return;
         }
-        let show: u16 = get_from_memory(building + BUILDING_SHOW_ID);
+        let show = ZTBuilding(building).show_id();
         if show == 0 {
             return;
         }

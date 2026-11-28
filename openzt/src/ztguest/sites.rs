@@ -17,8 +17,8 @@ use openzt_detour::{
         poolalloc::{ALLOCATE, DEALLOCATE, DEALLOCATE_N_12, DEALLOCATE_N_4},
         ztguest::{GET_NONSEEN_ATTRACTIONS, GET_NONSEEN_GAWK_SCENERY, GET_NONSEEN_HABITATS, GET_NUM_NONSEEN_GAWK_SCENERY, GET_NUM_NONSEEN_SITES, PICK_GAWK_SCENERY},
         zthabitatmgr::GET_NONEMPTY_NON_WORLD_HABITATS,
+        ztworldmgr::{GET_ATTRACTIONS, GET_GAWK_SCENERY},
     },
-    FunctionDef,
 };
 use openzt_detour_macro::detour_mod;
 use tracing::error;
@@ -34,10 +34,6 @@ use crate::{
 const WORLD_MGR_RVA: u32 = 0x0023_8040;
 const HABITAT_MGR_RVA: u32 = 0x0023_805c;
 
-/// `ZTWorldMgr::getAttractions(list)` and `getGawkScenery(list)`: `thiscall` on the world manager with the list handle
-/// slot on the stack (`generated.rs` declares them without the `this`).
-const GET_ATTRACTIONS: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef::new(0x0042_7f43);
-const GET_GAWK_SCENERY: FunctionDef<unsafe extern "thiscall" fn(*const u32, *const u32)> = FunctionDef::new(0x0042_7fd9);
 
 mod fields {
     /// `ZTGuestType` word: how much a gawk scenery is worth.
@@ -134,12 +130,12 @@ impl ZTGuest {
 
     /// `ZTGuest::getNonseenAttractions` (`0x00427d5c`): the world's attractions the guest has not seen.
     pub fn get_nonseen_attractions(self, out: u32) -> u32 {
-        self.nonseen_scenery_list(out, |world, slot| unsafe { GET_ATTRACTIONS.hooked()(world as *const u32, slot as *const u32) })
+        self.nonseen_scenery_list(out, |world, slot| unsafe { GET_ATTRACTIONS.hooked()(world as *const u32, slot as *const i32) })
     }
 
     /// `ZTGuest::getNonseenGawkScenery` (`0x0042956e`): the world's gawk scenery the guest has not seen.
     pub fn get_nonseen_gawk_scenery(self, out: u32) -> u32 {
-        self.nonseen_scenery_list(out, |world, slot| unsafe { GET_GAWK_SCENERY.hooked()(world as *const u32, slot as *const u32) })
+        self.nonseen_scenery_list(out, |world, slot| unsafe { GET_GAWK_SCENERY.hooked()(world as *const u32, slot as *const i32) })
     }
 
     /// `ZTGuest::getNonseenHabitats` (`0x00427b08`): the non-empty, non-world habitats the guest has not seen, as a
@@ -188,7 +184,7 @@ impl ZTGuest {
             }
             let mut source_slot = 0u32;
             let source = List::construct(&mut source_slot as *mut u32 as u32);
-            unsafe { GET_GAWK_SCENERY.hooked()(world as *const u32, &source_slot as *const u32) };
+            unsafe { GET_GAWK_SCENERY.hooked()(world as *const u32, std::ptr::from_ref(&source_slot).cast()) };
             let mut kept_slot = 0u32;
             let kept = List::construct(&mut kept_slot as *mut u32 as u32);
             for scenery in source.values() {

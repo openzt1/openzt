@@ -173,6 +173,7 @@ pub fn init() {
         // battery as soon as they exist.
         crate::ztunit::init();
         crate::ztstaff::init();
+        crate::ztbuilding::init();
         crate::ztkeeper::init();
         crate::ztmaint::init();
         crate::ztguest::init();

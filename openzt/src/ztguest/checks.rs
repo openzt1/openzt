@@ -36,6 +36,7 @@ use crate::{
         viewing_area::{recalculate_characteristics as recalculate_viewing_area, recalculate_observable_area},
     },
     ztkeeper::{call_slot_0, call_slot_1, unit_offsets},
+    ztbuilding::ZTBuilding,
     ztmegatilemgr::entity_type_matches,
 };
 
@@ -203,8 +204,7 @@ const WORLD_GET_ENTITY: u32 = 0x24;
 const WORLD_MGR_RVA: u32 = 0x0023_8040;
 /// Byte at a target entity `+0x2c` that the chase check tests.
 const TARGET_ACTIVE_OFFSET: u32 = 0x2c;
-/// Word at an entity `+0x19c` that `doTrashCheck` compares with `0x18`.
-const TRASH_TARGET_RANGE_OFFSET: u32 = 0x19c;
+/// `doTrashCheck` compares a trash can's trash count with this.
 const TRASH_TARGET_RANGE: i32 = 0x18;
 /// Offsets a building contributes to the guest's position record.
 const BUILDING_POSITION_X: u32 = 0x114;
@@ -536,7 +536,7 @@ impl ZTGuest {
         if unsafe { FIND_TRASH_CAN.hooked()(self.0 as *const u32, 1) } {
             let mut flag: u8 = 0;
             let target = call_slot_2_returning(self.0, check_slots::TRASH_TARGET, &mut flag as *mut u8 as u32, 1);
-            if target != 0 && get_from_memory::<i32>(target + TRASH_TARGET_RANGE_OFFSET) < TRASH_TARGET_RANGE {
+            if target != 0 && ZTBuilding(target).type_state() < TRASH_TARGET_RANGE {
                 return;
             }
         }

@@ -18,7 +18,6 @@ use openzt_detour::generated::{
     msvc_std_listuint::LIST_UINT_CTOR,
     msvc_std_vectorint::INSERT_N as VECTOR_INT_INSERT_N,
     poolalloc::DEALLOCATE as POOLALLOC_DEALLOCATE,
-    ztbuilding::{EMPTY_GRANDSTANDS, HAS_OPEN_SLOT},
     ztguest::{
         ADD_ITEM, ADD_TRASH, DROP, FENCES_OK, FIND_NEARBY_NEED_SATISFIER, FIND_PLACE_TO_SIT, FIND_TRASH_CAN, F_GUEST_THOUGHT, GET_TERRAIN_COST, GOTO_NEARBY_NEED,
         IN_GRANDSTAND, IS_NEED_SATISFIER, IS_PRESSING_NEED_SATISFIER, PICK_RANDOM_DEST, THROW_TRASH, TILE_FILTER, TRIGGER_GRANDSTAND_ESCAPE_0, TRIGGER_GRANDSTAND_ESCAPE_1,
@@ -35,6 +34,7 @@ use crate::{
     util::{get_from_memory, low_byte_bool, position_in_tile_xy, position_in_tile_z, save_to_memory},
     zthabitat::MAX_PATH_COST_RVA,
     ztkeeper::{call_slot_0, call_slot_1, call_slot_2, vtable_slot},
+    ztbuilding::ZTBuilding,
     ztmegatilemgr::entity_type_matches,
 };
 
@@ -118,8 +118,7 @@ const THOUGHT_NO_SEAT: u32 = 0x276d;
 const THOUGHT_CANNOT_LEAVE_WATER: u32 = 0x2948;
 /// Entity-type byte on an animal that flags a grandstand escape (`+0x3b0`).
 const ANIMAL_ESCAPE_FLAG_OFFSET: u32 = 0x3b0;
-/// `+0x19c` of a trash-can target below this keeps a guest's trash search from throwing.
-const TRASH_TARGET_RANGE_OFFSET: u32 = 0x19c;
+/// A trash-can target holding less trash than this keeps a guest's trash search from throwing.
 const TRASH_TARGET_RANGE: i32 = 0x18;
 
 /// The need names `isNeedSatisfier` accepts, in the order vanilla tests them.
@@ -474,7 +473,7 @@ impl ZTGuest {
         }
         let building = self.validated_building();
         if building != 0 {
-            unsafe { EMPTY_GRANDSTANDS.hooked()(building as *const u32) };
+            ZTBuilding(building).empty_grandstands();
         }
     }
 
@@ -558,7 +557,7 @@ impl ZTGuest {
             return false;
         }
         if self.read::<u8>(guest_fields::TRASH_FLAG) != 0 && !nearest && target != 0 {
-            if get_from_memory::<i32>(target + TRASH_TARGET_RANGE_OFFSET) < TRASH_TARGET_RANGE {
+            if ZTBuilding(target).type_state() < TRASH_TARGET_RANGE {
                 return true;
             }
             self.throw_trash();
@@ -683,7 +682,7 @@ impl ZTGuest {
         if self.habitat_from_tile(building_tile) != self.habitat_from_tile(tile) {
             return None;
         }
-        if !low_byte_bool(unsafe { HAS_OPEN_SLOT.hooked()(building as *const u32, self.0 as *const u32) }) {
+        if !ZTBuilding(building).has_open_slot(self.0) {
             return None;
         }
         let distance = tile_distance_squared(tile, building_tile);

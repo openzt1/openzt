@@ -46,7 +46,6 @@ use openzt_detour::generated::{
     bfmap::GET_DIRECTION_0 as BFMAP_GET_DIRECTION,
     bftile::IS_IN_ZOO as BFTILE_IS_IN_ZOO,
     bfunit::{GET_DEST_TILE, GET_PATH_1 as BFUNIT_GET_PATH, GO_TO_DEST_0 as BFUNIT_GO_TO_DEST, IS_MAX_COST_FOR_ALL, IS_SAME_TILE},
-    ztbuilding::EMPTY_GRANDSTANDS as ZTBUILDING_EMPTY_GRANDSTANDS,
     ztfence::{IS_ELECTRIFIED as ZTFENCE_IS_ELECTRIFIED, SET_BROKEN as ZTFENCE_SET_BROKEN},
     ztscenerytype::IS_ZOO_GATE as ZTSCENERYTYPE_IS_ZOO_GATE,
     msvc_std_tree36::OPERATOR_INDEX as TREE36_OPERATOR_INDEX,
@@ -5753,7 +5752,7 @@ impl ZTAnimal {
         if index != building_use::NEED_NONE {
             save_to_memory(self.0 + building_use::UNIT_NEED_BYTE, index);
         }
-        unsafe { ZTBUILDING_EMPTY_GRANDSTANDS.hooked()(building as *const u32) };
+        crate::ztbuilding::ZTBuilding(building).empty_grandstands();
         true
     }
 
