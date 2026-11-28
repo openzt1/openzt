@@ -15,3 +15,5 @@ windows =  { version = "0.61.3", features = ["Win32", "Win32_System_Console", "W
 [lib]
 name = "openzttest"
 crate-type = ["cdylib"]
+[features]
+perf-stats = ["openzt/perf-stats"]

@@ -18,25 +18,18 @@ use openzt_detour::generated::{
         bfworldmgr::GET_TYPE as BFWORLDMGR_GET_TYPE,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE},
         standalone::{OPERATOR_DELETE, OPERATOR_NEW, TILE_WITHIN_AVA},
-        ztanimal::{
-            ADD_FACE as ZTANIMAL_ADD_FACE, CAN_SERVICE, IS_HUNGRY as ZTANIMAL_IS_HUNGRY, IS_HUNGRY_AND_FOODLESS, IS_SICKLY,
-            IS_UNHAPPY_FOR_REPRODUCTION as ZTANIMAL_IS_UNHAPPY_FOR_REPRODUCTION, SET_FOOD, SET_KEEPER_ARRIVES, STOP_EATING,
-        },
         ztfence::{MAKE_FENCE as ZTFENCE_MAKE_FENCE, MAKE_GATE as ZTFENCE_MAKE_GATE},
         zthabitat::{
             SPECIES_SUITABILITY_CACHE_ALLOC, SPECIES_SUITABILITY_CACHE_CLEAR, SPECIES_SUITABILITY_CACHE_DTOR,
         },
-        ztkeeper::CLEANS_UP,
         ztapp::GET_WORLD_MGR as ZTAPP_GET_WORLD_MGR,
         ztspecies::IS_SPECIAL_DUMMY_SPECIES,
-        ztstaff::IS_HABITAT_ASSIGNED as ZTSTAFF_IS_HABITAT_ASSIGNED,
         ztworldmgr::GET_STAFF_LIST as ZTWORLDMGR_GET_STAFF_LIST,
         ztshowinfo::{CONSTRUCTOR_1 as ZTSHOWINFO_CONSTRUCTOR, DESTRUCTOR_1 as ZTSHOWINFO_DESTRUCTOR},
         ztshowmgr::{REGISTER_SHOW, UNREGISTER_SHOW},
         ztui_showpanel::SET_EXHIBIT,
         ztcheat::RENAME_EXHIBIT as ZTCHEAT_RENAME_EXHIBIT,
         ztui_habitatinfo::REFILL_HABITAT_LIST as ZTUI_REFILL_HABITAT_LIST,
-        ztunit::GET_HABITAT as ZTUNIT_GET_HABITAT,
         ztunittype::{GET_DINO_DIRT_TYPE as ZTUNITTYPE_GET_DINO_DIRT_TYPE, GET_DIRT_TYPE as ZTUNITTYPE_GET_DIRT_TYPE},
     };
 use getset::Getters;
@@ -358,7 +351,7 @@ pub(crate) struct RecalcPhase5Summary {
 /// `ZTAnimal::getHomeHabitat` (`0x004161da`): the animal's home habitat (recomputed through
 /// `recalcHomeHabitat`/`getMostSuitableHabitat` on every call), as a raw pointer.
 unsafe fn animal_home_habitat(animal_ptr: u32) -> u32 {
-    unsafe { openzt_detour::generated::ztanimal::GET_HOME_HABITAT.original()(animal_ptr as *const u32) as u32 }
+    crate::ztanimal::ZTAnimal(animal_ptr).get_home_habitat()
 }
 
 /// The two `ph_AdditionalConditionValues` bytes `setAnimalConditions` reads
@@ -850,7 +843,7 @@ impl ZTHabitat {
         }
 
         if self.needs_service(keeper_ptr, true) {
-            let keepers_habitat = unsafe { ZTUNIT_GET_HABITAT.original()(keeper_ptr as *const u32) } as u32;
+            let keepers_habitat = crate::ztunit::ZTUnit(keeper_ptr).get_habitat();
             if keepers_habitat != self_ptr {
                 return self_ptr;
             }
@@ -2554,9 +2547,9 @@ impl ZTHabitat {
     /// `true`.
     pub fn remove_food_target(animal_ptr: u32) -> bool {
         if animal_ptr != 0 && animal_food_target(animal_ptr) != 0 {
-            unsafe {
-                SET_FOOD.original()(animal_ptr as *const u32, std::ptr::null());
-                STOP_EATING.original()(animal_ptr as *const u32, 0);
+            {
+                crate::ztanimal::ZTAnimal(animal_ptr).set_food(0);
+                crate::ztanimal::ZTAnimal(animal_ptr).stop_eating(0);
             }
         }
         true
@@ -2896,7 +2889,7 @@ impl ZTHabitat {
         let mut total = 0i32;
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
-            if low_byte_bool(unsafe { IS_HUNGRY_AND_FOODLESS.original()(animal_ptr as *const u32) }) {
+            if crate::ztanimal::ZTAnimal(animal_ptr).is_hungry_and_foodless() {
                 total += 1;
             }
         }
@@ -2933,7 +2926,7 @@ impl ZTHabitat {
             if animal_ptr == 0 {
                 continue;
             }
-            if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
+            if !crate::ztanimal::ZTAnimal(animal_ptr).can_service(keeper_ptr) {
                 continue;
             }
             if Self::keeper_lists_animal(keeper_ptr, animal_ptr) {
@@ -2943,7 +2936,7 @@ impl ZTHabitat {
             if tile_ptr == 0 || get_from_memory::<u8>(tile_ptr + 0x85) & 4 != 0 {
                 continue;
             }
-            if !low_byte_bool(unsafe { IS_SICKLY.original()(animal_ptr as *const u32) }) {
+            if !crate::ztanimal::ZTAnimal(animal_ptr).is_sickly() {
                 continue;
             }
             if get_from_memory::<u8>(tile_ptr + 0x83) & 3 != 0 {
@@ -3036,7 +3029,7 @@ impl ZTHabitat {
         }
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
-            if low_byte_bool(unsafe { IS_SICKLY.original()(animal_ptr as *const u32) }) {
+            if crate::ztanimal::ZTAnimal(animal_ptr).is_sickly() {
                 vector_push_pool_alloc4(out_vector_ptr, animal_ptr);
             }
         }
@@ -3105,7 +3098,7 @@ impl ZTHabitat {
             if Self::keeper_lists_animal(keeper_ptr, animal_ptr) {
                 continue;
             }
-            if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
+            if !crate::ztanimal::ZTAnimal(animal_ptr).can_service(keeper_ptr) {
                 continue;
             }
             if check_can_see
@@ -3646,13 +3639,13 @@ impl ZTHabitat {
                     if get_from_memory::<u8>(occupant + 0x3aa) != 0 {
                         write_live!(self, num_angry_animals, self.num_angry_animals + 1);
                     }
-                    if unsafe { ZTANIMAL_IS_UNHAPPY_FOR_REPRODUCTION.original()(occupant as *const u32) } {
+                    if crate::ztanimal::ZTAnimal(occupant).is_unhappy_for_reproduction() {
                         write_live!(self, unhappy_for_reproduction_count, self.unhappy_for_reproduction_count + 1);
                     }
                     if get_from_memory::<u8>(occupant + 0x3a7) != 0 {
                         write_live!(self, num_sick_animals, self.num_sick_animals + 1);
                     }
-                    if low_byte_bool(unsafe { ZTANIMAL_IS_HUNGRY.original()(occupant as *const u32) }) {
+                    if crate::ztanimal::ZTAnimal(occupant).is_hungry() {
                         write_live!(self, hungry_count, self.hungry_count + 1);
                     }
 
@@ -4161,7 +4154,7 @@ impl ZTHabitat {
         for addr in (staff_begin..staff_end).step_by(4) {
             let staff_ptr: u32 = get_from_memory(addr);
             let is_keeper = staff_ptr != 0 && unsafe { entity_type_matches(staff_ptr, RVA_KEEPER_TYPE_CHECK_ARG) };
-            if is_keeper && low_byte_bool(unsafe { ZTSTAFF_IS_HABITAT_ASSIGNED.original()(staff_ptr as *const u32, self_addr as *const u32) }) {
+            if is_keeper && crate::ztstaff::ZTStaff(staff_ptr).is_habitat_assigned(self_addr) {
                 write_live!(self, has_keeper_assigned_raw, 1u8);
                 break;
             }
@@ -5777,7 +5770,7 @@ impl ZTHabitat {
         write_live!(self, scheduled_service_counter, self.scheduled_service_counter.wrapping_sub(1).max(0));
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
-            unsafe { SET_KEEPER_ARRIVES.original()(animal_ptr as *const u32, keeper_ptr as *const u32) };
+            crate::ztanimal::ZTAnimal(animal_ptr).set_keeper_arrives(keeper_ptr);
         }
         if scheduled {
             for neighbor_ptr in self.amphibious_neighbors() {
@@ -5898,7 +5891,7 @@ impl ZTHabitat {
 
         for addr in (self.all_animals_begin..self.all_animals_end).step_by(4) {
             let animal_ptr: u32 = get_from_memory(addr);
-            if animal_ptr != 0 && low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
+            if animal_ptr != 0 && crate::ztanimal::ZTAnimal(animal_ptr).can_service(keeper_ptr) {
                 return 0;
             }
         }
@@ -5909,7 +5902,7 @@ impl ZTHabitat {
                 continue;
             }
             let occupant_ptr: u32 = get_from_memory(tile_ptr + 0x10); // BFTile::entity_ptr
-            if occupant_ptr != 0 && low_byte_bool(unsafe { CLEANS_UP.original()(keeper_ptr as *const u32, occupant_ptr as *const u32) }) {
+            if occupant_ptr != 0 && crate::ztkeeper::ZTKeeper(keeper_ptr).cleans_up(occupant_ptr) {
                 return 0;
             }
         }
@@ -5936,7 +5929,7 @@ impl ZTHabitat {
                     }
                     let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
                     if unsafe { call_entity_vtable_noargs(entity_type_ptr, 0xcc) }
-                        && low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) })
+                        && crate::ztanimal::ZTAnimal(animal_ptr).can_service(keeper_ptr)
                     {
                         return 0;
                     }
@@ -6674,16 +6667,16 @@ impl ZTHabitat {
                     continue;
                 }
             }
-            if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) {
+            if !crate::ztanimal::ZTAnimal(animal_ptr).can_service(keeper_ptr) {
                 continue;
             }
             any_serviceable = true;
-            if include_neighbors && low_byte_bool(unsafe { IS_SICKLY.original()(animal_ptr as *const u32) }) {
+            if include_neighbors && crate::ztanimal::ZTAnimal(animal_ptr).is_sickly() {
                 needs_attention = true;
             }
             if get_from_memory::<u8>(animal_ptr + 0x395) == 0
                 && !Self::is_show_tank_by_vtable(self_addr)
-                && low_byte_bool(unsafe { IS_HUNGRY_AND_FOODLESS.original()(animal_ptr as *const u32) })
+                && crate::ztanimal::ZTAnimal(animal_ptr).is_hungry_and_foodless()
                 && unsafe { animal_home_habitat(animal_ptr) } == self_addr
             {
                 needs_attention = true;
@@ -6761,7 +6754,7 @@ impl ZTHabitat {
         let mut candidates: Vec<u32> = Vec::new();
         let animals: Vec<u32> = self.get_all_animals(false).collect();
         for animal_ptr in animals {
-            if !low_byte_bool(unsafe { CAN_SERVICE.original()(animal_ptr as *const u32, keeper_ptr as *const u32) }) || is_excluded(animal_ptr) {
+            if !crate::ztanimal::ZTAnimal(animal_ptr).can_service(keeper_ptr) || is_excluded(animal_ptr) {
                 continue;
             }
             let entity_type_ptr: u32 = get_from_memory(animal_ptr + 0x128);
@@ -6797,7 +6790,7 @@ impl ZTHabitat {
 
     /// Ports `ZTHabitat::generateFaces` (`GENERATE_FACES`, `0x004d9953`, `thiscall(species_type, smile,
     /// other_habitat) -> bool`): asks every animal of `species_type` in this habitat's own list
-    /// (`+0x6c`..`+0x70`) to show a smile/frown face (`ZTAnimal::addFace`, `ZTANIMAL_ADD_FACE`, reached through `.hooked()` so the live battery's recorder can observe the requests without spawning faces), and
+    /// (`+0x6c`..`+0x70`) to show a smile/frown face (`ZTAnimal::add_face`, whose recorder seam lets the live battery observe the requests without spawning faces), and
     /// for a land habitat visited directly (`other_habitat == 0`) with a species whose type passes the
     /// vtable `+0xcc` predicate, recurses into every amphibious neighbour (`+0x8`) with `other_habitat =
     /// self` and the same `smile` (the decompile shows `false`; the `.asm` pushes the caller's `[ESP+0x1c]`, the smile argument). Returns whether any animal
@@ -6825,7 +6818,7 @@ impl ZTHabitat {
             let animal_type = if entity_type_ptr != 0 && unsafe { type_check(entity_type_ptr, RVA_ANIMAL_TYPE_CHECK) } { entity_type_ptr } else { 0 };
             if animal_type == species_type_ptr {
                 any_matched = true;
-                unsafe { ZTANIMAL_ADD_FACE.hooked()(animal_ptr as *const u32, smile) };
+                crate::ztanimal::ZTAnimal(animal_ptr).add_face(smile);
             }
         }
         if !unsafe { call_vtable_slot_noargs_ret_bool(self_addr, 0x20) }
@@ -6856,7 +6849,7 @@ impl ZTHabitat {
 
     /// [`Self::get_habitat_rating`] before the final `f32` rounding: the value vanilla leaves in `ST0`
     /// (callers such as `findBestRating` compare it unrounded). Partial sums follow [`x87_weighted_sum`].
-    fn habitat_rating_unrounded(&self, animal_ptr: u32, include_neighbors: bool) -> f64 {
+    pub(crate) fn habitat_rating_unrounded(&self, animal_ptr: u32, include_neighbors: bool) -> f64 {
         let self_addr = self as *const Self as u32;
         let module_base = get_module_base("zoo.exe") as u32;
         let weight = |rva: u32| get_from_memory::<f32>(module_base + rva) as f64;
@@ -7017,7 +7010,7 @@ impl ZTHabitat {
                     continue;
                 }
                 counted += 1;
-                rating_sum += unsafe { openzt_detour::generated::ztanimal::GET_HABITAT_RATING.original()(animal_ptr as *const u32, habitat_ptr as *const u32) };
+                rating_sum += crate::ztanimal::ZTAnimal(animal_ptr).habitat_rating_in(habitat_ptr);
             }
             if counted > 0 && rating_threshold <= rating_sum / counted {
                 qualifying_habitats += 1;

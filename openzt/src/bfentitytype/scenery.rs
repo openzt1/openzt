@@ -6,6 +6,7 @@ use getset::{Getters, Setters};
 use super::base::{BFEntityType, EntityType};
 use super::wrapper::{zt_entity_type_class_is, ZTEntityTypeClass};
 use crate::util::{get_from_memory, get_string_from_memory, Checkable};
+use crate::vanilla_vector::VanillaVector;
 
 // ------------ ZTSceneryType, Implementation, and Related Functions ------------ //
 
@@ -134,7 +135,7 @@ impl Checkable for ZTSceneryType {
 pub struct ZTBuildingType {
     #[deref_field]
     pub ztscenerytype: ZTSceneryType, // bytes: 0x168 - 0x000 = 0x16C = 364 bytes
-    pad0: [u8; 0x16C - 0x168],                      // -------------------------- padding: 4 bytes
+    pub upgrades: u32,                              // 0x168, sentinel of a list of ZTBuildingUpgrade
     pub i_capacity: i32,                            // 0x16C
     pub toy_satisfaction: i32,                      // 0x170
     pub time_inside: i32,                           // 0x174
@@ -163,14 +164,78 @@ pub struct ZTBuildingType {
     pub user_teleports_inside: bool,                // 0x1A7
     pub user_uses_exit: bool,                       // 0x1A8
     pub user_uses_entrance_as_emergency_exit: bool, // 0x1A9
-    pad3: [u8; 0x1B8 - 0x1AA],                      // -------------------------- padding: 9 bytes
+    pad3: [u8; 0x1AC - 0x1AA],                      // -------------------------- padding: 2 bytes
+    pub slots: VanillaVector<ZTBuildingSlotType>,   // 0x1AC
     pub adult_change: i32,                          // 0x1B8
     pub child_change: i32,                          // 0x1BC
     pub hunger_change: i32,                         // 0x1C0
     pub thirst_change: i32,                         // 0x1C4
     pub bathroom_change: i32,                       // 0x1C8
     pub energy_change: i32,                         // 0x1CC
+    // 0x1D0: sound and animation names, sold/removed item and upgrade vectors
+    pad4: [u8; 0x23D - 0x1D0],                      // -------------------------- not modelled
+    pub commerce: bool,                             // 0x23D
+    pad5: [u8; 0x23F - 0x23E],                      // -------------------------- not modelled
+    pub use_random_slot: bool,                      // 0x23F
+    pub return_building: bool,                      // 0x240
+    pad6: [u8; 0x250 - 0x241],                      // -------------------------- not modelled
+    pub strict_building_capacity: i32,              // 0x250
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<ZTBuildingType>() == 0x254);
+    assert!(std::mem::offset_of!(ZTBuildingType, upgrades) == 0x168);
+    assert!(std::mem::offset_of!(ZTBuildingType, i_capacity) == 0x16C && std::mem::offset_of!(ZTBuildingType, default_cost) == 0x178);
+    assert!(std::mem::offset_of!(ZTBuildingType, user_tracker) == 0x19B && std::mem::offset_of!(ZTBuildingType, direct_entrance) == 0x1A4);
+    assert!(std::mem::offset_of!(ZTBuildingType, slots) == 0x1AC && std::mem::offset_of!(ZTBuildingType, commerce) == 0x23D);
+};
+
+/// One element of a building type's upgrade list (`ZTBuildingUpgrade`), which starts 8 bytes into its list node.
+#[derive(Debug)]
+#[repr(C)]
+pub struct ZTBuildingUpgrade {
+    _unknown_00: [u8; 0x10],
+    /// Replaces the type's upkeep, as a whole number.
+    pub upkeep: i32,       // 0x10
+    pub adult_change: i32, // 0x14
+    pub child_change: i32, // 0x18
+}
+
+const _: () = {
+    assert!(std::mem::offset_of!(ZTBuildingUpgrade, upkeep) == 0x10 && std::mem::offset_of!(ZTBuildingUpgrade, adult_change) == 0x14);
+    assert!(std::mem::offset_of!(ZTBuildingUpgrade, child_change) == 0x18);
+};
+
+/// One slot record of a building type (`ZTBuildingType::SlotType`). Vectors are `{begin, end, capacity}` addresses, and
+/// positions are `(x, y, z)`. The flags are `u8` because they are vanilla bytes.
+#[derive(Debug)]
+#[repr(C)]
+pub struct ZTBuildingSlotType {
+    pub position: [i32; 3],      // 0x00
+    pub entrances: [u32; 3],     // 0x0C, vector of positions
+    pub user_type_ids: [u32; 3], // 0x18, vector<u32>; empty admits every type
+    pub exit_position: [i32; 3], // 0x24
+    pub capacity: i32,           // 0x30, also the number of draw slots
+    pub facing: i32,             // 0x34
+    pub birth_user_type_id: i32, // 0x38, the type `drop` spawns into the slot, 0 for none
+    pub filter: u32,             // 0x3C, `char*`, null for none
+    pub user_type_names: u32,    // 0x40, string list the type ids are resolved from
+    pub has_draw_slots: u8,      // 0x44
+    pub is_return_slot: u8,      // 0x45
+    pub entrance_on_water: u8,   // 0x46
+    pub entrance_on_land: u8,    // 0x47
+    pub exit_on_water: u8,       // 0x48
+    pub exit_on_land: u8,        // 0x49
+    _pad_4a: [u8; 2],
+    pub draw_positions: [u32; 3],    // 0x4C, vector of positions
+    pub draw_orders: [[u32; 3]; 4], // 0x58, four vector<u32>
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<ZTBuildingSlotType>() == 0x88);
+    assert!(std::mem::offset_of!(ZTBuildingSlotType, capacity) == 0x30 && std::mem::offset_of!(ZTBuildingSlotType, has_draw_slots) == 0x44);
+    assert!(std::mem::offset_of!(ZTBuildingSlotType, draw_positions) == 0x4C && std::mem::offset_of!(ZTBuildingSlotType, draw_orders) == 0x58);
+};
 
 impl EntityType for ZTBuildingType {
     // print [Configuration/Floats] section of the configuration

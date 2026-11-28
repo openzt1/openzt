@@ -10,6 +10,27 @@ use std::ffi::c_void;
 
 use openzt_detour::generated::msvc_std_basic_string::{BASIC_STRING_0, BASIC_STRING_2};
 
+use crate::util::get_from_memory;
+
+/// The bytes of a vanilla `{begin, end}` string range, empty when it is unset (`begin` null or `end` not past it).
+/// Reads volatile bytes straight from vanilla memory, so the string may be one the caller does not own.
+pub(crate) fn range_bytes(begin: u32, end: u32) -> Vec<u8> {
+    if begin == 0 || end <= begin {
+        return Vec::new();
+    }
+    (begin..end).map(get_from_memory::<u8>).collect()
+}
+
+/// [`range_bytes`] of the string object (`{begin, end, ..}`) at `address`.
+pub(crate) fn object_bytes(address: u32) -> Vec<u8> {
+    range_bytes(get_from_memory(address), get_from_memory(address + 4))
+}
+
+/// The bytes of the NUL-terminated string at `address`, without the terminator.
+pub(crate) fn c_string_bytes(address: u32) -> Vec<u8> {
+    (address..).map(get_from_memory::<u8>).take_while(|&byte| byte != 0).collect()
+}
+
 #[repr(C)]
 pub(crate) struct VanillaString {
     ptr: *mut u8,
@@ -44,8 +65,27 @@ impl VanillaString {
         VanillaString { ptr: std::ptr::null_mut(), end: std::ptr::null_mut(), cap_end: std::ptr::null_mut() }
     }
 
+    pub(crate) fn words(&self) -> [u32; 3] {
+        [self.ptr as u32, self.end as u32, self.cap_end as u32]
+    }
+
+    /// Hands the string's three words to a caller that takes ownership (vanilla frees them), without running the destructor.
+    pub(crate) fn release(self) -> [u32; 3] {
+        let words = self.words();
+        std::mem::forget(self);
+        words
+    }
+
     pub(crate) fn as_ptr(&self) -> *const u32 {
         self as *const VanillaString as *const u32
+    }
+
+    /// The string's bytes (empty when unset).
+    pub(crate) fn bytes(&self) -> Vec<u8> {
+        if self.ptr.is_null() || self.end <= self.ptr {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(self.ptr, self.end as usize - self.ptr as usize) }.to_vec()
     }
 
     pub(crate) fn as_str(&self) -> std::borrow::Cow<'_, str> {

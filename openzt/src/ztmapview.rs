@@ -49,7 +49,9 @@ pub struct BFTile {
     /// the tile pointer, then walked identically to `owned_tiles_ptr`, calling vtable slot `+0x100` on
     /// each occupant's own payload) - see `ZTHabitat::reset_unit_ai`.
     pub(crate) unit_list_ptr: u32,
-    padding: [u8; 0xc],
+    /// The first three of the tile's four entity slots (`0x4..0x10`): the entities standing on its quadrants, one word
+    /// each; the fourth is [`Self::entity_ptr`].
+    pub(crate) quadrant_entities: [u32; 3],
     pub entity_ptr: u32, // 0x10 Pointer to the entity on this tile, if any
     pub north_fence: u32, // 0x14 Change to &ZTFence when that type exists
     pub east_fence: u32,  // 0x18
@@ -60,13 +62,23 @@ pub struct BFTile {
     padding_3: [u8; 0x40],
     unknown_byte_1: u8,     // 0x080
     pub unknown_byte_2: u8, // 0x081
-    unknown_byte_3: u8,     // 0x082
-    unknown_byte_4: u8,     // 0x083
+    /// `0x082`: two bits per edge direction, the cliff state the unit methods test.
+    pub(crate) cliff_bits: u8,
+    /// `0x083`: bits `0x3` mark water, bit `0x8` a walkable tile.
+    pub(crate) terrain_flags: u8,
     unknown_byte_5: u8,     // 0x084
-    padding_4: [u8; 0x7],   // Full size 0x8c
+    /// `0x085`: bit `0x20` marks a ramp / tank tile.
+    pub(crate) habitat_flags: u8,
+    padding_4: [u8; 0x6],   // Full size 0x8c
 }
 
 const _: () = assert!(std::mem::size_of::<BFTile>() == 0x8c);
+const _: () = assert!(std::mem::offset_of!(BFTile, entity_ptr) == 0x10);
+const _: () = assert!(std::mem::offset_of!(BFTile, north_fence) == 0x14);
+const _: () = assert!(std::mem::offset_of!(BFTile, pos) == 0x34);
+const _: () = assert!(std::mem::offset_of!(BFTile, cliff_bits) == 0x82);
+const _: () = assert!(std::mem::offset_of!(BFTile, terrain_flags) == 0x83);
+const _: () = assert!(std::mem::offset_of!(BFTile, habitat_flags) == 0x85);
 
 impl PartialEq for BFTile {
     fn eq(&self, other: &Self) -> bool {
@@ -84,7 +96,7 @@ impl BFTile {
     pub fn new(pos: IVec3, unknown_byte_2: u8) -> Self {
         BFTile {
             unit_list_ptr: 0,
-            padding: [0; 0xc],
+            quadrant_entities: [0; 3],
             entity_ptr: 0,
             north_fence: 0,
             east_fence: 0,
@@ -95,10 +107,11 @@ impl BFTile {
             padding_3: [0; 0x40],
             unknown_byte_1: 0,
             unknown_byte_2,
-            unknown_byte_3: 0,
-            unknown_byte_4: 0,
+            cliff_bits: 0,
+            terrain_flags: 0,
             unknown_byte_5: 0,
-            padding_4: [0; 0x7],
+            habitat_flags: 0,
+            padding_4: [0; 0x6],
         }
     }
 

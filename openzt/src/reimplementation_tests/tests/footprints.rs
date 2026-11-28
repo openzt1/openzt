@@ -13,7 +13,7 @@ use tracing::{error, info};
 use crate::bfentitytype::{BFEntityType, ZTAnimalType, ZTUnitType};
 use crate::reimplementation_tests::NoopFailurePersistence;
 use crate::reimplementation_tests::harness::write_success_line;
-use crate::ztworldmgr::{BFEntity, ZTAnimal, ZTUnit};
+use crate::ztworldmgr::{BFEntity, ZTAnimal, ZTUnitData};
 use glam::i32::IVec3;
 
 /// Calls the real GET_FOOTPRINT function at `entity_ptr` and reads the `IVec3` it writes back.
@@ -107,7 +107,7 @@ pub(crate) fn run_ztunit_get_footprint_tests(failure_log: &mut Option<std::fs::F
         ),
         |(fx, fy, fz, map_footprint, rotation, use_map_footprint)| {
             let entity_type = ZTUnitType::new_for_test(IVec3::new(fx, fy, fz), map_footprint);
-            let entity = ZTUnit::new_for_test(&raw const entity_type as u32, rotation, 0);
+            let entity = ZTUnitData::new_for_test(&raw const entity_type as u32, rotation, 0);
 
             let reimplemented_result = entity.get_footprint(use_map_footprint);
             let real_result = call_original_get_footprint(ZTUNIT_GET_FOOTPRINT, &raw const entity as *const u32, use_map_footprint);

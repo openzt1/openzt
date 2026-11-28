@@ -8,6 +8,7 @@ pub struct FlyOps {
     pub f_fly: unsafe fn(u32, u32, u32, u32, u32, u32, u32, u32) -> bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn f_fly_vanilla(this: u32, unit: u32, name: u32, value: u32, extra: u32, done: u32, reverse: u32, limit: u32) -> bool {
     unsafe { F_FLY.hooked()(this as *const u32, unit as *const u32, name as *const c_void, value as i32, extra as *const c_void, done as *const i8, reverse as i32, limit as i32) }
 }

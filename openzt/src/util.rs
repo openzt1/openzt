@@ -123,6 +123,68 @@ pub fn low_byte_bool(value: u32) -> bool {
     (value & 0xff) != 0
 }
 
+/// A world coordinate as the tile it lies in: the value divided by `64` rounding toward zero, which is how vanilla
+/// emits it (`(v + ((v >> 31) & 0x3f)) >> 6`). A negative coordinate in `-63..=-1` is tile `0`, not `-1`.
+pub fn world_to_tile(value: i32) -> i32 {
+    value.wrapping_add((value >> 31) & 0x3f) >> 6
+}
+
+/// `x` or `y` of a world position reduced to the position inside its tile: the C remainder by `64`, so a negative value
+/// stays negative.
+pub fn position_in_tile_xy(value: i32) -> i32 {
+    value.wrapping_rem(64)
+}
+
+/// `z` of a world position reduced to the height inside its tile: the C remainder by `16`, with `16` added when `z` is
+/// negative (`-1` gives `15`, `-16` gives `16`), as vanilla's `AND 0x8000000f` / `DEC; OR -16; INC` sequence does.
+pub fn position_in_tile_z(value: i32) -> i32 {
+    let remainder = value.wrapping_rem(16);
+    if value < 0 {
+        remainder.wrapping_add(16)
+    } else {
+        remainder
+    }
+}
+
+/// A world position reduced to the position inside its tile.
+pub fn position_in_tile(x: i32, y: i32, z: i32) -> [i32; 3] {
+    [position_in_tile_xy(x), position_in_tile_xy(y), position_in_tile_z(z)]
+}
+
+#[cfg(test)]
+mod tile_position_tests {
+    use super::{position_in_tile, world_to_tile};
+
+    #[test]
+    fn position_in_tile_follows_c_remainders() {
+        assert_eq!(position_in_tile(0, 0, 0), [0, 0, 0]);
+        assert_eq!(position_in_tile(130, 64, 33), [2, 0, 1]);
+        assert_eq!(position_in_tile(-130, -1, 16), [-2, -1, 0]);
+        assert_eq!(position_in_tile(-64, -63, 0), [0, -63, 0]);
+        assert_eq!(position_in_tile(5, 5, -1), [5, 5, 15]);
+        assert_eq!(position_in_tile(5, 5, -16), [5, 5, 16]);
+        assert_eq!(position_in_tile(5, 5, -17), [5, 5, 15]);
+        assert_eq!(position_in_tile(i32::MIN, i32::MAX, i32::MIN), [0, 63, 16]);
+    }
+
+    #[test]
+    fn world_to_tile_truncates_toward_zero() {
+        assert_eq!(world_to_tile(0), 0);
+        assert_eq!(world_to_tile(63), 0);
+        assert_eq!(world_to_tile(64), 1);
+        assert_eq!(world_to_tile(-1), 0);
+        assert_eq!(world_to_tile(-63), 0);
+        assert_eq!(world_to_tile(-64), -1);
+        assert_eq!(world_to_tile(-127), -1);
+        assert_eq!(world_to_tile(-128), -2);
+        assert_eq!(world_to_tile(i32::MAX), i32::MAX / 64);
+        assert_eq!(world_to_tile(i32::MIN), i32::MIN / 64);
+        for value in [-200, -65, -64, -1, 0, 1, 63, 64, 65, 200] {
+            assert_eq!(world_to_tile(value), value / 64);
+        }
+    }
+}
+
 /// MSVC `_ftol2`'s float-to-`int` conversion, which vanilla emits as `(int)(longlong)f`: truncate toward
 /// zero to a 64-bit integer (`FISTP qword` with the truncation rounding mode), then keep the low 32
 /// bits. A NaN, an infinity or a magnitude of 2^63 or more yields x87's "integer indefinite"
@@ -130,7 +192,16 @@ pub fn low_byte_bool(value: u32) -> bool {
 /// NaN to `0`), so the two disagree for any value outside the `i32` range.
 pub fn ftol_low32(value: f32) -> i32 {
     let truncated = value.trunc();
-    if !(-9.223_372_036_854_775_808e18..9.223_372_036_854_775_808e18).contains(&truncated) {
+    if !(i64::MIN as f32..-(i64::MIN as f32)).contains(&truncated) {
+        return 0;
+    }
+    (truncated as i64) as i32
+}
+
+/// [`ftol_low32`] for an `f64` (x87 double) operand.
+pub fn ftol_low32_f64(value: f64) -> i32 {
+    let truncated = value.trunc();
+    if !(i64::MIN as f64..-(i64::MIN as f64)).contains(&truncated) {
         return 0;
     }
     (truncated as i64) as i32
@@ -138,7 +209,17 @@ pub fn ftol_low32(value: f32) -> i32 {
 
 #[cfg(test)]
 mod ftol_tests {
-    use super::ftol_low32;
+    use super::{ftol_low32, ftol_low32_f64};
+
+    #[test]
+    fn f64_variant_matches_the_f32_rules() {
+        assert_eq!(ftol_low32_f64(-1.9), -1);
+        assert_eq!(ftol_low32_f64(4_294_967_296.0), 0);
+        assert_eq!(ftol_low32_f64(3_221_225_472.0), -1_073_741_824);
+        assert_eq!(ftol_low32_f64(f64::NAN), 0);
+        assert_eq!(ftol_low32_f64(f64::INFINITY), 0);
+        assert_eq!(ftol_low32_f64(9.3e18), 0);
+    }
 
     #[test]
     fn in_range_values_truncate_toward_zero() {

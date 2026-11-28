@@ -11,7 +11,6 @@ use openzt_detour::generated::{
         bfworldmgr::{ADD_ENTITY as BFWORLDMGR_ADD_ENTITY, GET_TYPE as BFWORLDMGR_GET_TYPE, REMOVE_ENTITY as BFWORLDMGR_REMOVE_ENTITY, VERIFY_ENTITY_0 as BFWORLDMGR_VERIFY_ENTITY_0},
         msvc_std_listuint::{ERASE as MSVC_LIST_UINT_ERASE_NODES, INSERT as MSVC_LIST_UINT_INSERT_NODE, LIST as MSVC_LIST_UINT_DTOR_NODE, LIST_UINT_CTOR as MSVC_LIST_UINT_CTOR},
         msvc_std_vectorbyte::VECTORBYTE,
-        ztbuilding::{REMOVE_ALL_USERS as ZTBUILDING_REMOVE_ALL_USERS, USER_DATA_CHANGED as ZTBUILDING_USER_DATA_CHANGED},
         ztshowmgr::GET_SHOW_INFO as ZTSHOWMGR_GET_SHOW_INFO,
         poolalloc::{ALLOCATE as POOLALLOC_ALLOCATE, DEALLOCATE as POOLALLOC_DEALLOCATE, DEALLOCATE_N_4 as POOLALLOC_DEALLOCATE_N_4},
         standalone::{IS_ZOO_GATE, IS_ZOO_WALL, MEMMOVE, OPERATOR_NEW},
@@ -21,7 +20,6 @@ use openzt_detour::generated::{
         },
         zthabitatmgr::NAME_HABITAT,
         ztmapview::{ADD_UNDO_ACTION, REMOVE_ENTITY as ZTMAPVIEW_REMOVE_ENTITY, SET_SELECTED_ENTITY_0 as ZTMAPVIEW_SET_SELECTED_ENTITY_0},
-        ztstaff::REMOVE_ASSIGNED_HABITAT as ZTSTAFF_REMOVE_ASSIGNED_HABITAT,
         zttankwall::SET_IS_COMBINED_CONNECTOR,
         ztui_buyh::REFRESH as ZTUI_BUYH_REFRESH,
         ztui_general::GET_MAPVIEW as ZTUI_GENERAL_GET_MAPVIEW,
@@ -42,6 +40,7 @@ use crate::{
     globals::{get_module_base, globals},
     string_registry::load_string_by_id,
     util::{get_from_memory, low_byte_bool, ref_from_memory, save_to_memory, ZTArray, ZTString},
+    ztbuilding::ZTBuilding,
     ztmapview::BFTile,
     ztmegatilemgr::{entity_type_matches, RVA_SCENERY_TYPE_CHECK_ARG},
     ztshow::{call_entity_vtable_u32_noargs, type_check, RVA_ANIMAL_TYPE_CHECK},
@@ -477,7 +476,7 @@ impl ZTHabitatMgr {
 
     /// Ports `ZTHabitatMgr::emptyGrandstands` (`EMPTY_GRANDSTANDS`, `0x0050c813`): for every building
     /// [`Self::get_grandstands`] returns for `show_id`, in list order, kicks out its users
-    /// (`ZTBuilding::removeAllUsers`), clears the building's `+0x19c` dword, and notifies it
+    /// (`ZTBuilding::removeAllUsers`), clears the building's show-running flag, and notifies it
     /// (`ZTBuilding::userDataChanged`). The temporary list is torn down through vanilla's destructor.
     pub fn empty_grandstands(&self, show_id: u16) {
         let mut grandstands: u32 = 0;
@@ -487,9 +486,9 @@ impl ZTHabitatMgr {
         for node in walk_tile_list(get_from_memory::<u32>(list_ptr)) {
             let building_ptr = get_from_memory::<u32>(node + 8);
             if building_ptr != 0 {
-                unsafe { ZTBUILDING_REMOVE_ALL_USERS.original()(building_ptr as *const u32) };
-                save_to_memory::<u32>(building_ptr + 0x19c, 0);
-                unsafe { ZTBUILDING_USER_DATA_CHANGED.original()(building_ptr as *const u32) };
+                ZTBuilding(building_ptr).remove_all_users();
+                ZTBuilding(building_ptr).set_type_state(0);
+                ZTBuilding(building_ptr).user_data_changed();
             }
         }
         unsafe { MSVC_LIST_UINT_DTOR_NODE.original()(list_ptr as *const std::ffi::c_void) };
@@ -3421,6 +3420,10 @@ impl ZTHabitatMgr {
     /// undefined upper 16 bits around the real `u16` show id (same `CONCAT22` shape [`ZTHabitat::get_show_info_id`]'s
     /// own doc comment documents) - masked here via a plain zero-extending cast, matching that method.
     pub fn can_see_show_from_building(&self, building_ptr: u32) -> u32 {
+        #[cfg(feature = "reimplementation-tests")]
+        if let Some(show) = crate::ztbuilding::live_support::intercept::seen_show(building_ptr) {
+            return show;
+        }
         for i in 0..self.exhibit_array.len() {
             let habitat_ptr = self.exhibit_array.get_ptr(i);
             let show_id = unsafe { ref_from_memory::<ZTHabitat>(habitat_ptr) }.get_show_info_id();
@@ -3672,8 +3675,8 @@ impl ZTHabitatMgr {
     /// [`Self::replace_gate_with_fence`]/[`ZTHabitat::highlight`]. Walks the live `GLOBAL_ZTWorldMgr`'s
     /// own [`ZTWorldMgr::entity_array`], and for every non-null entry that is a `ZTStaff`
     /// ([`RVA_STAFF_TYPE_CHECK_ARG`] `isCastClass` check), calls
-    /// `ZTStaff::removeAssignedHabitat(staff, habitat_ptr)` ([`ZTSTAFF_REMOVE_ASSIGNED_HABITAT`],
-    /// undetoured `.original()` call-through) to drop `habitat_ptr` from that staff member's
+    /// `ZTStaff::removeAssignedHabitat(staff, habitat_ptr)` ([`crate::ztstaff::ZTStaff::remove_assigned_habitat`],
+    /// the Rust port) to drop `habitat_ptr` from that staff member's
     /// assigned-habitat list. Real caller: `ZTHabitatMgr::removeHabitat`, passing the habitat being
     /// removed.
     ///
@@ -3683,7 +3686,7 @@ impl ZTHabitatMgr {
         let world = globals().ztworldmgr();
         for entity_ptr in world.entity_array() {
             if entity_ptr != 0 && unsafe { entity_type_matches(entity_ptr, RVA_STAFF_TYPE_CHECK_ARG) } {
-                unsafe { ZTSTAFF_REMOVE_ASSIGNED_HABITAT.original()(entity_ptr as *const u32, habitat_ptr as *const u32) };
+                crate::ztstaff::ZTStaff(entity_ptr).remove_assigned_habitat(habitat_ptr);
             }
         }
     }

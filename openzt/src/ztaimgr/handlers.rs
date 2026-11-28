@@ -1,6 +1,7 @@
 //! The entity handlers `fEndTrick`, the building transitions, `fHidePredator`, the `f*Routine` family, the predator/prey handlers and the face-toward handlers.
 
 use super::*;
+use crate::ztunit::ZTUnit;
 
 /// `fEndTrick`: ends the trick on a unit, or just finishes for a null/non-unit target.
 pub unsafe fn f_end_trick(unit: u32, done: *const bool) -> bool {
@@ -57,7 +58,7 @@ pub unsafe fn f_hide_predator(unit: u32, done: *const bool) -> bool {
     if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTGUEST) } {
         return false;
     }
-    let predator = unsafe { GET_PREDATOR_UNIT.original()(unit as *const u32) } as u32;
+    let predator = ZTUnit(unit).get_predator_unit();
     if predator != 0 && unsafe { unit_is(predator, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTANIMAL) } {
         unsafe { call_virtual_args(predator, ENTITY_VTABLE_HIDE_PREDATOR, [0]) };
     }
@@ -75,11 +76,11 @@ pub(super) unsafe fn exact_class_routine(unit: u32, done: *const bool, tag_rva: 
 }
 
 pub(super) unsafe fn guest_f_routine(unit: u32, done: *const bool) {
-    unsafe { ZTGUEST_F_ROUTINE.original()(unit as *const u32, done) };
+    crate::ztmaint::ZTMaint::f_routine(unit, done);
 }
 
 pub(super) unsafe fn guide_f_routine(unit: u32, done: *const bool) {
-    unsafe { ZTGUIDE_F_ROUTINE.original()(unit as *const u32, done) };
+    crate::ztguide::ZTGuide::f_routine(unit, done);
 }
 
 pub unsafe fn f_guest_routine(unit: u32, done: *const bool) -> bool {
@@ -100,7 +101,7 @@ pub unsafe fn f_keeper_routine(unit: u32, done: *const bool) -> bool {
     if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTKEEPER) } {
         return false;
     }
-    unsafe { ZTKEEPER_F_ROUTINE.original()(unit as *const u32, done) }
+    crate::ztkeeper::ZTKeeper(unit).f_routine(done)
 }
 
 /// `ZTUnit` field `fShowPredator` clears and `fCaughtPrey` stores the hunter's id into on the prey.
@@ -133,9 +134,9 @@ pub unsafe fn f_show_predator(unit: u32, done: *const bool) -> Option<bool> {
     if !unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTGUEST) } {
         return None;
     }
-    let predator = unsafe { GET_PREDATOR_UNIT.original()(unit as *const u32) } as u32;
+    let predator = ZTUnit(unit).get_predator_unit();
     if predator != 0 && unsafe { is_animal(predator) } {
-        unsafe { ZTANIMAL_CONSUME.original()(predator as *const u32, unit as *const i32) };
+        crate::ztanimal::ZTAnimal(predator).consume(unit);
     }
     unsafe { call_entity_virtual(unit, ENTITY_VTABLE_REFRESH) };
     unsafe { ((unit + UNIT_SHOW_PREDATOR_FLAG_OFFSET) as *mut u8).write_volatile(0) };
@@ -147,7 +148,7 @@ pub unsafe fn f_show_predator(unit: u32, done: *const bool) -> Option<bool> {
 /// the hunter, and the prey refreshes. Always reports success.
 pub unsafe fn f_caught_prey(unit: u32, done: *const bool) -> bool {
     if unit != 0 && unsafe { is_animal(unit) } {
-        let mut prey = unsafe { ZTUNIT_GET_TARGET_UNIT.original()(unit as *const u32) } as u32;
+        let mut prey = ZTUnit(unit).get_target_unit();
         if prey == 0 {
             prey = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_FIND_PREY) };
             if prey == 0 {
@@ -156,7 +157,7 @@ pub unsafe fn f_caught_prey(unit: u32, done: *const bool) -> bool {
                 return true;
             }
         }
-        unsafe { ZTANIMAL_CONSUME.original()(unit as *const u32, prey as *const i32) };
+        crate::ztanimal::ZTAnimal(unit).consume(prey);
         let hunter_id = get_from_memory::<u32>(unit + ENTITY_ID_OFFSET);
         unsafe { ((prey + UNIT_PREY_HUNTER_FIELD_OFFSET) as *mut u32).write_volatile(hunter_id) };
         unsafe { call_entity_virtual(prey, ENTITY_VTABLE_REFRESH) };
@@ -169,10 +170,10 @@ pub unsafe fn f_caught_prey(unit: u32, done: *const bool) -> bool {
 pub unsafe fn f_kill_prey(unit: u32, done: *const bool) -> bool {
     let mut killed = false;
     if unit != 0 && unsafe { is_animal(unit) } {
-        let prey = unsafe { ZTUNIT_GET_TARGET_UNIT.original()(unit as *const u32) } as u32;
+        let prey = ZTUnit(unit).get_target_unit();
         if prey != 0 {
             unsafe { call_virtual_args(prey, ENTITY_VTABLE_HIDE_PREDATOR, [0]) };
-            unsafe { ZTUNIT_SET_IS_REMOVED.original()(prey as *const u32, 1) };
+            ZTUnit(prey).set_is_removed(1);
             killed = true;
         }
     }
@@ -186,9 +187,9 @@ pub unsafe fn f_die(unit: u32, done: *const bool) -> bool {
     let mut removed = false;
     if unit != 0 && unsafe { is_animal(unit) } {
         if unsafe { unit_is(unit, TYPE_VTABLE_IS_CAST_CLASS, RVA_TAG_ZTUNITTYPE) } {
-            unsafe { ZTUNIT_SET_IS_REMOVED.original()(unit as *const u32, 1) };
+            ZTUnit(unit).set_is_removed(1);
             let tile = unsafe { BFENTITY_GET_TILE.original()(unit as *const u32) };
-            unsafe { F_ZOO_MESSAGE_TILE_0.original()(unit as *const u32, DEATH_MESSAGE_ID, DEATH_MESSAGE_KIND, tile as u32, 0, 1) };
+            ZTUnit(unit).f_zoo_message_tile(DEATH_MESSAGE_ID, DEATH_MESSAGE_KIND as i32, tile as u32, 0, 1);
             removed = true;
         }
         let habitat = unsafe { call_entity_virtual_ret(unit, ENTITY_VTABLE_GET_HABITAT) };
@@ -206,7 +207,7 @@ pub unsafe fn f_hatch(unit: u32, done: *const bool) -> bool {
     if !unsafe { is_animal(unit) } {
         return false;
     }
-    unsafe { FINISH_HATCH.original()(unit as *const u32) };
+    crate::ztanimal::ZTAnimal(unit).finish_hatch();
     unsafe { set_done(done) };
     true
 }
@@ -236,9 +237,9 @@ pub unsafe fn f_face_toward_target(unit: u32, done: *const bool) -> bool {
             return false;
         }
     } else if is_staff || is_guest {
-        unsafe { FACE_TOWARD_TARGET.original()(unit as *const u32) };
+        ZTUnit(unit).face_toward_target();
     } else {
-        unsafe { FACE_TOWARD_TARGET_UNIT.original()(unit as *const u32) };
+        ZTUnit(unit).face_toward_target_unit();
     }
     unsafe { set_done(done) };
     true

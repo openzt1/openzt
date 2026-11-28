@@ -11,6 +11,7 @@ use crate::geom::Rectangle;
 use crate::globals::globals;
 use crate::util::{get_from_memory, get_string_from_memory, ref_from_memory, ZTBufferString};
 use crate::ztmapview::BFTile;
+use crate::ztunit::{BFUnitTail, ZTUnitTail};
 
 #[derive(Debug, PartialEq, Eq, FromPrimitive, Clone)]
 #[repr(u32)]
@@ -283,8 +284,7 @@ impl BFEntity {
 #[repr(C)]
 pub(crate) struct BFUnit {
     base: BFEntity, // bytes: 0x154 = 340 bytes
-    // TODO
-    padding: [u8; 0x214-0x154], // ----- padding: 192 bytes
+    tail: BFUnitTail, // 0x154..0x214
 }
 
 const _: () = assert!(mem::size_of::<BFUnit>() == 0x214);
@@ -294,7 +294,7 @@ impl BFUnit {
     pub fn new_for_test(inner_class_ptr: u32, rotation: i32, map_footprint: i32) -> Self {
         BFUnit {
             base: BFEntity::new_for_test(inner_class_ptr, rotation, map_footprint),
-            padding: [0; 0x214 - 0x154],
+            tail: BFUnitTail::zeroed(),
         }
     }
 }
@@ -309,19 +309,19 @@ impl std::ops::Deref for BFUnit {
 #[derive(Debug, Getters)]
 #[get = "pub"]
 #[repr(C)]
-pub(crate) struct ZTUnit {
+pub(crate) struct ZTUnitData {
     base: BFUnit, // bytes: 0x214 = 532 bytes
-    padding: [u8; 0x260-0x214], // ----- padding: 76 bytes
+    tail: ZTUnitTail, // 0x214..0x260
 }
 
-const _: () = assert!(mem::size_of::<ZTUnit>() == 0x260);
+const _: () = assert!(mem::size_of::<ZTUnitData>() == 0x260);
 
-impl ZTUnit {
+impl ZTUnitData {
     /// Test-only fixture, see `BFEntity::new_for_test`.
     pub fn new_for_test(inner_class_ptr: u32, rotation: i32, map_footprint: i32) -> Self {
-        ZTUnit {
+        ZTUnitData {
             base: BFUnit::new_for_test(inner_class_ptr, rotation, map_footprint),
-            padding: [0; 0x260 - 0x214],
+            tail: ZTUnitTail::zeroed(),
         }
     }
 
@@ -343,7 +343,7 @@ impl ZTUnit {
     }
 }
 
-impl std::ops::Deref for ZTUnit {
+impl std::ops::Deref for ZTUnitData {
     type Target = BFUnit;
     fn deref(&self) -> &BFUnit {
         &self.base
@@ -354,7 +354,7 @@ impl std::ops::Deref for ZTUnit {
 #[get = "pub"]
 #[repr(C)]
 pub(crate) struct ZTAnimal { // bytes: 0x3a8 = 936 bytes
-    base: ZTUnit,  // offset: 0x0000
+    base: ZTUnitData,  // offset: 0x0000
     _pad_0x0260: [u8; 300],
     food_tile: *const BFTile,  // offset: 0x038c
     _pad_0x0390: [u8; 4],
@@ -380,7 +380,7 @@ impl ZTAnimal {
     /// every field is an integer/bool/byte-array/raw-pointer, none of them references or niche types.
     pub fn new_for_test(inner_class_ptr: u32, rotation: i32, map_footprint: i32, is_egg: bool, is_boxed: bool) -> Self {
         let mut animal: ZTAnimal = unsafe { mem::zeroed() };
-        animal.base = ZTUnit::new_for_test(inner_class_ptr, rotation, map_footprint);
+        animal.base = ZTUnitData::new_for_test(inner_class_ptr, rotation, map_footprint);
         animal.is_egg = is_egg;
         animal.is_boxed = is_boxed;
         animal
@@ -411,8 +411,8 @@ impl ZTAnimal {
 }
 
 impl std::ops::Deref for ZTAnimal {
-    type Target = ZTUnit;
-    fn deref(&self) -> &ZTUnit {
+    type Target = ZTUnitData;
+    fn deref(&self) -> &ZTUnitData {
         &self.base
     }
 }
@@ -539,7 +539,7 @@ mod tests {
     fn test_ztunit_get_footprint_map_footprint_ignores_rotation() {
         let entity_type = ZTUnitType::new_for_test(IVec3::default(), 42);
         for rotation in [-8, -3, -1, 0, 1, 3, 4, 8] {
-            let entity = ZTUnit::new_for_test(&entity_type as *const ZTUnitType as u32, rotation, 0);
+            let entity = ZTUnitData::new_for_test(&entity_type as *const ZTUnitType as u32, rotation, 0);
             let footprint = entity.get_footprint(true);
             assert_eq!(
                 (footprint.x, footprint.y, footprint.z),
@@ -554,11 +554,11 @@ mod tests {
     fn test_ztunit_get_footprint_delegates_to_base_when_not_using_map_footprint() {
         let entity_type = entity_type_with_footprint(5, 7, 9);
 
-        let unrotated = ZTUnit::new_for_test(&entity_type as *const BFEntityType as u32, 0, 42);
+        let unrotated = ZTUnitData::new_for_test(&entity_type as *const BFEntityType as u32, 0, 42);
         let footprint = unrotated.get_footprint(false);
         assert_eq!((footprint.x, footprint.y, footprint.z), (5, 7, 9));
 
-        let rotated = ZTUnit::new_for_test(&entity_type as *const BFEntityType as u32, 1, 42);
+        let rotated = ZTUnitData::new_for_test(&entity_type as *const BFEntityType as u32, 1, 42);
         let footprint = rotated.get_footprint(false);
         assert_eq!((footprint.x, footprint.y, footprint.z), (7, 5, 9), "odd rotation should swap x/y, matching BFEntity::get_footprint");
     }
@@ -579,7 +579,7 @@ mod tests {
         assert_eq!(
             (footprint.x, footprint.y, footprint.z),
             (7, 5, 9),
-            "is_egg=false, is_boxed=false should delegate through ZTUnit/BFEntity::get_footprint"
+            "is_egg=false, is_boxed=false should delegate through ZTUnitData/BFEntity::get_footprint"
         );
     }
 

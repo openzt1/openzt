@@ -270,13 +270,12 @@ pub fn reset_unit_ai_for_tile_occupants(tile: u32) {
 /// family. RVA = `0x00638660 - 0x400000`.
 pub const RVA_FENCE_TYPE_CHECK_ARG: u32 = 0x0023_8660;
 
-/// `isCastClass` type-tag constant (`&DAT_00638720`) used alongside tank-specific checks throughout the
-/// decompile corpus (`ZTTankExhibit_updateTankInfo.c`, `_setIsShowExhibit.c`, `_addWaterRipples.c`,
-/// `_updateAdjustmentCosts.c`) - most likely `ZTTankWallType`'s own tag, distinguishing a tank wall from
-/// the broader fence/wall family [`RVA_FENCE_TYPE_CHECK_ARG`] already covers. Not independently confirmed
-/// against a named symbol (no vtable/mac-lookup evidence for this specific address), only inferred from
-/// convergent call-site context - see [`ZTHabitatMgr::replace_fence_with_gate`]'s own use. RVA =
-/// `0x00638720 - 0x400000`.
+/// `isCastClass` type-tag constant (`&TANKWALL_CLASS_NAME`, `0x00638720`) used alongside tank-specific
+/// checks throughout the decompile corpus (`ZTTankExhibit_updateTankInfo.c`, `_setIsShowExhibit.c`,
+/// `_addWaterRipples.c`, `_updateAdjustmentCosts.c`). It is `ZTTankWallType`'s class-name string
+/// (`"tankwall"`, initialised at `0x00575dc5`; `ZTTankWallType::isClass` compares against it), which
+/// distinguishes a tank wall from the broader fence/wall family [`RVA_FENCE_TYPE_CHECK_ARG`] covers. See
+/// [`ZTHabitatMgr::replace_fence_with_gate`]'s own use. RVA = `0x00638720 - 0x400000`.
 pub const RVA_TANK_WALL_TYPE_CHECK_ARG: u32 = 0x0023_8720;
 
 /// `isCastClass` type-tag constant for `ZTKeeper` - `ZTHabitat::blockService`'s own leading guard uses it

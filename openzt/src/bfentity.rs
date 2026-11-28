@@ -27,7 +27,7 @@
 //! decremented before its buffer is freed. Everything is freed through vanilla's own helpers.
 
 use openzt_detour::generated::{
-    bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_NAME, SET_QUEUED_CALL, SET_WORLD_POS},
+    bfentity::{CLEAR_BS, CLEAR_QUEUE, CONSTRUCTOR, DESTRUCTOR_0, LOAD, SAVE, SET_BS, SET_BSNEW, SET_NAME, SET_QUEUED_CALL, SET_QUEUED_CALL_NEW, SET_WORLD_POS},
     gxmixer::CONSTRUCTOR as GXMIXER_CONSTRUCTOR,
     msvc_std_basic_string::BASIC_STRING_1,
     standalone::CRT_ISMBCGRAPH,
@@ -118,10 +118,8 @@ pub(crate) unsafe fn destroy_entity(this: u32) {
         write(this, VTABLE_BFENTITY);
 
         string_release((this + NAME_VECTOR) as StringSlot);
-        for (begin_offset, capacity_offset) in [(0xfcu32, 0x104)] {
-            let begin = read(this + begin_offset);
-            BASIC_STRING_1.original()(begin as *const u32, read(this + capacity_offset).wrapping_sub(begin));
-        }
+        let begin = read(this + 0xfc);
+        BASIC_STRING_1.original()(begin as *const u32, read(this + 0x104).wrapping_sub(begin));
 
         string_release((this + BS_CALL) as StringSlot);
 
@@ -208,8 +206,22 @@ pub(crate) unsafe fn set_bs(this: u32, name: RawString, call_flag: u8, force: u8
     loaded
 }
 
+/// `set_bs`, except that under the live battery an installed [`set_bs_override`] hook may answer in its place.
+/// `setBSNew` reaches `setBS` through here, as vanilla's `setBSNew` reaches the hooked `setBS` address.
+pub(crate) unsafe fn set_bs_overridable(this: u32, name: RawString, call_flag: u8, force: u8, clear_mode: i32) -> bool {
+    #[cfg(feature = "reimplementation-tests")]
+    {
+        if let Some(hook) = set_bs_override::HOOK.lock().ok().and_then(|hook| *hook) {
+            if let Some(answer) = hook(this, name.begin as u32, name.end as u32, call_flag as i8, force as i8, clear_mode) {
+                return answer;
+            }
+        }
+    }
+    unsafe { set_bs(this, name, call_flag, force, clear_mode) }
+}
+
 /// A Rust-owned string holding `bytes`, as the by-value argument words a callee takes and releases.
-unsafe fn new_owned_name(bytes: &[u8]) -> RawString {
+pub(crate) unsafe fn new_owned_name(bytes: &[u8]) -> RawString {
     let mut slot: [*mut u8; 3] = [std::ptr::null_mut(); 3];
     unsafe { string_fill_new(&mut slot, bytes, 1) };
     RawString { begin: slot[0], end: slot[1], capacity: slot[2] }
@@ -251,7 +263,7 @@ pub(crate) unsafe fn set_bs_new(this: u32, name: RawString, call_flag: u8, force
     } else {
         // `setBS` frees the string it is given, so it gets a copy of its own.
         let copy_words = unsafe { new_owned_name(&wanted) };
-        let loaded = unsafe { set_bs(this, copy_words, call_flag, force, clear_mode) };
+        let loaded = unsafe { set_bs_overridable(this, copy_words, call_flag, force, clear_mode) };
         if queued == wanted {
             unsafe { set_pending_bs(this, new_owned_name(b""), 1, 1) };
         }
@@ -259,6 +271,22 @@ pub(crate) unsafe fn set_bs_new(this: u32, name: RawString, call_flag: u8, force
     };
     unsafe { free_buffer(name.begin as *mut u8, (name.capacity as usize).wrapping_sub(name.begin as usize), 1) };
     result
+}
+
+/// `BFEntity::setQueuedCallNew(name, callFlag, force)` (`0x4301b7`): when `name` equals the embedded set's current
+/// name (`+0x54`) it queues nothing and returns false; otherwise it queues a copy through `setQueuedCall` and
+/// returns that result. `name` is passed by value and its buffer is released on return, as vanilla does.
+pub(crate) unsafe fn set_queued_call_new(this: u32, name: RawString, call_flag: u8, force: u8) -> bool {
+    let set = unsafe { ref_from_memory::<BfBehaviorSet>(this + EMBEDDED_SET) };
+    let wanted = unsafe { string_bytes(name.begin as u32, name.end as u32) };
+    let current = unsafe { string_bytes(set.name.begin as u32, set.name.end as u32) };
+    let queued = if wanted == current {
+        false
+    } else {
+        unsafe { set_pending_bs(this, new_owned_name(&wanted), call_flag, force) }
+    };
+    unsafe { free_buffer(name.begin as *mut u8, (name.capacity as usize).wrapping_sub(name.begin as usize), 1) };
+    queued
 }
 
 const POSITION: u32 = 0x114;
@@ -521,6 +549,16 @@ pub(crate) unsafe fn clear_queue(this: u32) -> bool {
     true
 }
 
+/// Hook the live tests install on `setBS`: gets the guest, the name `{begin, end}` and the three flags, and answers in
+/// place of the real call (`None` runs the real one).
+#[cfg(feature = "reimplementation-tests")]
+pub(crate) mod set_bs_override {
+    use std::sync::Mutex;
+
+    pub type Hook = fn(this: u32, begin: u32, end: u32, call_flag: i8, force: i8, clear_mode: i32) -> Option<bool>;
+    pub static HOOK: Mutex<Option<Hook>> = Mutex::new(None);
+}
+
 #[detour_mod]
 mod detours {
     use super::*;
@@ -548,7 +586,7 @@ mod detours {
     #[detour(SET_BS)]
     unsafe extern "thiscall" fn set_bs_detour(this: *const u32, begin: *const u32, end: *const u32, capacity: *const u32, call_flag: i8, force: i8, clear_mode: i32) -> bool {
         let name = RawString { begin: begin as *const u8, end: end as *const u8, capacity: capacity as *const u8 };
-        unsafe { set_bs(this as u32, name, call_flag as u8, force as u8, clear_mode) }
+        unsafe { set_bs_overridable(this as u32, name, call_flag as u8, force as u8, clear_mode) }
     }
 
     #[detour(SET_BSNEW)]
@@ -561,6 +599,13 @@ mod detours {
     unsafe extern "thiscall" fn set_pending_bs_detour(this: *const u32, begin: *const u32, end: *const u32, capacity: *const u32, call_flag: i8, force: i8) -> bool {
         let name = RawString { begin: begin as *const u8, end: end as *const u8, capacity: capacity as *const u8 };
         unsafe { set_pending_bs(this as u32, name, call_flag as u8, force as u8) }
+    }
+
+    /// `generated.rs` declares five stack words after `this`: the three string words, the call flag and `force`.
+    #[detour(SET_QUEUED_CALL_NEW)]
+    unsafe extern "thiscall" fn set_queued_call_new_detour(this: *const u32, begin: *const u32, end: i32, capacity: i32, call_flag: u32, force: u32) -> u32 {
+        let name = RawString { begin: begin as *const u8, end: end as usize as *const u8, capacity: capacity as usize as *const u8 };
+        unsafe { set_queued_call_new(this as u32, name, call_flag as u8, force as u8) as u32 }
     }
 
     #[detour(SET_NAME)]
@@ -595,6 +640,9 @@ mod detours {
         }
         pub(crate) fn set_pending_bs(this: u32, name: [u32; 3], call_flag: u8, force: u8) -> bool {
             unsafe { super::SET_QUEUED_CALL_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as *const u32, name[2] as *const u32, call_flag as i8, force as i8) }
+        }
+        pub(crate) fn set_queued_call_new(this: u32, name: [u32; 3], call_flag: u8, force: u8) -> bool {
+            unsafe { super::SET_QUEUED_CALL_NEW_DETOUR.call(this as *const u32, name[0] as *const u32, name[1] as i32, name[2] as i32, call_flag as u32, force as u32) as u8 != 0 }
         }
         pub(crate) fn set_name(this: u32, name: u32) {
             unsafe { super::SET_NAME_DETOUR.call(this as *const u32, name as *const u32) }

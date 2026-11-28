@@ -62,6 +62,10 @@ pub(crate) mod base_terrain_recorder;
 #[cfg(target_os = "windows")]
 pub(crate) mod display_message_recorder;
 
+/// Redirects `showEscapedAnimalAlert`'s UI calls (element lookups, icon animation, caption, confirm dialog) into an in-memory record.
+#[cfg(target_os = "windows")]
+pub(crate) mod alert_recorder;
+
 /// Redirects `ZTHabitat::sendEvent` into an in-memory call record - lets the live
 /// `sendMaintWorkerCleanupEvents` comparison observe real vanilla's sends without delivering them.
 #[cfg(target_os = "windows")]
@@ -90,6 +94,7 @@ pub fn init() {
         io_redirect::init();
         portal_dispatch_recorder::init();
         display_message_recorder::init();
+        alert_recorder::init();
         generate_faces_recorder::init();
 
         // Installs `resource_manager::init()`'s hooks so `LAZY_RESOURCE_MAP` is populated before
@@ -163,6 +168,17 @@ pub fn init() {
         // rationale as the MenuMusicHandler block above). Those tests' "real vanilla" poles therefore
         // go through soundscape_live_support's real_* trampolines for the same per-profile reason.
         crate::ztsoundscape::init();
+
+        // ZTKeeper: no detours yet; the call stays here so each method group's detours are installed under the
+        // battery as soon as they exist.
+        crate::ztunit::init();
+        crate::ztstaff::init();
+        crate::ztbuilding::init();
+        crate::ztkeeper::init();
+        crate::ztmaint::init();
+        crate::ztguest::init();
+        crate::ztguide::init();
+        crate::ztanimal::init();
 
         // ZooStatus: installs the class's 31 detours (zoostatus-implementation-plan.md Stage 8) so
         // ZOOSTATUS_DETOURS_ENABLED can assert the wiring itself (same rationale as the MenuMusicHandler/

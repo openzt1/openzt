@@ -16,7 +16,7 @@ pub struct ZTWorldMgr {
     pub map_x_size: u32,
     pub map_y_size: u32,
     padding_2: [u8; 0x4],
-    tile_array: u32,
+    pub(crate) tile_array: u32,
     padding_3: [u8; 0x3c],
     pub(crate) entity_array_start: u32,
     pub(crate) entity_array_end: u32,

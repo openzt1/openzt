@@ -204,6 +204,7 @@ pub struct PlaySpecialFOps {
 /// - neither set, sound named, anim named: `fPlayWithSound(anim, sound)`;
 /// - neither set, sound named, anim "none": the second flag is set when special is `ModeB` and `fPlaySpecial`
 ///   runs with no duration or count.
+///
 /// Anything else is `fPlaySpecial(anim, sound, seconds, count, special)`.
 ///
 /// `None` (defer to vanilla) for a call with fewer than five parameters and a clear flag, where vanilla reads

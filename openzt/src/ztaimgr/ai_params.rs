@@ -99,7 +99,9 @@ pub fn compute_bf_ai_params(mut read: impl FnMut(&str, i32) -> i32) -> BfAiParam
 pub(super) const RVA_CLEAR_UNREACHABLE_FREQ: u32 = 0x0023_9028;
 pub(super) const RVA_MIN_UNREACHABLE_COUNT: u32 = 0x0023_9532;
 /// `BFAIMgr` fields `initAIParams` fills.
-pub(super) const BF_AI_PARAM_OFFSETS: [(u32, fn(&BfAiParams) -> i32); 19] = [
+type AiParamAccessor = fn(&BfAiParams) -> i32;
+
+pub(super) const BF_AI_PARAM_OFFSETS: [(u32, AiParamAccessor); 19] = [
     (0xd4, |p| p.base_x),
     (0xd8, |p| p.base_y),
     (0xdc, |p| p.random_x),

@@ -81,6 +81,11 @@ IF "%~1"=="--wait" (
     SHIFT
     GOTO parse_loop
 )
+IF "%~1"=="--perf-stats" (
+    SET CARGO_ARGS=!CARGO_ARGS! --features perf-stats
+    SHIFT
+    GOTO parse_loop
+)
 IF "%~1"=="--" (
     SET PARSING_CARGO_ARGS=1
     SHIFT
@@ -752,6 +757,7 @@ echo.
 echo Build/Run Flags:
 echo   --release      Build with release optimizations
 echo   --test         Build the test DLL (openzt-test-dll)
+echo   --perf-stats   Build with per-detour timing (Lua: perf_stats(), perf_stats_save(path), perf_stats_reset())
 echo   --wait         Wait for Zoo Tycoon to exit before returning
 echo   -- ^<args^>      Forward additional arguments to cargo
 echo.

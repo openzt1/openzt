@@ -434,9 +434,12 @@ pub struct ZTAnimalType {
     pub babies_attack: bool,      // 0x3D4
     pad19: [u8; 0x410 - 0x3D8],   // ----------------------- padding: 8 bytes
     pub egg_footprint: IVec3,         // 0x410
+    /// `0x41c`-`0x49c`: strings, animation ids and the `cKeepMoving` byte (`+0x44c`). `ZTAnimalType` is allocated
+    /// with `operator_new(0x49c)`; `ztanimal.rs` reads these fields raw.
+    pad20: [u8; 0x49C - 0x41C],
 }
 
-const _: () = assert!(std::mem::size_of::<ZTAnimalType>() == 0x41c);
+const _: () = assert!(std::mem::size_of::<ZTAnimalType>() == 0x49c);
 
 impl EntityType for ZTAnimalType {
     fn print_config_integers(&self) -> String {

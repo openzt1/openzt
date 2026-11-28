@@ -67,12 +67,11 @@ pub unsafe fn f_random_walk(this: u32, unit: u32, ops: &RandomWalkOps) -> Option
     }
     save_to_memory(unit + UNIT_WALKING_GUARD, 1u8);
 
-    let div64 = |v: i32| v.wrapping_add((v >> 31) & 0x3f) >> 6;
     let mut height = get_from_memory::<i32>(unit + UNIT_POS_Z);
     if height < 0 {
         height = height.wrapping_sub(15);
     }
-    let start = [div64(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_X)), div64(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_Y)), height.wrapping_add((height >> 31) & 0xf) >> 4];
+    let start = [crate::util::world_to_tile(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_X)), crate::util::world_to_tile(get_from_memory::<i32>(unit + OFFSET_UNIT_POS_Y)), height.wrapping_add((height >> 31) & 0xf) >> 4];
     let start_tile = map_tile(map, start[0], start[1]);
 
     let mut goal = unsafe { (ops.no_destination)() };
@@ -186,7 +185,7 @@ pub(super) const RANDOM_WALK_VANILLA: RandomWalkOps = RandomWalkOps {
 };
 
 pub(super) unsafe fn animal_target_building_vanilla(unit: u32) -> bool {
-    unsafe { ZTANIMAL_TARGET_BUILDING.original()(unit as *const u32, true) }
+    unsafe { ZTANIMAL_TARGET_BUILDING.hooked()(unit as *const u32, true) }
 }
 
 pub(super) unsafe fn f_move_vanilla(this: u32, none: u32, unit: u32, done: u32, name: u32, speed: u32, empty: u32) -> bool {

@@ -565,6 +565,36 @@ pub fn init() {
         Ok("pong".to_string())
     });
 
+    #[cfg(feature = "perf-stats")]
+    {
+        lua_fn!(
+            "perf_stats",
+            "Table of detour call counts and timings since start or the last reset, by self time",
+            "perf_stats([top])",
+            |top: Option<usize>| {
+                match crate::perf_stats::report(top.unwrap_or(40)) {
+                    Ok(table) => Ok((table, None::<String>)),
+                    Err(e) => Ok((String::new(), Some(e))),
+                }
+            }
+        );
+        lua_fn!(
+            "perf_stats_save",
+            "Write every called detour's timings to a CSV file (for diffing builds)",
+            "perf_stats_save(path)",
+            |path: String| {
+                match crate::perf_stats::csv().and_then(|csv| std::fs::write(&path, csv).map_err(|e| e.to_string())) {
+                    Ok(()) => Ok((format!("Wrote {}", path), None::<String>)),
+                    Err(e) => Ok((String::new(), Some(e))),
+                }
+            }
+        );
+        lua_fn!("perf_stats_reset", "Zero all detour timing counters", "perf_stats_reset()", || {
+            crate::perf_stats::reset();
+            Ok("Reset".to_string())
+        });
+    }
+
     lua_fn!(
         "load_game",
         "Load a .zoo save file into the running game (same fopen/loadFile/fclose sequence as the load-game UI, minus the dialog)",

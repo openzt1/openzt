@@ -124,6 +124,7 @@ pub(super) unsafe fn play_single_vanilla(unit: u32, anim: u32, flag: u8, sound: 
     unsafe { play_single_with(&VANILLA_MIXER, unit, anim, flag, sound) }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn play_pair_with(m: &MixerOps, this: u32, unit: u32, anim_first: u32, anim_second: u32, flag: u8, sound: u32, seconds: i32) -> bool {
     let first_link = make_link(anim_first, 0, 0);
     let first = LinkVector::with(&first_link);

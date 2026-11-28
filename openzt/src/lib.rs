@@ -62,7 +62,10 @@ pub mod systemtime;
 /// Basic 2D and 3D geometry types and directions.
 pub mod geom;
 
-/// Vanilla MSVC std::vector layout compatibility types.
+/// Vanilla MSVC container layouts: `std::deque` iterators, `std::list` nodes and freelists, the red-black tree behind
+/// `std::map`/`std::set`, and the 3-word `std::vector` header.
+pub mod msvc_deque;
+pub mod vanilla_list;
 pub mod vanilla_rbtree;
 pub mod vanilla_vector;
 
@@ -160,12 +163,32 @@ mod bfentity;
 
 /// bfunit module reimplements `BFUnit::getMoveAnimSpeed`.
 mod bfunit;
+
 /// gxmixer module reimplements `GXMixer`'s read-side methods.
 mod gxmixer;
+#[cfg(feature = "perf-stats")]
+mod perf_stats;
 
+/// ztanimal module reimplements the vanilla ZTAnimal zoo animal entity in place over vanilla memory.
+mod ztanimal;
 /// ztguest module reimplements ZTGuest's three megatile-reading methods (fCrowdDensityMegatile/
 /// fEstheticBonusMegatile/fStinkyMegatile) - closes the last vanilla read path into ZTMegatileMgr's grid.
 mod ztguest;
+
+/// ztguide module reimplements the vanilla ZTGuide staff entity in place over vanilla memory.
+mod ztguide;
+/// ztbuilding module reimplements the vanilla ZTBuilding building entity in place over vanilla memory.
+mod ztbuilding;
+
+/// ztkeeper module reimplements the vanilla ZTKeeper staff entity in place over vanilla memory.
+mod ztkeeper;
+/// ztstaff module reimplements the vanilla ZTStaff base class (assigned-habitat list, leaf getters) in place over vanilla memory.
+mod ztstaff;
+/// ztunit module reimplements the vanilla ZTUnit base class (getters, animation, lifecycle, goals, movement, satisfiers,
+/// buildings, shows and messages) in place over vanilla memory.
+mod ztunit;
+/// ztmaint module reimplements the vanilla ZTMaint staff entity (and the ZTMaintTaskPool helpers) in place over vanilla memory.
+mod ztmaint;
 
 /// ztsoundscape module reimplements the vanilla ZTSoundscape crowd/world ambient-audio crossfade
 /// class (structs + constructor + init + update, plus the CONSTRUCTOR/INIT/UPDATE detours; see
@@ -205,6 +228,8 @@ mod util;
 /// A shared, vanilla-allocator-owned `std::string` helper for class-reimplementation modules that need
 /// to build temporary vanilla string arguments or receive one via the RVO convention.
 mod vanilla_string;
+/// pool_vec is a scope guard that returns a vanilla pool vector's buffer to `PoolAlloc`.
+mod pool_vec;
 
 /// Loads settings from the zoo.ini file and commands/functions for reading and writing settings during runtime
 mod settings;
@@ -308,6 +333,13 @@ mod zoo_init {
             ztguest::init();
             ambients::init();
             ztsoundscape::init();
+            ztunit::init();
+            ztstaff::init();
+            ztbuilding::init();
+            ztkeeper::init();
+            ztmaint::init();
+            ztguide::init();
+            ztanimal::init();
         }
         unsafe { LOAD_LANG_DLLS_DETOUR.call(this) }
     }
